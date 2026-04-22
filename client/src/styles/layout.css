@@ -1,0 +1,121 @@
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 40px;
+  padding: 0 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.toolbar-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.toolbar-sim-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.toolbar-sim-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.toolbar-sim-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.toolbar-sim-name {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar-sim-detail {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar-status-dot {
+  width: 8px;
+  height: 8px;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.main {
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.viewport-zoom-dock {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 8;
+}
+
+@media (max-width: 600px) {
+  .debug-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .debug-row-wide {
+    grid-column: auto;
+  }
+
+  .viewport-zoom-dock {
+    right: 12px;
+    bottom: 12px;
+    max-width: calc(100vw - 24px);
+  }
+
+  .menu-popover {
+    width: min(260px, calc(100vw - 16px));
+  }
+
+  .toolbar-sim-detail {
+    display: none;
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "xcode-canvas-web",
+  "private": true,
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build:cli": "scripts/build-cli.sh",
+    "build:client": "npm run --prefix client build",
+    "build": "npm run build:cli && npm run build:client",
+    "dev": "npm run build:cli && node scripts/dev.mjs"
+  }
+}

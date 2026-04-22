@@ -1,0 +1,26 @@
+.DS_Store
+
+# Build outputs
+build/
+target/
+server/target/
+client/dist/
+
+# Package manager installs and caches
+node_modules/
+client/node_modules/
+
+# Local editor state
+.vscode/
+.idea/
+
+# Local environment files
+.env
+.env.local
+.env.*.local
+
+# Tooling logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
