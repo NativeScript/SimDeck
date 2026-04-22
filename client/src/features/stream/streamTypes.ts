@@ -38,7 +38,11 @@ export interface StreamRuntimeInfo {
   webTransport: boolean;
 }
 
-export type StreamConnectionState = "idle" | "connecting" | "streaming" | "error";
+export type StreamConnectionState =
+  | "idle"
+  | "connecting"
+  | "streaming"
+  | "error";
 
 export interface StreamStatus {
   detail?: string;

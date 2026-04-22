@@ -1,5 +1,9 @@
 import { apiRequest } from "./client";
-import type { ChromeProfile, SimulatorMetadata, SimulatorsResponse } from "./types";
+import type {
+  ChromeProfile,
+  SimulatorMetadata,
+  SimulatorsResponse,
+} from "./types";
 
 export async function listSimulators(): Promise<SimulatorMetadata[]> {
   const data = await apiRequest<SimulatorsResponse>("/api/simulators");

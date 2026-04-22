@@ -1,7 +1,7 @@
 import type {
   StreamRuntimeInfo,
   StreamStats,
-  StreamStatus
+  StreamStatus,
 } from "../stream/streamTypes";
 
 interface DebugPanelProps {
@@ -52,7 +52,7 @@ export function DebugPanel({
   inline = false,
   runtimeInfo,
   stats,
-  status
+  status,
 }: DebugPanelProps) {
   const rows: Array<{ label: string; value: string }> = [
     { label: "State", value: status.state },
@@ -69,7 +69,7 @@ export function DebugPanel({
     { label: "GPU", value: formatGpuStatus(runtimeInfo) },
     { label: "WebGL2", value: formatBoolean(runtimeInfo.webGL2) },
     { label: "WebCodecs", value: formatBoolean(runtimeInfo.webCodecs) },
-    { label: "WebTransport", value: formatBoolean(runtimeInfo.webTransport) }
+    { label: "WebTransport", value: formatBoolean(runtimeInfo.webTransport) },
   ];
 
   const gpuRenderer = runtimeInfo.gpuRenderer.trim();

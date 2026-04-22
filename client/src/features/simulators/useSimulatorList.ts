@@ -27,7 +27,11 @@ export function useSimulatorList() {
         setError("");
       } catch (loadError) {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : "Failed to load simulators.");
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Failed to load simulators.",
+          );
         }
       } finally {
         if (!cancelled) {
@@ -51,6 +55,6 @@ export function useSimulatorList() {
     error,
     isLoading,
     refresh,
-    simulators
+    simulators,
   };
 }

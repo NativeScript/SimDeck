@@ -26,7 +26,7 @@ export function usePointerInput({
   isBooted,
   pan,
   setPan,
-  onTouch
+  onTouch,
 }: UsePointerInputOptions) {
   const activePointerRef = useRef<number | null>(null);
   const moveFrameRef = useRef<number>(0);
@@ -86,7 +86,7 @@ export function usePointerInput({
       startX: event.clientX,
       startY: event.clientY,
       startPanX: pan.x,
-      startPanY: pan.y
+      startPanY: pan.y,
     };
     setIsPanning(true);
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -101,14 +101,18 @@ export function usePointerInput({
     setPan(
       clampPan(
         {
-          x: panningRef.current.startPanX + (event.clientX - panningRef.current.startX),
-          y: panningRef.current.startPanY + (event.clientY - panningRef.current.startY)
+          x:
+            panningRef.current.startPanX +
+            (event.clientX - panningRef.current.startX),
+          y:
+            panningRef.current.startPanY +
+            (event.clientY - panningRef.current.startY),
         },
         effectiveZoom,
         canvasSize,
         deviceNaturalSize,
-        chromeProfile
-      )
+        chromeProfile,
+      ),
     );
   }
 
@@ -142,7 +146,10 @@ export function usePointerInput({
     }
   }
 
-  function finishTouch(event: React.PointerEvent<HTMLElement>, phase: Exclude<TouchPhase, "moved" | "began">) {
+  function finishTouch(
+    event: React.PointerEvent<HTMLElement>,
+    phase: Exclude<TouchPhase, "moved" | "began">,
+  ) {
     event.stopPropagation();
     if (activePointerRef.current !== event.pointerId) {
       return;
@@ -165,6 +172,6 @@ export function usePointerInput({
     handleScreenPointerUp: (event: React.PointerEvent<HTMLElement>) =>
       finishTouch(event, "ended"),
     handleScreenPointerCancel: (event: React.PointerEvent<HTMLElement>) =>
-      finishTouch(event, "cancelled")
+      finishTouch(event, "cancelled"),
   };
 }

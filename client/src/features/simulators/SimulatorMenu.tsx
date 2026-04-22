@@ -4,7 +4,7 @@ import type { SimulatorMetadata } from "../../api/types";
 import type {
   StreamRuntimeInfo,
   StreamStats,
-  StreamStatus
+  StreamStatus,
 } from "../stream/streamTypes";
 import { DebugPanel } from "../toolbar/DebugPanel";
 import { SimulatorRow } from "./SimulatorRow";
@@ -48,7 +48,7 @@ export function SimulatorMenu({
   selectedSimulator,
   setSelectedUDID,
   stats,
-  status
+  status,
 }: SimulatorMenuProps) {
   return (
     <div className="menu-wrap" ref={menuRef}>
@@ -63,7 +63,10 @@ export function SimulatorMenu({
         <MenuIcon />
       </button>
       {menuOpen ? (
-        <div className="menu-popover" onPointerDown={(event) => event.stopPropagation()}>
+        <div
+          className="menu-popover"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
           <input
             className="sidebar-search"
             onChange={(event) => onChangeSearch(event.target.value)}

@@ -5,20 +5,20 @@ import type {
   OpenUrlPayload,
   SimulatorMetadata,
   SimulatorResponse,
-  TouchPayload
+  TouchPayload,
 } from "./types";
 
 async function postSimulatorAction(
   udid: string,
   action: string,
-  payload?: KeyPayload | LaunchPayload | OpenUrlPayload | TouchPayload
+  payload?: KeyPayload | LaunchPayload | OpenUrlPayload | TouchPayload,
 ): Promise<SimulatorMetadata | null> {
   const response = await apiRequest<SimulatorResponse | { ok: boolean }>(
     `/api/simulators/${udid}/${action}`,
     {
       method: "POST",
-      body: payload ? JSON.stringify(payload) : undefined
-    }
+      body: payload ? JSON.stringify(payload) : undefined,
+    },
   );
 
   return "simulator" in response ? response.simulator : null;

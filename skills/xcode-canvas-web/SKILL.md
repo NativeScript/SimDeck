@@ -31,10 +31,16 @@ The compiled binary lands at:
 ./build/xcode-canvas-web
 ```
 
+Install the CLI globally from this checkout:
+
+```sh
+npm install -g .
+```
+
 ## Launch The Web Server
 
 ```sh
-./build/xcode-canvas-web serve --port 4310
+xcode-canvas-web serve --port 4310
 ```
 
 Open:
@@ -46,17 +52,28 @@ http://127.0.0.1:4310
 The server also exposes WebTransport on `4311` when the HTTP port is `4310`.
 The client should discover the exact URL template and certificate hash from `GET /api/health`.
 
-For LAN access, bind on all interfaces and advertise a reachable host or IP so
-the generated WebTransport certificate matches what the browser connects to:
+From a local checkout without a global install, the equivalent command is:
 
 ```sh
-./build/xcode-canvas-web serve --port 4310 --bind 0.0.0.0 --advertise-host 192.168.1.50
+./build/xcode-canvas-web serve --port 4310
 ```
 
 You can point the server at a different built client directory if needed:
 
 ```sh
-./build/xcode-canvas-web serve --port 4310 --client-root /absolute/path/to/client/dist
+xcode-canvas-web serve --port 4310 --client-root /absolute/path/to/client/dist
+```
+
+Enable the per-user `launchd` service:
+
+```sh
+xcode-canvas-web service on --port 4310
+```
+
+Disable it:
+
+```sh
+xcode-canvas-web service off
 ```
 
 ## Simulator CLI Commands
@@ -64,31 +81,31 @@ You can point the server at a different built client directory if needed:
 List simulators:
 
 ```sh
-./build/xcode-canvas-web list
+xcode-canvas-web list
 ```
 
 Boot a simulator:
 
 ```sh
-./build/xcode-canvas-web boot <udid>
+xcode-canvas-web boot <udid>
 ```
 
 Shut a simulator down:
 
 ```sh
-./build/xcode-canvas-web shutdown <udid>
+xcode-canvas-web shutdown <udid>
 ```
 
 Open a URL inside a simulator:
 
 ```sh
-./build/xcode-canvas-web open-url <udid> https://example.com
+xcode-canvas-web open-url <udid> https://example.com
 ```
 
 Launch an installed app by bundle identifier:
 
 ```sh
-./build/xcode-canvas-web launch <udid> com.apple.Preferences
+xcode-canvas-web launch <udid> com.apple.Preferences
 ```
 
 ## Current API Shape

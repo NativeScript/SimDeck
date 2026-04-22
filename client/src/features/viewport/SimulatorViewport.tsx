@@ -68,7 +68,7 @@ export function SimulatorViewport({
   streamCanvasRef,
   viewMode,
   zoomDockRef,
-  zoomAnimating
+  zoomAnimating,
 }: SimulatorViewportProps) {
   return (
     <div className="main">

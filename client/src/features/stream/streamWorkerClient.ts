@@ -1,6 +1,9 @@
 import type { StreamConnectTarget, WorkerToMainMessage } from "./streamTypes";
 
-export function buildStreamTarget(udid: string, stamp: number): StreamConnectTarget {
+export function buildStreamTarget(
+  udid: string,
+  stamp: number,
+): StreamConnectTarget {
   return { stamp, udid };
 }
 
@@ -17,9 +20,12 @@ class WorkerStreamClient implements StreamClientBackend {
   private readonly worker: Worker;
 
   constructor(onMessage: (message: WorkerToMainMessage) => void) {
-    this.worker = new Worker(new URL("../../workers/simulatorStream.worker.ts", import.meta.url), {
-      type: "module"
-    });
+    this.worker = new Worker(
+      new URL("../../workers/simulatorStream.worker.ts", import.meta.url),
+      {
+        type: "module",
+      },
+    );
     this.worker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
       onMessage(event.data);
     };
@@ -27,9 +33,10 @@ class WorkerStreamClient implements StreamClientBackend {
 
   attachCanvas(canvasElement: HTMLCanvasElement) {
     const offscreenCanvas = canvasElement.transferControlToOffscreen();
-    this.worker.postMessage({ type: "attach-canvas", canvas: offscreenCanvas }, [
-      offscreenCanvas
-    ]);
+    this.worker.postMessage(
+      { type: "attach-canvas", canvas: offscreenCanvas },
+      [offscreenCanvas],
+    );
   }
 
   connect(target: StreamConnectTarget) {
@@ -45,7 +52,12 @@ class WorkerStreamClient implements StreamClientBackend {
   }
 
   resize(width: number, height: number, devicePixelRatio: number) {
-    this.worker.postMessage({ type: "resize", width, height, devicePixelRatio });
+    this.worker.postMessage({
+      type: "resize",
+      width,
+      height,
+      devicePixelRatio,
+    });
   }
 
   destroy() {

@@ -19,10 +19,26 @@
 ./scripts/build-cli.sh
 ```
 
+## Install
+
+Install the published CLI globally:
+
+```sh
+npm install -g xcode-canvas-web
+```
+
+Install the current local checkout globally from source:
+
+```sh
+npm install -g .
+```
+
+After a global install, use the `xcode-canvas-web` command directly. From a local checkout, you can also run `./build/xcode-canvas-web`.
+
 ## Run
 
 ```sh
-./build/xcode-canvas-web serve --port 4310
+xcode-canvas-web serve --port 4310
 ```
 
 Then open [http://127.0.0.1:4310](http://127.0.0.1:4310).
@@ -31,44 +47,32 @@ The Rust server exposes HTTP on the requested port and WebTransport on `port + 1
 The browser bootstrap comes from `GET /api/health`, which returns the WebTransport URL template,
 certificate hash, and packet version needed by the client.
 
-To expose the server on your LAN, bind on all interfaces and advertise a host
-or IP that the browser can actually reach and validate in the self-signed
-certificate:
+## Service
+
+Enable the per-user background service with `launchd`:
 
 ```sh
-./build/xcode-canvas-web serve --port 4310 --bind 0.0.0.0 --advertise-host 192.168.1.50
+xcode-canvas-web service on --port 4310
 ```
 
-Then open `http://192.168.1.50:4310` from another device on the same network.
+Disable it:
+
+```sh
+xcode-canvas-web service off
+```
 
 ## CLI
 
 ```sh
-./build/xcode-canvas-web list
-./build/xcode-canvas-web boot <udid>
-./build/xcode-canvas-web shutdown <udid>
-./build/xcode-canvas-web open-url <udid> https://example.com
-./build/xcode-canvas-web launch <udid> com.apple.Preferences
+xcode-canvas-web list
+xcode-canvas-web boot <udid>
+xcode-canvas-web shutdown <udid>
+xcode-canvas-web open-url <udid> https://example.com
+xcode-canvas-web launch <udid> com.apple.Preferences
 ```
 
-## HTTP API
+## License
 
-- `GET /api/health`
-- `GET /api/metrics`
-- `GET /api/simulators`
-- `POST /api/simulators/:udid/boot`
-- `POST /api/simulators/:udid/shutdown`
-- `POST /api/simulators/:udid/open-url`
-- `POST /api/simulators/:udid/launch`
-- `POST /api/simulators/:udid/touch`
-- `POST /api/simulators/:udid/key`
-- `POST /api/simulators/:udid/home`
-- `POST /api/simulators/:udid/rotate-right`
-- `GET /api/simulators/:udid/chrome-profile`
-- `GET /api/simulators/:udid/chrome.png`
+Copyright 2026 Dj
 
-## Status
-
-The live browser preview now comes from the vendored private display bridge rather than `simctl io screenshot`.
-The Rust server owns REST routing, session orchestration, metrics, static file serving, and the WebTransport video path.
-The native layer owns simulator lookup/boot, chrome rendering, HID input injection, and hardware H.264 encode.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).

@@ -8,7 +8,7 @@ import type {
   StreamRuntimeInfo,
   StreamStats,
   StreamStatus,
-  WorkerToMainMessage
+  WorkerToMainMessage,
 } from "./streamTypes";
 
 const FPS_SAMPLE_INTERVAL_MS = 500;
@@ -39,7 +39,7 @@ function createDefaultRuntimeInfo(): StreamRuntimeInfo {
     streamBackend: "Worker / WebTransport",
     webCodecs: false,
     webGL2: false,
-    webTransport: false
+    webTransport: false,
   };
 }
 
@@ -55,7 +55,7 @@ function detectRuntimeInfo(): StreamRuntimeInfo {
       antialias: false,
       depth: false,
       powerPreference: "high-performance",
-      stencil: false
+      stencil: false,
     });
     if (!gl) {
       runtimeInfo.gpuLikelyHardware = false;
@@ -67,11 +67,16 @@ function detectRuntimeInfo(): StreamRuntimeInfo {
 
     const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
     if (debugInfo) {
-      runtimeInfo.gpuVendor = String(gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) ?? "");
-      runtimeInfo.gpuRenderer = String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) ?? "");
+      runtimeInfo.gpuVendor = String(
+        gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) ?? "",
+      );
+      runtimeInfo.gpuRenderer = String(
+        gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) ?? "",
+      );
     }
 
-    const gpuDescriptor = `${runtimeInfo.gpuVendor} ${runtimeInfo.gpuRenderer}`.trim();
+    const gpuDescriptor =
+      `${runtimeInfo.gpuVendor} ${runtimeInfo.gpuRenderer}`.trim();
     runtimeInfo.gpuLikelyHardware = gpuDescriptor
       ? !DEBUG_RENDERER_SOFTWARE_PATTERN.test(gpuDescriptor)
       : true;
@@ -88,7 +93,7 @@ function detectRuntimeInfo(): StreamRuntimeInfo {
 export function useLiveStream({
   canvasElement,
   simulator,
-  stamp
+  stamp,
 }: UseLiveStreamOptions): UseLiveStreamResult {
   const workerClientRef = useRef<StreamWorkerClient | null>(null);
   const latestDecodedFramesRef = useRef(0);
@@ -97,7 +102,9 @@ export function useLiveStream({
   const [status, setStatus] = useState<StreamStatus>({ state: "idle" });
   const [error, setError] = useState("");
   const [fps, setFps] = useState(0);
-  const [runtimeInfo, setRuntimeInfo] = useState<StreamRuntimeInfo>(createDefaultRuntimeInfo);
+  const [runtimeInfo, setRuntimeInfo] = useState<StreamRuntimeInfo>(
+    createDefaultRuntimeInfo,
+  );
 
   useEffect(() => {
     setRuntimeInfo(detectRuntimeInfo());
@@ -108,33 +115,45 @@ export function useLiveStream({
       return;
     }
 
-    const workerClient = new StreamWorkerClient((message: WorkerToMainMessage) => {
-      if (message.type === "stats") {
-        setStats(message.stats);
-        return;
-      }
-
-      if (message.type === "status") {
-        setStatus(message.status);
-        if (message.status.error) {
-          setError(message.status.error);
-        } else if (message.status.state === "streaming" || message.status.state === "idle") {
-          setError("");
+    const workerClient = new StreamWorkerClient(
+      (message: WorkerToMainMessage) => {
+        if (message.type === "stats") {
+          setStats(message.stats);
+          return;
         }
-        return;
-      }
 
-      setDeviceNaturalSize(message.size);
-    });
+        if (message.type === "status") {
+          setStatus(message.status);
+          if (message.status.error) {
+            setError(message.status.error);
+          } else if (
+            message.status.state === "streaming" ||
+            message.status.state === "idle"
+          ) {
+            setError("");
+          }
+          return;
+        }
+
+        setDeviceNaturalSize(message.size);
+      },
+    );
 
     try {
       workerClient.attachCanvas(canvasElement);
       workerClientRef.current = workerClient;
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Unable to attach the stream canvas.");
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Unable to attach the stream canvas.",
+      );
       setStatus({
-        error: error instanceof Error ? error.message : "Unable to attach the stream canvas.",
-        state: "error"
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to attach the stream canvas.",
+        state: "error",
       });
       workerClient.destroy();
       return;
@@ -205,6 +224,6 @@ export function useLiveStream({
     hasFrame: status.state === "streaming" || stats.decodedFrames > 0,
     runtimeInfo,
     stats,
-    status
+    status,
   };
 }

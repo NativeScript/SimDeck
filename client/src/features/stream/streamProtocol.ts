@@ -7,7 +7,7 @@ const FLAG_CONFIG = 1 << 1;
 
 export function appendBytes(
   existing: Uint8Array<ArrayBufferLike>,
-  incoming: Uint8Array<ArrayBufferLike>
+  incoming: Uint8Array<ArrayBufferLike>,
 ): Uint8Array<ArrayBufferLike> {
   if (!existing.length) {
     return incoming;
@@ -18,16 +18,23 @@ export function appendBytes(
   return combined;
 }
 
-export function readUInt32BE(bytes: Uint8Array<ArrayBufferLike>, offset: number): number {
+export function readUInt32BE(
+  bytes: Uint8Array<ArrayBufferLike>,
+  offset: number,
+): number {
   return (
-    (bytes[offset] << 24) |
-    (bytes[offset + 1] << 16) |
-    (bytes[offset + 2] << 8) |
-    bytes[offset + 3]
-  ) >>> 0;
+    ((bytes[offset] << 24) |
+      (bytes[offset + 1] << 16) |
+      (bytes[offset + 2] << 8) |
+      bytes[offset + 3]) >>>
+    0
+  );
 }
 
-export function readUInt64BE(bytes: Uint8Array<ArrayBufferLike>, offset: number): number {
+export function readUInt64BE(
+  bytes: Uint8Array<ArrayBufferLike>,
+  offset: number,
+): number {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return Number(view.getBigUint64(offset, false));
 }
@@ -55,7 +62,7 @@ export function hexToUint8Array(value: string): Uint8Array {
 }
 
 export function decoderDescriptionBytes(
-  value: StreamPacketMetadata["description"]
+  value: StreamPacketMetadata["description"],
 ): Uint8Array | undefined {
   if (!value) {
     return undefined;
@@ -63,7 +70,9 @@ export function decoderDescriptionBytes(
   return typeof value === "string" ? base64ToUint8Array(value) : value;
 }
 
-export function decoderDescriptionKey(value: StreamPacketMetadata["description"]): string {
+export function decoderDescriptionKey(
+  value: StreamPacketMetadata["description"],
+): string {
   if (!value) {
     return "";
   }
@@ -76,7 +85,7 @@ export function decoderDescriptionKey(value: StreamPacketMetadata["description"]
 }
 
 export function consumeBinaryVideoPackets(
-  buffer: Uint8Array<ArrayBufferLike>
+  buffer: Uint8Array<ArrayBufferLike>,
 ): { packets: StreamPacket[]; remainder: Uint8Array<ArrayBufferLike> } {
   const packets: StreamPacket[] = [];
   let offset = 0;
@@ -95,7 +104,8 @@ export function consumeBinaryVideoPackets(
     const height = readUInt32BE(buffer, packetOffset + 24);
     const descriptionLength = readUInt32BE(buffer, packetOffset + 28);
     const payloadLength = readUInt32BE(buffer, packetOffset + 32);
-    const packetLength = BINARY_VIDEO_PACKET_HEADER_BYTES + descriptionLength + payloadLength;
+    const packetLength =
+      BINARY_VIDEO_PACKET_HEADER_BYTES + descriptionLength + payloadLength;
     if (buffer.length - packetOffset < packetLength) {
       break;
     }
@@ -116,14 +126,14 @@ export function consumeBinaryVideoPackets(
         height,
         isKeyFrame: (flags & FLAG_KEYFRAME) !== 0,
         timestampUs,
-        width
+        width,
       },
-      payload
+      payload,
     });
   }
 
   return {
     packets,
-    remainder: buffer.subarray(offset)
+    remainder: buffer.subarray(offset),
   };
 }

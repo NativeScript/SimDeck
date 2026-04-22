@@ -3,18 +3,18 @@ import {
   BEZEL_PADDING,
   DEVICE_SCREEN_WIDTH,
   FIT_MARGIN,
-  MAX_ZOOM_MULTIPLIER
+  MAX_ZOOM_MULTIPLIER,
 } from "../../shared/constants";
 import type { Point, ScreenRect, Size } from "./types";
 
 export function shellSize(
   deviceNaturalSize: Size | null,
-  chromeProfile: ChromeProfile | null
+  chromeProfile: ChromeProfile | null,
 ): Size {
   if (chromeProfile?.totalWidth && chromeProfile?.totalHeight) {
     return {
       width: chromeProfile.totalWidth,
-      height: chromeProfile.totalHeight
+      height: chromeProfile.totalHeight,
     };
   }
 
@@ -24,13 +24,13 @@ export function shellSize(
   const screenHeight = DEVICE_SCREEN_WIDTH * aspectRatio;
   return {
     width: DEVICE_SCREEN_WIDTH + BEZEL_PADDING * 2,
-    height: screenHeight + BEZEL_PADDING * 2
+    height: screenHeight + BEZEL_PADDING * 2,
   };
 }
 
 export function computeChromeScreenRect(
   chromeProfile: ChromeProfile | null,
-  deviceNaturalSize: Size | null
+  deviceNaturalSize: Size | null,
 ): ScreenRect | null {
   if (!chromeProfile) {
     return null;
@@ -66,7 +66,7 @@ function computeScale(
   marginX: number,
   marginY: number,
   chromeProfile: ChromeProfile | null,
-  reservedBottomInset = 0
+  reservedBottomInset = 0,
 ): number {
   if (!canvasSize) {
     return 1;
@@ -75,11 +75,11 @@ function computeScale(
   const availableWidth = Math.max(canvasSize.width - marginX * 2, 0);
   const availableHeight = Math.max(
     canvasSize.height - marginY * 2 - reservedBottomInset,
-    0
+    0,
   );
   return Math.min(
     availableWidth / totalSize.width,
-    availableHeight / totalSize.height
+    availableHeight / totalSize.height,
   );
 }
 
@@ -87,7 +87,7 @@ export function computeFitScale(
   canvasSize: Size | null,
   deviceNaturalSize: Size | null,
   chromeProfile: ChromeProfile | null,
-  reservedBottomInset = 0
+  reservedBottomInset = 0,
 ): number {
   return computeScale(
     canvasSize,
@@ -95,7 +95,7 @@ export function computeFitScale(
     FIT_MARGIN,
     FIT_MARGIN,
     chromeProfile,
-    reservedBottomInset
+    reservedBottomInset,
   );
 }
 
@@ -103,7 +103,7 @@ export function computeCenterScale(
   canvasSize: Size | null,
   deviceNaturalSize: Size | null,
   chromeProfile: ChromeProfile | null,
-  reservedBottomInset = 0
+  reservedBottomInset = 0,
 ): number {
   if (!canvasSize) {
     return 1;
@@ -111,11 +111,11 @@ export function computeCenterScale(
 
   const horizontalMargin = Math.max(
     40,
-    Math.min(96, Math.round(canvasSize.width * 0.12))
+    Math.min(96, Math.round(canvasSize.width * 0.12)),
   );
   const verticalMargin = Math.max(
     28,
-    Math.min(72, Math.round(canvasSize.height * 0.08))
+    Math.min(72, Math.round(canvasSize.height * 0.08)),
   );
 
   return Math.min(
@@ -126,8 +126,8 @@ export function computeCenterScale(
       horizontalMargin,
       verticalMargin,
       chromeProfile,
-      reservedBottomInset
-    )
+      reservedBottomInset,
+    ),
   );
 }
 
@@ -142,7 +142,7 @@ export function clampPan(
   scale: number,
   canvasSize: Size | null,
   deviceNaturalSize: Size | null,
-  chromeProfile: ChromeProfile | null
+  chromeProfile: ChromeProfile | null,
 ): Point {
   if (!canvasSize) {
     return nextPan;
@@ -156,6 +156,6 @@ export function clampPan(
 
   return {
     x: Math.min(Math.max(nextPan.x, -limitX), limitX),
-    y: Math.min(Math.max(nextPan.y, -limitY), limitY)
+    y: Math.min(Math.max(nextPan.y, -limitY), limitY),
   };
 }

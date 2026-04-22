@@ -4,7 +4,7 @@ import type { SimulatorMetadata } from "../../api/types";
 import type {
   StreamRuntimeInfo,
   StreamStats,
-  StreamStatus
+  StreamStatus,
 } from "../stream/streamTypes";
 import { SimulatorMenu } from "../simulators/SimulatorMenu";
 
@@ -59,7 +59,7 @@ export function Toolbar({
   selectedSimulatorIdentifier,
   setSelectedUDID,
   stats,
-  status
+  status,
 }: ToolbarProps) {
   return (
     <header className="toolbar">
@@ -88,12 +88,16 @@ export function Toolbar({
           <div className="toolbar-sim-info">
             <div className="toolbar-sim-copy">
               <div className="toolbar-sim-title-row">
-                <span className="toolbar-sim-name">{selectedSimulator.name}</span>
+                <span className="toolbar-sim-name">
+                  {selectedSimulator.name}
+                </span>
                 {selectedSimulator.isBooted ? (
                   <span className="state-dot booted toolbar-status-dot" />
                 ) : null}
               </div>
-              <span className="toolbar-sim-detail">{selectedSimulatorIdentifier}</span>
+              <span className="toolbar-sim-detail">
+                {selectedSimulatorIdentifier}
+              </span>
             </div>
           </div>
         ) : (

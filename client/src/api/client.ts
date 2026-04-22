@@ -1,9 +1,12 @@
 import { API_ROOT } from "../shared/constants";
 
-export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function apiRequest<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
   const response = await fetch(`${API_ROOT}${path}`, {
     headers: { "Content-Type": "application/json" },
-    ...options
+    ...options,
   });
 
   const contentType = response.headers.get("content-type") ?? "";

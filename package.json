@@ -1,12 +1,47 @@
 {
   "name": "xcode-canvas-web",
-  "private": true,
   "version": "0.1.0",
+  "description": "Native macOS simulator control plane with a browser client",
   "license": "Apache-2.0",
+  "bin": {
+    "xcode-canvas-web": "bin/xcode-canvas-web.mjs"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "bin/",
+    "cli/",
+    "client/dist/",
+    "scripts/build-cli.sh",
+    "scripts/npm-postinstall.mjs",
+    "server/Cargo.lock",
+    "server/Cargo.toml",
+    "server/build.rs",
+    "server/src/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build:cli": "scripts/build-cli.sh",
     "build:client": "npm run --prefix client build",
     "build": "npm run build:cli && npm run build:client",
-    "dev": "npm run build:cli && node scripts/dev.mjs"
+    "format": "prettier --write . && cargo fmt --manifest-path server/Cargo.toml",
+    "format:check": "prettier --check . && cargo fmt --manifest-path server/Cargo.toml --check",
+    "lint": "npm run format:check && cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings && npm run --prefix client typecheck",
+    "test": "cargo test --manifest-path server/Cargo.toml && npm run --prefix client test",
+    "ci": "npm run lint && npm run build && npm run test",
+    "dev": "npm run build:cli && node scripts/dev.mjs",
+    "postinstall": "node scripts/npm-postinstall.mjs",
+    "prepack": "npm run build:client"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2"
   }
 }

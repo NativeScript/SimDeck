@@ -5,7 +5,7 @@ import {
   consumeBinaryVideoPackets,
   decoderDescriptionBytes,
   decoderDescriptionKey,
-  hexToUint8Array
+  hexToUint8Array,
 } from "../features/stream/streamProtocol";
 import { createEmptyStreamStats } from "../features/stream/stats";
 import { VideoFrameRenderer } from "../features/stream/videoFrameRenderer";
@@ -15,7 +15,7 @@ import type {
   StreamConnectTarget,
   StreamPacketMetadata,
   StreamStatus,
-  WorkerToMainMessage
+  WorkerToMainMessage,
 } from "../features/stream/streamTypes";
 
 const workerScope = self as DedicatedWorkerGlobalScope;
@@ -81,7 +81,11 @@ function clearReconnectTimeout() {
 
 function postStats(force = false) {
   const now = performance.now();
-  if (force || lastStatsPostAt === 0 || now - lastStatsPostAt >= STATS_POST_INTERVAL_MS) {
+  if (
+    force ||
+    lastStatsPostAt === 0 ||
+    now - lastStatsPostAt >= STATS_POST_INTERVAL_MS
+  ) {
     if (statsPostTimeout) {
       clearTimeout(statsPostTimeout);
       statsPostTimeout = 0;
@@ -181,15 +185,26 @@ function disconnect() {
   postStatus({ state: "idle" });
 }
 
-function scheduleReconnect(reason: string, expectedConnectionId = currentConnectionId) {
+function scheduleReconnect(
+  reason: string,
+  expectedConnectionId = currentConnectionId,
+) {
   const reconnectTarget = currentTarget;
-  if (!reconnectTarget || reconnectTimeout || expectedConnectionId !== currentConnectionId) {
+  if (
+    !reconnectTarget ||
+    reconnectTimeout ||
+    expectedConnectionId !== currentConnectionId
+  ) {
     return;
   }
   postStatus({ detail: reason, state: "connecting" });
   reconnectTimeout = setTimeout(() => {
     reconnectTimeout = 0;
-    if (!reconnectTarget || expectedConnectionId !== currentConnectionId || reconnectTarget !== currentTarget) {
+    if (
+      !reconnectTarget ||
+      expectedConnectionId !== currentConnectionId ||
+      reconnectTarget !== currentTarget
+    ) {
       return;
     }
     void connect(reconnectTarget, true);
@@ -198,7 +213,7 @@ function scheduleReconnect(reason: string, expectedConnectionId = currentConnect
 
 async function ensureDecoder(
   metadata: StreamPacketMetadata,
-  expectedConnectionId: number
+  expectedConnectionId: number,
 ): Promise<boolean> {
   if (expectedConnectionId !== currentConnectionId) {
     return false;
@@ -207,7 +222,7 @@ async function ensureDecoder(
   if (typeof VideoDecoder !== "function") {
     postStatus({
       error: "This browser does not support WebCodecs.",
-      state: "error"
+      state: "error",
     });
     return false;
   }
@@ -248,8 +263,11 @@ async function ensureDecoder(
       } catch (error) {
         frame.close();
         postStatus({
-          error: error instanceof Error ? error.message : "Unable to initialize the GPU renderer.",
-          state: "error"
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to initialize the GPU renderer.",
+          state: "error",
         });
         return;
       }
@@ -264,8 +282,11 @@ async function ensureDecoder(
       } catch (error) {
         frame.close();
         postStatus({
-          error: error instanceof Error ? error.message : "Unable to render the decoded frame.",
-          state: "error"
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to render the decoded frame.",
+          state: "error",
         });
         return;
       }
@@ -280,7 +301,7 @@ async function ensureDecoder(
       }
       postStatus({ error: error.message, state: "error" });
       scheduleReconnect("Reconnecting live stream…", decoderConnectionId);
-    }
+    },
   });
 
   const config: VideoDecoderConfig = {
@@ -288,7 +309,7 @@ async function ensureDecoder(
     codedWidth: metadata.width,
     codec,
     description: decoderDescriptionBytes(description),
-    optimizeForLatency: true
+    optimizeForLatency: true,
   };
 
   const support = await VideoDecoder.isConfigSupported(config);
@@ -298,7 +319,7 @@ async function ensureDecoder(
   if (!support.supported) {
     postStatus({
       error: `Unsupported decoder configuration for ${codec} at ${metadata.width}x${metadata.height}.`,
-      state: "error"
+      state: "error",
     });
     resetDecoder();
     return false;
@@ -309,7 +330,10 @@ async function ensureDecoder(
   return true;
 }
 
-async function handlePacket(packet: StreamPacket, expectedConnectionId: number) {
+async function handlePacket(
+  packet: StreamPacket,
+  expectedConnectionId: number,
+) {
   if (expectedConnectionId !== currentConnectionId) {
     return;
   }
@@ -339,7 +363,10 @@ async function handlePacket(packet: StreamPacket, expectedConnectionId: number) 
     return;
   }
 
-  if (decoder.decodeQueueSize > DECODE_QUEUE_SOFT_LIMIT && !packet.metadata.isKeyFrame) {
+  if (
+    decoder.decodeQueueSize > DECODE_QUEUE_SOFT_LIMIT &&
+    !packet.metadata.isKeyFrame
+  ) {
     stats.droppedFrames += 1;
     droppedDeltaFrames += 1;
     postStats();
@@ -355,8 +382,8 @@ async function handlePacket(packet: StreamPacket, expectedConnectionId: number) 
       new EncodedVideoChunk({
         data: packet.payload,
         timestamp: Number(packet.metadata.timestampUs ?? 0),
-        type: packet.metadata.isKeyFrame ? "key" : "delta"
-      })
+        type: packet.metadata.isKeyFrame ? "key" : "delta",
+      }),
     );
   } catch {
     if (expectedConnectionId !== currentConnectionId) {
@@ -397,7 +424,10 @@ function buildHealthUrl(): string {
 }
 
 function buildRefreshUrl(udid: string): string {
-  return new URL(`/api/simulators/${encodeURIComponent(udid)}/refresh`, workerScope.location.href).toString();
+  return new URL(
+    `/api/simulators/${encodeURIComponent(udid)}/refresh`,
+    workerScope.location.href,
+  ).toString();
 }
 
 function buildWebTransportUrl(urlTemplate: string, udid: string): string {
@@ -407,7 +437,7 @@ function buildWebTransportUrl(urlTemplate: string, udid: string): string {
 async function resolveTransportCloseReason(
   expectedConnectionId: number,
   activeTransport: WebTransport | null,
-  currentReason: string
+  currentReason: string,
 ): Promise<string> {
   if (
     !activeTransport ||
@@ -423,15 +453,17 @@ async function resolveTransportCloseReason(
       .catch((error) => describeError(error)),
     new Promise<string>((resolve) => {
       setTimeout(() => resolve(""), 75);
-    })
+    }),
   ]);
-  return expectedConnectionId === currentConnectionId ? timeoutReason : currentReason;
+  return expectedConnectionId === currentConnectionId
+    ? timeoutReason
+    : currentReason;
 }
 
 async function fetchHealth(signal: AbortSignal): Promise<HealthPayload> {
   const response = await fetch(buildHealthUrl(), {
     cache: "no-store",
-    signal
+    signal,
   });
   if (!response.ok) {
     throw new Error(`Health check failed with status ${response.status}`);
@@ -439,7 +471,9 @@ async function fetchHealth(signal: AbortSignal): Promise<HealthPayload> {
   return (await response.json()) as HealthPayload;
 }
 
-async function readStreamBytes(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+async function readStreamBytes(
+  stream: ReadableStream<Uint8Array>,
+): Promise<Uint8Array> {
   const reader = stream.getReader();
   let buffer: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
 
@@ -455,7 +489,9 @@ async function readStreamBytes(stream: ReadableStream<Uint8Array>): Promise<Uint
   }
 }
 
-async function readControlHello(stream: ReadableStream<Uint8Array>): Promise<ControlHello> {
+async function readControlHello(
+  stream: ReadableStream<Uint8Array>,
+): Promise<ControlHello> {
   const bytes = await readStreamBytes(stream);
   return JSON.parse(new TextDecoder().decode(bytes)) as ControlHello;
 }
@@ -470,7 +506,7 @@ async function requestRefresh(udid: string) {
   try {
     await fetch(buildRefreshUrl(udid), {
       cache: "no-store",
-      method: "POST"
+      method: "POST",
     });
   } catch {
     // Best-effort recovery hint. The live stream stays open.
@@ -505,18 +541,23 @@ async function connect(target: StreamConnectTarget, isReconnect = false) {
     const urlTemplate = health.webTransport?.urlTemplate;
     const certificateHash = health.webTransport?.certificateHash?.value;
     if (!urlTemplate || !certificateHash) {
-      throw new Error("Server did not provide WebTransport connection details.");
+      throw new Error(
+        "Server did not provide WebTransport connection details.",
+      );
     }
 
-    transport = new WebTransport(buildWebTransportUrl(urlTemplate, target.udid), {
-      congestionControl: "low-latency",
-      serverCertificateHashes: [
-        {
-          algorithm: "sha-256",
-          value: new Uint8Array(hexToUint8Array(certificateHash))
-        }
-      ]
-    });
+    transport = new WebTransport(
+      buildWebTransportUrl(urlTemplate, target.udid),
+      {
+        congestionControl: "low-latency",
+        serverCertificateHashes: [
+          {
+            algorithm: "sha-256",
+            value: new Uint8Array(hexToUint8Array(certificateHash)),
+          },
+        ],
+      },
+    );
     void transport.closed
       .then(() => {
         if (connectionId !== currentConnectionId) {
@@ -539,7 +580,9 @@ async function connect(target: StreamConnectTarget, isReconnect = false) {
     }
     const hello = await readControlHello(controlResult.value);
     if (hello.packet_format !== "binary-video-v1") {
-      throw new Error(`Unsupported WebTransport packet format ${hello.packet_format}.`);
+      throw new Error(
+        `Unsupported WebTransport packet format ${hello.packet_format}.`,
+      );
     }
     stats.codec = hello.codec ?? "";
     postVideoConfig(hello.width, hello.height);
@@ -585,13 +628,15 @@ async function connect(target: StreamConnectTarget, isReconnect = false) {
     const closeReason = await resolveTransportCloseReason(
       connectionId,
       transport,
-      transportCloseReason
+      transportCloseReason,
     );
     const errorMessage =
-      closeReason && closeReason !== message ? `${message} (${closeReason})` : message;
+      closeReason && closeReason !== message
+        ? `${message} (${closeReason})`
+        : message;
     postStatus({
       error: errorMessage,
-      state: "error"
+      state: "error",
     });
     if (connectionId === currentConnectionId) {
       scheduleReconnect("Reconnecting live stream…", connectionId);
@@ -610,8 +655,11 @@ workerScope.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         clearCanvas();
       } catch (error) {
         postStatus({
-          error: error instanceof Error ? error.message : "Unable to initialize the GPU renderer.",
-          state: "error"
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to initialize the GPU renderer.",
+          state: "error",
         });
       }
       break;

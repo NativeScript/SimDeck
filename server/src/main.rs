@@ -4,6 +4,7 @@ mod error;
 mod logging;
 mod metrics;
 mod native;
+mod service;
 mod simulators;
 mod static_files;
 mod transport;
@@ -43,6 +44,10 @@ enum Command {
         #[arg(long)]
         client_root: Option<PathBuf>,
     },
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
     List,
     Boot {
         udid: String,
@@ -60,10 +65,25 @@ enum Command {
     },
 }
 
+#[derive(Subcommand)]
+enum ServiceCommand {
+    On {
+        #[arg(long, default_value_t = 4310)]
+        port: u16,
+        #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
+        bind: IpAddr,
+        #[arg(long)]
+        advertise_host: Option<String>,
+        #[arg(long)]
+        client_root: Option<PathBuf>,
+    },
+    Off,
+}
+
 fn main() -> anyhow::Result<()> {
     logging::init();
     let cli = Cli::parse();
-    let bridge = NativeBridge::default();
+    let bridge = NativeBridge;
 
     match cli.command {
         Command::Serve {
@@ -72,6 +92,20 @@ fn main() -> anyhow::Result<()> {
             advertise_host,
             client_root,
         } => serve_with_appkit(port, bind, advertise_host, client_root),
+        Command::Service { command } => match command {
+            ServiceCommand::On {
+                port,
+                bind,
+                advertise_host,
+                client_root,
+            } => service::enable(ServiceOptions {
+                port,
+                bind,
+                advertise_host,
+                client_root,
+            }),
+            ServiceCommand::Off => service::disable(),
+        },
         Command::List => {
             let simulators = bridge.list_simulators()?;
             println!(
@@ -123,6 +157,14 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ServiceOptions {
+    port: u16,
+    bind: IpAddr,
+    advertise_host: Option<String>,
+    client_root: Option<PathBuf>,
+}
+
 fn serve_with_appkit(
     port: u16,
     bind: IpAddr,
@@ -165,10 +207,13 @@ async fn serve(
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
 ) -> anyhow::Result<()> {
-    let root = std::env::current_dir()?.join("client").join("dist");
-    let config = Config::new(port, client_root.unwrap_or(root), bind, advertise_host);
+    let root = match client_root {
+        Some(root) => root,
+        None => default_client_root()?,
+    };
+    let config = Config::new(port, root, bind, advertise_host);
     let metrics = Arc::new(Metrics::default());
-    let bridge = NativeBridge::default();
+    let bridge = NativeBridge;
     let registry = SessionRegistry::new(bridge, metrics.clone());
     let (wt_runtime, wt_endpoint) = transport::webtransport::prepare(&config).await?;
     let state = AppState {
@@ -212,4 +257,17 @@ Use --advertise-host <LAN-IP-or-DNS-name> for remote browser access."
     }
 
     Ok(())
+}
+
+fn default_client_root() -> anyhow::Result<PathBuf> {
+    let current_exe = std::env::current_exe().context("resolve current executable path")?;
+
+    if let Some(package_root) = current_exe.parent().and_then(|parent| parent.parent()) {
+        let packaged_client = package_root.join("client").join("dist");
+        if packaged_client.is_dir() {
+            return Ok(packaged_client);
+        }
+    }
+
+    Ok(std::env::current_dir()?.join("client").join("dist"))
 }

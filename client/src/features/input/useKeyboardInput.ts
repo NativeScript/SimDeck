@@ -1,6 +1,10 @@
 import { useEffect } from "react";
 
-import { isEditableTarget, keyCodeForKeyboardEvent, keyboardModifiers } from "./keycodes";
+import {
+  isEditableTarget,
+  keyCodeForKeyboardEvent,
+  keyboardModifiers,
+} from "./keycodes";
 
 interface UseKeyboardInputOptions {
   enabled: boolean;

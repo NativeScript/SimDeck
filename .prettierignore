@@ -1,0 +1,7 @@
+.claude
+.git
+.vscode
+build
+client/dist
+node_modules
+server/target

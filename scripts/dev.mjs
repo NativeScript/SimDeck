@@ -11,10 +11,14 @@ const SERVER_PORT = "4310";
 
 function findListeningPids(port) {
   try {
-    const output = execFileSync("lsof", ["-t", `-iTCP:${port}`, "-sTCP:LISTEN"], {
-      cwd: ROOT,
-      encoding: "utf8"
-    }).trim();
+    const output = execFileSync(
+      "lsof",
+      ["-t", `-iTCP:${port}`, "-sTCP:LISTEN"],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+      },
+    ).trim();
     return output
       .split(/\s+/)
       .map((value) => Number.parseInt(value, 10))
@@ -25,7 +29,10 @@ function findListeningPids(port) {
 }
 
 function stopStaleCliProcesses() {
-  const stalePids = new Set([...findListeningPids(4310), ...findListeningPids(4311)]);
+  const stalePids = new Set([
+    ...findListeningPids(4310),
+    ...findListeningPids(4311),
+  ]);
   for (const pid of stalePids) {
     if (pid === process.pid) {
       continue;
@@ -46,7 +53,7 @@ console.log(`[server] serving on :${SERVER_PORT} — logs: build/cli.log`);
 
 const cli = spawn(SERVER_BIN, ["serve", "--port", SERVER_PORT], {
   stdio: ["ignore", "pipe", "pipe"],
-  cwd: ROOT
+  cwd: ROOT,
 });
 
 cli.stdout.pipe(logStream);
@@ -54,7 +61,7 @@ cli.stderr.pipe(logStream);
 
 const vite = spawn("npx", ["vite", "--host", "127.0.0.1"], {
   stdio: "inherit",
-  cwd: resolve(ROOT, "client")
+  cwd: resolve(ROOT, "client"),
 });
 
 function cleanup() {
@@ -73,7 +80,8 @@ cli.on("error", (error) => {
 });
 
 cli.on("exit", (code, signal) => {
-  const reason = code == null ? `signal ${signal ?? "unknown"}` : `code ${code}`;
+  const reason =
+    code == null ? `signal ${signal ?? "unknown"}` : `code ${code}`;
   console.log(`[server] exited (${reason})`);
   vite.kill();
   process.exit(code ?? 1);

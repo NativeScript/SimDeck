@@ -7,32 +7,32 @@ export function useViewportLayout({
   deviceNaturalSize,
   reservedBottomInset,
   viewMode,
-  zoom
+  zoom,
 }: ViewportLayoutState) {
   const fitScale = computeFitScale(
     canvasSize,
     deviceNaturalSize,
     chromeProfile,
-    reservedBottomInset
+    reservedBottomInset,
   );
   const centerScale = computeCenterScale(
     canvasSize,
     deviceNaturalSize,
     chromeProfile,
-    reservedBottomInset
+    reservedBottomInset,
   );
   const effectiveZoom = clampZoom(
     viewMode === "fit"
       ? fitScale
       : viewMode === "center"
         ? centerScale
-        : zoom ?? centerScale,
-    fitScale
+        : (zoom ?? centerScale),
+    fitScale,
   );
 
   return {
     fitScale,
     centerScale,
-    effectiveZoom
+    effectiveZoom,
   };
 }

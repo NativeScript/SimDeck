@@ -9,6 +9,6 @@ export function createEmptyStreamStats(): StreamStats {
     height: 0,
     receivedPackets: 0,
     reconnects: 0,
-    width: 0
+    width: 0,
   };
 }

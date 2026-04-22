@@ -415,14 +415,16 @@ static void *DFResolveSwiftSymbol(const char *prefix, const char *suffix, const 
 }
 
 static id DFDigitizerDelegateGetter(id self, SEL _cmd) {
+    (void)_cmd;
     return objc_getAssociatedObject(self, DFDigitizerDelegateAssociationKey);
 }
 
 static id DFDigitizerWakeDelegateGetter(id self, SEL _cmd) {
+    (void)_cmd;
     return objc_getAssociatedObject(self, DFDigitizerWakeDelegateAssociationKey);
 }
 
-static Class DFEnsureDigitizerProxyClass(Class baseClass) {
+static Class __attribute__((unused)) DFEnsureDigitizerProxyClass(Class baseClass) {
     if (baseClass == Nil) {
         return Nil;
     }
@@ -505,7 +507,7 @@ static id DFCallSwiftSelfGetterByFunction(id selfObject, void *function) {
     return result;
 }
 
-static id DFCallSwiftSelfGetter(id selfObject, const char *symbolName) {
+static id __attribute__((unused)) DFCallSwiftSelfGetter(id selfObject, const char *symbolName) {
     if (selfObject == nil) return nil;
     void *function = dlsym(RTLD_DEFAULT, symbolName);
     if (function == NULL) {
@@ -541,6 +543,7 @@ static NSDictionary<NSNumber *, id> * DFReadAdapterScreens(id adapter) {
     NSMutableDictionary<NSNumber *, id> *unwrapped = [NSMutableDictionary dictionaryWithCapacity:[(NSDictionary *)screens count]];
     SEL screenSelector = sel_registerName("screen");
     [(NSDictionary *)screens enumerateKeysAndObjectsUsingBlock:^(id key, id value, BOOL *stop) {
+        (void)stop;
         if (![key isKindOfClass:[NSNumber class]] || value == nil) {
             return;
         }
@@ -556,7 +559,7 @@ static NSDictionary<NSNumber *, id> * DFReadAdapterScreens(id adapter) {
     return unwrapped;
 }
 
-static uint32_t DFCallSwiftSelfGetterU32(id selfObject, const char *symbolName) {
+static uint32_t __attribute__((unused)) DFCallSwiftSelfGetterU32(id selfObject, const char *symbolName) {
     if (selfObject == nil) {
         return 0;
     }
@@ -578,7 +581,7 @@ static uint32_t DFCallSwiftSelfGetterU32(id selfObject, const char *symbolName) 
     return result;
 }
 
-static uintptr_t DFCallSwiftUWordGetter(const char *symbolName) {
+static uintptr_t __attribute__((unused)) DFCallSwiftUWordGetter(const char *symbolName) {
     if (symbolName == NULL) {
         return 0;
     }
@@ -599,7 +602,7 @@ static uintptr_t DFCallSwiftUWordGetter(const char *symbolName) {
     return result;
 }
 
-static BOOL DFCallSwiftVoidMethodWithSelfAndTwoArgs(id selfObject, id firstArgument, const void *secondArgument, const char *symbolName) {
+static BOOL __attribute__((unused)) DFCallSwiftVoidMethodWithSelfAndTwoArgs(id selfObject, id firstArgument, const void *secondArgument, const char *symbolName) {
     if (selfObject == nil || firstArgument == nil || secondArgument == nil) {
         return NO;
     }
@@ -637,7 +640,7 @@ static BOOL DFCallSwiftVoidMethodWithSelfAndObjectByFunction(id selfObject, id f
     return YES;
 }
 
-static BOOL DFCallSwiftVoidMethodWithSelfAndObject(id selfObject, id firstArgument, const char *symbolName) {
+static BOOL __attribute__((unused)) DFCallSwiftVoidMethodWithSelfAndObject(id selfObject, id firstArgument, const char *symbolName) {
     if (selfObject == nil || firstArgument == nil) return NO;
     void *function = dlsym(RTLD_DEFAULT, symbolName);
     if (function == NULL) {
@@ -653,7 +656,7 @@ static BOOL DFCallSwiftVoidMethodWithSelfAndObjectByPattern(id selfObject, id fi
     return DFCallSwiftVoidMethodWithSelfAndObjectByFunction(selfObject, firstArgument, function);
 }
 
-static BOOL DFCallSwiftVoidMethodWithSelfAndUWordAndBool(id selfObject, uintptr_t firstArgument, BOOL secondArgument, const char *symbolName) {
+static BOOL __attribute__((unused)) DFCallSwiftVoidMethodWithSelfAndUWordAndBool(id selfObject, uintptr_t firstArgument, BOOL secondArgument, const char *symbolName) {
     if (selfObject == nil) {
         return NO;
     }
@@ -676,7 +679,7 @@ static BOOL DFCallSwiftVoidMethodWithSelfAndUWordAndBool(id selfObject, uintptr_
     return YES;
 }
 
-static BOOL DFCallSwiftThrowingMethodWithSelfAndObjectAndUWord(id selfObject, id firstArgument, uintptr_t secondArgument, const char *symbolName, NSError **error) {
+static BOOL __attribute__((unused)) DFCallSwiftThrowingMethodWithSelfAndObjectAndUWord(id selfObject, id firstArgument, uintptr_t secondArgument, const char *symbolName, NSError **error) {
     if (selfObject == nil || firstArgument == nil) {
         return NO;
     }
@@ -1055,7 +1058,7 @@ static BOOL DFCallSwiftUnitAngleMeasurementGetterByFunction(id selfObject, void 
     return YES;
 }
 
-static BOOL DFCallSwiftUnitAngleMeasurementGetter(id selfObject, const char *symbolName, DFUnitAngleMeasurement *measurement) {
+static BOOL __attribute__((unused)) DFCallSwiftUnitAngleMeasurementGetter(id selfObject, const char *symbolName, DFUnitAngleMeasurement *measurement) {
     if (selfObject == nil || measurement == NULL) return NO;
     void *function = dlsym(RTLD_DEFAULT, symbolName);
     if (function == NULL) {
@@ -1089,7 +1092,7 @@ static BOOL DFCallSwiftUnitAngleMeasurementSetterByFunction(id selfObject, DFUni
     return YES;
 }
 
-static BOOL DFCallSwiftUnitAngleMeasurementSetter(id selfObject, DFUnitAngleMeasurement measurement, const char *symbolName) {
+static BOOL __attribute__((unused)) DFCallSwiftUnitAngleMeasurementSetter(id selfObject, DFUnitAngleMeasurement measurement, const char *symbolName) {
     if (selfObject == nil) return NO;
     void *function = dlsym(RTLD_DEFAULT, symbolName);
     if (function == NULL) {
@@ -2132,6 +2135,7 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
         _screenAdapterCallbackUUID,
         _callbackQueue,
         ^(id simScreen) {
+            (void)simScreen;
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (strongSelf == nil) {
                 return;
@@ -2139,6 +2143,7 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
             [strongSelf updateStatus:@"CoreSimulator screen proxy connected"];
         },
         ^(id simScreen) {
+            (void)simScreen;
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (strongSelf == nil) {
                 return;
@@ -2248,6 +2253,7 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
             [strongSelf notifyDelegateOfFrame:strongSelf->_latestPixelBuffer];
         },
         ^(id surface, id maskedSurface) {
+            (void)maskedSurface;
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (strongSelf == nil) {
                 return;

@@ -4,7 +4,7 @@ export const MODIFIER_BITS = {
   option: 1 << 2,
   command: 1 << 3,
   capsLock: 1 << 4,
-  function: 1 << 5
+  function: 1 << 5,
 } as const;
 
 export const BROWSER_CODE_TO_MAC_KEYCODE: Record<string, number> = {
@@ -90,7 +90,7 @@ export const BROWSER_CODE_TO_MAC_KEYCODE: Record<string, number> = {
   ArrowLeft: 123,
   ArrowRight: 124,
   ArrowDown: 125,
-  ArrowUp: 126
+  ArrowUp: 126,
 };
 
 const KEY_TO_MAC_KEYCODE: Record<string, number> = {
@@ -147,7 +147,7 @@ const KEY_TO_MAC_KEYCODE: Record<string, number> = {
   l: 37,
   j: 38,
   "'": 39,
-  "\"": 39,
+  '"': 39,
   k: 40,
   ";": 41,
   ":": 41,
@@ -177,7 +177,7 @@ const KEY_TO_MAC_KEYCODE: Record<string, number> = {
   ArrowLeft: 123,
   ArrowRight: 124,
   ArrowDown: 125,
-  ArrowUp: 126
+  ArrowUp: 126,
 };
 
 export function keyboardModifiers(event: KeyboardEvent): number {
@@ -193,7 +193,9 @@ export function keyboardModifiers(event: KeyboardEvent): number {
 
 export function keyCodeForKeyboardEvent(event: KeyboardEvent): number | null {
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-  return KEY_TO_MAC_KEYCODE[key] ?? BROWSER_CODE_TO_MAC_KEYCODE[event.code] ?? null;
+  return (
+    KEY_TO_MAC_KEYCODE[key] ?? BROWSER_CODE_TO_MAC_KEYCODE[event.code] ?? null
+  );
 }
 
 export function isEditableTarget(target: EventTarget | null): boolean {

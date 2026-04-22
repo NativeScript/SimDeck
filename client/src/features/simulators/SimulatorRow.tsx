@@ -6,7 +6,11 @@ interface SimulatorRowProps {
   simulator: SimulatorMetadata;
 }
 
-export function SimulatorRow({ isSelected, onSelect, simulator }: SimulatorRowProps) {
+export function SimulatorRow({
+  isSelected,
+  onSelect,
+  simulator,
+}: SimulatorRowProps) {
   return (
     <button
       className={`sim-item ${isSelected ? "selected" : ""}`}

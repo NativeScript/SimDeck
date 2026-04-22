@@ -28,7 +28,7 @@ void main() {
 function compileShader(
   gl: WebGL2RenderingContext,
   type: number,
-  source: string
+  source: string,
 ): WebGLShader {
   const shader = gl.createShader(type);
   if (!shader) {
@@ -41,14 +41,23 @@ function compileShader(
     return shader;
   }
 
-  const infoLog = gl.getShaderInfoLog(shader) ?? "Unknown shader compile failure.";
+  const infoLog =
+    gl.getShaderInfoLog(shader) ?? "Unknown shader compile failure.";
   gl.deleteShader(shader);
   throw new Error(infoLog);
 }
 
 function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
-  const vertexShader = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER_SOURCE);
-  const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER_SOURCE);
+  const vertexShader = compileShader(
+    gl,
+    gl.VERTEX_SHADER,
+    VERTEX_SHADER_SOURCE,
+  );
+  const fragmentShader = compileShader(
+    gl,
+    gl.FRAGMENT_SHADER,
+    FRAGMENT_SHADER_SOURCE,
+  );
   const program = gl.createProgram();
   if (!program) {
     gl.deleteShader(vertexShader);
@@ -66,7 +75,8 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
     return program;
   }
 
-  const infoLog = gl.getProgramInfoLog(program) ?? "Unknown program link failure.";
+  const infoLog =
+    gl.getProgramInfoLog(program) ?? "Unknown program link failure.";
   gl.deleteProgram(program);
   throw new Error(infoLog);
 }
@@ -80,8 +90,10 @@ function getWebGL2Context(canvas: StreamCanvas): WebGL2RenderingContext | null {
     powerPreference: "high-performance",
     premultipliedAlpha: false,
     preserveDrawingBuffer: false,
-    stencil: false
-  } as WebGLContextAttributes & { desynchronized: boolean }) as WebGL2RenderingContext | null;
+    stencil: false,
+  } as WebGLContextAttributes & {
+    desynchronized: boolean;
+  }) as WebGL2RenderingContext | null;
 }
 
 export class VideoFrameRenderer {
@@ -126,14 +138,10 @@ export class VideoFrameRenderer {
     gl.bufferData(
       gl.ARRAY_BUFFER,
       new Float32Array([
-        -1, -1, 0, 1,
-        1, -1, 1, 1,
-        -1, 1, 0, 0,
-        -1, 1, 0, 0,
-        1, -1, 1, 1,
-        1, 1, 1, 0
+        -1, -1, 0, 1, 1, -1, 1, 1, -1, 1, 0, 0, -1, 1, 0, 0, 1, -1, 1, 1, 1, 1,
+        1, 0,
       ]),
-      gl.STATIC_DRAW
+      gl.STATIC_DRAW,
     );
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0);
@@ -177,7 +185,7 @@ export class VideoFrameRenderer {
       this.gl.RGBA,
       this.gl.RGBA,
       this.gl.UNSIGNED_BYTE,
-      frame
+      frame,
     );
     this.gl.useProgram(this.program);
     this.gl.bindVertexArray(this.vertexArray);

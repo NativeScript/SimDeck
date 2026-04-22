@@ -39,7 +39,7 @@ export function DeviceChrome({
   shellStyle,
   simulatorName,
   streamCanvasRef,
-  useChromeProfile
+  useChromeProfile,
 }: DeviceChromeProps) {
   if (useChromeProfile) {
     return (
@@ -125,7 +125,7 @@ function ScreenLayer({
   onScreenPointerUp,
   simulatorName,
   streamCanvasRef,
-  useChromeProfile
+  useChromeProfile,
 }: ScreenLayerProps) {
   return (
     <div

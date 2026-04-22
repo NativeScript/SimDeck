@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 
 import type { Size } from "../../features/viewport/types";
 
-export function useElementSize<T extends Element>(element: T | null): Size | null {
+export function useElementSize<T extends Element>(
+  element: T | null,
+): Size | null {
   const [size, setSize] = useState<Size | null>(null);
 
   useEffect(() => {

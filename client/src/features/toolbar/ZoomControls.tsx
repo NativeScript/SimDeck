@@ -19,10 +19,12 @@ export function ZoomControls({
   onZoomIn,
   onZoomOut,
   variant = "toolbar",
-  viewMode
+  viewMode,
 }: ZoomControlsProps) {
   return (
-    <div className={`zoom-controls ${variant === "floating" ? "zoom-controls-floating" : ""}`}>
+    <div
+      className={`zoom-controls ${variant === "floating" ? "zoom-controls-floating" : ""}`}
+    >
       <button className="tbtn" onClick={onZoomOut} title="Zoom out">
         &minus;
       </button>

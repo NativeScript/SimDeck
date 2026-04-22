@@ -6,7 +6,7 @@ import {
   decoderDescriptionKey,
   hexToUint8Array,
   readUInt32BE,
-  readUInt64BE
+  readUInt64BE,
 } from "./streamProtocol";
 
 function encodeBinaryPacket({
@@ -16,7 +16,7 @@ function encodeBinaryPacket({
   isKeyFrame,
   payload,
   timestampUs,
-  width
+  width,
 }: {
   description?: number[];
   frameSequence: number;
@@ -61,7 +61,7 @@ describe("streamProtocol", () => {
       isKeyFrame: true,
       payload: [5, 6, 7],
       timestampUs: 1234,
-      width: 100
+      width: 100,
     });
 
     const parsed = consumeBinaryVideoPackets(packet);
@@ -70,7 +70,9 @@ describe("streamProtocol", () => {
     expect(parsed.packets[0]?.metadata.frameSequence).toBe(9);
     expect(parsed.packets[0]?.metadata.isKeyFrame).toBe(true);
     expect(
-      Array.from(decoderDescriptionBytes(parsed.packets[0]?.metadata.description) ?? [])
+      Array.from(
+        decoderDescriptionBytes(parsed.packets[0]?.metadata.description) ?? [],
+      ),
     ).toEqual([1, 2, 3, 4]);
     expect(Array.from(parsed.packets[0]?.payload ?? [])).toEqual([5, 6, 7]);
   });
@@ -79,7 +81,9 @@ describe("streamProtocol", () => {
     const bytes = new Uint8Array([1, 2, 3]);
     expect(Array.from(decoderDescriptionBytes(bytes) ?? [])).toEqual([1, 2, 3]);
     expect(decoderDescriptionKey(bytes)).toBe("1,2,3");
-    expect(Array.from(decoderDescriptionBytes("AQID") ?? [])).toEqual([1, 2, 3]);
+    expect(Array.from(decoderDescriptionBytes("AQID") ?? [])).toEqual([
+      1, 2, 3,
+    ]);
     expect(decoderDescriptionKey("AQID")).toBe("AQID");
   });
 

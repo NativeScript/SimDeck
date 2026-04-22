@@ -6,7 +6,7 @@ function keyboardEventLike(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return {
     code: "",
     key: "",
-    ...overrides
+    ...overrides,
   } as KeyboardEvent;
 }
 
@@ -14,7 +14,7 @@ describe("keyCodeForKeyboardEvent", () => {
   it("prefers the actual key value for printable characters", () => {
     const event = keyboardEventLike({
       code: "KeyQ",
-      key: "a"
+      key: "a",
     });
 
     expect(keyCodeForKeyboardEvent(event)).toBe(0);
@@ -23,7 +23,7 @@ describe("keyCodeForKeyboardEvent", () => {
   it("maps shifted printable characters to their underlying key", () => {
     const event = keyboardEventLike({
       code: "Slash",
-      key: "?"
+      key: "?",
     });
 
     expect(keyCodeForKeyboardEvent(event)).toBe(44);
@@ -32,7 +32,7 @@ describe("keyCodeForKeyboardEvent", () => {
   it("falls back to the physical code for control keys", () => {
     const event = keyboardEventLike({
       code: "ArrowLeft",
-      key: "ArrowLeft"
+      key: "ArrowLeft",
     });
 
     expect(keyCodeForKeyboardEvent(event)).toBe(123);
