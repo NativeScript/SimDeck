@@ -12,6 +12,10 @@ use tracing::{debug, warn};
 const INSPECTOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const POLLED_INFO_REQUEST_ID: u64 = 0;
 
+type InspectorResponse = Result<Value, String>;
+type PendingResponseSender = oneshot::Sender<InspectorResponse>;
+type PendingResponses = Arc<Mutex<HashMap<u64, PendingResponseSender>>>;
+
 #[derive(Clone, Default)]
 pub struct InspectorHub {
     inner: Arc<Mutex<InspectorHubState>>,
@@ -36,7 +40,7 @@ struct InspectorAgentHandle {
     outgoing: mpsc::Sender<Value>,
     outbox: Arc<Mutex<VecDeque<Value>>>,
     outbox_notify: Arc<Notify>,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>,
+    pending: PendingResponses,
     next_request_id: Arc<AtomicU64>,
 }
 
@@ -353,7 +357,7 @@ impl InspectorAgentHandle {
 async fn handle_incoming_message(
     hub: &InspectorHub,
     handle: &InspectorAgentHandle,
-    pending: &Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>,
+    pending: &PendingResponses,
     process_identifier: &Arc<Mutex<Option<i64>>>,
     text: &str,
 ) {
@@ -388,10 +392,7 @@ async fn handle_incoming_message(
     hub.register(pid, handle.with_info(info)).await;
 }
 
-async fn complete_pending_response_value(
-    pending: &Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>,
-    value: Value,
-) {
+async fn complete_pending_response_value(pending: &PendingResponses, value: Value) {
     let Some(id) = value.get("id").and_then(Value::as_u64) else {
         return;
     };
@@ -431,10 +432,7 @@ fn inspector_info_from_response(response: &Value) -> Option<Value> {
     }
 }
 
-async fn fail_all_pending(
-    pending: &Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>,
-    message: &str,
-) {
+async fn fail_all_pending(pending: &PendingResponses, message: &str) {
     let mut pending = pending.lock().await;
     for (_, response_tx) in pending.drain() {
         let _ = response_tx.send(Err(message.to_owned()));

@@ -20,10 +20,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: |
             package-lock.json
             client/package-lock.json
+            nativescript-inspector/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -40,9 +42,15 @@ jobs:
 
           VERSION="${TAG_NAME#v}"
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          INSPECTOR_VERSION="$(node -p "require('./nativescript-inspector/package.json').version")"
 
           if [ "${VERSION}" != "${PACKAGE_VERSION}" ]; then
             echo "Tag ${TAG_NAME} does not match package version ${PACKAGE_VERSION}" >&2
+            exit 1
+          fi
+
+          if [ "${VERSION}" != "${INSPECTOR_VERSION}" ]; then
+            echo "Tag ${TAG_NAME} does not match NativeScript inspector version ${INSPECTOR_VERSION}" >&2
             exit 1
           fi
 
@@ -54,6 +62,9 @@ jobs:
 
       - name: Install client dependencies
         run: npm ci --prefix client
+
+      - name: Install NativeScript inspector dependencies
+        run: npm ci --prefix nativescript-inspector
 
       - name: Lint, build, and test
         run: npm run ci
@@ -81,6 +92,10 @@ jobs:
             "${ARTIFACTS_DIR}/xcode-canvas-web-${VERSION}-macos.zip"
 
           npm pack --pack-destination "${ARTIFACTS_DIR}"
+          (
+            cd nativescript-inspector
+            npm pack --pack-destination "${ARTIFACTS_DIR}"
+          )
 
       - name: Publish package to npm
         env:
@@ -98,6 +113,26 @@ jobs:
           fi
 
           npm publish
+
+      - name: Publish NativeScript inspector to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          if npm view "@nativescript/xcode-canvas-inspector@${VERSION}" version >/dev/null 2>&1; then
+            echo "@nativescript/xcode-canvas-inspector@${VERSION} is already published on npm."
+            exit 0
+          fi
+
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "NPM_TOKEN repository secret is required to publish @nativescript/xcode-canvas-inspector@${VERSION}." >&2
+            exit 1
+          fi
+
+          (
+            cd nativescript-inspector
+            npm publish --access public
+          )
 
       - name: Upload GitHub release assets
         env:

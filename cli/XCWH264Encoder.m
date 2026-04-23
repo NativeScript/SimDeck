@@ -262,9 +262,12 @@ static void XCWApplyCompressionPresetIfAvailable(VTCompressionSessionRef session
     }
 
     if (@available(macOS 26.0, *)) {
+        CFStringRef supportedPresetDictionariesKey = CFSTR("SupportedPresetDictionaries");
+        CFStringRef videoConferencingPresetKey = CFSTR("VideoConferencing");
+        CFStringRef highSpeedPresetKey = CFSTR("HighSpeed");
         CFTypeRef supportedPresets = NULL;
         OSStatus status = VTSessionCopyProperty(session,
-                                                kVTCompressionPropertyKey_SupportedPresetDictionaries,
+                                                supportedPresetDictionariesKey,
                                                 kCFAllocatorDefault,
                                                 &supportedPresets);
         if (status != noErr || supportedPresets == NULL || CFGetTypeID(supportedPresets) != CFDictionaryGetTypeID()) {
@@ -275,9 +278,9 @@ static void XCWApplyCompressionPresetIfAvailable(VTCompressionSessionRef session
         }
 
         CFDictionaryRef presets = (CFDictionaryRef)supportedPresets;
-        CFDictionaryRef preset = CFDictionaryGetValue(presets, kVTCompressionPreset_VideoConferencing);
+        CFDictionaryRef preset = CFDictionaryGetValue(presets, videoConferencingPresetKey);
         if (preset == NULL) {
-            preset = CFDictionaryGetValue(presets, kVTCompressionPreset_HighSpeed);
+            preset = CFDictionaryGetValue(presets, highSpeedPresetKey);
         }
         if (preset != NULL && CFGetTypeID(preset) == CFDictionaryGetTypeID()) {
             CFDictionaryApplyFunction(preset, XCWSetCompressionProperty, session);

@@ -93,17 +93,24 @@ available.
 
 ## VS Code
 
-Package the local VS Code extension:
+Package the local VS Code extension from this checkout:
 
 ```sh
 npm run package:vscode-extension
 ```
 
-Install it into local VS Code:
+This writes `build/vscode/xcode-canvas-web-vscode.vsix`.
+
+Install that local package into VS Code:
 
 ```sh
 npm run install:vscode-extension
 ```
+
+The install script packages the extension first if the `.vsix` does not exist,
+then runs the VS Code CLI with `--install-extension build/vscode/xcode-canvas-web-vscode.vsix --force`.
+If the `code` command is not available, install it from VS Code with
+`Shell Command: Install 'code' command in PATH`.
 
 Then run `Xcode Canvas Web: Open Simulator View` from the Command Palette. The extension will open the simulator
 inside a VS Code panel and auto-start the local server when it is not already reachable.

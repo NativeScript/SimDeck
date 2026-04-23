@@ -5,10 +5,13 @@ build/
 target/
 server/target/
 client/dist/
+inspector-agent/.build/
+nativescript-inspector/dist/
 
 # Package manager installs and caches
 node_modules/
 client/node_modules/
+nativescript-inspector/node_modules/
 
 # Local editor state
 .vscode/
