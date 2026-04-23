@@ -20,7 +20,7 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             client/package-lock.json
-            nativescript-inspector/package-lock.json
+            packages/nativescript-inspector/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -33,7 +33,7 @@ jobs:
         run: npm ci --prefix client
 
       - name: Install NativeScript inspector dependencies
-        run: npm ci --prefix nativescript-inspector
+        run: npm ci --prefix packages/nativescript-inspector
 
       - name: Lint, build, and test
         run: npm run ci

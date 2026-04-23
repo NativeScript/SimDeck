@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const extensionDir = path.join(root, "vscode-extension");
+const extensionDir = path.join(root, "packages", "vscode-extension");
 const outputDir = path.join(root, "build", "vscode");
 const packagePath = path.join(outputDir, "xcode-canvas-web-vscode.vsix");
 const vscePath = path.join(root, "node_modules", "@vscode", "vsce", "vsce");

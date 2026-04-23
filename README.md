@@ -8,7 +8,7 @@
 - private CoreSimulator boot fallback
 - vendored private display bridge for continuous frames plus touch and keyboard injection
 - CoreSimulator chrome asset rendering for device bezels
-- NativeScript runtime inspector in `nativescript-inspector/` for JS-driven UIKit querying and property edits
+- NativeScript runtime inspector in `packages/nativescript-inspector/` for JS-driven UIKit querying and property edits
 - local HTTP API plus static client hosting in Rust
 - WebTransport video delivery over a self-signed local or LAN endpoint
 - React client in `client/`

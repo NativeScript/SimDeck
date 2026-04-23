@@ -25,7 +25,7 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             client/package-lock.json
-            nativescript-inspector/package-lock.json
+            packages/nativescript-inspector/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -42,7 +42,7 @@ jobs:
 
           VERSION="${TAG_NAME#v}"
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          INSPECTOR_VERSION="$(node -p "require('./nativescript-inspector/package.json').version")"
+          INSPECTOR_VERSION="$(node -p "require('./packages/nativescript-inspector/package.json').version")"
 
           if [ "${VERSION}" != "${PACKAGE_VERSION}" ]; then
             echo "Tag ${TAG_NAME} does not match package version ${PACKAGE_VERSION}" >&2
@@ -64,7 +64,7 @@ jobs:
         run: npm ci --prefix client
 
       - name: Install NativeScript inspector dependencies
-        run: npm ci --prefix nativescript-inspector
+        run: npm ci --prefix packages/nativescript-inspector
 
       - name: Lint, build, and test
         run: npm run ci
@@ -93,7 +93,7 @@ jobs:
 
           npm pack --pack-destination "${ARTIFACTS_DIR}"
           (
-            cd nativescript-inspector
+            cd packages/nativescript-inspector
             npm pack --pack-destination "${ARTIFACTS_DIR}"
           )
 
@@ -130,7 +130,7 @@ jobs:
           fi
 
           (
-            cd nativescript-inspector
+            cd packages/nativescript-inspector
             npm publish --access public
           )
 

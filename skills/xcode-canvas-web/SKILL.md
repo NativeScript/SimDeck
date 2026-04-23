@@ -9,7 +9,7 @@ Use this skill when you need to operate the local Xcode Canvas Web project: buil
 - The product server lives in `server/` and is written in Rust.
 - The native simulator bridge lives in `cli/` and is written in Objective-C.
 - The browser client lives in `client/` and is built with React.
-- The NativeScript in-app inspector runtime lives in `nativescript-inspector/`
+- The NativeScript in-app inspector runtime lives in `packages/nativescript-inspector/`
   and is written in TypeScript.
 - The Rust CLI serves the HTTP API and the built web app, and exposes WebTransport for video.
 

@@ -39,7 +39,7 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
   Renders Apple’s CoreSimulator device-type PDF chrome assets into PNGs for the browser.
 - `client/src/app/App.tsx`
   Browser entrypoint for the React control surface.
-- `nativescript-inspector/src/index.ts`
+- `packages/nativescript-inspector/src/index.ts`
   NativeScript in-app inspector runtime that connects to the Rust server over
   WebSocket, publishes NativeScript/UIKit hierarchies, and performs debug UIKit
   property edits from JavaScript.
@@ -49,7 +49,7 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
 - Keep simulator-native logic in Objective-C under `cli/`.
 - Keep Rust server logic under `server/`.
 - Keep browser-only presentation logic in `client/`.
-- Keep NativeScript app runtime inspection logic in `nativescript-inspector/`.
+- Keep NativeScript app runtime inspection logic in `packages/nativescript-inspector/`.
 - Prefer adding a native API endpoint before adding client-only assumptions.
 - Do not add a Node or Swift dependency to solve work that already fits in Foundation/AppKit.
 - When touching private API usage, keep the adaptation small and explicit and document any simulator/runtime assumptions here.
