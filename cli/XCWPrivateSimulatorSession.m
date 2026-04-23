@@ -30,6 +30,8 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
     NSData *_latestKeyFrameDecoderConfig;
     CGSize _latestKeyFrameDimensions;
     NSUInteger _latestKeyFrameSequenceValue;
+    NSUInteger _displayFrameCount;
+    NSUInteger _manualRefreshFrameCount;
     BOOL _displayReadyValue;
     BOOL _didSignalReadiness;
 }
@@ -150,6 +152,9 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
             @"displayWidth": @(self->_displaySizeValue.width),
             @"displayHeight": @(self->_displaySizeValue.height),
             @"frameSequence": @(self->_encodedFrameSequenceValue),
+            @"displayFrameCount": @(self->_displayFrameCount),
+            @"manualRefreshFrameCount": @(self->_manualRefreshFrameCount),
+            @"encoder": [self->_videoEncoder statsRepresentation],
         };
     });
     return representation;
@@ -188,6 +193,7 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
 
     CGSize displaySize = CGSizeMake((CGFloat)CVPixelBufferGetWidth(pixelBuffer), (CGFloat)CVPixelBufferGetHeight(pixelBuffer));
     dispatch_async(_stateQueue, ^{
+        self->_manualRefreshFrameCount += 1;
         self->_displaySizeValue = displaySize;
         self->_displayReadyValue = YES;
         self->_displayStatusValue = [NSString stringWithFormat:@"Private display ready (%.0fx%.0f)", displaySize.width, displaySize.height];
@@ -309,6 +315,10 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
     return [_displayBridge rotateRight:error];
 }
 
+- (BOOL)rotateLeft:(NSError * _Nullable __autoreleasing *)error {
+    return [_displayBridge rotateLeft:error];
+}
+
 - (void)disconnect {
     [_displayBridge disconnect];
     _displayBridge.delegate = nil;
@@ -318,6 +328,7 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
 - (void)privateSimulatorDisplayBridge:(DFPrivateSimulatorDisplayBridge *)bridge didUpdateFrame:(CVPixelBufferRef)pixelBuffer {
     CGSize displaySize = CGSizeMake((CGFloat)CVPixelBufferGetWidth(pixelBuffer), (CGFloat)CVPixelBufferGetHeight(pixelBuffer));
     dispatch_async(_stateQueue, ^{
+        self->_displayFrameCount += 1;
         self->_displaySizeValue = displaySize;
         self->_displayReadyValue = YES;
         self->_displayStatusValue = [NSString stringWithFormat:@"Private display ready (%.0fx%.0f)", displaySize.width, displaySize.height];
@@ -347,6 +358,7 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
     if (pixelBuffer != nil) {
         CGSize displaySize = CGSizeMake((CGFloat)CVPixelBufferGetWidth(pixelBuffer), (CGFloat)CVPixelBufferGetHeight(pixelBuffer));
         dispatch_async(_stateQueue, ^{
+            self->_manualRefreshFrameCount += 1;
             self->_displaySizeValue = displaySize;
             self->_displayReadyValue = YES;
             self->_displayStatusValue = [NSString stringWithFormat:@"Private display ready (%.0fx%.0f)", displaySize.width, displaySize.height];

@@ -114,7 +114,6 @@ static const NSUInteger DFKeyboardModifierControl = 1 << 1;
 static const NSUInteger DFKeyboardModifierOption = 1 << 2;
 static const NSUInteger DFKeyboardModifierCommand = 1 << 3;
 static const NSUInteger DFKeyboardModifierCapsLock = 1 << 4;
-static const NSUInteger DFKeyboardModifierFunction = 1 << 5;
 
 typedef struct {
     __unsafe_unretained id unit;
@@ -2657,7 +2656,7 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     return success;
 }
 
-- (BOOL)rotateRight:(NSError * _Nullable __autoreleasing *)error {
+- (BOOL)rotateByDegrees:(double)deltaDegrees error:(NSError * _Nullable __autoreleasing *)error {
     __block BOOL success = NO;
     __block NSError *dispatchError = nil;
 
@@ -2700,7 +2699,7 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
                 }
             }
 
-            measurement.value = DFNormalizedDegrees(measurement.value + 90.0);
+            measurement.value = DFNormalizedDegrees(measurement.value + deltaDegrees);
             self->_deviceRotationDegrees = measurement.value;
 
             if (readFromSimulatorKit) {
@@ -2766,6 +2765,14 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     }
 
     return success;
+}
+
+- (BOOL)rotateRight:(NSError * _Nullable __autoreleasing *)error {
+    return [self rotateByDegrees:90.0 error:error];
+}
+
+- (BOOL)rotateLeft:(NSError * _Nullable __autoreleasing *)error {
+    return [self rotateByDegrees:-90.0 error:error];
 }
 
 - (void)disconnect {
@@ -2932,12 +2939,13 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
             NSUInteger mask;
             uint16_t keyCode;
         } modifierMap[] = {
+            // IndigoHIDMessageForKeyboardArbitrary expects USB HID keyboard
+            // usages. These are left-side modifier usages from the Keyboard page.
             { DFKeyboardModifierCapsLock, 57 },
-            { DFKeyboardModifierControl, 59 },
-            { DFKeyboardModifierOption, 58 },
-            { DFKeyboardModifierShift, 56 },
-            { DFKeyboardModifierCommand, 55 },
-            { DFKeyboardModifierFunction, 63 },
+            { DFKeyboardModifierControl, 224 },
+            { DFKeyboardModifierShift, 225 },
+            { DFKeyboardModifierOption, 226 },
+            { DFKeyboardModifierCommand, 227 },
         };
 
         NSMutableArray<NSNumber *> *modifierKeyCodes = [NSMutableArray array];

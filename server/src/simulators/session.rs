@@ -8,10 +8,12 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::watch;
+use tokio::sync::broadcast;
 use tokio::task;
 use tokio::time::{timeout, Instant};
 use tracing::debug;
+
+const FRAME_BROADCAST_CAPACITY: usize = 240;
 
 pub struct SimulatorSession {
     inner: Arc<SimulatorSessionInner>,
@@ -22,7 +24,7 @@ struct SimulatorSessionInner {
     udid: String,
     native: NativeSession,
     metrics: Arc<Metrics>,
-    sender: watch::Sender<Option<SharedFrame>>,
+    sender: broadcast::Sender<SharedFrame>,
     latest_keyframe: RwLock<Option<SharedFrame>>,
     state: Mutex<SessionState>,
     display_ready: AtomicBool,
@@ -39,7 +41,7 @@ impl SimulatorSession {
         metrics: Arc<Metrics>,
     ) -> Result<Self, AppError> {
         let native = bridge.create_session(&udid)?;
-        let (sender, _) = watch::channel(None);
+        let (sender, _) = broadcast::channel(FRAME_BROADCAST_CAPACITY);
         let inner = Arc::new(SimulatorSessionInner {
             udid,
             native,
@@ -91,15 +93,7 @@ impl SimulatorSession {
             .map_err(|error| AppError::internal(format!("Failed to join start task: {error}")))?
     }
 
-    pub fn subscribe(&self) -> watch::Receiver<Option<SharedFrame>> {
-        self.inner
-            .metrics
-            .subscribers_connected
-            .fetch_add(1, Ordering::Relaxed);
-        self.inner
-            .metrics
-            .max_send_queue_depth
-            .fetch_max(1, Ordering::Relaxed);
+    pub fn subscribe(&self) -> broadcast::Receiver<SharedFrame> {
         *self.inner.state.lock().unwrap() = SessionState::Streaming;
         self.inner.sender.subscribe()
     }
@@ -128,8 +122,10 @@ impl SimulatorSession {
             }
 
             let remaining = deadline - now;
-            match timeout(remaining, rx.changed()).await {
-                Ok(Ok(())) => {
+            match timeout(remaining, rx.recv()).await {
+                Ok(Ok(frame)) if frame.is_keyframe => return Some(frame),
+                Ok(Ok(_)) => self.request_refresh_async().await,
+                Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
                     self.request_refresh_async().await;
                 }
                 Ok(Err(_)) | Err(_) => return self.latest_keyframe(),
@@ -175,13 +171,24 @@ impl SimulatorSession {
         self.inner.native.rotate_right()
     }
 
+    pub fn rotate_left(&self) -> Result<(), AppError> {
+        self.ensure_started()?;
+        self.inner.native.rotate_left()
+    }
+
     pub fn snapshot(&self) -> serde_json::Value {
+        let native = self.inner.native.session_info().unwrap_or_else(|error| {
+            serde_json::json!({
+                "nativeStatsError": error.to_string(),
+            })
+        });
         serde_json::json!({
             "displayReady": self.inner.display_ready.load(Ordering::Relaxed),
             "displayStatus": self.inner.state.lock().unwrap().as_str(),
             "displayWidth": self.inner.display_width.load(Ordering::Relaxed),
             "displayHeight": self.inner.display_height.load(Ordering::Relaxed),
             "frameSequence": self.inner.frame_sequence.load(Ordering::Relaxed),
+            "native": native,
         })
     }
 }
@@ -260,7 +267,7 @@ impl SimulatorSessionInner {
             keyframe = packet.is_keyframe,
             "native frame received"
         );
-        let _ = self.sender.send_replace(Some(packet));
+        let _ = self.sender.send(packet);
         if matches!(*self.state.lock().unwrap(), SessionState::Attaching) {
             *self.state.lock().unwrap() = SessionState::Ready;
         }

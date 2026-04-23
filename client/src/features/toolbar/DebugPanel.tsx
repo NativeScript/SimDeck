@@ -23,6 +23,13 @@ function formatFps(value: number): string {
   return value.toFixed(1);
 }
 
+function formatMs(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "—";
+  }
+  return `${value.toFixed(1)} ms`;
+}
+
 function formatGpuStatus(runtimeInfo: StreamRuntimeInfo): string {
   if (!runtimeInfo.webGL2) {
     return "No";
@@ -64,6 +71,10 @@ export function DebugPanel({
     { label: "Reconnects", value: String(stats.reconnects) },
     { label: "Frame Seq", value: String(stats.frameSequence) },
     { label: "Decoded", value: String(stats.decodedFrames) },
+    { label: "Rendered", value: String(stats.renderedFrames) },
+    { label: "Decode Q", value: String(stats.decodeQueueSize) },
+    { label: "Render", value: formatMs(stats.latestRenderMs) },
+    { label: "Frame Gap", value: formatMs(stats.latestFrameGapMs) },
     { label: "Path", value: runtimeInfo.streamBackend },
     { label: "Renderer", value: runtimeInfo.renderBackend },
     { label: "GPU", value: formatGpuStatus(runtimeInfo) },

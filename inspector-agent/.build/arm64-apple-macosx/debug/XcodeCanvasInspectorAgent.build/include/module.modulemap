@@ -1,0 +1,3 @@
+module XcodeCanvasInspectorAgent {
+    header "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/include/XcodeCanvasInspectorAgent-Swift.h"
+}

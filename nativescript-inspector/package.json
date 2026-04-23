@@ -1,0 +1,41 @@
+{
+  "name": "@nativescript/xcode-canvas-inspector",
+  "version": "0.1.0",
+  "description": "Debug-only NativeScript runtime inspector for xcode-canvas-web",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "src"
+  ],
+  "keywords": [
+    "nativescript",
+    "uikit",
+    "inspector",
+    "xcode-canvas-web"
+  ],
+  "sideEffects": false,
+  "nativescript": {
+    "platforms": {
+      "ios": "9.0.0"
+    }
+  },
+  "peerDependencies": {
+    "@nativescript/core": ">=8.0.0"
+  },
+  "devDependencies": {
+    "@nativescript/core": "~9.0.0",
+    "typescript": "~5.8.0"
+  }
+}

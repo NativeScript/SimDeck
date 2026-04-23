@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildShellRotationTransform,
   clampPan,
   clampZoom,
   computeChromeScreenRect,
   computeFitScale,
+  mapDisplayedPointToNaturalOrientation,
+  shellSize,
 } from "./viewportMath";
 
 describe("viewportMath", () => {
@@ -58,5 +61,35 @@ describe("viewportMath", () => {
     );
 
     expect(withDock).toBeLessThan(withoutDock);
+  });
+
+  it("swaps shell dimensions for quarter-turn rotations", () => {
+    const portrait = shellSize({ width: 300, height: 650 }, null, 0);
+    expect(shellSize({ width: 300, height: 650 }, null, 1)).toEqual({
+      height: portrait.width,
+      width: portrait.height,
+    });
+  });
+
+  it("maps rotated pointer coordinates back to the natural stream", () => {
+    expect(
+      mapDisplayedPointToNaturalOrientation({ x: 0.2, y: 0.75 }, 1),
+    ).toEqual({
+      x: 0.75,
+      y: 0.8,
+    });
+    expect(
+      mapDisplayedPointToNaturalOrientation({ x: 0.2, y: 0.75 }, 3),
+    ).toEqual({
+      x: 0.25,
+      y: 0.2,
+    });
+  });
+
+  it("builds a quarter-turn transform around the shell origin", () => {
+    const portrait = shellSize({ width: 300, height: 650 }, null, 0);
+    expect(
+      buildShellRotationTransform({ width: 300, height: 650 }, null, 1),
+    ).toBe(`translate(${portrait.height}px, 0px) rotate(90deg)`);
   });
 });

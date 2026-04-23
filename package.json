@@ -12,6 +12,7 @@
     "bin/",
     "cli/",
     "client/dist/",
+    "nativescript-inspector/",
     "scripts/build-cli.sh",
     "scripts/npm-postinstall.mjs",
     "server/Cargo.lock",
@@ -32,16 +33,19 @@
     "build:cli": "scripts/build-cli.sh",
     "build:client": "npm run --prefix client build",
     "build": "npm run build:cli && npm run build:client",
+    "package:vscode-extension": "node scripts/package-vscode-extension.mjs",
+    "install:vscode-extension": "node scripts/install-vscode-extension.mjs",
     "format": "prettier --write . && cargo fmt --manifest-path server/Cargo.toml",
     "format:check": "prettier --check . && cargo fmt --manifest-path server/Cargo.toml --check",
     "lint": "npm run format:check && cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings && npm run --prefix client typecheck",
     "test": "cargo test --manifest-path server/Cargo.toml && npm run --prefix client test",
-    "ci": "npm run lint && npm run build && npm run test",
+    "ci": "npm run lint && npm run build && npm run test && npm run package:vscode-extension",
     "dev": "npm run build:cli && node scripts/dev.mjs",
     "postinstall": "node scripts/npm-postinstall.mjs",
     "prepack": "npm run build:client"
   },
   "devDependencies": {
+    "@vscode/vsce": "^3.6.2",
     "prettier": "^3.6.2"
   }
 }

@@ -147,6 +147,8 @@ fn plist_contents(
         options.bind.to_string(),
         "--client-root".to_string(),
         client_root.to_string_lossy().into_owned(),
+        "--video-codec".to_string(),
+        options.video_codec.as_env_value().to_string(),
     ];
 
     if let Some(advertise_host) = options.advertise_host.as_ref() {

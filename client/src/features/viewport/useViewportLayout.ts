@@ -5,6 +5,7 @@ export function useViewportLayout({
   canvasSize,
   chromeProfile,
   deviceNaturalSize,
+  rotationQuarterTurns,
   reservedBottomInset,
   viewMode,
   zoom,
@@ -14,12 +15,14 @@ export function useViewportLayout({
     deviceNaturalSize,
     chromeProfile,
     reservedBottomInset,
+    rotationQuarterTurns,
   );
   const centerScale = computeCenterScale(
     canvasSize,
     deviceNaturalSize,
     chromeProfile,
     reservedBottomInset,
+    rotationQuarterTurns,
   );
   const effectiveZoom = clampZoom(
     viewMode === "fit"

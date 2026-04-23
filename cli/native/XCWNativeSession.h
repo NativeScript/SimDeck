@@ -12,6 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
                                 error:(NSError * _Nullable * _Nullable)error NS_DESIGNATED_INITIALIZER;
 
 - (BOOL)start:(NSError * _Nullable * _Nullable)error;
+- (NSDictionary *)sessionInfoRepresentation;
 - (void)requestRefresh;
 - (BOOL)sendTouchAtX:(double)x
                    y:(double)y
@@ -22,6 +23,7 @@ NS_ASSUME_NONNULL_BEGIN
               error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)pressHome:(NSError * _Nullable * _Nullable)error;
 - (BOOL)rotateRight:(NSError * _Nullable * _Nullable)error;
+- (BOOL)rotateLeft:(NSError * _Nullable * _Nullable)error;
 - (void)setFrameCallback:(xcw_native_frame_callback _Nullable)callback
                  userData:(void * _Nullable)userData;
 - (void)disconnect;

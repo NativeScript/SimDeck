@@ -12,12 +12,12 @@ import type {
 } from "./streamTypes";
 
 const FPS_SAMPLE_INTERVAL_MS = 500;
+const CLIENT_TELEMETRY_INTERVAL_MS = 1000;
 const DEBUG_RENDERER_SOFTWARE_PATTERN = /swiftshader|software|llvmpipe/i;
 
 interface UseLiveStreamOptions {
   canvasElement: HTMLCanvasElement | null;
   simulator: SimulatorMetadata | null;
-  stamp: number;
 }
 
 interface UseLiveStreamResult {
@@ -90,13 +90,28 @@ function detectRuntimeInfo(): StreamRuntimeInfo {
   return runtimeInfo;
 }
 
+function createClientTelemetryId(): string {
+  return (
+    window.crypto?.randomUUID?.() ??
+    `page-${Math.random().toString(36).slice(2)}`
+  );
+}
+
+function buildClientTelemetryUrl(): string {
+  return new URL("/api/client-stream-stats", window.location.href).toString();
+}
+
 export function useLiveStream({
   canvasElement,
   simulator,
-  stamp,
 }: UseLiveStreamOptions): UseLiveStreamResult {
+  const clientTelemetryIdRef = useRef("");
   const workerClientRef = useRef<StreamWorkerClient | null>(null);
   const latestDecodedFramesRef = useRef(0);
+  const latestFpsRef = useRef(0);
+  const latestStatsRef = useRef<StreamStats>(createEmptyStreamStats());
+  const latestStatusRef = useRef<StreamStatus>({ state: "idle" });
+  const pageFpsRef = useRef(0);
   const [deviceNaturalSize, setDeviceNaturalSize] = useState<Size | null>(null);
   const [stats, setStats] = useState<StreamStats>(createEmptyStreamStats);
   const [status, setStatus] = useState<StreamStatus>({ state: "idle" });
@@ -106,8 +121,36 @@ export function useLiveStream({
     createDefaultRuntimeInfo,
   );
 
+  if (!clientTelemetryIdRef.current) {
+    clientTelemetryIdRef.current = createClientTelemetryId();
+  }
+
   useEffect(() => {
     setRuntimeInfo(detectRuntimeInfo());
+  }, []);
+
+  useEffect(() => {
+    let frameCount = 0;
+    let lastSampleAt = performance.now();
+    let rafId = 0;
+
+    const tick = () => {
+      frameCount += 1;
+      const now = performance.now();
+      const elapsedMs = now - lastSampleAt;
+      if (elapsedMs >= CLIENT_TELEMETRY_INTERVAL_MS) {
+        pageFpsRef.current = (frameCount * 1000) / elapsedMs;
+        frameCount = 0;
+        lastSampleAt = now;
+      }
+
+      rafId = window.requestAnimationFrame(tick);
+    };
+
+    rafId = window.requestAnimationFrame(tick);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
   }, []);
 
   useEffect(() => {
@@ -167,7 +210,16 @@ export function useLiveStream({
 
   useEffect(() => {
     latestDecodedFramesRef.current = stats.decodedFrames;
-  }, [stats.decodedFrames]);
+    latestStatsRef.current = stats;
+  }, [stats]);
+
+  useEffect(() => {
+    latestStatusRef.current = status;
+  }, [status]);
+
+  useEffect(() => {
+    latestFpsRef.current = fps;
+  }, [fps]);
 
   useEffect(() => {
     let lastSampleFrames = latestDecodedFramesRef.current;
@@ -211,11 +263,52 @@ export function useLiveStream({
       return;
     }
 
-    workerClient.connect(buildStreamTarget(simulator.udid, stamp));
+    workerClient.connect(buildStreamTarget(simulator.udid));
     return () => {
       workerClient.disconnect();
     };
-  }, [canvasElement, simulator?.isBooted, simulator?.udid, stamp]);
+  }, [canvasElement, simulator?.isBooted, simulator?.udid]);
+
+  useEffect(() => {
+    if (!simulator?.udid) {
+      return;
+    }
+
+    const postTelemetry = () => {
+      const latestStats = latestStatsRef.current;
+      const latestStatus = latestStatusRef.current;
+      void fetch(buildClientTelemetryUrl(), {
+        body: JSON.stringify({
+          ...latestStats,
+          appFps: latestFpsRef.current,
+          clientId: clientTelemetryIdRef.current,
+          focused: document.hasFocus(),
+          kind: "page",
+          pageFps: pageFpsRef.current,
+          status: latestStatus.state,
+          timestampMs: Date.now(),
+          udid: simulator.udid,
+          url: window.location.href,
+          userAgent: window.navigator.userAgent,
+          visibilityState: document.visibilityState,
+        }),
+        cache: "no-store",
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }).catch(() => {
+        // Diagnostic only; UI state should never depend on telemetry.
+      });
+    };
+
+    postTelemetry();
+    const intervalId = window.setInterval(
+      postTelemetry,
+      CLIENT_TELEMETRY_INTERVAL_MS,
+    );
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [simulator?.udid]);
 
   return {
     deviceNaturalSize,

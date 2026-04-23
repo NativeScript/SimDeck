@@ -24,6 +24,7 @@ export interface ViewportLayoutState {
   chromeProfile: ChromeProfile | null;
   deviceNaturalSize: Size | null;
   pan: Point;
+  rotationQuarterTurns?: number;
   reservedBottomInset?: number;
   viewMode: ViewMode;
   zoom: number | null;

@@ -1,0 +1,68 @@
+{
+  "name": "xcode-canvas-web-vscode",
+  "displayName": "Xcode Canvas Web",
+  "description": "Open the local Xcode Canvas Web simulator inside VS Code.",
+  "version": "0.1.0",
+  "publisher": "dj",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:xcodeCanvasWeb.openSimulatorView",
+    "onCommand:xcodeCanvasWeb.stopServer",
+    "onCommand:xcodeCanvasWeb.showOutput"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "xcodeCanvasWeb.openSimulatorView",
+        "title": "Xcode Canvas Web: Open Simulator View"
+      },
+      {
+        "command": "xcodeCanvasWeb.stopServer",
+        "title": "Xcode Canvas Web: Stop Managed Server"
+      },
+      {
+        "command": "xcodeCanvasWeb.showOutput",
+        "title": "Xcode Canvas Web: Show Output"
+      }
+    ],
+    "configuration": {
+      "title": "Xcode Canvas Web",
+      "properties": {
+        "xcodeCanvasWeb.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4310",
+          "description": "URL loaded inside the simulator webview."
+        },
+        "xcodeCanvasWeb.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to the xcode-canvas-web CLI. When empty, the extension first checks the workspace build and then falls back to PATH."
+        },
+        "xcodeCanvasWeb.port": {
+          "type": "number",
+          "default": 4310,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port used when the extension auto-starts the local server."
+        },
+        "xcodeCanvasWeb.bindAddress": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Bind address used when the extension auto-starts the local server."
+        },
+        "xcodeCanvasWeb.autoStartServer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the local server automatically when opening the simulator view if the server is not already reachable."
+        }
+      }
+    }
+  }
+}

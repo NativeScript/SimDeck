@@ -9,6 +9,8 @@ Use this skill when you need to operate the local Xcode Canvas Web project: buil
 - The product server lives in `server/` and is written in Rust.
 - The native simulator bridge lives in `cli/` and is written in Objective-C.
 - The browser client lives in `client/` and is built with React.
+- The NativeScript in-app inspector runtime lives in `nativescript-inspector/`
+  and is written in TypeScript.
 - The Rust CLI serves the HTTP API and the built web app, and exposes WebTransport for video.
 
 ## Build Commands
@@ -41,6 +43,12 @@ npm install -g .
 
 ```sh
 xcode-canvas-web serve --port 4310
+```
+
+Use software H.264 when macOS screen recording starves the hardware encoder:
+
+```sh
+xcode-canvas-web serve --port 4310 --video-codec h264-software
 ```
 
 Open:
@@ -112,6 +120,7 @@ xcode-canvas-web launch <udid> com.apple.Preferences
 
 - `GET /api/health`
 - `GET /api/metrics`
+- `GET /api/inspector/connect`
 - `GET /api/simulators`
 - `POST /api/simulators/:udid/boot`
 - `POST /api/simulators/:udid/shutdown`
@@ -123,6 +132,9 @@ xcode-canvas-web launch <udid> com.apple.Preferences
 - `POST /api/simulators/:udid/rotate-right`
 - `GET /api/simulators/:udid/chrome-profile`
 - `GET /api/simulators/:udid/chrome.png`
+- `GET /api/simulators/:udid/accessibility-tree`
+- `GET /api/simulators/:udid/accessibility-point`
+- `POST /api/simulators/:udid/inspector/request`
 
 ## Important Notes
 

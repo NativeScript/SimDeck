@@ -1,6 +1,7 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 
 import type { Point } from "../viewport/types";
+import { mapDisplayedPointToNaturalOrientation } from "../viewport/viewportMath";
 
 export function normalizedPointerCoordinates(
   event: PointerEvent | ReactPointerEvent<HTMLElement>,
@@ -17,4 +18,14 @@ export function normalizedPointerCoordinates(
     x: Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1),
     y: Math.min(Math.max((event.clientY - rect.top) / rect.height, 0), 1),
   };
+}
+
+export function normalizedPointerCoordinatesForOrientation(
+  event: PointerEvent | ReactPointerEvent<HTMLElement>,
+  rotationQuarterTurns: number,
+): Point | null {
+  const coords = normalizedPointerCoordinates(event);
+  return coords
+    ? mapDisplayedPointToNaturalOrientation(coords, rotationQuarterTurns)
+    : null;
 }

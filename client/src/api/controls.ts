@@ -32,6 +32,10 @@ export function shutdownSimulator(udid: string) {
   return postSimulatorAction(udid, "shutdown");
 }
 
+export function toggleAppearance(udid: string) {
+  return postSimulatorAction(udid, "toggle-appearance");
+}
+
 export function openSimulatorUrl(udid: string, payload: OpenUrlPayload) {
   return postSimulatorAction(udid, "open-url", payload);
 }
@@ -50,6 +54,14 @@ export function sendKey(udid: string, payload: KeyPayload) {
 
 export function pressHome(udid: string) {
   return postSimulatorAction(udid, "home");
+}
+
+export function openAppSwitcher(udid: string) {
+  return postSimulatorAction(udid, "app-switcher");
+}
+
+export function rotateLeft(udid: string) {
+  return postSimulatorAction(udid, "rotate-left");
 }
 
 export function rotateRight(udid: string) {

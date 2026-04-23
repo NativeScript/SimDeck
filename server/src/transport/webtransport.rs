@@ -6,6 +6,7 @@ use anyhow::Context;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::broadcast;
 use tracing::warn;
 use wtransport::endpoint::endpoint_side::Server;
 use wtransport::{Endpoint, Identity, ServerConfig};
@@ -99,7 +100,9 @@ async fn handle_session(
     let started_at = Instant::now();
     let mut first_frame_sent = false;
     let mut last_sequence = 0u64;
+    let mut waiting_for_keyframe = false;
     let mut rx = session.subscribe();
+    let _stream_metrics = StreamMetricsGuard::new(state.metrics.clone());
 
     if let Some(frame) = hello_frame {
         send_frame(&mut video, &session, &state.metrics, &frame, true).await?;
@@ -112,23 +115,45 @@ async fn handle_session(
     }
 
     loop {
-        rx.changed().await?;
-        let Some(frame) = rx.borrow().clone() else {
-            continue;
+        let frame = match rx.recv().await {
+            Ok(frame) => frame,
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                state
+                    .metrics
+                    .frames_dropped_server
+                    .fetch_add(skipped, Ordering::Relaxed);
+                waiting_for_keyframe = true;
+                last_sequence = 0;
+                session.request_refresh();
+                continue;
+            }
+            Err(broadcast::error::RecvError::Closed) => anyhow::bail!("frame stream closed"),
         };
+
+        if waiting_for_keyframe && !frame.is_keyframe {
+            state
+                .metrics
+                .frames_dropped_server
+                .fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
 
         if last_sequence != 0 && frame.frame_sequence > last_sequence + 1 && !frame.is_keyframe {
             state
                 .metrics
                 .frames_dropped_server
                 .fetch_add(1, Ordering::Relaxed);
+            waiting_for_keyframe = true;
+            last_sequence = 0;
             session.request_refresh();
             continue;
         }
 
         let discontinuity = last_sequence != 0 && frame.frame_sequence > last_sequence + 1;
+        let discontinuity = discontinuity || waiting_for_keyframe;
         send_frame(&mut video, &session, &state.metrics, &frame, discontinuity).await?;
         last_sequence = frame.frame_sequence;
+        waiting_for_keyframe = false;
 
         if !first_frame_sent {
             first_frame_sent = true;
@@ -137,6 +162,36 @@ async fn handle_session(
                 .latest_first_frame_ms
                 .store(started_at.elapsed().as_millis() as u64, Ordering::Relaxed);
         }
+    }
+}
+
+struct StreamMetricsGuard {
+    metrics: Arc<Metrics>,
+}
+
+impl StreamMetricsGuard {
+    fn new(metrics: Arc<Metrics>) -> Self {
+        metrics
+            .subscribers_connected
+            .fetch_add(1, Ordering::Relaxed);
+        let active_streams = metrics.active_streams.fetch_add(1, Ordering::Relaxed) + 1;
+        metrics
+            .max_send_queue_depth
+            .fetch_max(active_streams, Ordering::Relaxed);
+        Self { metrics }
+    }
+}
+
+impl Drop for StreamMetricsGuard {
+    fn drop(&mut self) {
+        self.metrics
+            .subscribers_disconnected
+            .fetch_add(1, Ordering::Relaxed);
+        let _ = self.metrics.active_streams.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |current| Some(current.saturating_sub(1)),
+        );
     }
 }
 
@@ -162,7 +217,7 @@ async fn send_frame(
         stream.write_all(data).await?;
     }
     metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
-    if discontinuity {
+    if discontinuity && !frame.is_keyframe {
         session.request_refresh();
     }
     Ok(())

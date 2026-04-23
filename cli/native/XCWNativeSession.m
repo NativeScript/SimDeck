@@ -94,6 +94,10 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
     [self.session requestKeyFrameRefresh];
 }
 
+- (NSDictionary *)sessionInfoRepresentation {
+    return [self.session sessionInfoRepresentation];
+}
+
 - (BOOL)sendTouchAtX:(double)x
                    y:(double)y
                phase:(NSString *)phase
@@ -113,6 +117,10 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
 
 - (BOOL)rotateRight:(NSError * _Nullable __autoreleasing *)error {
     return [self.session rotateRight:error];
+}
+
+- (BOOL)rotateLeft:(NSError * _Nullable __autoreleasing *)error {
+    return [self.session rotateLeft:error];
 }
 
 - (void)setFrameCallback:(xcw_native_frame_callback)callback

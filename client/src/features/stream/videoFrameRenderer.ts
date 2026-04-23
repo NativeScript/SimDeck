@@ -103,6 +103,8 @@ export class VideoFrameRenderer {
   private readonly texture: WebGLTexture;
   private readonly vertexArray: WebGLVertexArrayObject;
   private readonly vertexBuffer: WebGLBuffer;
+  private textureHeight = 0;
+  private textureWidth = 0;
 
   constructor(canvas: StreamCanvas) {
     this.canvas = canvas;
@@ -179,17 +181,39 @@ export class VideoFrameRenderer {
     this.syncViewport(frame.displayWidth, frame.displayHeight);
     this.gl.activeTexture(this.gl.TEXTURE0);
     this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture);
-    this.gl.texImage2D(
+    this.uploadFrame(frame);
+    this.gl.useProgram(this.program);
+    this.gl.bindVertexArray(this.vertexArray);
+    this.gl.drawArrays(this.gl.TRIANGLES, 0, 6);
+  }
+
+  private uploadFrame(frame: VideoFrame) {
+    if (
+      this.textureWidth !== frame.displayWidth ||
+      this.textureHeight !== frame.displayHeight
+    ) {
+      this.textureWidth = frame.displayWidth;
+      this.textureHeight = frame.displayHeight;
+      this.gl.texImage2D(
+        this.gl.TEXTURE_2D,
+        0,
+        this.gl.RGBA,
+        this.gl.RGBA,
+        this.gl.UNSIGNED_BYTE,
+        frame,
+      );
+      return;
+    }
+
+    this.gl.texSubImage2D(
       this.gl.TEXTURE_2D,
       0,
-      this.gl.RGBA,
+      0,
+      0,
       this.gl.RGBA,
       this.gl.UNSIGNED_BYTE,
       frame,
     );
-    this.gl.useProgram(this.program);
-    this.gl.bindVertexArray(this.vertexArray);
-    this.gl.drawArrays(this.gl.TRIANGLES, 0, 6);
   }
 
   private syncViewport(width: number, height: number) {

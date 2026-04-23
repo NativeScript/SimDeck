@@ -36,19 +36,23 @@ void xcw_native_run_main_loop_slice(double duration_seconds);
 char * _Nullable xcw_native_list_simulators(char * _Nullable * _Nullable error_message);
 bool xcw_native_boot_simulator(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 bool xcw_native_shutdown_simulator(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
+bool xcw_native_toggle_appearance(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 bool xcw_native_open_url(const char * _Nonnull udid, const char * _Nonnull url, char * _Nullable * _Nullable error_message);
 bool xcw_native_launch_bundle(const char * _Nonnull udid, const char * _Nonnull bundle_id, char * _Nullable * _Nullable error_message);
 char * _Nullable xcw_native_get_chrome_profile(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 xcw_native_owned_bytes xcw_native_render_chrome_png(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
+char * _Nullable xcw_native_recent_logs(const char * _Nonnull udid, double seconds, size_t limit, char * _Nullable * _Nullable error_message);
 
 void * _Nullable xcw_native_session_create(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 void xcw_native_session_destroy(void * _Nullable handle);
 bool xcw_native_session_start(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
+char * _Nullable xcw_native_session_info(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 void xcw_native_session_request_refresh(void * _Nonnull handle);
 bool xcw_native_session_send_touch(void * _Nonnull handle, double x, double y, const char * _Nonnull phase, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_send_key(void * _Nonnull handle, uint16_t key_code, uint32_t modifiers, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_press_home(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_rotate_right(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
+bool xcw_native_session_rotate_left(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 void xcw_native_session_set_frame_callback(void * _Nonnull handle, xcw_native_frame_callback _Nullable callback, void * _Nullable user_data);
 
 void xcw_native_free_string(char * _Nullable value);

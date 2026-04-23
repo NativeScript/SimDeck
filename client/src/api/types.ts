@@ -34,6 +34,108 @@ export interface ChromeProfile {
   cornerRadius: number;
 }
 
+export interface AccessibilityFrame {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface AccessibilitySourceLocation {
+  column?: number | null;
+  file?: string | null;
+  kind?: string | null;
+  line?: number | null;
+  offset?: number | null;
+}
+
+export interface AccessibilityNode {
+  AXFrame?: string | null;
+  AXIdentifier?: string | null;
+  AXLabel?: string | null;
+  AXUniqueId?: string | null;
+  AXValue?: string | null;
+  alpha?: number | null;
+  backgroundColor?: Record<string, unknown> | null;
+  bounds?: AccessibilityFrame | null;
+  className?: string | null;
+  children?: AccessibilityNode[];
+  control?: Record<string, unknown> | null;
+  content_required?: boolean | null;
+  custom_actions?: string[] | null;
+  debugDescription?: string | null;
+  enabled?: boolean | null;
+  frame?: AccessibilityFrame | null;
+  frameInScreen?: AccessibilityFrame | null;
+  help?: string | null;
+  imageName?: string | null;
+  inspectorId?: string | null;
+  isHidden?: boolean | null;
+  isOpaque?: boolean | null;
+  isUserInteractionEnabled?: boolean | null;
+  moduleName?: string | null;
+  nativeScript?: Record<string, unknown> | null;
+  pid?: number | null;
+  placeholder?: string | null;
+  role?: string | null;
+  role_description?: string | null;
+  scroll?: Record<string, unknown> | null;
+  source?: "axe" | "in-app-inspector" | "nativescript" | string | null;
+  sourceColumn?: number | null;
+  sourceFile?: string | null;
+  sourceLine?: number | null;
+  sourceLocation?: AccessibilitySourceLocation | null;
+  sourceLocations?: AccessibilitySourceLocation[] | null;
+  subrole?: string | null;
+  swiftUI?: Record<string, unknown> | null;
+  text?: string | null;
+  title?: string | null;
+  type?: string | null;
+  uikit?: Record<string, unknown> | null;
+  uikitId?: string | null;
+  uikitScript?: Record<string, unknown> | null;
+  viewController?: Record<string, unknown> | null;
+}
+
+export type AccessibilitySource = "axe" | "in-app-inspector" | "nativescript";
+export type AccessibilitySourcePreference = AccessibilitySource | "auto";
+
+export interface AccessibilityTreeResponse {
+  availableSources?: AccessibilitySource[];
+  fallbackReason?: string;
+  fallbackSource?: "axe";
+  inspector?: Record<string, unknown>;
+  roots: AccessibilityNode[];
+  source: AccessibilitySource;
+}
+
+export interface SimulatorLogEntry {
+  category: string;
+  level: string;
+  message: string;
+  pid: number | null;
+  process: string;
+  subsystem: string;
+  timestamp: string;
+}
+
+export interface SimulatorLogsResponse {
+  entries: SimulatorLogEntry[];
+}
+
+export interface InspectorRequestResponse<T = unknown> {
+  inspector?: Record<string, unknown>;
+  result: T;
+}
+
+export interface UIKitScriptResult {
+  className?: string | null;
+  id: string;
+  ok: boolean;
+  result?: unknown;
+  script?: string;
+}
+
 export type TouchPhase = "began" | "moved" | "ended" | "cancelled";
 
 export interface TouchPayload {

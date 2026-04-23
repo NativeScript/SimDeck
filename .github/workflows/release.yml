@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  release:
+    types:
+      - published
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            client/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG_NAME="${{ github.event.release.tag_name }}"
+          else
+            TAG_NAME="${GITHUB_REF_NAME}"
+          fi
+
+          VERSION="${TAG_NAME#v}"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+
+          if [ "${VERSION}" != "${PACKAGE_VERSION}" ]; then
+            echo "Tag ${TAG_NAME} does not match package version ${PACKAGE_VERSION}" >&2
+            exit 1
+          fi
+
+          echo "tag=${TAG_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install client dependencies
+        run: npm ci --prefix client
+
+      - name: Lint, build, and test
+        run: npm run ci
+
+      - name: Prepare release assets
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          ARTIFACTS_DIR="${RUNNER_TEMP}/release-assets"
+          BUNDLE_DIR="${RUNNER_TEMP}/xcode-canvas-web-${VERSION}-macos"
+
+          rm -rf "${ARTIFACTS_DIR}" "${BUNDLE_DIR}"
+          mkdir -p "${ARTIFACTS_DIR}" "${BUNDLE_DIR}"
+
+          cp build/xcode-canvas-web "${BUNDLE_DIR}/"
+          cp build/xcode-canvas-web-bin "${BUNDLE_DIR}/"
+          cp README.md LICENSE "${BUNDLE_DIR}/"
+
+          tar -czf "${ARTIFACTS_DIR}/xcode-canvas-web-${VERSION}-macos.tar.gz" \
+            -C "${RUNNER_TEMP}" \
+            "xcode-canvas-web-${VERSION}-macos"
+
+          ditto -c -k --keepParent \
+            "${BUNDLE_DIR}" \
+            "${ARTIFACTS_DIR}/xcode-canvas-web-${VERSION}-macos.zip"
+
+          npm pack --pack-destination "${ARTIFACTS_DIR}"
+
+      - name: Publish package to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          if npm view "xcode-canvas-web@${VERSION}" version >/dev/null 2>&1; then
+            echo "xcode-canvas-web@${VERSION} is already published on npm."
+            exit 0
+          fi
+
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "NPM_TOKEN repository secret is required to publish xcode-canvas-web@${VERSION}." >&2
+            exit 1
+          fi
+
+          npm publish
+
+      - name: Upload GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.meta.outputs.tag }}
+        run: |
+          ARTIFACTS_DIR="${RUNNER_TEMP}/release-assets"
+
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release upload "${TAG_NAME}" "${ARTIFACTS_DIR}"/* --clobber
+          else
+            gh release create "${TAG_NAME}" "${ARTIFACTS_DIR}"/* \
+              --generate-notes \
+              --title "${TAG_NAME}"
+          fi

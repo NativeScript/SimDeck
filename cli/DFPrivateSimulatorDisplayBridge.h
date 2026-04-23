@@ -59,6 +59,7 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
 - (BOOL)pressHomeButton:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(pressHomeButton());
 
 - (BOOL)rotateRight:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(rotateRight());
+- (BOOL)rotateLeft:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(rotateLeft());
 
 - (void)disconnect;
 

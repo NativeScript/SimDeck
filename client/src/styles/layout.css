@@ -115,6 +115,12 @@
     width: min(260px, calc(100vw - 16px));
   }
 
+  .hierarchy-panel {
+    width: min(320px, 74vw);
+    min-width: 0;
+    max-width: 74vw;
+  }
+
   .toolbar-sim-detail {
     display: none;
   }

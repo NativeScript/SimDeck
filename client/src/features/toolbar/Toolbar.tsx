@@ -13,15 +13,20 @@ interface ToolbarProps {
   error: string;
   filteredSimulators: SimulatorMetadata[];
   fps: number;
+  hierarchyVisible: boolean;
   isLoading: boolean;
   onBoot: () => void;
   onChangeSearch: (value: string) => void;
   onHome: () => void;
+  onOpenAppSwitcher: () => void;
   onOpenBundlePrompt: () => void;
   onOpenUrlPrompt: () => void;
+  onRotateLeft: () => void;
   onRotateRight: () => void;
   onShutdown: () => void;
+  onToggleAppearance: () => void;
   onToggleDebug: () => void;
+  onToggleHierarchy: () => void;
   onToggleMenu: () => void;
   runtimeInfo: StreamRuntimeInfo;
   search: string;
@@ -41,17 +46,22 @@ export function Toolbar({
   error,
   filteredSimulators,
   fps,
+  hierarchyVisible,
   isLoading,
   menuOpen,
   menuRef,
   onBoot,
   onChangeSearch,
   onHome,
+  onOpenAppSwitcher,
   onOpenBundlePrompt,
   onOpenUrlPrompt,
+  onRotateLeft,
   onRotateRight,
   onShutdown,
+  onToggleAppearance,
   onToggleDebug,
+  onToggleHierarchy,
   onToggleMenu,
   runtimeInfo,
   search,
@@ -64,6 +74,15 @@ export function Toolbar({
   return (
     <header className="toolbar">
       <div className="toolbar-left">
+        <button
+          aria-label="Toggle View Hierarchy"
+          className={`tbtn icon-btn ${hierarchyVisible ? "active" : ""}`}
+          onClick={onToggleHierarchy}
+          title="Toggle View Hierarchy"
+          type="button"
+        >
+          <HierarchyIcon />
+        </button>
         <SimulatorMenu
           debugVisible={debugVisible}
           filteredSimulators={filteredSimulators}
@@ -135,6 +154,30 @@ export function Toolbar({
               <HomeIcon />
             </button>
             <button
+              aria-label="App Switcher"
+              className="tbtn icon-btn"
+              onClick={onOpenAppSwitcher}
+              title="App Switcher"
+            >
+              <AppSwitcherIcon />
+            </button>
+            <button
+              aria-label="Toggle Appearance"
+              className="tbtn icon-btn"
+              onClick={onToggleAppearance}
+              title="Toggle Appearance"
+            >
+              <AppearanceIcon />
+            </button>
+            <button
+              aria-label="Rotate Left"
+              className="tbtn icon-btn"
+              onClick={onRotateLeft}
+              title="Rotate Left"
+            >
+              <RotateLeftIcon />
+            </button>
+            <button
               aria-label="Rotate Right"
               className="tbtn icon-btn"
               onClick={onRotateRight}
@@ -174,11 +217,80 @@ function HomeIcon() {
   );
 }
 
+function AppSwitcherIcon() {
+  return (
+    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
+      <rect
+        height="8.5"
+        rx="1.6"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        width="6.5"
+        x="2.25"
+        y="4.25"
+      />
+      <path
+        d="M7.25 3.25h4.1c.9 0 1.65.74 1.65 1.65v6.35"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.25"
+      />
+    </svg>
+  );
+}
+
+function AppearanceIcon() {
+  return (
+    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
+      <path
+        d="M8 2.2v11.6M8 13.8a5.8 5.8 0 0 0 0-11.6 5.8 5.8 0 0 0 0 11.6z"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.35"
+      />
+      <path d="M8 3.5a4.5 4.5 0 0 1 0 9z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function RotateLeftIcon() {
+  return (
+    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
+      <path
+        d="M5.2 4H3.3V2.1M3.5 4A5.4 5.4 0 1 1 2.9 10"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.45"
+      />
+    </svg>
+  );
+}
+
 function RotateRightIcon() {
   return (
-    <svg fill="currentColor" height="16" viewBox="0 0 16 16" width="16">
-      <path d="M10.75 1.75h1.75v3.5h-1.5V4.34a4.5 4.5 0 1 0 .8 5.66l1.23.87a6 6 0 1 1-1.28-7.12v-.99z" />
-      <path d="M6.1 4.25h2.8a.6.6 0 0 1 .6.6v5.3a.6.6 0 0 1-.6.6H6.1a.6.6 0 0 1-.6-.6v-5.3a.6.6 0 0 1 .6-.6zm.9 1.1v4.3h1.5v-4.3H7z" />
+    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
+      <path
+        d="M10.8 4h1.9V2.1M12.5 4a5.4 5.4 0 1 0 .6 6"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.45"
+      />
+    </svg>
+  );
+}
+
+function HierarchyIcon() {
+  return (
+    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
+      <path
+        d="M3 2.5h4v3H3zM9 2.5h4v3H9zM3 10.5h4v3H3zM9 10.5h4v3H9zM5 5.5v2.25h6V5.5M5 10.5V7.75M11 10.5V7.75"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.35"
+      />
     </svg>
   );
 }

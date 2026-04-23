@@ -40,6 +40,10 @@ unsafe extern "C" {
         udid: *const c_char,
         error_message: *mut *mut c_char,
     ) -> bool;
+    pub fn xcw_native_toggle_appearance(
+        udid: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> bool;
     pub fn xcw_native_open_url(
         udid: *const c_char,
         url: *const c_char,
@@ -58,6 +62,12 @@ unsafe extern "C" {
         udid: *const c_char,
         error_message: *mut *mut c_char,
     ) -> xcw_native_owned_bytes;
+    pub fn xcw_native_recent_logs(
+        udid: *const c_char,
+        seconds: f64,
+        limit: usize,
+        error_message: *mut *mut c_char,
+    ) -> *mut c_char;
 
     pub fn xcw_native_session_create(
         udid: *const c_char,
@@ -65,6 +75,10 @@ unsafe extern "C" {
     ) -> *mut c_void;
     pub fn xcw_native_session_destroy(handle: *mut c_void);
     pub fn xcw_native_session_start(handle: *mut c_void, error_message: *mut *mut c_char) -> bool;
+    pub fn xcw_native_session_info(
+        handle: *mut c_void,
+        error_message: *mut *mut c_char,
+    ) -> *mut c_char;
     pub fn xcw_native_session_request_refresh(handle: *mut c_void);
     pub fn xcw_native_session_send_touch(
         handle: *mut c_void,
@@ -84,6 +98,10 @@ unsafe extern "C" {
         error_message: *mut *mut c_char,
     ) -> bool;
     pub fn xcw_native_session_rotate_right(
+        handle: *mut c_void,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_session_rotate_left(
         handle: *mut c_void,
         error_message: *mut *mut c_char,
     ) -> bool;

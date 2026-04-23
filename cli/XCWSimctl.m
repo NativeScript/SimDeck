@@ -7,6 +7,50 @@
 
 static NSString * const XCWSimctlErrorDomain = @"XcodeCanvasWeb.Simctl";
 
+static NSArray *XCWArrayPayload(id payload, NSString *nestedKey) {
+    if ([payload isKindOfClass:[NSArray class]]) {
+        return payload;
+    }
+    if ([payload isKindOfClass:[NSDictionary class]]) {
+        id nested = [(NSDictionary *)payload objectForKey:nestedKey];
+        if ([nested isKindOfClass:[NSArray class]]) {
+            return nested;
+        }
+    }
+    return @[];
+}
+
+static NSString *XCWStringValue(id value) {
+    return [value isKindOfClass:[NSString class]] ? value : @"";
+}
+
+static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeIdentifier) {
+    NSString *name = XCWStringValue(runtime[@"name"]);
+    if (name.length > 0 && ![name isEqualToString:runtimeIdentifier]) {
+        return name;
+    }
+
+    NSString *platform = XCWStringValue(runtime[@"platform"]);
+    NSString *version = XCWStringValue(runtime[@"version"]);
+    if (platform.length > 0 && version.length > 0) {
+        return [NSString stringWithFormat:@"%@ %@", platform, version];
+    }
+
+    NSString *prefix = @"com.apple.CoreSimulator.SimRuntime.";
+    NSString *suffix = runtimeIdentifier ?: @"";
+    if ([suffix hasPrefix:prefix]) {
+        suffix = [suffix substringFromIndex:prefix.length];
+    }
+    for (NSString *candidate in @[@"iOS", @"watchOS", @"tvOS", @"visionOS", @"xrOS"]) {
+        NSString *candidatePrefix = [candidate stringByAppendingString:@"-"];
+        if ([suffix hasPrefix:candidatePrefix]) {
+            NSString *versionSuffix = [suffix substringFromIndex:candidatePrefix.length];
+            return [NSString stringWithFormat:@"%@ %@", candidate, [versionSuffix stringByReplacingOccurrencesOfString:@"-" withString:@"."]];
+        }
+    }
+    return runtimeIdentifier.length > 0 ? runtimeIdentifier : @"Unknown Runtime";
+}
+
 @implementation XCWSimctl
 
 - (nullable NSArray<NSDictionary *> *)listSimulatorsWithError:(NSError * _Nullable __autoreleasing *)error {
@@ -29,26 +73,24 @@ static NSString * const XCWSimctlErrorDomain = @"XcodeCanvasWeb.Simctl";
         return nil;
     }
 
-    NSDictionary *deviceTypesPayload = payload[@"devicetypes"];
-    NSArray *deviceTypesArray = [deviceTypesPayload isKindOfClass:[NSDictionary class]] ? deviceTypesPayload[@"devicetypes"] : nil;
-    if (![deviceTypesArray isKindOfClass:[NSArray class]]) {
-        deviceTypesArray = @[];
-    }
+    NSArray *deviceTypesArray = XCWArrayPayload(payload[@"devicetypes"], @"devicetypes");
     NSMutableDictionary<NSString *, NSDictionary *> *deviceTypesByIdentifier = [NSMutableDictionary dictionary];
     for (NSDictionary *deviceType in deviceTypesArray) {
+        if (![deviceType isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
         NSString *identifier = deviceType[@"identifier"];
         if (identifier.length > 0) {
             deviceTypesByIdentifier[identifier] = deviceType;
         }
     }
 
-    NSDictionary *runtimesPayload = payload[@"runtimes"];
-    NSArray *runtimeArray = [runtimesPayload isKindOfClass:[NSDictionary class]] ? runtimesPayload[@"runtimes"] : nil;
-    if (![runtimeArray isKindOfClass:[NSArray class]]) {
-        runtimeArray = @[];
-    }
+    NSArray *runtimeArray = XCWArrayPayload(payload[@"runtimes"], @"runtimes");
     NSMutableDictionary<NSString *, NSDictionary *> *runtimesByIdentifier = [NSMutableDictionary dictionary];
     for (NSDictionary *runtime in runtimeArray) {
+        if (![runtime isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
         NSString *identifier = runtime[@"identifier"];
         if (identifier.length > 0) {
             runtimesByIdentifier[identifier] = runtime;
@@ -57,6 +99,9 @@ static NSString * const XCWSimctlErrorDomain = @"XcodeCanvasWeb.Simctl";
 
     NSMutableArray<NSDictionary *> *flattened = [NSMutableArray array];
     NSDictionary *devicesByRuntime = payload[@"devices"];
+    if (![devicesByRuntime isKindOfClass:[NSDictionary class]]) {
+        devicesByRuntime = @{};
+    }
     [devicesByRuntime enumerateKeysAndObjectsUsingBlock:^(NSString *runtimeIdentifier, NSArray *devices, __unused BOOL *stop) {
         if (![devices isKindOfClass:[NSArray class]]) {
             return;
@@ -86,7 +131,7 @@ static NSString * const XCWSimctlErrorDomain = @"XcodeCanvasWeb.Simctl";
                 @"deviceTypeIdentifier": deviceTypeIdentifier.length > 0 ? deviceTypeIdentifier : [NSNull null],
                 @"deviceTypeName": deviceType[@"name"] ?: device[@"name"] ?: @"Unknown Simulator",
                 @"runtimeIdentifier": runtimeIdentifier ?: [NSNull null],
-                @"runtimeName": runtime[@"name"] ?: runtimeIdentifier ?: @"Unknown Runtime",
+                @"runtimeName": XCWRuntimeDisplayName(runtime, runtimeIdentifier),
             }];
         }
     }];
@@ -171,6 +216,41 @@ static NSString * const XCWSimctlErrorDomain = @"XcodeCanvasWeb.Simctl";
     return NO;
 }
 
+- (BOOL)toggleAppearanceForSimulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
+    XCWProcessResult *queryResult = [self.class runSimctl:@[@"ui", udid, @"appearance"] error:error];
+    if (queryResult == nil) {
+        return NO;
+    }
+    if (queryResult.terminationStatus != 0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:queryResult.stderrString.length > 0 ? queryResult.stderrString : @"Unable to read simulator appearance." code:10];
+        }
+        return NO;
+    }
+
+    NSString *currentAppearance = [queryResult.stdoutString stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].lowercaseString;
+    if ([currentAppearance isEqualToString:@"unsupported"]) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:@"This simulator runtime does not support appearance switching." code:11];
+        }
+        return NO;
+    }
+
+    NSString *nextAppearance = [currentAppearance isEqualToString:@"dark"] ? @"light" : @"dark";
+    XCWProcessResult *setResult = [self.class runSimctl:@[@"ui", udid, @"appearance", nextAppearance] error:error];
+    if (setResult == nil) {
+        return NO;
+    }
+    if (setResult.terminationStatus == 0) {
+        return YES;
+    }
+
+    if (error != NULL) {
+        *error = [self.class errorWithDescription:setResult.stderrString.length > 0 ? setResult.stderrString : @"Unable to set simulator appearance." code:12];
+    }
+    return NO;
+}
+
 - (BOOL)openURL:(NSString *)urlString simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
     XCWProcessResult *result = [self.class runSimctl:@[@"openurl", udid, urlString] error:error];
     if (result == nil) {
@@ -221,6 +301,65 @@ static NSString * const XCWSimctlErrorDomain = @"XcodeCanvasWeb.Simctl";
         return nil;
     }
     return imageData;
+}
+
+- (nullable NSArray<NSDictionary *> *)recentLogEntriesForSimulatorUDID:(NSString *)udid
+                                                               seconds:(NSTimeInterval)seconds
+                                                                 error:(NSError * _Nullable __autoreleasing *)error {
+    NSUInteger boundedSeconds = MIN(MAX((NSUInteger)ceil(seconds), 1), 1800);
+    XCWProcessResult *result = [self.class runSimctl:@[
+        @"spawn",
+        udid,
+        @"log",
+        @"show",
+        @"--style",
+        @"ndjson",
+        @"--last",
+        [NSString stringWithFormat:@"%lus", (unsigned long)boundedSeconds],
+        @"--info",
+        @"--debug"
+    ] error:error];
+    if (result == nil) {
+        return nil;
+    }
+    if (result.terminationStatus != 0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"Unable to read simulator logs." code:10];
+        }
+        return nil;
+    }
+
+    NSMutableArray<NSDictionary *> *entries = [NSMutableArray array];
+    NSArray<NSString *> *lines = [result.stdoutString componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
+    for (NSString *line in lines) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (![trimmed hasPrefix:@"{"]) {
+            continue;
+        }
+
+        NSData *lineData = [trimmed dataUsingEncoding:NSUTF8StringEncoding];
+        if (lineData == nil) {
+            continue;
+        }
+        NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:lineData options:0 error:nil];
+        if (![payload isKindOfClass:NSDictionary.class]) {
+            continue;
+        }
+
+        NSString *processPath = [payload[@"processImagePath"] isKindOfClass:NSString.class] ? payload[@"processImagePath"] : @"";
+        NSString *processName = processPath.lastPathComponent.length > 0 ? processPath.lastPathComponent : @"unknown";
+        [entries addObject:@{
+            @"timestamp": payload[@"timestamp"] ?: @"",
+            @"level": payload[@"messageType"] ?: @"Default",
+            @"process": processName,
+            @"pid": payload[@"processID"] ?: [NSNull null],
+            @"subsystem": payload[@"subsystem"] ?: @"",
+            @"category": payload[@"category"] ?: @"",
+            @"message": payload[@"eventMessage"] ?: payload[@"formatString"] ?: @"",
+        }];
+    }
+
+    return entries;
 }
 
 + (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments

@@ -1,0 +1,343 @@
+{
+  "builtTestProducts" : [
+
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.XcodeCanvasInspectorAgent-arm64-apple-macosx-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/sources",
+      "importPath" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/InspectorMetadata.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/InspectorProtocol.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/InspectorTCPServer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/JSONValue.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/SwiftUIInspectorTag.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/ViewHierarchySnapshotter.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/ViewInteractionPerformer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/ViewModels.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/XcodeCanvasInspectorAgent.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "XcodeCanvasInspectorAgent",
+      "moduleOutputPath" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/Modules/XcodeCanvasInspectorAgent.swiftmodule",
+      "objects" : [
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/InspectorMetadata.swift.o",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/InspectorProtocol.swift.o",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/InspectorTCPServer.swift.o",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/JSONValue.swift.o",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/SwiftUIInspectorTag.swift.o",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/ViewHierarchySnapshotter.swift.o",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/ViewInteractionPerformer.swift.o",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/ViewModels.swift.o",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/XcodeCanvasInspectorAgent.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx10.13",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/include/XcodeCanvasInspectorAgent-Swift.h",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "inspector_agent"
+      ],
+      "outputFileMapPath" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/InspectorMetadata.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/InspectorProtocol.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/InspectorTCPServer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/JSONValue.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/SwiftUIInspectorTag.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/ViewHierarchySnapshotter.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/ViewInteractionPerformer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/ViewModels.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/XcodeCanvasInspectorAgent.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/Modules/XcodeCanvasInspectorAgent.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/InspectorMetadata.swift",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/InspectorProtocol.swift",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/InspectorTCPServer.swift",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/JSONValue.swift",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/SwiftUIInspectorTag.swift",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/ViewHierarchySnapshotter.swift",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/ViewInteractionPerformer.swift",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/ViewModels.swift",
+        "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/XcodeCanvasInspectorAgent.swift"
+      ],
+      "tempsPath" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "XcodeCanvasInspectorAgent" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "XcodeCanvasInspectorAgent",
+      "-package-name",
+      "inspector_agent",
+      "-c",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/InspectorMetadata.swift",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/InspectorProtocol.swift",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/InspectorTCPServer.swift",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/JSONValue.swift",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/SwiftUIInspectorTag.swift",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/ViewHierarchySnapshotter.swift",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/ViewInteractionPerformer.swift",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/ViewModels.swift",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/XcodeCanvasInspectorAgent.swift",
+      "-I",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx10.13",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/include/XcodeCanvasInspectorAgent-Swift.h",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "inspector_agent",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "XcodeCanvasInspectorAgent" : [
+
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/InspectorMetadata.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/InspectorProtocol.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/InspectorTCPServer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/JSONValue.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/SwiftUIInspectorTag.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/ViewHierarchySnapshotter.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/ViewInteractionPerformer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/ViewModels.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/Sources/XcodeCanvasInspectorAgent/XcodeCanvasInspectorAgent.swift"
+        }
+      ],
+      "outputFilePath" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/XcodeCanvasInspectorAgent.build/sources"
+    },
+    "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Volumes/SSD/gh/nativescript/xcode-canvas-web/inspector-agent/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+    }
+  }
+}

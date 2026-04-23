@@ -1,7 +1,6 @@
 import type { Size } from "../viewport/types";
 
 export interface StreamConnectTarget {
-  stamp: number;
   udid: string;
 }
 
@@ -19,12 +18,19 @@ export interface StreamPacket {
 }
 
 export interface StreamStats extends Size {
+  averageRenderMs: number;
   codec: string;
+  decodeQueueSize: number;
   decodedFrames: number;
   droppedFrames: number;
   frameSequence: number;
+  latestFrameGapMs: number;
+  latestRenderMs: number;
+  maxRenderMs: number;
   receivedPackets: number;
   reconnects: number;
+  renderedFrames: number;
+  waitingForKeyFrame: boolean;
 }
 
 export interface StreamRuntimeInfo {

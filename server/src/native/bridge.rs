@@ -37,6 +37,38 @@ struct SimulatorsEnvelope {
     simulators: Vec<Simulator>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub process: String,
+    pub pid: serde_json::Value,
+    pub subsystem: String,
+    pub category: String,
+    pub message: String,
+}
+
+pub struct LogFilters {
+    pub levels: Vec<String>,
+    pub processes: Vec<String>,
+    pub query: String,
+}
+
+impl LogFilters {
+    pub fn new(levels: Vec<String>, processes: Vec<String>, query: String) -> Self {
+        Self {
+            levels,
+            processes,
+            query,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LogsEnvelope {
+    entries: Vec<LogEntry>,
+}
+
 fn deserialize_boolish<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -113,6 +145,17 @@ impl NativeBridge {
         }
     }
 
+    pub fn toggle_appearance(&self, udid: &str) -> Result<(), AppError> {
+        unsafe {
+            let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_toggle_appearance(udid.as_ptr(), &mut error),
+                error,
+            )
+        }
+    }
+
     pub fn open_url(&self, udid: &str, url: &str) -> Result<(), AppError> {
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
         let url = CString::new(url).map_err(|e| AppError::bad_request(e.to_string()))?;
@@ -163,6 +206,32 @@ impl NativeBridge {
         }
     }
 
+    pub fn recent_logs(
+        &self,
+        udid: &str,
+        seconds: f64,
+        limit: usize,
+        filters: &LogFilters,
+    ) -> Result<Vec<LogEntry>, AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let json = unsafe {
+            let mut error = ptr::null_mut();
+            let raw = ffi::xcw_native_recent_logs(udid.as_ptr(), seconds, limit, &mut error);
+            string_from_raw(raw, error)?
+        };
+        let payload: LogsEnvelope =
+            serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))?;
+        let mut entries: Vec<LogEntry> = payload
+            .entries
+            .into_iter()
+            .filter(|entry| log_entry_matches(entry, filters))
+            .collect();
+        if entries.len() > limit {
+            entries = entries.split_off(entries.len() - limit);
+        }
+        Ok(entries)
+    }
+
     pub fn create_session(&self, udid: &str) -> Result<NativeSession, AppError> {
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
         unsafe {
@@ -177,6 +246,58 @@ impl NativeBridge {
     }
 }
 
+pub fn log_entry_matches(entry: &LogEntry, filters: &LogFilters) -> bool {
+    if !filters.levels.is_empty()
+        && !filters
+            .levels
+            .iter()
+            .any(|level| log_level_matches(&entry.level, level))
+    {
+        return false;
+    }
+
+    if !filters.processes.is_empty()
+        && !filters
+            .processes
+            .iter()
+            .any(|process| entry.process.eq_ignore_ascii_case(process))
+    {
+        return false;
+    }
+
+    if !filters.query.is_empty() {
+        let haystack = format!(
+            "{} {} {} {} {}",
+            entry.process, entry.message, entry.subsystem, entry.category, entry.level
+        )
+        .to_lowercase();
+        if !haystack.contains(&filters.query) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn log_level_matches(entry_level: &str, filter: &str) -> bool {
+    match filter {
+        "error" => {
+            entry_level.to_lowercase().contains("error")
+                || entry_level.to_lowercase().contains("fault")
+        }
+        "debug" => entry_level.to_lowercase().contains("debug"),
+        "info" => entry_level.to_lowercase().contains("info"),
+        "default" => {
+            let level = entry_level.to_lowercase();
+            !level.contains("error")
+                && !level.contains("fault")
+                && !level.contains("debug")
+                && !level.contains("info")
+        }
+        _ => true,
+    }
+}
+
 pub struct NativeSession {
     handle: *mut c_void,
 }
@@ -185,6 +306,15 @@ unsafe impl Send for NativeSession {}
 unsafe impl Sync for NativeSession {}
 
 impl NativeSession {
+    pub fn session_info(&self) -> Result<serde_json::Value, AppError> {
+        let json = unsafe {
+            let mut error = ptr::null_mut();
+            let raw = ffi::xcw_native_session_info(self.handle, &mut error);
+            string_from_raw(raw, error)?
+        };
+        serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))
+    }
+
     pub fn start(&self) -> Result<(), AppError> {
         unsafe {
             let mut error = ptr::null_mut();
@@ -237,6 +367,16 @@ impl NativeSession {
             let mut error = ptr::null_mut();
             bool_result(
                 ffi::xcw_native_session_rotate_right(self.handle, &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn rotate_left(&self) -> Result<(), AppError> {
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_rotate_left(self.handle, &mut error),
                 error,
             )
         }

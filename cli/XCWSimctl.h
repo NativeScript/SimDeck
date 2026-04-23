@@ -7,9 +7,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable NSArray<NSDictionary *> *)listSimulatorsWithError:(NSError * _Nullable * _Nullable)error;
 - (BOOL)bootSimulatorWithUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)shutdownSimulatorWithUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
+- (BOOL)toggleAppearanceForSimulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)openURL:(NSString *)urlString simulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)launchBundleID:(NSString *)bundleID simulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (nullable NSData *)screenshotJPEGDataForSimulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
+- (nullable NSArray<NSDictionary *> *)recentLogEntriesForSimulatorUDID:(NSString *)udid seconds:(NSTimeInterval)seconds error:(NSError * _Nullable * _Nullable)error;
 - (nullable NSDictionary *)simulatorWithUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 
 @end

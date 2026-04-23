@@ -20,9 +20,12 @@ import type {
 
 const workerScope = self as DedicatedWorkerGlobalScope;
 const STATS_POST_INTERVAL_MS = 120;
-const DECODE_QUEUE_SOFT_LIMIT = 1;
-const DELTA_DROPS_BEFORE_REFRESH = 3;
+const CLIENT_TELEMETRY_INTERVAL_MS = 1000;
+const DECODE_QUEUE_SOFT_LIMIT = 8;
 const REFRESH_REQUEST_INTERVAL_MS = 200;
+const CLIENT_TELEMETRY_ID =
+  workerScope.crypto?.randomUUID?.() ??
+  `worker-${Math.random().toString(36).slice(2)}`;
 
 let canvas: OffscreenCanvas | null = null;
 let renderer: VideoFrameRenderer | null = null;
@@ -32,15 +35,22 @@ let transport: WebTransport | null = null;
 let currentConnectionId = 0;
 let currentTarget: StreamConnectTarget | null = null;
 let configuredDecoderKey = "";
-let droppedDeltaFrames = 0;
 let waitingForKeyFrame = false;
 let lastStatsPostAt = 0;
 let lastStatusKey = "";
 let lastVideoConfigKey = "";
 let lastRefreshRequestAt = 0;
+let lastRenderedAt = 0;
+let lastTelemetryAt = 0;
+let lastTelemetryDecodedFrames = 0;
+let lastTelemetryDroppedFrames = 0;
+let lastTelemetryReceivedPackets = 0;
+let latestStatusState = "idle";
+let renderDurationTotalMs = 0;
 let stats = createEmptyStreamStats();
 let statsPostTimeout = 0;
 let reconnectTimeout = 0;
+let telemetryInFlight = false;
 
 function describeError(error: unknown): string {
   if (error instanceof Error) {
@@ -51,11 +61,22 @@ function describeError(error: unknown): string {
   return String(error);
 }
 
+function isTransientTransportError(message: string): boolean {
+  return (
+    message.includes("WebTransport") ||
+    message.includes("opening handshake failed") ||
+    message.includes("stream closed") ||
+    message.includes("session closed") ||
+    message.includes("closed before sending")
+  );
+}
+
 function postMessage(message: WorkerToMainMessage) {
   workerScope.postMessage(message);
 }
 
 function postStatus(status: StreamStatus) {
+  latestStatusState = status.state;
   const statusKey = `${status.state}|${status.detail ?? ""}|${status.error ?? ""}`;
   if (statusKey === lastStatusKey) {
     return;
@@ -65,10 +86,89 @@ function postStatus(status: StreamStatus) {
   postMessage({ type: "status", status });
 }
 
+function buildClientTelemetryUrl(): string {
+  return new URL(
+    "/api/client-stream-stats",
+    workerScope.location.href,
+  ).toString();
+}
+
+function resetTelemetryCounters() {
+  lastRenderedAt = 0;
+  lastTelemetryAt = 0;
+  lastTelemetryDecodedFrames = 0;
+  lastTelemetryDroppedFrames = 0;
+  lastTelemetryReceivedPackets = 0;
+  renderDurationTotalMs = 0;
+  telemetryInFlight = false;
+}
+
+function updateDecodeQueueSize() {
+  stats.decodeQueueSize = decoder?.decodeQueueSize ?? 0;
+  stats.waitingForKeyFrame = waitingForKeyFrame;
+}
+
+function postClientTelemetry(force = false) {
+  const target = currentTarget;
+  if (!target || telemetryInFlight) {
+    return;
+  }
+
+  const now = performance.now();
+  if (
+    !force &&
+    lastTelemetryAt &&
+    now - lastTelemetryAt < CLIENT_TELEMETRY_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  const elapsedMs = lastTelemetryAt ? now - lastTelemetryAt : 0;
+  const packetDelta = stats.receivedPackets - lastTelemetryReceivedPackets;
+  const decodedDelta = stats.decodedFrames - lastTelemetryDecodedFrames;
+  const droppedDelta = stats.droppedFrames - lastTelemetryDroppedFrames;
+  const perSecond = elapsedMs > 0 ? 1000 / elapsedMs : 0;
+
+  lastTelemetryAt = now;
+  lastTelemetryReceivedPackets = stats.receivedPackets;
+  lastTelemetryDecodedFrames = stats.decodedFrames;
+  lastTelemetryDroppedFrames = stats.droppedFrames;
+  updateDecodeQueueSize();
+
+  telemetryInFlight = true;
+  void fetch(buildClientTelemetryUrl(), {
+    body: JSON.stringify({
+      ...stats,
+      clientId: CLIENT_TELEMETRY_ID,
+      connectionId: currentConnectionId,
+      decodedFps: decodedDelta * perSecond,
+      droppedFps: droppedDelta * perSecond,
+      kind: "worker",
+      packetFps: packetDelta * perSecond,
+      status: latestStatusState,
+      timestampMs: Date.now(),
+      udid: target.udid,
+      url: workerScope.location.href,
+      userAgent: workerScope.navigator.userAgent,
+    }),
+    cache: "no-store",
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  })
+    .catch(() => {
+      // Telemetry is diagnostic only; never disturb the stream.
+    })
+    .finally(() => {
+      telemetryInFlight = false;
+    });
+}
+
 function flushStats() {
   statsPostTimeout = 0;
   lastStatsPostAt = performance.now();
+  updateDecodeQueueSize();
   postMessage({ type: "stats", stats: { ...stats } });
+  postClientTelemetry();
 }
 
 function clearReconnectTimeout() {
@@ -144,7 +244,6 @@ function resetDecoder() {
   }
   decoder = null;
   configuredDecoderKey = "";
-  droppedDeltaFrames = 0;
   waitingForKeyFrame = false;
 }
 
@@ -174,6 +273,7 @@ function resetReportedState() {
 }
 
 function disconnect() {
+  postClientTelemetry(true);
   currentConnectionId += 1;
   abortController?.abort();
   abortController = null;
@@ -181,6 +281,7 @@ function disconnect() {
   resetTransport();
   resetDecoder();
   resetReportedState();
+  resetTelemetryCounters();
   clearCanvas();
   postStatus({ state: "idle" });
 }
@@ -278,7 +379,19 @@ async function ensureDecoder(
       }
 
       try {
+        const renderStartedAt = performance.now();
         renderer.drawFrame(frame);
+        const renderFinishedAt = performance.now();
+        const renderMs = renderFinishedAt - renderStartedAt;
+        stats.renderedFrames += 1;
+        renderDurationTotalMs += renderMs;
+        stats.latestRenderMs = renderMs;
+        stats.maxRenderMs = Math.max(stats.maxRenderMs, renderMs);
+        stats.averageRenderMs = renderDurationTotalMs / stats.renderedFrames;
+        if (lastRenderedAt > 0) {
+          stats.latestFrameGapMs = renderFinishedAt - lastRenderedAt;
+        }
+        lastRenderedAt = renderFinishedAt;
       } catch (error) {
         frame.close();
         postStatus({
@@ -292,6 +405,7 @@ async function ensureDecoder(
       }
       frame.close();
       stats.decodedFrames += 1;
+      updateDecodeQueueSize();
       postStats();
       postStatus({ state: "streaming" });
     },
@@ -345,10 +459,10 @@ async function handlePacket(
   postVideoConfig(packet.metadata.width, packet.metadata.height);
 
   if (packet.metadata.isKeyFrame) {
-    droppedDeltaFrames = 0;
     waitingForKeyFrame = false;
   } else if (waitingForKeyFrame) {
     stats.droppedFrames += 1;
+    updateDecodeQueueSize();
     postStats();
     return;
   }
@@ -368,10 +482,10 @@ async function handlePacket(
     !packet.metadata.isKeyFrame
   ) {
     stats.droppedFrames += 1;
-    droppedDeltaFrames += 1;
+    waitingForKeyFrame = true;
+    updateDecodeQueueSize();
     postStats();
-    if (currentTarget && droppedDeltaFrames >= DELTA_DROPS_BEFORE_REFRESH) {
-      waitingForKeyFrame = true;
+    if (currentTarget) {
       void requestRefresh(currentTarget.udid);
     }
     return;
@@ -391,12 +505,14 @@ async function handlePacket(
     }
     stats.droppedFrames += 1;
     waitingForKeyFrame = true;
+    updateDecodeQueueSize();
     postStats();
     if (currentTarget) {
       void requestRefresh(currentTarget.udid);
     }
     return;
   }
+  updateDecodeQueueSize();
   postStats();
 }
 
@@ -526,6 +642,7 @@ async function connect(target: StreamConnectTarget, isReconnect = false) {
   resetReportedState();
   clearCanvas();
   stats = createEmptyStreamStats();
+  resetTelemetryCounters();
   if (isReconnect) {
     stats.reconnects += 1;
   }
@@ -634,11 +751,18 @@ async function connect(target: StreamConnectTarget, isReconnect = false) {
       closeReason && closeReason !== message
         ? `${message} (${closeReason})`
         : message;
-    postStatus({
-      error: errorMessage,
-      state: "error",
-    });
     if (connectionId === currentConnectionId) {
+      if (isTransientTransportError(errorMessage)) {
+        postStatus({
+          detail: "Reconnecting live stream…",
+          state: "connecting",
+        });
+      } else {
+        postStatus({
+          error: errorMessage,
+          state: "error",
+        });
+      }
       scheduleReconnect("Reconnecting live stream…", connectionId);
     }
   }

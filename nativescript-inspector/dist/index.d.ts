@@ -1,0 +1,51 @@
+export interface XcodeCanvasInspectorOptions {
+    host?: string;
+    path?: string;
+    port?: number;
+    reconnect?: boolean;
+    secure?: boolean;
+}
+export declare function startXcodeCanvasInspector(options?: XcodeCanvasInspectorOptions): XcodeCanvasNativeScriptInspector;
+export declare function stopXcodeCanvasInspector(): void;
+export declare class XcodeCanvasNativeScriptInspector {
+    private readonly options;
+    private socket;
+    private pollTimer;
+    private polling;
+    private reconnectTimer;
+    private nextObjectId;
+    private readonly ids;
+    private readonly nativeScriptViewsByNativeView;
+    private readonly objects;
+    private readonly uikitScriptsById;
+    constructor(options?: XcodeCanvasInspectorOptions);
+    start(): void;
+    stop(): void;
+    private scheduleReconnect;
+    private startPolling;
+    private schedulePoll;
+    private pollCommands;
+    private executePolledRequest;
+    private httpBaseUrl;
+    private handleMessage;
+    private send;
+    private dispatch;
+    private info;
+    private hierarchy;
+    private getView;
+    private listActions;
+    private perform;
+    private getProperties;
+    private setProperty;
+    private evaluateScript;
+    private nativeScriptNode;
+    private uikitNode;
+    private objectId;
+    private requireObject;
+    private uikitScriptFor;
+    private uikitScriptInfo;
+    private snapshotMetadata;
+    private windows;
+    private reindexNativeScriptViews;
+    private indexNativeScriptView;
+}

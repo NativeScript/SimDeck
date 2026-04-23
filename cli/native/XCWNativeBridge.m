@@ -119,6 +119,18 @@ bool xcw_native_shutdown_simulator(const char *udid, char **error_message) {
     }
 }
 
+bool xcw_native_toggle_appearance(const char *udid, char **error_message) {
+    @autoreleasepool {
+        XCWSimctl *simctl = [[XCWSimctl alloc] init];
+        NSError *error = nil;
+        BOOL ok = [simctl toggleAppearanceForSimulatorUDID:XCWStringFromCString(udid) error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
 bool xcw_native_open_url(const char *udid, const char *url, char **error_message) {
     @autoreleasepool {
         XCWSimctl *simctl = [[XCWSimctl alloc] init];
@@ -191,6 +203,23 @@ xcw_native_owned_bytes xcw_native_render_chrome_png(const char *udid, char **err
     }
 }
 
+char *xcw_native_recent_logs(const char *udid, double seconds, size_t limit, char **error_message) {
+    @autoreleasepool {
+        (void)limit;
+        XCWSimctl *simctl = [[XCWSimctl alloc] init];
+        NSError *error = nil;
+        NSArray<NSDictionary *> *entries = [simctl recentLogEntriesForSimulatorUDID:XCWStringFromCString(udid)
+                                                                            seconds:seconds
+                                                                              error:&error];
+        if (entries == nil) {
+            XCWSetErrorMessage(error_message, error);
+            return NULL;
+        }
+
+        return XCWJSONStringFromObject(@{ @"entries": entries }, error_message);
+    }
+}
+
 void *xcw_native_session_create(const char *udid, char **error_message) {
     @autoreleasepool {
         NSError *error = nil;
@@ -222,6 +251,13 @@ bool xcw_native_session_start(void *handle, char **error_message) {
             XCWSetErrorMessage(error_message, error);
         }
         return ok;
+    }
+}
+
+char *xcw_native_session_info(void *handle, char **error_message) {
+    @autoreleasepool {
+        NSDictionary *info = [XCWNativeSessionFromHandle(handle) sessionInfoRepresentation];
+        return XCWJSONStringFromObject(info ?: @{}, error_message);
     }
 }
 
@@ -273,6 +309,17 @@ bool xcw_native_session_rotate_right(void *handle, char **error_message) {
     @autoreleasepool {
         NSError *error = nil;
         BOOL ok = [XCWNativeSessionFromHandle(handle) rotateRight:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_session_rotate_left(void *handle, char **error_message) {
+    @autoreleasepool {
+        NSError *error = nil;
+        BOOL ok = [XCWNativeSessionFromHandle(handle) rotateLeft:&error];
         if (!ok) {
             XCWSetErrorMessage(error_message, error);
         }

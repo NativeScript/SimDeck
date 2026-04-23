@@ -7,25 +7,83 @@ import {
 } from "../../shared/constants";
 import type { Point, ScreenRect, Size } from "./types";
 
+export function normalizeQuarterTurns(quarterTurns: number): number {
+  return ((Math.trunc(quarterTurns) % 4) + 4) % 4;
+}
+
+function rotateSize(size: Size, quarterTurns: number): Size {
+  return normalizeQuarterTurns(quarterTurns) % 2 === 0
+    ? size
+    : {
+        height: size.width,
+        width: size.height,
+      };
+}
+
 export function shellSize(
   deviceNaturalSize: Size | null,
   chromeProfile: ChromeProfile | null,
+  rotationQuarterTurns = 0,
 ): Size {
-  if (chromeProfile?.totalWidth && chromeProfile?.totalHeight) {
-    return {
-      width: chromeProfile.totalWidth,
-      height: chromeProfile.totalHeight,
-    };
-  }
+  const naturalSize =
+    chromeProfile?.totalWidth && chromeProfile?.totalHeight
+      ? {
+          height: chromeProfile.totalHeight,
+          width: chromeProfile.totalWidth,
+        }
+      : (() => {
+          const aspectRatio = deviceNaturalSize
+            ? deviceNaturalSize.height / deviceNaturalSize.width
+            : 2.16;
+          const screenHeight = DEVICE_SCREEN_WIDTH * aspectRatio;
+          return {
+            height: screenHeight + BEZEL_PADDING * 2,
+            width: DEVICE_SCREEN_WIDTH + BEZEL_PADDING * 2,
+          };
+        })();
 
-  const aspectRatio = deviceNaturalSize
-    ? deviceNaturalSize.height / deviceNaturalSize.width
-    : 2.16;
-  const screenHeight = DEVICE_SCREEN_WIDTH * aspectRatio;
-  return {
-    width: DEVICE_SCREEN_WIDTH + BEZEL_PADDING * 2,
-    height: screenHeight + BEZEL_PADDING * 2,
-  };
+  return rotateSize(naturalSize, rotationQuarterTurns);
+}
+
+export function buildShellRotationTransform(
+  deviceNaturalSize: Size | null,
+  chromeProfile: ChromeProfile | null,
+  rotationQuarterTurns: number,
+): string {
+  const naturalShellSize = shellSize(deviceNaturalSize, chromeProfile);
+
+  switch (normalizeQuarterTurns(rotationQuarterTurns)) {
+    case 1:
+      return `translate(${naturalShellSize.height}px, 0px) rotate(90deg)`;
+    case 2:
+      return `translate(${naturalShellSize.width}px, ${naturalShellSize.height}px) rotate(180deg)`;
+    case 3:
+      return `translate(0px, ${naturalShellSize.width}px) rotate(270deg)`;
+    default:
+      return "none";
+  }
+}
+
+export function screenAspectRatio(deviceNaturalSize: Size | null): string {
+  return deviceNaturalSize
+    ? `${deviceNaturalSize.width} / ${deviceNaturalSize.height}`
+    : "9 / 19.5";
+}
+
+export function mapDisplayedPointToNaturalOrientation(
+  point: Point,
+  rotationQuarterTurns: number,
+): Point {
+  switch (normalizeQuarterTurns(rotationQuarterTurns)) {
+    case 1:
+      return { x: point.y, y: 1 - point.x };
+    case 2:
+      return { x: 1 - point.x, y: 1 - point.y };
+    case 3:
+      return { x: 1 - point.y, y: point.x };
+    default:
+      return point;
+  }
 }
 
 export function computeChromeScreenRect(
@@ -67,11 +125,16 @@ function computeScale(
   marginY: number,
   chromeProfile: ChromeProfile | null,
   reservedBottomInset = 0,
+  rotationQuarterTurns = 0,
 ): number {
   if (!canvasSize) {
     return 1;
   }
-  const totalSize = shellSize(deviceNaturalSize, chromeProfile);
+  const totalSize = shellSize(
+    deviceNaturalSize,
+    chromeProfile,
+    rotationQuarterTurns,
+  );
   const availableWidth = Math.max(canvasSize.width - marginX * 2, 0);
   const availableHeight = Math.max(
     canvasSize.height - marginY * 2 - reservedBottomInset,
@@ -88,6 +151,7 @@ export function computeFitScale(
   deviceNaturalSize: Size | null,
   chromeProfile: ChromeProfile | null,
   reservedBottomInset = 0,
+  rotationQuarterTurns = 0,
 ): number {
   return computeScale(
     canvasSize,
@@ -96,6 +160,7 @@ export function computeFitScale(
     FIT_MARGIN,
     chromeProfile,
     reservedBottomInset,
+    rotationQuarterTurns,
   );
 }
 
@@ -104,6 +169,7 @@ export function computeCenterScale(
   deviceNaturalSize: Size | null,
   chromeProfile: ChromeProfile | null,
   reservedBottomInset = 0,
+  rotationQuarterTurns = 0,
 ): number {
   if (!canvasSize) {
     return 1;
@@ -127,6 +193,7 @@ export function computeCenterScale(
       verticalMargin,
       chromeProfile,
       reservedBottomInset,
+      rotationQuarterTurns,
     ),
   );
 }
@@ -143,12 +210,17 @@ export function clampPan(
   canvasSize: Size | null,
   deviceNaturalSize: Size | null,
   chromeProfile: ChromeProfile | null,
+  rotationQuarterTurns = 0,
 ): Point {
   if (!canvasSize) {
     return nextPan;
   }
 
-  const deviceSize = shellSize(deviceNaturalSize, chromeProfile);
+  const deviceSize = shellSize(
+    deviceNaturalSize,
+    chromeProfile,
+    rotationQuarterTurns,
+  );
   const scaledWidth = deviceSize.width * scale;
   const scaledHeight = deviceSize.height * scale;
   const limitX = Math.max((scaledWidth - canvasSize.width) / 2 + 32, 0);

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { ChromeProfile, TouchPhase } from "../../api/types";
-import { normalizedPointerCoordinates } from "./gestureMath";
+import { normalizedPointerCoordinatesForOrientation } from "./gestureMath";
 import { clampPan } from "../viewport/viewportMath";
 import type { Point, Size } from "../viewport/types";
 
@@ -13,6 +13,7 @@ interface UsePointerInputOptions {
   fitScale: number;
   isBooted: boolean;
   pan: Point;
+  rotationQuarterTurns: number;
   setPan: React.Dispatch<React.SetStateAction<Point>>;
   onTouch: (phase: TouchPhase, coords: Point) => void;
 }
@@ -25,6 +26,7 @@ export function usePointerInput({
   fitScale,
   isBooted,
   pan,
+  rotationQuarterTurns,
   setPan,
   onTouch,
 }: UsePointerInputOptions) {
@@ -112,6 +114,7 @@ export function usePointerInput({
         canvasSize,
         deviceNaturalSize,
         chromeProfile,
+        rotationQuarterTurns,
       ),
     );
   }
@@ -126,7 +129,10 @@ export function usePointerInput({
       return;
     }
     event.stopPropagation();
-    const coords = normalizedPointerCoordinates(event);
+    const coords = normalizedPointerCoordinatesForOrientation(
+      event,
+      rotationQuarterTurns,
+    );
     if (!coords) {
       return;
     }
@@ -140,7 +146,10 @@ export function usePointerInput({
     if (activePointerRef.current !== event.pointerId) {
       return;
     }
-    const coords = normalizedPointerCoordinates(event);
+    const coords = normalizedPointerCoordinatesForOrientation(
+      event,
+      rotationQuarterTurns,
+    );
     if (coords) {
       queueMove(coords);
     }
@@ -156,7 +165,10 @@ export function usePointerInput({
     }
     activePointerRef.current = null;
     clearQueuedMove();
-    const coords = normalizedPointerCoordinates(event);
+    const coords = normalizedPointerCoordinatesForOrientation(
+      event,
+      rotationQuarterTurns,
+    );
     if (coords) {
       onTouch(phase, coords);
     }

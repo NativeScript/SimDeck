@@ -1,10 +1,7 @@
 import type { StreamConnectTarget, WorkerToMainMessage } from "./streamTypes";
 
-export function buildStreamTarget(
-  udid: string,
-  stamp: number,
-): StreamConnectTarget {
-  return { stamp, udid };
+export function buildStreamTarget(udid: string): StreamConnectTarget {
+  return { udid };
 }
 
 interface StreamClientBackend {

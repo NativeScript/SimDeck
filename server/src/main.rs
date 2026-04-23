@@ -1,7 +1,9 @@
 mod api;
 mod config;
 mod error;
+mod inspector;
 mod logging;
+mod logs;
 mod metrics;
 mod native;
 mod service;
@@ -11,8 +13,10 @@ mod transport;
 
 use anyhow::Context;
 use api::routes::{router, AppState};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
+use inspector::InspectorHub;
+use logs::LogRegistry;
 use metrics::counters::Metrics;
 use native::bridge::NativeBridge;
 use native::ffi;
@@ -43,6 +47,8 @@ enum Command {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
+        video_codec: VideoCodecMode,
     },
     Service {
         #[command(subcommand)]
@@ -76,8 +82,27 @@ enum ServiceCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
+        video_codec: VideoCodecMode,
     },
     Off,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum VideoCodecMode {
+    Hevc,
+    H264,
+    H264Software,
+}
+
+impl VideoCodecMode {
+    fn as_env_value(self) -> &'static str {
+        match self {
+            Self::Hevc => "hevc",
+            Self::H264 => "h264",
+            Self::H264Software => "h264-software",
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -91,18 +116,21 @@ fn main() -> anyhow::Result<()> {
             bind,
             advertise_host,
             client_root,
-        } => serve_with_appkit(port, bind, advertise_host, client_root),
+            video_codec,
+        } => serve_with_appkit(port, bind, advertise_host, client_root, video_codec),
         Command::Service { command } => match command {
             ServiceCommand::On {
                 port,
                 bind,
                 advertise_host,
                 client_root,
+                video_codec,
             } => service::enable(ServiceOptions {
                 port,
                 bind,
                 advertise_host,
                 client_root,
+                video_codec,
             }),
             ServiceCommand::Off => service::disable(),
         },
@@ -163,6 +191,7 @@ struct ServiceOptions {
     bind: IpAddr,
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
+    video_codec: VideoCodecMode,
 }
 
 fn serve_with_appkit(
@@ -170,7 +199,9 @@ fn serve_with_appkit(
     bind: IpAddr,
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
+    video_codec: VideoCodecMode,
 ) -> anyhow::Result<()> {
+    std::env::set_var("XCW_VIDEO_CODEC", video_codec.as_env_value());
     unsafe {
         ffi::xcw_native_initialize_app();
     }
@@ -182,7 +213,9 @@ fn serve_with_appkit(
             .build()
             .context("build tokio runtime");
         let result = match runtime {
-            Ok(runtime) => runtime.block_on(serve(port, bind, advertise_host, client_root)),
+            Ok(runtime) => {
+                runtime.block_on(serve(port, bind, advertise_host, client_root, video_codec))
+            }
             Err(error) => Err(error),
         };
         let _ = result_tx.send(result);
@@ -206,19 +239,30 @@ async fn serve(
     bind: IpAddr,
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
+    video_codec: VideoCodecMode,
 ) -> anyhow::Result<()> {
     let root = match client_root {
         Some(root) => root,
         None => default_client_root()?,
     };
-    let config = Config::new(port, root, bind, advertise_host);
+    let config = Config::new(
+        port,
+        root,
+        bind,
+        advertise_host,
+        video_codec.as_env_value().to_owned(),
+    );
     let metrics = Arc::new(Metrics::default());
     let bridge = NativeBridge;
     let registry = SessionRegistry::new(bridge, metrics.clone());
+    let logs = LogRegistry::default();
+    let inspectors = InspectorHub::default();
     let (wt_runtime, wt_endpoint) = transport::webtransport::prepare(&config).await?;
     let state = AppState {
         config: config.clone(),
         registry,
+        logs,
+        inspectors,
         metrics,
         wt_endpoint_template: wt_runtime.endpoint_url_template.clone(),
         certificate_hash_hex: wt_runtime.certificate_hash_hex.clone(),

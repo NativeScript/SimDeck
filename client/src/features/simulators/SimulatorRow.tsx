@@ -1,4 +1,5 @@
 import type { SimulatorMetadata } from "../../api/types";
+import { simulatorRuntimeLabel } from "./simulatorDisplay";
 
 interface SimulatorRowProps {
   isSelected: boolean;
@@ -18,7 +19,7 @@ export function SimulatorRow({
     >
       <span className="sim-item-name">{simulator.name}</span>
       <span className="sim-item-meta">
-        {simulator.runtimeName}
+        {simulatorRuntimeLabel(simulator)}
         <span className={`state-dot ${simulator.isBooted ? "booted" : ""}`} />
       </span>
     </button>
