@@ -44,12 +44,6 @@ xcode-canvas-web serve --port 4310
 
 Then open [http://127.0.0.1:4310](http://127.0.0.1:4310).
 
-The default stream encoder is hardware HEVC. If macOS screen recording makes the stream sluggish, run the server with software H.264 so the live stream does not compete with the screen recorder's hardware encoder:
-
-```sh
-xcode-canvas-web serve --port 4310 --video-codec h264-software
-```
-
 The Rust server exposes HTTP on the requested port and WebTransport on `port + 1`.
 The browser bootstrap comes from `GET /api/health`, which returns the WebTransport URL template,
 certificate hash, and packet version needed by the client.
@@ -96,18 +90,6 @@ The runtime connects to `GET /api/inspector/connect` as a WebSocket. The Rust
 server prefers connected NativeScript inspectors for hierarchy requests and
 falls back to the Swift TCP inspector or AXe when no matching app inspector is
 available.
-
-Dynamic UIKit mutation is exposed through
-`POST /api/simulators/:udid/inspector/request` with methods such as
-`View.getProperties` and `View.setProperty`. This endpoint is intentionally a
-debug/tooling API for now; the browser UI can add a focused property editor on
-top of it once the safe editable-property surface settles.
-
-## Releases
-
-Push a `vX.Y.Z` tag, or publish a GitHub release for that tag, to run the release workflow on `macos-latest`.
-The tag has to match `package.json`. The workflow builds the CLI, uploads the macOS archives and npm tarball
-to the GitHub release, and publishes the package to npm when `NPM_TOKEN` is configured in repository secrets.
 
 ## VS Code
 
