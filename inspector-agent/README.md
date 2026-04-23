@@ -104,6 +104,95 @@ Framework snapshots can attach source locations to individual nodes:
 
 The web inspector shows this in the selected node properties.
 
+## NativeScript
+
+For NativeScript apps, use the companion runtime package instead of linking this
+Swift package directly into your app code:
+
+```sh
+npm install @nativescript/xcode-canvas-inspector
+```
+
+Start it as early as possible in app startup, before bootstrapping the app:
+
+```ts
+import { startXcodeCanvasInspector } from "@nativescript/xcode-canvas-inspector";
+
+if (__DEV__) {
+  startXcodeCanvasInspector({ port: 4310 });
+}
+```
+
+Important:
+
+- `port` here is the `xcode-canvas-web` server port, not a per-app inspector port.
+- NativeScript apps do not need to choose or manage a unique local inspector port.
+- The package connects to `/api/inspector/connect` and falls back to `/api/inspector/poll`.
+- The separate auto-discovered local TCP ports described above are for the Swift in-app inspector transport, not the NativeScript package.
+
+When the NativeScript inspector is running, `View.getHierarchy` returns the
+NativeScript logical tree by default and `"source": "uikit"` still forces the
+raw UIKit hierarchy.
+
+### Angular
+
+For Angular NativeScript apps, call `startXcodeCanvasInspector()` before
+`runNativeScriptAngularApp()`.
+
+```ts
+import { startXcodeCanvasInspector } from "@nativescript/xcode-canvas-inspector";
+
+startXcodeCanvasInspector({ port: 4310 });
+
+runNativeScriptAngularApp({
+  appModuleBootstrap: () => bootstrapApplication(AppComponent, {
+    providers: [
+      provideNativeScriptHttpClient(withInterceptorsFromDi()),
+      provideNativeScriptRouter(routes),
+    ],
+  }),
+});
+```
+
+If you want template file and line locations in the hierarchy, enable Angular
+template source locations in your NativeScript webpack config:
+
+```js
+const webpack = require("@nativescript/webpack");
+
+class AngularTemplateSourceLocationsPlugin {
+  apply(compiler) {
+    const enable = async () => {
+      const angularCompiler = await import("@angular/compiler");
+      angularCompiler.setEnableTemplateSourceLocations?.(true);
+    };
+
+    compiler.hooks.beforeRun.tapPromise(
+      "AngularTemplateSourceLocationsPlugin",
+      enable,
+    );
+    compiler.hooks.watchRun.tapPromise(
+      "AngularTemplateSourceLocationsPlugin",
+      enable,
+    );
+  }
+}
+
+module.exports = (env) => {
+  webpack.init(env);
+  webpack.chainWebpack((config) => {
+    config
+      .plugin("angular-template-source-locations")
+      .use(AngularTemplateSourceLocationsPlugin);
+  });
+
+  return webpack.resolveConfig();
+};
+```
+
+That lets the NativeScript inspector attach `sourceLocation` metadata such as
+`src/app/home.component.html:12:5` to hierarchy nodes.
+
 ## Auth Token
 
 For shared-network simulator sessions, start with a token and require every request to include top-level `token`.
