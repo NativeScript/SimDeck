@@ -12,7 +12,7 @@
     "bin/",
     "cli/",
     "client/dist/",
-    "nativescript-inspector/",
+    "packages/nativescript-inspector/",
     "scripts/build-cli.sh",
     "scripts/npm-postinstall.mjs",
     "server/Cargo.lock",
@@ -32,7 +32,7 @@
   "scripts": {
     "build:cli": "scripts/build-cli.sh",
     "build:client": "npm run --prefix client build",
-    "build:nativescript-inspector": "npm run --prefix nativescript-inspector build",
+    "build:nativescript-inspector": "npm run --prefix packages/nativescript-inspector build",
     "build": "npm run build:cli && npm run build:client && npm run build:nativescript-inspector",
     "package:vscode-extension": "node scripts/package-vscode-extension.mjs",
     "install:vscode-extension": "node scripts/install-vscode-extension.mjs",

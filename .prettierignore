@@ -3,7 +3,7 @@
 .vscode
 build
 client/dist
-inspector-agent/.build
-nativescript-inspector/dist
+packages/inspector-agent/.build
+packages/nativescript-inspector/dist
 node_modules
 server/target
