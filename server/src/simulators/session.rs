@@ -109,7 +109,7 @@ impl SimulatorSession {
 
         let deadline = Instant::now() + timeout_duration;
         let mut rx = self.inner.sender.subscribe();
-        self.request_refresh_async().await;
+        self.request_refresh();
 
         loop {
             if let Some(frame) = self.latest_keyframe() {
@@ -124,9 +124,9 @@ impl SimulatorSession {
             let remaining = deadline - now;
             match timeout(remaining, rx.recv()).await {
                 Ok(Ok(frame)) if frame.is_keyframe => return Some(frame),
-                Ok(Ok(_)) => self.request_refresh_async().await,
+                Ok(Ok(_)) => self.request_refresh(),
                 Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
-                    self.request_refresh_async().await;
+                    self.request_refresh();
                 }
                 Ok(Err(_)) | Err(_) => return self.latest_keyframe(),
             }
@@ -147,10 +147,6 @@ impl SimulatorSession {
         self.inner.native.request_refresh();
     }
 
-    pub async fn request_refresh_async(&self) {
-        self.request_refresh();
-    }
-
     pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
         self.ensure_started()?;
         self.inner.native.send_touch(x, y, phase)
@@ -159,6 +155,11 @@ impl SimulatorSession {
     pub fn send_key(&self, key_code: u16, modifiers: u32) -> Result<(), AppError> {
         self.ensure_started()?;
         self.inner.native.send_key(key_code, modifiers)
+    }
+
+    pub fn dismiss_keyboard(&self) -> Result<(), AppError> {
+        self.ensure_started()?;
+        self.inner.native.dismiss_keyboard()
     }
 
     pub fn press_home(&self) -> Result<(), AppError> {

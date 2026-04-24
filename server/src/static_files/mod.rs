@@ -1,8 +1,84 @@
-use crate::config::Config;
-use tower_http::services::{ServeDir, ServeFile};
-use tower_http::set_status::SetStatus;
+use axum::body::Body;
+use axum::http::{header, Method, Response, StatusCode, Uri};
+use std::path::{Component, Path, PathBuf};
 
-pub fn service(config: &Config) -> ServeDir<SetStatus<ServeFile>> {
-    let index = config.client_root.join("index.html");
-    ServeDir::new(&config.client_root).not_found_service(ServeFile::new(index))
+pub async fn serve_static(
+    root: PathBuf,
+    method: Method,
+    uri: Uri,
+) -> Result<Response<Body>, StatusCode> {
+    if method != Method::GET && method != Method::HEAD {
+        return Err(StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    let path = uri.path();
+    let Some(relative_path) = safe_relative_path(path) else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+
+    let requested_path = root.join(&relative_path);
+    let file_path = match tokio::fs::metadata(&requested_path).await {
+        Ok(metadata) if metadata.is_file() => requested_path,
+        _ => root.join("index.html"),
+    };
+
+    let bytes = tokio::fs::read(&file_path)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    let content_type = content_type_for_path(&file_path);
+    let body = if method == Method::HEAD {
+        Body::empty()
+    } else {
+        Body::from(bytes)
+    };
+
+    let mut response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(
+            header::CACHE_CONTROL,
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
+        .header(header::PRAGMA, "no-cache")
+        .header(header::EXPIRES, "0")
+        .body(body)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    response.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        "*".parse().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    );
+    Ok(response)
+}
+
+fn safe_relative_path(path: &str) -> Option<PathBuf> {
+    let trimmed = path.trim_start_matches('/');
+    if trimmed.is_empty() {
+        return Some(PathBuf::from("index.html"));
+    }
+
+    let mut relative = PathBuf::new();
+    for component in Path::new(trimmed).components() {
+        match component {
+            Component::Normal(part) => relative.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(relative)
+}
+
+fn content_type_for_path(path: &Path) -> &'static str {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("css") => "text/css; charset=utf-8",
+        Some("html") => "text/html; charset=utf-8",
+        Some("ico") => "image/x-icon",
+        Some("js") | Some("mjs") => "text/javascript; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("map") => "application/json; charset=utf-8",
+        Some("png") => "image/png",
+        Some("svg") => "image/svg+xml",
+        Some("wasm") => "application/wasm",
+        Some("webp") => "image/webp",
+        _ => "application/octet-stream",
+    }
 }

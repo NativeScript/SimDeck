@@ -68,6 +68,16 @@ export function AccessibilityInspector({
   const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const expandedInitializedUDIDRef = useRef("");
   const resizeStateRef = useRef<ResizeState | null>(null);
+  const panelWidthRef = useRef(panelWidth);
+  const detailsHeightRef = useRef(detailsHeight);
+
+  useEffect(() => {
+    panelWidthRef.current = panelWidth;
+  }, [panelWidth]);
+
+  useEffect(() => {
+    detailsHeightRef.current = detailsHeight;
+  }, [detailsHeight]);
 
   useEffect(() => {
     function handlePointerMove(event: PointerEvent) {
@@ -105,7 +115,11 @@ export function AccessibilityInspector({
         resizeState.kind === "width"
           ? "xcw-hierarchy-panel-width"
           : "xcw-hierarchy-details-height",
-        String(resizeState.kind === "width" ? panelWidth : detailsHeight),
+        String(
+          resizeState.kind === "width"
+            ? panelWidthRef.current
+            : detailsHeightRef.current,
+        ),
       );
     }
 
@@ -115,7 +129,7 @@ export function AccessibilityInspector({
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [detailsHeight, panelWidth]);
+  }, []);
 
   useEffect(() => {
     const udid = selectedSimulator?.udid ?? "";
@@ -626,7 +640,7 @@ function errorMessage(error: unknown): string {
 const HIERARCHY_SOURCE_ORDER: AccessibilitySource[] = [
   "nativescript",
   "in-app-inspector",
-  "axe",
+  "native-ax",
 ];
 
 function hierarchySourceOptions(
@@ -650,7 +664,7 @@ function sourceLabel(source: AccessibilitySource): string {
   if (source === "nativescript") {
     return "NativeScript";
   }
-  return source === "in-app-inspector" ? "UIKit" : "AXe";
+  return source === "in-app-inspector" ? "UIKit" : "Native AX";
 }
 
 function objectClassName(value: Record<string, unknown> | null | undefined) {

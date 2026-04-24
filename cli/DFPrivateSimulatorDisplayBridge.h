@@ -4,7 +4,6 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @class DFPrivateSimulatorDisplayBridge;
-@class DFPrivateSimulatorChromeButton;
 
 typedef NS_ENUM(NSInteger, DFPrivateSimulatorTouchPhase) {
     DFPrivateSimulatorTouchPhaseBegan = 0,
@@ -30,14 +29,15 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
 
 - (instancetype)init NS_UNAVAILABLE;
 - (instancetype)new NS_UNAVAILABLE;
-- (nullable instancetype)initWithUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error NS_DESIGNATED_INITIALIZER NS_SWIFT_NAME(init(udid:));
+- (nullable instancetype)initWithUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(init(udid:));
+- (nullable instancetype)initWithUDID:(NSString *)udid
+                         attachDisplay:(BOOL)attachDisplay
+                                 error:(NSError * _Nullable * _Nullable)error NS_DESIGNATED_INITIALIZER;
 
 @property (nonatomic, weak, nullable) id<DFPrivateSimulatorDisplayBridgeDelegate> delegate;
-@property (nonatomic, readonly) NSView *displayView;
 @property (nonatomic, readonly, getter=isDisplayReady) BOOL displayReady;
 @property (nonatomic, readonly) NSString *displayStatus;
 
-- (void)activateDisplayIfNeeded;
 - (nullable CVPixelBufferRef)copyPixelBuffer CF_RETURNS_RETAINED;
 
 - (BOOL)sendTouchAtNormalizedX:(double)normalizedX
@@ -45,37 +45,29 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
                          phase:(DFPrivateSimulatorTouchPhase)phase
                          error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendTouch(normalizedX:normalizedY:phase:));
 
+- (BOOL)sendMultiTouchAtNormalizedX1:(double)normalizedX1
+                          normalizedY1:(double)normalizedY1
+                          normalizedX2:(double)normalizedX2
+                          normalizedY2:(double)normalizedY2
+                                phase:(DFPrivateSimulatorTouchPhase)phase
+                                error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendMultiTouch(normalizedX1:normalizedY1:normalizedX2:normalizedY2:phase:));
+
 - (BOOL)sendKeyCode:(uint16_t)keyCode
           modifiers:(NSUInteger)modifiers
               error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendKey(keyCode:modifiers:));
-
-- (BOOL)sendKeyEvent:(NSEvent *)event
-               error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendKey(event:));
-
-- (NSArray<DFPrivateSimulatorChromeButton *> *)availableChromeButtons NS_SWIFT_NAME(availableChromeButtons());
-- (BOOL)pressChromeButtonWithIdentifier:(NSString *)identifier
-                                  error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(pressChromeButton(identifier:));
+- (BOOL)sendKeyCode:(uint16_t)keyCode
+                down:(BOOL)down
+               error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendKey(keyCode:down:));
 
 - (BOOL)pressHomeButton:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(pressHomeButton());
+- (BOOL)pressHardwareButtonNamed:(NSString *)buttonName
+                       durationMs:(NSUInteger)durationMs
+                            error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(pressHardwareButton(named:durationMs:));
 
 - (BOOL)rotateRight:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(rotateRight());
 - (BOOL)rotateLeft:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(rotateLeft());
 
 - (void)disconnect;
-
-@end
-
-NS_SWIFT_NAME(PrivateSimulatorChromeButton)
-@interface DFPrivateSimulatorChromeButton : NSObject
-
-- (instancetype)init NS_UNAVAILABLE;
-- (instancetype)new NS_UNAVAILABLE;
-
-@property (nonatomic, copy, readonly) NSString *identifier;
-@property (nonatomic, copy, readonly) NSString *title;
-@property (nonatomic, copy, readonly) NSString *toolTip;
-@property (nonatomic, copy, readonly) NSString *accessibilityLabel;
-@property (nonatomic, copy, readonly) NSString *summary;
 
 @end
 

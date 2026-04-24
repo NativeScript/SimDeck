@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   bootSimulator,
+  dismissKeyboard,
   launchSimulatorBundle,
   openAppSwitcher,
   openSimulatorUrl,
@@ -20,7 +21,6 @@ import type {
   AccessibilitySourcePreference,
   AccessibilityTreeResponse,
   ChromeProfile,
-  SimulatorMetadata,
   TouchPhase,
 } from "../api/types";
 import { AccessibilityInspector } from "../features/accessibility/AccessibilityInspector";
@@ -47,6 +47,21 @@ import {
   ZOOM_STEP,
 } from "../shared/constants";
 import { useElementSize } from "../shared/hooks/useElementSize";
+import {
+  ACCESSIBILITY_SOURCE_STORAGE_KEY,
+  DEBUG_VISIBLE_STORAGE_KEY,
+  DEFAULT_VIEWPORT_STATE,
+  HIERARCHY_VISIBLE_STORAGE_KEY,
+  readPersistedUiState,
+  readStoredAccessibilitySource,
+  readStoredFlag,
+  sanitizeAccessibilitySources,
+  viewportStateForUDID,
+  writePersistedUiState,
+  writeStoredFlag,
+} from "./uiState";
+
+const ACCESSIBILITY_REFRESH_MS = 1500;
 
 function buildChromeUrl(udid: string, stamp: number): string {
   return `${STREAM_ORIGIN}/api/simulators/${udid}/chrome.png?stamp=${stamp}`;
@@ -59,8 +74,11 @@ type SimulatorTransition = {
 
 export function AppShell() {
   const [initialUiState] = useState(readPersistedUiState);
-  const initialViewportState = initialUiState.selectedUDID
-    ? viewportStateForUDID(initialUiState, initialUiState.selectedUDID)
+  const [initialSelectedUDID] = useState(
+    () => readDeviceQueryParam() ?? initialUiState.selectedUDID,
+  );
+  const initialViewportState = initialSelectedUDID
+    ? viewportStateForUDID(initialUiState, initialSelectedUDID)
     : DEFAULT_VIEWPORT_STATE;
   const {
     error: listError,
@@ -68,21 +86,13 @@ export function AppShell() {
     refresh,
     simulators,
   } = useSimulatorList();
-  const [debugVisible, setDebugVisible] = useState(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return window.localStorage.getItem("xcw-debug-visible") === "1";
-  });
-  const [hierarchyVisible, setHierarchyVisible] = useState(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return window.localStorage.getItem("xcw-hierarchy-visible") === "1";
-  });
-  const [selectedUDID, setSelectedUDID] = useState(
-    initialUiState.selectedUDID ?? "",
+  const [debugVisible, setDebugVisible] = useState(() =>
+    readStoredFlag(DEBUG_VISIBLE_STORAGE_KEY),
   );
+  const [hierarchyVisible, setHierarchyVisible] = useState(() =>
+    readStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY),
+  );
+  const [selectedUDID, setSelectedUDID] = useState(initialSelectedUDID ?? "");
   const [search, setSearch] = useState(initialUiState.search ?? "");
   const [openURLValue, setOpenURLValue] = useState(
     initialUiState.openURLValue ?? "https://example.com",
@@ -110,10 +120,9 @@ export function AppShell() {
     AccessibilityNode[]
   >([]);
   const [accessibilitySelectedId, setAccessibilitySelectedId] = useState(
-    initialUiState.selectedUDID
-      ? (initialUiState.accessibilitySelectedByUDID?.[
-          initialUiState.selectedUDID
-        ] ?? "")
+    initialSelectedUDID
+      ? (initialUiState.accessibilitySelectedByUDID?.[initialSelectedUDID] ??
+          "")
       : "",
   );
   const [accessibilityHoveredId, setAccessibilityHoveredId] = useState<
@@ -239,14 +248,11 @@ export function AppShell() {
     : "";
 
   useEffect(() => {
-    window.localStorage.setItem("xcw-debug-visible", debugVisible ? "1" : "0");
+    writeStoredFlag(DEBUG_VISIBLE_STORAGE_KEY, debugVisible);
   }, [debugVisible]);
 
   useEffect(() => {
-    window.localStorage.setItem(
-      "xcw-hierarchy-visible",
-      hierarchyVisible ? "1" : "0",
-    );
+    writeStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY, hierarchyVisible);
   }, [hierarchyVisible]);
 
   useEffect(() => {
@@ -386,8 +392,11 @@ export function AppShell() {
       setAccessibilityRoots(roots);
       setAccessibilityAvailableSources(availableSources);
       setAccessibilitySource(snapshot.source);
+      setAccessibilityError(
+        roots.length === 0 ? (snapshot.fallbackReason ?? "") : "",
+      );
       if (
-        snapshot.source === "axe" &&
+        snapshot.source === "native-ax" &&
         availableSources.includes("nativescript") &&
         accessibilityPreferredSource !== "nativescript"
       ) {
@@ -416,6 +425,9 @@ export function AppShell() {
       setAccessibilityHoveredId(null);
       setAccessibilitySource("");
       setAccessibilityAvailableSources([]);
+      if (accessibilityPreferredSource !== "auto") {
+        setAccessibilityPreferredSource("auto");
+      }
     } finally {
       if (accessibilityRequestIdRef.current === requestId) {
         accessibilityLoadingRef.current = false;
@@ -432,7 +444,7 @@ export function AppShell() {
     void loadAccessibilityTree();
     const interval = window.setInterval(() => {
       void loadAccessibilityTree();
-    }, 650);
+    }, ACCESSIBILITY_REFRESH_MS);
     return () => window.clearInterval(interval);
   }, [hierarchyVisible, loadAccessibilityTree]);
 
@@ -726,6 +738,12 @@ export function AppShell() {
           });
         }}
         onChangeSearch={setSearch}
+        onDismissKeyboard={() => {
+          if (!selectedSimulator) {
+            return;
+          }
+          void runAction(() => dismissKeyboard(selectedSimulator.udid), false);
+        }}
         onHome={() => {
           if (!selectedSimulator) {
             return;
@@ -885,145 +903,12 @@ export function AppShell() {
   );
 }
 
-interface PersistedViewportState {
-  pan: Point;
-  rotationQuarterTurns: number;
-  viewMode: ViewMode;
-  zoom: number | null;
-}
-
-interface PersistedUiState {
-  accessibilitySelectedByUDID?: Record<string, string>;
-  bundleIDValue?: string;
-  openURLValue?: string;
-  search?: string;
-  selectedUDID?: string;
-  viewportByUDID?: Record<string, PersistedViewportState>;
-}
-
-const UI_STATE_STORAGE_KEY = "xcw-ui-state";
-const ACCESSIBILITY_SOURCE_STORAGE_KEY = "xcw-hierarchy-source";
-const ACCESSIBILITY_SOURCE_ORDER: AccessibilitySource[] = [
-  "nativescript",
-  "in-app-inspector",
-  "axe",
-];
-
-const DEFAULT_VIEWPORT_STATE: PersistedViewportState = {
-  pan: { x: 0, y: 0 },
-  rotationQuarterTurns: 0,
-  viewMode: "center",
-  zoom: null,
-};
-
-function readPersistedUiState(): PersistedUiState {
+function readDeviceQueryParam(): string | undefined {
   if (typeof window === "undefined") {
-    return {};
+    return undefined;
   }
 
-  try {
-    const parsed = JSON.parse(
-      window.localStorage.getItem(UI_STATE_STORAGE_KEY) ?? "{}",
-    ) as PersistedUiState;
-    return sanitizePersistedUiState(parsed);
-  } catch {
-    return {};
-  }
-}
-
-function readStoredAccessibilitySource(): AccessibilitySourcePreference {
-  if (typeof window === "undefined") {
-    return "auto";
-  }
-
-  const source = window.localStorage.getItem(ACCESSIBILITY_SOURCE_STORAGE_KEY);
-  return source === "auto" || isAccessibilitySource(source) ? source : "auto";
-}
-
-function sanitizeAccessibilitySources(value: unknown): AccessibilitySource[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const sourceSet = new Set(value.filter(isAccessibilitySource));
-  return ACCESSIBILITY_SOURCE_ORDER.filter((source) => sourceSet.has(source));
-}
-
-function isAccessibilitySource(value: unknown): value is AccessibilitySource {
-  return (
-    value === "nativescript" || value === "in-app-inspector" || value === "axe"
-  );
-}
-
-function writePersistedUiState(
-  updater: (current: PersistedUiState) => PersistedUiState,
-) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const nextState = sanitizePersistedUiState(updater(readPersistedUiState()));
-  window.localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(nextState));
-}
-
-function viewportStateForUDID(
-  state: PersistedUiState,
-  udid: string,
-): PersistedViewportState {
-  return state.viewportByUDID?.[udid] ?? DEFAULT_VIEWPORT_STATE;
-}
-
-function sanitizePersistedUiState(state: PersistedUiState): PersistedUiState {
-  const viewportByUDID = Object.fromEntries(
-    Object.entries(state.viewportByUDID ?? {})
-      .map(([udid, viewport]) => [udid, sanitizeViewportState(viewport)])
-      .filter((entry): entry is [string, PersistedViewportState] =>
-        Boolean(entry[1]),
-      ),
-  );
-
-  return {
-    accessibilitySelectedByUDID: state.accessibilitySelectedByUDID ?? {},
-    bundleIDValue: stringOrUndefined(state.bundleIDValue),
-    openURLValue: stringOrUndefined(state.openURLValue),
-    search: stringOrUndefined(state.search),
-    selectedUDID: stringOrUndefined(state.selectedUDID),
-    viewportByUDID,
-  };
-}
-
-function sanitizeViewportState(
-  state: PersistedViewportState | undefined,
-): PersistedViewportState | null {
-  if (!state) {
-    return null;
-  }
-
-  return {
-    pan: isPoint(state.pan) ? state.pan : DEFAULT_VIEWPORT_STATE.pan,
-    rotationQuarterTurns: Number.isFinite(state.rotationQuarterTurns)
-      ? state.rotationQuarterTurns
-      : DEFAULT_VIEWPORT_STATE.rotationQuarterTurns,
-    viewMode: isViewMode(state.viewMode)
-      ? state.viewMode
-      : DEFAULT_VIEWPORT_STATE.viewMode,
-    zoom: state.zoom == null || Number.isFinite(state.zoom) ? state.zoom : null,
-  };
-}
-
-function isPoint(value: unknown): value is Point {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    Number.isFinite((value as Point).x) &&
-    Number.isFinite((value as Point).y),
-  );
-}
-
-function isViewMode(value: unknown): value is ViewMode {
-  return value === "center" || value === "fit" || value === "manual";
-}
-
-function stringOrUndefined(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+  const value = new URLSearchParams(window.location.search).get("device");
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }

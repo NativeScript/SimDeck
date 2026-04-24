@@ -35,17 +35,6 @@ typedef IndigoHIDMessage *(*DFIndigoHIDMessageForKeyboardArbitraryFn)(int keyCod
 typedef IndigoHIDMessage *(*DFIndigoHIDMessageForKeyboardNSEventFn)(NSEvent *event);
 typedef IndigoHIDMessage *(*DFIndigoHIDMessageForButtonFn)(uint32_t buttonCode, uint32_t operation, uint32_t target);
 typedef IndigoHIDMessage *(*DFIndigoHIDMessageForHIDArbitraryFn)(uint32_t target, uint32_t page, uint32_t usage, uint32_t operation);
-typedef void (*DFSimDigitizerTouchMethodFn)(id inputView, const void *touchEvent);
-
-typedef struct {
-    CGPoint touch1;
-    CGPoint touch2;
-    uint8_t touch2IsNil;
-    uint8_t phase;
-    uint8_t reserved[6];
-    int64_t type;
-    uint64_t edge;
-} DFSimDigitizerTouchEvent;
 
 #pragma pack(push, 4)
 typedef struct {
@@ -119,6 +108,8 @@ typedef struct {
     __unsafe_unretained id unit;
     double value;
 } DFUnitAngleMeasurement;
+
+static DFIndigoMessage *DFCreateIndigoMultiTouchMessage(CGPoint normalizedPoint1, CGPoint normalizedPoint2, NSSize displaySize, BOOL touchDown, NSError **error);
 
 typedef NS_ENUM(NSInteger, DFPrivateSimulatorErrorCode) {
     DFPrivateSimulatorErrorCodeFrameworkLoadFailed = 1,
@@ -942,6 +933,71 @@ static DFIndigoMessage *DFCreateIndigoTouchMessage(CGPoint normalizedPoint, NSSi
     memcpy(secondPayload, &message->payload, sizeof(DFIndigoPayload));
     secondPayload->event.touch.field1 = 0x1;
     secondPayload->event.touch.field2 = 0x2;
+
+    free(baseMessage);
+    return message;
+}
+
+static DFIndigoMessage *DFCreateIndigoMultiTouchMessage(CGPoint normalizedPoint1, CGPoint normalizedPoint2, NSSize displaySize, BOOL touchDown, NSError **error) {
+    DFIndigoHIDMessageForMouseNSEventFn mouseMessage = (DFIndigoHIDMessageForMouseNSEventFn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
+    if (mouseMessage == NULL) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit did not expose IndigoHIDMessageForMouseNSEvent."
+            );
+        }
+        return NULL;
+    }
+
+    NSEventType eventType = touchDown ? NSEventTypeLeftMouseDown : NSEventTypeLeftMouseUp;
+    CGPoint ratioPoint = CGPointMake(
+        fmax(0.0, fmin(1.0, normalizedPoint1.x)),
+        fmax(0.0, fmin(1.0, normalizedPoint1.y))
+    );
+    CGPoint secondRatioPoint = CGPointMake(
+        fmax(0.0, fmin(1.0, normalizedPoint2.x)),
+        fmax(0.0, fmin(1.0, normalizedPoint2.y))
+    );
+
+    DFIndigoMessage *baseMessage = (DFIndigoMessage *)mouseMessage(&ratioPoint, NULL, DFIndigoTouchTarget, eventType, displaySize, 0);
+    if (baseMessage == NULL) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit failed to create a base Indigo HID touch packet."
+            );
+        }
+        return NULL;
+    }
+
+    size_t messageSize = sizeof(DFIndigoMessage) + sizeof(DFIndigoPayload);
+    DFIndigoMessage *message = calloc(1, messageSize);
+    if (message == NULL) {
+        free(baseMessage);
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"Unable to allocate the Indigo HID touch packet."
+            );
+        }
+        return NULL;
+    }
+
+    message->innerSize = (uint32_t)sizeof(DFIndigoPayload);
+    message->eventType = DFIndigoEventTypeTouch;
+    message->payload.field1 = DFIndigoTouchEventKind;
+    message->payload.timestamp = mach_absolute_time();
+    message->payload.event.touch = baseMessage->payload.event.touch;
+    message->payload.event.touch.xRatio = ratioPoint.x;
+    message->payload.event.touch.yRatio = ratioPoint.y;
+
+    DFIndigoPayload *secondPayload = (DFIndigoPayload *)((uint8_t *)&message->payload + sizeof(DFIndigoPayload));
+    memcpy(secondPayload, &message->payload, sizeof(DFIndigoPayload));
+    secondPayload->event.touch.field1 = 0x1;
+    secondPayload->event.touch.field2 = 0x2;
+    secondPayload->event.touch.xRatio = secondRatioPoint.x;
+    secondPayload->event.touch.yRatio = secondRatioPoint.y;
 
     free(baseMessage);
     return message;
@@ -1854,7 +1910,13 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
 
 @end
 
-@interface DFPrivateSimulatorChromeButton ()
+@interface DFPrivateSimulatorChromeButton : NSObject
+
+@property (nonatomic, copy, readonly) NSString *identifier;
+@property (nonatomic, copy, readonly) NSString *title;
+@property (nonatomic, copy, readonly) NSString *toolTip;
+@property (nonatomic, copy, readonly) NSString *accessibilityLabel;
+@property (nonatomic, copy, readonly) NSString *summary;
 
 - (instancetype)initWithIdentifier:(NSString *)identifier
                              title:(NSString *)title
@@ -1986,6 +2048,12 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
 }
 
 - (nullable instancetype)initWithUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
+    return [self initWithUDID:udid attachDisplay:YES error:error];
+}
+
+- (nullable instancetype)initWithUDID:(NSString *)udid
+                         attachDisplay:(BOOL)attachDisplay
+                                 error:(NSError * _Nullable __autoreleasing *)error {
     if (![DFPrivateSimulatorDisplayBridge loadPrivateFrameworks:error]) {
         return nil;
     }
@@ -2081,6 +2149,12 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
         }
     } else {
         DFLog(@"SimulatorKit legacy HID client class was unavailable.");
+    }
+
+    if (!attachDisplay) {
+        _displayPixelSize = CGSizeMake(1.0, 1.0);
+        [self updateStatus:@"Private HID ready"];
+        return self;
     }
 
     _screenAdapterHost = DFCallSwiftSelfGetterByPattern(
@@ -2767,6 +2841,105 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     return success;
 }
 
+- (BOOL)pressHardwareButtonNamed:(NSString *)buttonName
+                       durationMs:(NSUInteger)durationMs
+                            error:(NSError * _Nullable __autoreleasing *)error {
+    NSString *normalizedName = buttonName.lowercaseString ?: @"";
+    if ([normalizedName isEqualToString:@"home"]) {
+        if (durationMs > 0) {
+            [NSThread sleepForTimeInterval:(NSTimeInterval)durationMs / 1000.0];
+        }
+        return [self pressHomeButton:error];
+    }
+
+    static NSDictionary<NSString *, NSNumber *> *buttonCodes;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        buttonCodes = @{
+            // FBSimulatorHIDButton raw values used by fbsimctl/idb/AXe.
+            @"apple-pay": @1,
+            @"lock": @3,
+            @"power": @3,
+            @"side-button": @4,
+            @"side": @4,
+            @"siri": @5,
+        };
+    });
+
+    NSNumber *buttonCode = buttonCodes[normalizedName];
+    if (buttonCode == nil) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                [NSString stringWithFormat:@"Unsupported hardware button `%@`.", buttonName ?: @""]
+            );
+        }
+        return NO;
+    }
+
+    __block BOOL success = NO;
+    __block NSError *dispatchError = nil;
+
+    dispatch_block_t work = ^{
+        if (self->_hidClient == nil) {
+            dispatchError = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit did not provide a headless HID client for hardware buttons."
+            );
+            return;
+        }
+
+        uint32_t code = buttonCode.unsignedIntValue;
+        uint32_t targets[] = { DFIndigoTouchTarget, 0x2 };
+        for (NSUInteger targetIndex = 0; targetIndex < sizeof(targets) / sizeof(targets[0]); targetIndex++) {
+            NSError *downError = nil;
+            IndigoHIDMessage *down = DFCreateButtonMessage(code, DFButtonDirectionDown, targets[targetIndex], &downError);
+            if (down == NULL) {
+                dispatchError = downError;
+                continue;
+            }
+            if (!DFSendHIDMessage(self->_hidClient, down, YES, &downError)) {
+                dispatchError = downError;
+                continue;
+            }
+
+            if (durationMs > 0) {
+                [NSThread sleepForTimeInterval:(NSTimeInterval)durationMs / 1000.0];
+            }
+
+            NSError *upError = nil;
+            IndigoHIDMessage *up = DFCreateButtonMessage(code, DFButtonDirectionUp, targets[targetIndex], &upError);
+            if (up == NULL) {
+                dispatchError = upError;
+                continue;
+            }
+            if (!DFSendHIDMessage(self->_hidClient, up, YES, &upError)) {
+                dispatchError = upError;
+                continue;
+            }
+
+            DFLog(@"Sending hardware button `%@` code=%u target=0x%x durationMs=%lu", buttonName, code, targets[targetIndex], (unsigned long)durationMs);
+            success = YES;
+            return;
+        }
+    };
+
+    if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {
+        work();
+    } else {
+        dispatch_sync(_callbackQueue, work);
+    }
+
+    if (!success && error != NULL) {
+        *error = dispatchError ?: DFMakeError(
+            DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+            [NSString stringWithFormat:@"SimulatorKit rejected hardware button `%@`.", buttonName ?: @""]
+        );
+    }
+
+    return success;
+}
+
 - (BOOL)rotateRight:(NSError * _Nullable __autoreleasing *)error {
     return [self rotateByDegrees:90.0 error:error];
 }
@@ -2920,6 +3093,81 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     return success;
 }
 
+- (BOOL)sendMultiTouchAtNormalizedX1:(double)normalizedX1
+                         normalizedY1:(double)normalizedY1
+                         normalizedX2:(double)normalizedX2
+                         normalizedY2:(double)normalizedY2
+                               phase:(DFPrivateSimulatorTouchPhase)phase
+                               error:(NSError * _Nullable __autoreleasing *)error {
+    __block BOOL success = NO;
+    __block NSError *dispatchError = nil;
+
+    dispatch_block_t work = ^{
+        if (self->_hidClient == nil) {
+            dispatchError = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit did not provide a headless HID client for this simulator."
+            );
+            return;
+        }
+
+        CGFloat x1 = (CGFloat)fmax(0.0, fmin(1.0, normalizedX1));
+        CGFloat y1 = (CGFloat)fmax(0.0, fmin(1.0, normalizedY1));
+        CGFloat x2 = (CGFloat)fmax(0.0, fmin(1.0, normalizedX2));
+        CGFloat y2 = (CGFloat)fmax(0.0, fmin(1.0, normalizedY2));
+        CGSize displaySize = self->_displayPixelSize;
+        if (displaySize.width < 1.0 || displaySize.height < 1.0) {
+            displaySize = CGSizeMake(1.0, 1.0);
+        }
+
+        NSString *phaseLabel = @"moved";
+        switch (phase) {
+        case DFPrivateSimulatorTouchPhaseBegan:
+            phaseLabel = @"began";
+            break;
+        case DFPrivateSimulatorTouchPhaseMoved:
+            phaseLabel = @"moved";
+            break;
+        case DFPrivateSimulatorTouchPhaseEnded:
+        case DFPrivateSimulatorTouchPhaseCancelled:
+            phaseLabel = phase == DFPrivateSimulatorTouchPhaseEnded ? @"ended" : @"cancelled";
+            break;
+        }
+
+        BOOL touchDown = phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved;
+        DFIndigoMessage *message = DFCreateIndigoMultiTouchMessage(CGPointMake(x1, y1), CGPointMake(x2, y2), displaySize, touchDown, &dispatchError);
+        if (message == NULL) {
+            return;
+        }
+
+        NSError *messageError = nil;
+        if (!DFSendHIDMessage(self->_hidClient, (IndigoHIDMessage *)message, YES, &messageError)) {
+            dispatchError = messageError ?: DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit rejected the Indigo HID multi-touch packet."
+            );
+            return;
+        }
+
+        if (phase != DFPrivateSimulatorTouchPhaseMoved) {
+            DFLog(@"Sending %@ Indigo HID multi-touch p1=(%.4f, %.4f) p2=(%.4f, %.4f) within %.0fx%.0f", phaseLabel, x1, y1, x2, y2, displaySize.width, displaySize.height);
+        }
+        success = YES;
+    };
+
+    if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {
+        work();
+    } else {
+        dispatch_sync(_callbackQueue, work);
+    }
+
+    if (!success && error != NULL) {
+        *error = dispatchError;
+    }
+
+    return success;
+}
+
 - (BOOL)sendKeyCode:(uint16_t)keyCode
           modifiers:(NSUInteger)modifiers
               error:(NSError * _Nullable __autoreleasing *)error {
@@ -2981,6 +3229,44 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
         }
 
         DFLog(@"Sending keyboard HID keyCode %u with modifiers 0x%lx", keyCode, (unsigned long)modifiers);
+        success = YES;
+    };
+
+    if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {
+        work();
+    } else {
+        dispatch_sync(_callbackQueue, work);
+    }
+
+    if (!success && error != NULL) {
+        *error = dispatchError;
+    }
+
+    return success;
+}
+
+- (BOOL)sendKeyCode:(uint16_t)keyCode
+                down:(BOOL)down
+               error:(NSError * _Nullable __autoreleasing *)error {
+    __block BOOL success = NO;
+    __block NSError *dispatchError = nil;
+
+    dispatch_block_t work = ^{
+        if (self->_hidClient == nil) {
+            dispatchError = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit did not provide a headless HID client for keyboard input."
+            );
+            return;
+        }
+
+        NSError *messageError = nil;
+        if (!DFSendSingleKeyboardEvent(self->_hidClient, keyCode, down, &messageError)) {
+            dispatchError = messageError;
+            return;
+        }
+
+        DFLog(@"Sending keyboard HID keyCode %u %@", keyCode, down ? @"down" : @"up");
         success = YES;
     };
 

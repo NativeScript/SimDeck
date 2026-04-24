@@ -18,6 +18,12 @@ NS_ASSUME_NONNULL_BEGIN
                    y:(double)y
                phase:(NSString *)phase
                error:(NSError * _Nullable * _Nullable)error;
+- (BOOL)sendMultiTouchAtX1:(double)x1
+                        y1:(double)y1
+                        x2:(double)x2
+                        y2:(double)y2
+                     phase:(NSString *)phase
+                     error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)sendKeyCode:(uint16_t)keyCode
           modifiers:(uint32_t)modifiers
               error:(NSError * _Nullable * _Nullable)error;

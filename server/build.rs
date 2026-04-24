@@ -13,8 +13,8 @@ fn main() {
         cli.join("XCWH264Encoder.m"),
         cli.join("XCWProcessRunner.m"),
         cli.join("XCWPrivateSimulatorBooter.m"),
-        cli.join("XCWPrivateSimulatorChromeBridge.m"),
         cli.join("XCWPrivateSimulatorSession.m"),
+        cli.join("XCWAccessibilityBridge.m"),
         cli.join("XCWChromeRenderer.m"),
         cli.join("XCWSimctl.m"),
         native.join("XCWNativeSession.m"),
@@ -48,11 +48,11 @@ fn main() {
     );
     println!(
         "cargo:rerun-if-changed={}",
-        cli.join("XCWPrivateSimulatorChromeBridge.h").display()
+        cli.join("XCWPrivateSimulatorSession.h").display()
     );
     println!(
         "cargo:rerun-if-changed={}",
-        cli.join("XCWPrivateSimulatorSession.h").display()
+        cli.join("XCWAccessibilityBridge.h").display()
     );
     println!(
         "cargo:rerun-if-changed={}",

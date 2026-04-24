@@ -11,8 +11,10 @@ SERVER_BIN="$ROOT_DIR/server/target/release/xcode-canvas-web-server"
 mkdir -p "$BUILD_DIR"
 
 cargo build --release --manifest-path "$MANIFEST_PATH"
-cp "$SERVER_BIN" "$OUTPUT_BIN"
-chmod +x "$OUTPUT_BIN"
+TMP_OUTPUT_BIN="$OUTPUT_BIN.tmp.$$"
+cp "$SERVER_BIN" "$TMP_OUTPUT_BIN"
+chmod +x "$TMP_OUTPUT_BIN"
+mv -f "$TMP_OUTPUT_BIN" "$OUTPUT_BIN"
 
 cat > "$OUTPUT" <<EOF
 #!/usr/bin/env zsh

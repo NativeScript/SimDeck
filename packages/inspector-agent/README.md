@@ -145,12 +145,13 @@ import { startXcodeCanvasInspector } from "@nativescript/xcode-canvas-inspector"
 startXcodeCanvasInspector({ port: 4310 });
 
 runNativeScriptAngularApp({
-  appModuleBootstrap: () => bootstrapApplication(AppComponent, {
-    providers: [
-      provideNativeScriptHttpClient(withInterceptorsFromDi()),
-      provideNativeScriptRouter(routes),
-    ],
-  }),
+  appModuleBootstrap: () =>
+    bootstrapApplication(AppComponent, {
+      providers: [
+        provideNativeScriptHttpClient(withInterceptorsFromDi()),
+        provideNativeScriptRouter(routes),
+      ],
+    }),
 });
 ```
 

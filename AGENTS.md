@@ -22,9 +22,11 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
 - `server/src/simulators/registry.rs`
   Tracks Rust-side simulator session state and lazy native attachment by UDID.
 - `cli/XCWSimctl.*`
-  Wraps `xcrun simctl` for discovery, lifecycle management, app launching, URL opening, and screenshot capture.
+  Wraps `xcrun simctl` for discovery, lifecycle management, app launching, URL opening, appearance toggles, and simulator log capture.
 - `cli/DFPrivateSimulatorDisplayBridge.*`
   Owns headless private display frames plus HID-based touch and keyboard injection.
+- `cli/XCWAccessibilityBridge.*`
+  Owns private CoreSimulator accessibility snapshots through `AccessibilityPlatformTranslation`.
 - `cli/XCWPrivateSimulatorSession.*`
   Owns one private display bridge per booted simulator plus selectable HEVC/H.264 encode.
 - `cli/native/XCWNativeBridge.*`
@@ -33,8 +35,6 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
   Wraps one Objective-C private simulator session handle for the Rust registry.
 - `cli/XCWPrivateSimulatorBooter.*`
   Uses private `CoreSimulator` APIs for direct simulator boot when available, with `simctl` as the fallback path.
-- `cli/XCWPrivateSimulatorChromeBridge.*`
-  Experimental private `SimulatorKit` chrome bridge for simulator chrome exploration.
 - `cli/XCWChromeRenderer.*`
   Renders Apple’s CoreSimulator device-type PDF chrome assets into PNGs for the browser.
 - `client/src/app/App.tsx`
@@ -60,10 +60,10 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
 Private simulator behavior is implemented locally in:
 
 - Boot path: `cli/XCWPrivateSimulatorBooter.*`
-- Chrome asset bridge: `cli/XCWPrivateSimulatorChromeBridge.*`
 - Full live display bridge: `cli/DFPrivateSimulatorDisplayBridge.*`
+- Accessibility bridge: `cli/XCWAccessibilityBridge.*`
 
-The current repo uses the private boot path and private display bridge directly. The browser streams frames from that bridge and injects touch and keyboard events through the same native session layer.
+The current repo uses the private boot path, private display bridge, and private accessibility translation bridge directly. The browser streams frames from that bridge, injects touch and keyboard events through the same native session layer, inspects accessibility through `AccessibilityPlatformTranslation`, and renders device chrome from `cli/XCWChromeRenderer.*`.
 
 ## Build and Run
 
@@ -105,8 +105,26 @@ Useful direct commands:
 ./build/xcode-canvas-web list
 ./build/xcode-canvas-web boot <udid>
 ./build/xcode-canvas-web shutdown <udid>
+./build/xcode-canvas-web erase <udid>
+./build/xcode-canvas-web install <udid> /path/to/App.app
+./build/xcode-canvas-web uninstall <udid> com.example.App
 ./build/xcode-canvas-web open-url <udid> https://example.com
 ./build/xcode-canvas-web launch <udid> com.apple.Preferences
+./build/xcode-canvas-web pasteboard set <udid> "hello"
+./build/xcode-canvas-web pasteboard get <udid>
+./build/xcode-canvas-web screenshot <udid> --output screen.png
+./build/xcode-canvas-web describe-ui <udid>
+./build/xcode-canvas-web tap <udid> 120 240
+./build/xcode-canvas-web tap <udid> --label "Continue" --wait-timeout-ms 5000
+./build/xcode-canvas-web swipe <udid> 200 700 200 200
+./build/xcode-canvas-web gesture <udid> scroll-down
+./build/xcode-canvas-web pinch <udid> --start-distance 160 --end-distance 80
+./build/xcode-canvas-web rotate-gesture <udid> --radius 100 --degrees 90
+./build/xcode-canvas-web key-sequence <udid> --keycodes h,e,l,l,o
+./build/xcode-canvas-web key-combo <udid> --modifiers cmd --key a
+./build/xcode-canvas-web type <udid> "hello"
+./build/xcode-canvas-web button <udid> lock --duration-ms 1000
+./build/xcode-canvas-web home <udid>
 ```
 
 ## Expectations For Future Changes
@@ -120,5 +138,5 @@ Useful direct commands:
 ## Near-Term Roadmap
 
 - Compose the private frame stream and CoreSimulator chrome into a single server-side render path.
-- Add richer input surfaces such as gesture synthesis, text entry helpers, and chrome-button actions on top of the HID bridge.
-- Add simulator creation, erase, pasteboard, install, and log streaming commands.
+- Keep private Indigo multi-touch packet assumptions documented when Xcode runtimes change.
+- Add simulator creation and log streaming commands.

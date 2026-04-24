@@ -8,41 +8,39 @@ export function useSimulatorList() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
+  async function loadSimulators(cancelled = false) {
+    try {
+      const nextSimulators = await listSimulators();
+      if (cancelled) {
+        return;
+      }
+      startTransition(() => setSimulators(nextSimulators));
+      setError("");
+    } catch (loadError) {
+      if (!cancelled) {
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Failed to load simulators.",
+        );
+      }
+    } finally {
+      if (!cancelled) {
+        setIsLoading(false);
+      }
+    }
+  }
+
   async function refresh() {
-    const nextSimulators = await listSimulators();
-    startTransition(() => setSimulators(nextSimulators));
-    setError("");
+    await loadSimulators();
   }
 
   useEffect(() => {
     let cancelled = false;
 
-    async function load() {
-      try {
-        const nextSimulators = await listSimulators();
-        if (cancelled) {
-          return;
-        }
-        startTransition(() => setSimulators(nextSimulators));
-        setError("");
-      } catch (loadError) {
-        if (!cancelled) {
-          setError(
-            loadError instanceof Error
-              ? loadError.message
-              : "Failed to load simulators.",
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      }
-    }
-
-    void load();
+    void loadSimulators();
     const intervalId = window.setInterval(() => {
-      void load();
+      void loadSimulators(cancelled);
     }, 5000);
 
     return () => {

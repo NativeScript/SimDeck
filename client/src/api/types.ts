@@ -80,7 +80,7 @@ export interface AccessibilityNode {
   role?: string | null;
   role_description?: string | null;
   scroll?: Record<string, unknown> | null;
-  source?: "axe" | "in-app-inspector" | "nativescript" | string | null;
+  source?: "native-ax" | "in-app-inspector" | "nativescript" | string | null;
   sourceColumn?: number | null;
   sourceFile?: string | null;
   sourceLine?: number | null;
@@ -97,13 +97,16 @@ export interface AccessibilityNode {
   viewController?: Record<string, unknown> | null;
 }
 
-export type AccessibilitySource = "axe" | "in-app-inspector" | "nativescript";
+export type AccessibilitySource =
+  | "native-ax"
+  | "in-app-inspector"
+  | "nativescript";
 export type AccessibilitySourcePreference = AccessibilitySource | "auto";
 
 export interface AccessibilityTreeResponse {
   availableSources?: AccessibilitySource[];
   fallbackReason?: string;
-  fallbackSource?: "axe";
+  fallbackSource?: "native-ax";
   inspector?: Record<string, unknown>;
   roots: AccessibilityNode[];
   source: AccessibilitySource;

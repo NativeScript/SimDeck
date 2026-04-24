@@ -206,6 +206,22 @@ impl NativeBridge {
         }
     }
 
+    pub fn screenshot_png(&self, udid: &str) -> Result<Vec<u8>, AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            let bytes = ffi::xcw_native_screenshot_png(udid.as_ptr(), &mut error);
+            if bytes.data.is_null() {
+                return Err(
+                    take_error(error).unwrap_or_else(|| AppError::native("Unknown native error."))
+                );
+            }
+            let data = std::slice::from_raw_parts(bytes.data, bytes.length).to_vec();
+            ffi::xcw_native_free_bytes(bytes);
+            Ok(data)
+        }
+    }
+
     pub fn recent_logs(
         &self,
         udid: &str,
@@ -230,6 +246,156 @@ impl NativeBridge {
             entries = entries.split_off(entries.len() - limit);
         }
         Ok(entries)
+    }
+
+    pub fn accessibility_snapshot(
+        &self,
+        udid: &str,
+        point: Option<(f64, f64)>,
+    ) -> Result<serde_json::Value, AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let json = unsafe {
+            let mut error = ptr::null_mut();
+            let raw =
+                ffi::xcw_native_accessibility_snapshot(udid.as_ptr(), false, 0.0, 0.0, &mut error);
+            string_from_raw(raw, error)?
+        };
+        let snapshot: serde_json::Value =
+            serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))?;
+        Ok(match point {
+            Some((x, y)) => accessibility_snapshot_at_point(snapshot, x, y),
+            None => snapshot,
+        })
+    }
+
+    pub fn send_touch(&self, udid: &str, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let phase = CString::new(phase).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_send_touch(udid.as_ptr(), x, y, phase.as_ptr(), &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn send_key(&self, udid: &str, key_code: u16, modifiers: u32) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_send_key(udid.as_ptr(), key_code, modifiers, &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn send_key_event(&self, udid: &str, key_code: u16, down: bool) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_send_key_event(udid.as_ptr(), key_code, down, &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn press_home(&self, udid: &str) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(ffi::xcw_native_press_home(udid.as_ptr(), &mut error), error)
+        }
+    }
+
+    pub fn press_button(&self, udid: &str, button: &str, duration_ms: u32) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let button = CString::new(button).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_press_button(
+                    udid.as_ptr(),
+                    button.as_ptr(),
+                    duration_ms,
+                    &mut error,
+                ),
+                error,
+            )
+        }
+    }
+
+    pub fn erase_simulator(&self, udid: &str) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_erase_simulator(udid.as_ptr(), &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn install_app(&self, udid: &str, app_path: &str) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let app_path = CString::new(app_path).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_install_app(udid.as_ptr(), app_path.as_ptr(), &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn uninstall_app(&self, udid: &str, bundle_id: &str) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let bundle_id =
+            CString::new(bundle_id).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_uninstall_app(udid.as_ptr(), bundle_id.as_ptr(), &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn set_pasteboard_text(&self, udid: &str, text: &str) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let text = CString::new(text).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_set_pasteboard_text(udid.as_ptr(), text.as_ptr(), &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn pasteboard_text(&self, udid: &str) -> Result<String, AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            let raw = ffi::xcw_native_get_pasteboard_text(udid.as_ptr(), &mut error);
+            string_from_raw(raw, error)
+        }
+    }
+
+    pub fn create_input_session(&self, udid: &str) -> Result<NativeInputSession, AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            let handle = ffi::xcw_native_input_create(udid.as_ptr(), &mut error);
+            if handle.is_null() {
+                return Err(take_error(error).unwrap_or_else(|| {
+                    AppError::native("Unable to create native input session.")
+                }));
+            }
+            Ok(NativeInputSession { handle })
+        }
     }
 
     pub fn create_session(&self, udid: &str) -> Result<NativeSession, AppError> {
@@ -298,6 +464,49 @@ fn log_level_matches(entry_level: &str, filter: &str) -> bool {
     }
 }
 
+pub struct NativeInputSession {
+    handle: *mut c_void,
+}
+
+unsafe impl Send for NativeInputSession {}
+unsafe impl Sync for NativeInputSession {}
+
+impl NativeInputSession {
+    pub fn send_multitouch(
+        &self,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        phase: &str,
+    ) -> Result<(), AppError> {
+        let phase = CString::new(phase).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_input_send_multitouch(
+                    self.handle,
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    phase.as_ptr(),
+                    &mut error,
+                ),
+                error,
+            )
+        }
+    }
+}
+
+impl Drop for NativeInputSession {
+    fn drop(&mut self) {
+        unsafe {
+            ffi::xcw_native_input_destroy(self.handle);
+        }
+    }
+}
+
 pub struct NativeSession {
     handle: *mut c_void,
 }
@@ -352,6 +561,10 @@ impl NativeSession {
         }
     }
 
+    pub fn dismiss_keyboard(&self) -> Result<(), AppError> {
+        self.send_key(41, 0)
+    }
+
     pub fn press_home(&self) -> Result<(), AppError> {
         unsafe {
             let mut error = ptr::null_mut();
@@ -398,6 +611,71 @@ impl Drop for NativeSession {
             ffi::xcw_native_session_destroy(self.handle);
         }
     }
+}
+
+fn accessibility_snapshot_at_point(
+    snapshot: serde_json::Value,
+    x: f64,
+    y: f64,
+) -> serde_json::Value {
+    let source = snapshot
+        .get("source")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("native-ax")
+        .to_owned();
+    let mut best: Option<(usize, serde_json::Value)> = None;
+    if let Some(roots) = snapshot.get("roots").and_then(serde_json::Value::as_array) {
+        for root in roots {
+            accessibility_node_at_point(root, x, y, 0, &mut best);
+        }
+    }
+    serde_json::json!({
+        "roots": best.map(|(_, node)| vec![node]).unwrap_or_default(),
+        "source": source,
+    })
+}
+
+fn accessibility_node_at_point(
+    node: &serde_json::Value,
+    x: f64,
+    y: f64,
+    depth: usize,
+    best: &mut Option<(usize, serde_json::Value)>,
+) {
+    if !accessibility_frame_contains_point(node.get("frame"), x, y) {
+        return;
+    }
+    if best
+        .as_ref()
+        .map(|(best_depth, _)| depth >= *best_depth)
+        .unwrap_or(true)
+    {
+        *best = Some((depth, node.clone()));
+    }
+    if let Some(children) = node.get("children").and_then(serde_json::Value::as_array) {
+        for child in children {
+            accessibility_node_at_point(child, x, y, depth + 1, best);
+        }
+    }
+}
+
+fn accessibility_frame_contains_point(frame: Option<&serde_json::Value>, x: f64, y: f64) -> bool {
+    let Some(frame) = frame else {
+        return false;
+    };
+    let Some(frame_x) = frame.get("x").and_then(serde_json::Value::as_f64) else {
+        return false;
+    };
+    let Some(frame_y) = frame.get("y").and_then(serde_json::Value::as_f64) else {
+        return false;
+    };
+    let Some(width) = frame.get("width").and_then(serde_json::Value::as_f64) else {
+        return false;
+    };
+    let Some(height) = frame.get("height").and_then(serde_json::Value::as_f64) else {
+        return false;
+    };
+    x >= frame_x && y >= frame_y && x <= frame_x + width && y <= frame_y + height
 }
 
 unsafe fn string_from_raw(raw: *mut i8, error: *mut i8) -> Result<String, AppError> {

@@ -102,7 +102,6 @@ export class VideoFrameRenderer {
   private readonly program: WebGLProgram;
   private readonly texture: WebGLTexture;
   private readonly vertexArray: WebGLVertexArrayObject;
-  private readonly vertexBuffer: WebGLBuffer;
   private textureHeight = 0;
   private textureWidth = 0;
 
@@ -127,7 +126,6 @@ export class VideoFrameRenderer {
     if (!vertexBuffer) {
       throw new Error("Unable to allocate a WebGL vertex buffer.");
     }
-    this.vertexBuffer = vertexBuffer;
 
     const texture = gl.createTexture();
     if (!texture) {

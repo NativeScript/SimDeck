@@ -105,6 +105,20 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
     return [self.session sendTouchWithNormalizedX:x normalizedY:y phase:phase error:error];
 }
 
+- (BOOL)sendMultiTouchAtX1:(double)x1
+                        y1:(double)y1
+                        x2:(double)x2
+                        y2:(double)y2
+                     phase:(NSString *)phase
+                     error:(NSError * _Nullable __autoreleasing *)error {
+    return [self.session sendMultiTouchWithNormalizedX1:x1
+                                           normalizedY1:y1
+                                           normalizedX2:x2
+                                           normalizedY2:y2
+                                                 phase:phase
+                                                 error:error];
+}
+
 - (BOOL)sendKeyCode:(uint16_t)keyCode
           modifiers:(uint32_t)modifiers
               error:(NSError * _Nullable __autoreleasing *)error {

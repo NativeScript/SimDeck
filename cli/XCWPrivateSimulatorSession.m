@@ -146,7 +146,7 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
 - (NSDictionary *)sessionInfoRepresentation {
     __block NSDictionary *representation = nil;
     dispatch_sync(_stateQueue, ^{
-        representation = @{
+        NSMutableDictionary *payload = [@{
             @"displayReady": @(self->_displayReadyValue),
             @"displayStatus": self->_displayStatusValue ?: @"",
             @"displayWidth": @(self->_displaySizeValue.width),
@@ -155,7 +155,14 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
             @"displayFrameCount": @(self->_displayFrameCount),
             @"manualRefreshFrameCount": @(self->_manualRefreshFrameCount),
             @"encoder": [self->_videoEncoder statsRepresentation],
-        };
+        } mutableCopy];
+        if (self->_latestKeyFrameCodec.length > 0) {
+            payload[@"latestKeyFrameCodec"] = self->_latestKeyFrameCodec;
+        }
+        if (self->_latestKeyFrameDecoderConfig.length > 0) {
+            payload[@"latestDecoderConfigBytes"] = @(self->_latestKeyFrameDecoderConfig.length);
+        }
+        representation = payload;
     });
     return representation;
 }
@@ -278,15 +285,44 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
                            phase:(NSString *)phase
                            error:(NSError * _Nullable __autoreleasing *)error {
     DFPrivateSimulatorTouchPhase touchPhase = DFPrivateSimulatorTouchPhaseMoved;
+    if (![self touchPhaseFromString:phase outPhase:&touchPhase error:error]) {
+        return NO;
+    }
+
+    return [_displayBridge sendTouchAtNormalizedX:normalizedX normalizedY:normalizedY phase:touchPhase error:error];
+}
+
+- (BOOL)sendMultiTouchWithNormalizedX1:(double)normalizedX1
+                           normalizedY1:(double)normalizedY1
+                           normalizedX2:(double)normalizedX2
+                           normalizedY2:(double)normalizedY2
+                                 phase:(NSString *)phase
+                                 error:(NSError * _Nullable __autoreleasing *)error {
+    DFPrivateSimulatorTouchPhase touchPhase = DFPrivateSimulatorTouchPhaseMoved;
+    if (![self touchPhaseFromString:phase outPhase:&touchPhase error:error]) {
+        return NO;
+    }
+
+    return [_displayBridge sendMultiTouchAtNormalizedX1:normalizedX1
+                                           normalizedY1:normalizedY1
+                                           normalizedX2:normalizedX2
+                                           normalizedY2:normalizedY2
+                                                 phase:touchPhase
+                                                 error:error];
+}
+
+- (BOOL)touchPhaseFromString:(NSString *)phase
+                    outPhase:(DFPrivateSimulatorTouchPhase *)outPhase
+                       error:(NSError * _Nullable __autoreleasing *)error {
     NSString *phaseValue = phase.lowercaseString;
     if ([phaseValue isEqualToString:@"began"]) {
-        touchPhase = DFPrivateSimulatorTouchPhaseBegan;
+        *outPhase = DFPrivateSimulatorTouchPhaseBegan;
     } else if ([phaseValue isEqualToString:@"moved"]) {
-        touchPhase = DFPrivateSimulatorTouchPhaseMoved;
+        *outPhase = DFPrivateSimulatorTouchPhaseMoved;
     } else if ([phaseValue isEqualToString:@"ended"]) {
-        touchPhase = DFPrivateSimulatorTouchPhaseEnded;
+        *outPhase = DFPrivateSimulatorTouchPhaseEnded;
     } else if ([phaseValue isEqualToString:@"cancelled"]) {
-        touchPhase = DFPrivateSimulatorTouchPhaseCancelled;
+        *outPhase = DFPrivateSimulatorTouchPhaseCancelled;
     } else {
         if (error != NULL) {
             *error = [NSError errorWithDomain:XCWPrivateSimulatorSessionErrorDomain
@@ -297,8 +333,7 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
         }
         return NO;
     }
-
-    return [_displayBridge sendTouchAtNormalizedX:normalizedX normalizedY:normalizedY phase:touchPhase error:error];
+    return YES;
 }
 
 - (BOOL)sendKeyCode:(uint16_t)keyCode

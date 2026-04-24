@@ -420,7 +420,7 @@
   color: color-mix(in srgb, #65d2ff 82%, var(--text));
 }
 
-.hierarchy-source-pill.source-axe {
+.hierarchy-source-pill.source-native-ax {
   border-color: color-mix(in srgb, #d7ba7d 55%, var(--border));
   background: color-mix(in srgb, #d7ba7d 13%, transparent);
   color: color-mix(in srgb, #d7ba7d 82%, var(--text));

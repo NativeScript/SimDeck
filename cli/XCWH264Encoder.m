@@ -91,6 +91,14 @@ static NSString *XCWCodecStringFromSPS(NSData *spsData) {
     return [NSString stringWithFormat:@"avc1.%02x%02x%02x", bytes[1], bytes[2], bytes[3]];
 }
 
+static uint32_t XCWReverseBits32(uint32_t value) {
+    value = ((value & 0x55555555u) << 1) | ((value >> 1) & 0x55555555u);
+    value = ((value & 0x33333333u) << 2) | ((value >> 2) & 0x33333333u);
+    value = ((value & 0x0f0f0f0fu) << 4) | ((value >> 4) & 0x0f0f0f0fu);
+    value = ((value & 0x00ff00ffu) << 8) | ((value >> 8) & 0x00ff00ffu);
+    return (value << 16) | (value >> 16);
+}
+
 static NSString *XCWCodecStringFromHVCC(NSData *hvcCData) {
     const uint8_t *bytes = hvcCData.bytes;
     if (bytes == NULL || hvcCData.length < 13) {
@@ -102,10 +110,11 @@ static NSString *XCWCodecStringFromHVCC(NSData *hvcCData) {
     uint8_t profileSpace = (profileByte >> 6) & 0x03;
     BOOL tierFlag = (profileByte & 0x20) != 0;
     uint8_t profileIdc = profileByte & 0x1f;
-    uint32_t compatibility = ((uint32_t)bytes[2] << 24)
+    uint32_t rawCompatibility = ((uint32_t)bytes[2] << 24)
         | ((uint32_t)bytes[3] << 16)
         | ((uint32_t)bytes[4] << 8)
         | (uint32_t)bytes[5];
+    uint32_t compatibility = XCWReverseBits32(rawCompatibility);
     uint8_t levelIdc = bytes[12];
 
     NSMutableArray<NSString *> *constraintParts = [NSMutableArray array];

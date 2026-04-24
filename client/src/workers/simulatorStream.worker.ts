@@ -64,11 +64,63 @@ function describeError(error: unknown): string {
 function isTransientTransportError(message: string): boolean {
   return (
     message.includes("WebTransport") ||
+    message.includes("Mach port invalid") ||
+    message.includes("device disconnected") ||
     message.includes("opening handshake failed") ||
     message.includes("stream closed") ||
     message.includes("session closed") ||
     message.includes("closed before sending")
   );
+}
+
+function isHevcCodec(codec: string): boolean {
+  return codec.startsWith("hvc1.") || codec.startsWith("hev1.");
+}
+
+function alternateHevcCodec(codec: string): string | null {
+  if (codec.startsWith("hvc1.")) {
+    return `hev1.${codec.slice("hvc1.".length)}`;
+  }
+  if (codec.startsWith("hev1.")) {
+    return `hvc1.${codec.slice("hev1.".length)}`;
+  }
+  return null;
+}
+
+function decoderConfigCandidates(
+  config: VideoDecoderConfig,
+): Array<{ config: VideoDecoderConfig; label: string }> {
+  const candidates = [{ config, label: `${config.codec} prefer-hardware` }];
+  const alternateCodec = alternateHevcCodec(config.codec);
+  if (alternateCodec) {
+    candidates.push({
+      config: { ...config, codec: alternateCodec },
+      label: `${alternateCodec} prefer-hardware`,
+    });
+  }
+  candidates.push({
+    config: {
+      codedHeight: config.codedHeight,
+      codedWidth: config.codedWidth,
+      codec: config.codec,
+      description: config.description,
+      optimizeForLatency: config.optimizeForLatency,
+    },
+    label: `${config.codec} default-acceleration`,
+  });
+  if (alternateCodec) {
+    candidates.push({
+      config: {
+        codedHeight: config.codedHeight,
+        codedWidth: config.codedWidth,
+        codec: alternateCodec,
+        description: config.description,
+        optimizeForLatency: config.optimizeForLatency,
+      },
+      label: `${alternateCodec} default-acceleration`,
+    });
+  }
+  return candidates;
 }
 
 function postMessage(message: WorkerToMainMessage) {
@@ -226,12 +278,6 @@ function clearCanvas() {
     return;
   }
   renderer.clear();
-}
-
-function resizeCanvas(width: number, height: number, devicePixelRatio: number) {
-  void width;
-  void height;
-  void devicePixelRatio;
 }
 
 function resetDecoder() {
@@ -423,24 +469,42 @@ async function ensureDecoder(
     codedWidth: metadata.width,
     codec,
     description: decoderDescriptionBytes(description),
+    hardwareAcceleration: "prefer-hardware",
     optimizeForLatency: true,
   };
 
-  const support = await VideoDecoder.isConfigSupported(config);
+  let supportedConfig: VideoDecoderConfig | null = null;
+  const attempts: string[] = [];
+  for (const candidate of decoderConfigCandidates(config)) {
+    try {
+      const support = await VideoDecoder.isConfigSupported(candidate.config);
+      attempts.push(`${candidate.label}: ${support.supported ? "yes" : "no"}`);
+      if (support.supported) {
+        supportedConfig = support.config ?? candidate.config;
+        break;
+      }
+    } catch (error) {
+      attempts.push(`${candidate.label}: ${describeError(error)}`);
+    }
+  }
   if (expectedConnectionId !== currentConnectionId || !decoder) {
     return false;
   }
-  if (!support.supported) {
+  if (!supportedConfig) {
+    const descriptionBytes = decoderDescriptionBytes(description);
+    const hevcHint = isHevcCodec(codec)
+      ? " HEVC decode is disabled or unavailable in this Chrome profile; check Chrome hardware acceleration and chrome://gpu video decode status."
+      : "";
     postStatus({
-      error: `Unsupported decoder configuration for ${codec} at ${metadata.width}x${metadata.height}.`,
+      error: `Unsupported decoder configuration for ${codec} at ${metadata.width}x${metadata.height} (${descriptionBytes?.byteLength ?? 0} config bytes). Tried ${attempts.join("; ")}.${hevcHint}`,
       state: "error",
     });
     resetDecoder();
     return false;
   }
-  decoder.configure(support.config ?? config);
+  decoder.configure(supportedConfig);
   configuredDecoderKey = decoderKey;
-  stats.codec = codec;
+  stats.codec = supportedConfig.codec;
   return true;
 }
 
@@ -522,6 +586,7 @@ interface HealthPayload {
       algorithm?: string;
       value?: string;
     };
+    packetVersion?: number;
     urlTemplate?: string;
   };
 }
@@ -656,10 +721,23 @@ async function connect(target: StreamConnectTarget, isReconnect = false) {
 
     const health = await fetchHealth(abortController.signal);
     const urlTemplate = health.webTransport?.urlTemplate;
+    const certificateHashAlgorithm =
+      health.webTransport?.certificateHash?.algorithm;
     const certificateHash = health.webTransport?.certificateHash?.value;
-    if (!urlTemplate || !certificateHash) {
+    const packetVersion = health.webTransport?.packetVersion;
+    if (
+      !urlTemplate ||
+      !certificateHashAlgorithm ||
+      !certificateHash ||
+      packetVersion == null
+    ) {
       throw new Error(
         "Server did not provide WebTransport connection details.",
+      );
+    }
+    if (certificateHashAlgorithm !== "sha-256") {
+      throw new Error(
+        `Unsupported WebTransport certificate hash algorithm ${certificateHashAlgorithm}.`,
       );
     }
 
@@ -669,7 +747,7 @@ async function connect(target: StreamConnectTarget, isReconnect = false) {
         congestionControl: "low-latency",
         serverCertificateHashes: [
           {
-            algorithm: "sha-256",
+            algorithm: certificateHashAlgorithm,
             value: new Uint8Array(hexToUint8Array(certificateHash)),
           },
         ],
@@ -696,6 +774,11 @@ async function connect(target: StreamConnectTarget, isReconnect = false) {
       throw new Error("WebTransport closed before sending control stream.");
     }
     const hello = await readControlHello(controlResult.value);
+    if (hello.version !== packetVersion) {
+      throw new Error(
+        `Unsupported WebTransport packet version ${hello.version}.`,
+      );
+    }
     if (hello.packet_format !== "binary-video-v1") {
       throw new Error(
         `Unsupported WebTransport packet format ${hello.packet_format}.`,
@@ -786,9 +869,6 @@ workerScope.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
           state: "error",
         });
       }
-      break;
-    case "resize":
-      resizeCanvas(message.width, message.height, message.devicePixelRatio);
       break;
     case "connect":
       void connect(message.target);

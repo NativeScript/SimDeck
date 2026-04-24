@@ -52,6 +52,10 @@ export function sendKey(udid: string, payload: KeyPayload) {
   return postSimulatorAction(udid, "key", payload);
 }
 
+export function dismissKeyboard(udid: string) {
+  return postSimulatorAction(udid, "dismiss-keyboard");
+}
+
 export function pressHome(udid: string) {
   return postSimulatorAction(udid, "home");
 }

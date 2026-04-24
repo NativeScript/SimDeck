@@ -12,7 +12,6 @@
     "bin/",
     "cli/",
     "client/dist/",
-    "packages/nativescript-inspector/",
     "scripts/build-cli.sh",
     "scripts/npm-postinstall.mjs",
     "server/Cargo.lock",

@@ -17,6 +17,7 @@ interface ToolbarProps {
   isLoading: boolean;
   onBoot: () => void;
   onChangeSearch: (value: string) => void;
+  onDismissKeyboard: () => void;
   onHome: () => void;
   onOpenAppSwitcher: () => void;
   onOpenBundlePrompt: () => void;
@@ -52,6 +53,7 @@ export function Toolbar({
   menuRef,
   onBoot,
   onChangeSearch,
+  onDismissKeyboard,
   onHome,
   onOpenAppSwitcher,
   onOpenBundlePrompt,
@@ -162,6 +164,14 @@ export function Toolbar({
               <AppSwitcherIcon />
             </button>
             <button
+              aria-label="Dismiss Keyboard"
+              className="tbtn icon-btn"
+              onClick={onDismissKeyboard}
+              title="Dismiss Keyboard"
+            >
+              <KeyboardDismissIcon />
+            </button>
+            <button
               aria-label="Toggle Appearance"
               className="tbtn icon-btn"
               onClick={onToggleAppearance}
@@ -233,6 +243,35 @@ function AppSwitcherIcon() {
         d="M7.25 3.25h4.1c.9 0 1.65.74 1.65 1.65v6.35"
         stroke="currentColor"
         strokeLinecap="round"
+        strokeWidth="1.25"
+      />
+    </svg>
+  );
+}
+
+function KeyboardDismissIcon() {
+  return (
+    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
+      <rect
+        height="6"
+        rx="1.2"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        width="11"
+        x="2.5"
+        y="3"
+      />
+      <path
+        d="M4.5 5.2h.1M6.8 5.2h.1M9.1 5.2h.1M11.4 5.2h.1M4.5 7h7"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.25"
+      />
+      <path
+        d="m5.5 11 2.5 2.5 2.5-2.5M8 9.7v3.4"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
         strokeWidth="1.25"
       />
     </svg>

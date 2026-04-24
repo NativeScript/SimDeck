@@ -60,12 +60,12 @@ async fn handle_session(
     let Some(udid) = path.strip_prefix("/wt/simulators/") else {
         anyhow::bail!("unexpected WebTransport path: {path}");
     };
-    let session = state.registry.get_or_create_async(udid).await?;
-    session.ensure_started_async().await?;
-    session.request_refresh_async().await;
+    let session = started_session(&state, udid).await?;
+    session.request_refresh();
 
     let hello_frame = session.wait_for_keyframe(Duration::from_secs(3)).await;
     let Some(hello_frame_ref) = hello_frame.as_ref() else {
+        state.registry.remove(udid);
         anyhow::bail!("timed out waiting for initial simulator keyframe for {udid}");
     };
     let width = hello_frame_ref.width;
@@ -221,4 +221,19 @@ async fn send_frame(
         session.request_refresh();
     }
     Ok(())
+}
+
+async fn started_session(state: &AppState, udid: &str) -> anyhow::Result<SimulatorSession> {
+    let session = state.registry.get_or_create_async(udid).await?;
+    match session.ensure_started_async().await {
+        Ok(()) => Ok(session),
+        Err(first_error) => {
+            state.registry.remove(udid);
+            let session = state.registry.get_or_create_async(udid).await?;
+            session.ensure_started_async().await.with_context(|| {
+                format!("failed to start fresh simulator display session after: {first_error}")
+            })?;
+            Ok(session)
+        }
+    }
 }

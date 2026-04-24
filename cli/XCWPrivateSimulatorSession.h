@@ -28,8 +28,6 @@ typedef void (^XCWPrivateSimulatorEncodedFrameHandler)(NSData *sampleData,
 - (BOOL)waitUntilReadyWithTimeout:(NSTimeInterval)timeout;
 - (BOOL)waitForFirstEncodedFrameWithTimeout:(NSTimeInterval)timeout;
 - (NSDictionary *)sessionInfoRepresentation;
-- (nullable NSDictionary *)latestEncodedKeyFrameRepresentation;
-- (void)refreshCurrentFrame;
 - (void)requestKeyFrameRefresh;
 - (id)addEncodedFrameListener:(XCWPrivateSimulatorEncodedFrameHandler)handler;
 - (void)removeEncodedFrameListener:(id)token;
@@ -38,6 +36,13 @@ typedef void (^XCWPrivateSimulatorEncodedFrameHandler)(NSData *sampleData,
                      normalizedY:(double)normalizedY
                            phase:(NSString *)phase
                            error:(NSError * _Nullable * _Nullable)error;
+
+- (BOOL)sendMultiTouchWithNormalizedX1:(double)normalizedX1
+                           normalizedY1:(double)normalizedY1
+                           normalizedX2:(double)normalizedX2
+                           normalizedY2:(double)normalizedY2
+                                 phase:(NSString *)phase
+                                 error:(NSError * _Nullable * _Nullable)error;
 
 - (BOOL)sendKeyCode:(uint16_t)keyCode
           modifiers:(NSUInteger)modifiers

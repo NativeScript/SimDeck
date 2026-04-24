@@ -279,28 +279,103 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
     return NO;
 }
 
-- (nullable NSData *)screenshotJPEGDataForSimulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
-    NSString *temporaryPath = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"xcode-canvas-web-%@.jpg", NSUUID.UUID.UUIDString]];
-    XCWProcessResult *result = [self.class runSimctl:@[@"io", udid, @"screenshot", @"--type=jpeg", temporaryPath] error:error];
+- (nullable NSData *)screenshotPNGForSimulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
+    NSString *filename = [NSString stringWithFormat:@"xcode-canvas-web-%@.png", NSUUID.UUID.UUIDString];
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:filename];
+    XCWProcessResult *result = [self.class runSimctl:@[@"io", udid, @"screenshot", @"--type=png", path] error:error];
     if (result == nil) {
         return nil;
     }
-    if (result.terminationStatus != 0) {
-        if (error != NULL) {
-            *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"Unable to capture simulator screenshot." code:8];
+    if (result.terminationStatus == 0) {
+        NSData *data = [NSData dataWithContentsOfFile:path options:0 error:error];
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        if (data.length > 0) {
+            return data;
         }
-        return nil;
-    }
-
-    NSData *imageData = [NSData dataWithContentsOfFile:temporaryPath options:0 error:error];
-    [[NSFileManager defaultManager] removeItemAtPath:temporaryPath error:nil];
-    if (imageData.length == 0) {
         if (error != NULL && *error == nil) {
-            *error = [self.class errorWithDescription:@"simctl completed without producing a screenshot file." code:9];
+            *error = [self.class errorWithDescription:@"Simulator screenshot command produced an empty PNG." code:13];
         }
         return nil;
     }
-    return imageData;
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    if (error != NULL) {
+        *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"Unable to capture simulator screenshot." code:13];
+    }
+    return nil;
+}
+
+- (BOOL)eraseSimulatorWithUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
+    XCWProcessResult *result = [self.class runSimctl:@[@"erase", udid] error:error];
+    if (result == nil) {
+        return NO;
+    }
+    if (result.terminationStatus == 0) {
+        return YES;
+    }
+    if (error != NULL) {
+        *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"Unable to erase simulator." code:14];
+    }
+    return NO;
+}
+
+- (BOOL)installAppAtPath:(NSString *)appPath simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
+    XCWProcessResult *result = [self.class runSimctl:@[@"install", udid, appPath] error:error];
+    if (result == nil) {
+        return NO;
+    }
+    if (result.terminationStatus == 0) {
+        return YES;
+    }
+    if (error != NULL) {
+        *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"Unable to install app in simulator." code:15];
+    }
+    return NO;
+}
+
+- (BOOL)uninstallBundleID:(NSString *)bundleID simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
+    XCWProcessResult *result = [self.class runSimctl:@[@"uninstall", udid, bundleID] error:error];
+    if (result == nil) {
+        return NO;
+    }
+    if (result.terminationStatus == 0) {
+        return YES;
+    }
+    if (error != NULL) {
+        *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"Unable to uninstall app from simulator." code:16];
+    }
+    return NO;
+}
+
+- (BOOL)setPasteboardText:(NSString *)text simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
+    NSData *inputData = [text dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+    XCWProcessResult *result = [XCWProcessRunner runLaunchPath:@"/usr/bin/xcrun"
+                                                     arguments:@[@"simctl", @"pbcopy", udid]
+                                                     inputData:inputData
+                                                         error:error];
+    if (result == nil) {
+        return NO;
+    }
+    if (result.terminationStatus == 0) {
+        return YES;
+    }
+    if (error != NULL) {
+        *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"Unable to write simulator pasteboard." code:17];
+    }
+    return NO;
+}
+
+- (nullable NSString *)pasteboardTextForSimulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
+    XCWProcessResult *result = [self.class runSimctl:@[@"pbpaste", udid] error:error];
+    if (result == nil) {
+        return nil;
+    }
+    if (result.terminationStatus == 0) {
+        return result.stdoutString ?: @"";
+    }
+    if (error != NULL) {
+        *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"Unable to read simulator pasteboard." code:18];
+    }
+    return nil;
 }
 
 - (nullable NSArray<NSDictionary *> *)recentLogEntriesForSimulatorUDID:(NSString *)udid

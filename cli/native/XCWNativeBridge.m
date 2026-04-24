@@ -1,5 +1,7 @@
 #import "XCWNativeBridge.h"
 
+#import "DFPrivateSimulatorDisplayBridge.h"
+#import "XCWAccessibilityBridge.h"
 #import "XCWChromeRenderer.h"
 #import "XCWNativeSession.h"
 #import "XCWSimctl.h"
@@ -65,6 +67,26 @@ static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
     return (__bridge XCWNativeSession *)handle;
 }
 
+static BOOL XCWPerformSimctlAction(char **errorMessage, BOOL (^action)(XCWSimctl *simctl, NSError **error)) {
+    XCWSimctl *simctl = [[XCWSimctl alloc] init];
+    NSError *error = nil;
+    BOOL ok = action(simctl, &error);
+    if (!ok) {
+        XCWSetErrorMessage(errorMessage, error);
+    }
+    return ok;
+}
+
+static NSDictionary *XCWSimulatorRecordForUDID(const char *udid, char **errorMessage) {
+    XCWSimctl *simctl = [[XCWSimctl alloc] init];
+    NSError *error = nil;
+    NSDictionary *simulator = [simctl simulatorWithUDID:XCWStringFromCString(udid) error:&error];
+    if (simulator == nil) {
+        XCWSetErrorMessage(errorMessage, error);
+    }
+    return simulator;
+}
+
 void xcw_native_initialize_app(void) {
     @autoreleasepool {
         [NSApplication sharedApplication];
@@ -97,75 +119,52 @@ char *xcw_native_list_simulators(char **error_message) {
 
 bool xcw_native_boot_simulator(const char *udid, char **error_message) {
     @autoreleasepool {
-        XCWSimctl *simctl = [[XCWSimctl alloc] init];
-        NSError *error = nil;
-        BOOL ok = [simctl bootSimulatorWithUDID:XCWStringFromCString(udid) error:&error];
-        if (!ok) {
-            XCWSetErrorMessage(error_message, error);
-        }
-        return ok;
+        return XCWPerformSimctlAction(error_message, ^BOOL(XCWSimctl *simctl, NSError **error) {
+            return [simctl bootSimulatorWithUDID:XCWStringFromCString(udid) error:error];
+        });
     }
 }
 
 bool xcw_native_shutdown_simulator(const char *udid, char **error_message) {
     @autoreleasepool {
-        XCWSimctl *simctl = [[XCWSimctl alloc] init];
-        NSError *error = nil;
-        BOOL ok = [simctl shutdownSimulatorWithUDID:XCWStringFromCString(udid) error:&error];
-        if (!ok) {
-            XCWSetErrorMessage(error_message, error);
-        }
-        return ok;
+        return XCWPerformSimctlAction(error_message, ^BOOL(XCWSimctl *simctl, NSError **error) {
+            return [simctl shutdownSimulatorWithUDID:XCWStringFromCString(udid) error:error];
+        });
     }
 }
 
 bool xcw_native_toggle_appearance(const char *udid, char **error_message) {
     @autoreleasepool {
-        XCWSimctl *simctl = [[XCWSimctl alloc] init];
-        NSError *error = nil;
-        BOOL ok = [simctl toggleAppearanceForSimulatorUDID:XCWStringFromCString(udid) error:&error];
-        if (!ok) {
-            XCWSetErrorMessage(error_message, error);
-        }
-        return ok;
+        return XCWPerformSimctlAction(error_message, ^BOOL(XCWSimctl *simctl, NSError **error) {
+            return [simctl toggleAppearanceForSimulatorUDID:XCWStringFromCString(udid) error:error];
+        });
     }
 }
 
 bool xcw_native_open_url(const char *udid, const char *url, char **error_message) {
     @autoreleasepool {
-        XCWSimctl *simctl = [[XCWSimctl alloc] init];
-        NSError *error = nil;
-        BOOL ok = [simctl openURL:XCWStringFromCString(url)
-                    simulatorUDID:XCWStringFromCString(udid)
-                            error:&error];
-        if (!ok) {
-            XCWSetErrorMessage(error_message, error);
-        }
-        return ok;
+        return XCWPerformSimctlAction(error_message, ^BOOL(XCWSimctl *simctl, NSError **error) {
+            return [simctl openURL:XCWStringFromCString(url)
+                     simulatorUDID:XCWStringFromCString(udid)
+                             error:error];
+        });
     }
 }
 
 bool xcw_native_launch_bundle(const char *udid, const char *bundle_id, char **error_message) {
     @autoreleasepool {
-        XCWSimctl *simctl = [[XCWSimctl alloc] init];
-        NSError *error = nil;
-        BOOL ok = [simctl launchBundleID:XCWStringFromCString(bundle_id)
-                           simulatorUDID:XCWStringFromCString(udid)
-                                   error:&error];
-        if (!ok) {
-            XCWSetErrorMessage(error_message, error);
-        }
-        return ok;
+        return XCWPerformSimctlAction(error_message, ^BOOL(XCWSimctl *simctl, NSError **error) {
+            return [simctl launchBundleID:XCWStringFromCString(bundle_id)
+                            simulatorUDID:XCWStringFromCString(udid)
+                                    error:error];
+        });
     }
 }
 
 char *xcw_native_get_chrome_profile(const char *udid, char **error_message) {
     @autoreleasepool {
-        XCWSimctl *simctl = [[XCWSimctl alloc] init];
-        NSError *lookupError = nil;
-        NSDictionary *simulator = [simctl simulatorWithUDID:XCWStringFromCString(udid) error:&lookupError];
+        NSDictionary *simulator = XCWSimulatorRecordForUDID(udid, error_message);
         if (simulator == nil) {
-            XCWSetErrorMessage(error_message, lookupError);
             return NULL;
         }
 
@@ -183,11 +182,8 @@ char *xcw_native_get_chrome_profile(const char *udid, char **error_message) {
 
 xcw_native_owned_bytes xcw_native_render_chrome_png(const char *udid, char **error_message) {
     @autoreleasepool {
-        XCWSimctl *simctl = [[XCWSimctl alloc] init];
-        NSError *lookupError = nil;
-        NSDictionary *simulator = [simctl simulatorWithUDID:XCWStringFromCString(udid) error:&lookupError];
+        NSDictionary *simulator = XCWSimulatorRecordForUDID(udid, error_message);
         if (simulator == nil) {
-            XCWSetErrorMessage(error_message, lookupError);
             return (xcw_native_owned_bytes){0};
         }
 
@@ -200,6 +196,19 @@ xcw_native_owned_bytes xcw_native_render_chrome_png(const char *udid, char **err
         }
 
         return XCWOwnedBytesFromData(pngData);
+    }
+}
+
+xcw_native_owned_bytes xcw_native_screenshot_png(const char *udid, char **error_message) {
+    @autoreleasepool {
+        XCWSimctl *simctl = [[XCWSimctl alloc] init];
+        NSError *error = nil;
+        NSData *png = [simctl screenshotPNGForSimulatorUDID:XCWStringFromCString(udid) error:&error];
+        if (png == nil) {
+            XCWSetErrorMessage(error_message, error);
+            return (xcw_native_owned_bytes){0};
+        }
+        return XCWOwnedBytesFromData(png);
     }
 }
 
@@ -217,6 +226,261 @@ char *xcw_native_recent_logs(const char *udid, double seconds, size_t limit, cha
         }
 
         return XCWJSONStringFromObject(@{ @"entries": entries }, error_message);
+    }
+}
+
+char *xcw_native_accessibility_snapshot(const char *udid, bool has_point, double x, double y, char **error_message) {
+    @autoreleasepool {
+        NSError *error = nil;
+        NSValue *pointValue = has_point ? [NSValue valueWithPoint:NSMakePoint(x, y)] : nil;
+        NSDictionary *snapshot = [XCWAccessibilityBridge accessibilitySnapshotForSimulatorUDID:XCWStringFromCString(udid)
+                                                                                       atPoint:pointValue
+                                                                                         error:&error];
+        if (snapshot == nil) {
+            XCWSetErrorMessage(error_message, error);
+            return NULL;
+        }
+        return XCWJSONStringFromObject(snapshot, error_message);
+    }
+}
+
+static BOOL XCWTouchPhaseFromString(NSString *phase, DFPrivateSimulatorTouchPhase *outPhase, NSError **error) {
+    NSString *phaseValue = phase.lowercaseString;
+    if ([phaseValue isEqualToString:@"began"]) {
+        *outPhase = DFPrivateSimulatorTouchPhaseBegan;
+        return YES;
+    }
+    if ([phaseValue isEqualToString:@"moved"]) {
+        *outPhase = DFPrivateSimulatorTouchPhaseMoved;
+        return YES;
+    }
+    if ([phaseValue isEqualToString:@"ended"]) {
+        *outPhase = DFPrivateSimulatorTouchPhaseEnded;
+        return YES;
+    }
+    if ([phaseValue isEqualToString:@"cancelled"]) {
+        *outPhase = DFPrivateSimulatorTouchPhaseCancelled;
+        return YES;
+    }
+    if (error != NULL) {
+        *error = [NSError errorWithDomain:@"XcodeCanvasWeb.NativeBridge"
+                                     code:1
+                                 userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Unsupported touch phase `%@`.", phase ?: @""] }];
+    }
+    return NO;
+}
+
+static DFPrivateSimulatorDisplayBridge *XCWInputBridgeForUDID(const char *udid, char **errorMessage) {
+    NSError *error = nil;
+    DFPrivateSimulatorDisplayBridge *bridge = [[DFPrivateSimulatorDisplayBridge alloc] initWithUDID:XCWStringFromCString(udid)
+                                                                                      attachDisplay:NO
+                                                                                              error:&error];
+    if (bridge == nil) {
+        XCWSetErrorMessage(errorMessage, error);
+    }
+    return bridge;
+}
+
+bool xcw_native_send_touch(const char *udid, double x, double y, const char *phase, char **error_message) {
+    @autoreleasepool {
+        DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
+        if (bridge == nil) {
+            return false;
+        }
+        NSError *phaseError = nil;
+        DFPrivateSimulatorTouchPhase touchPhase = DFPrivateSimulatorTouchPhaseMoved;
+        if (!XCWTouchPhaseFromString(XCWStringFromCString(phase), &touchPhase, &phaseError)) {
+            XCWSetErrorMessage(error_message, phaseError);
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [bridge sendTouchAtNormalizedX:x normalizedY:y phase:touchPhase error:&error];
+        [bridge disconnect];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+void *xcw_native_input_create(const char *udid, char **error_message) {
+    @autoreleasepool {
+        DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
+        if (bridge == nil) {
+            return NULL;
+        }
+        return (__bridge_retained void *)bridge;
+    }
+}
+
+void xcw_native_input_destroy(void *handle) {
+    @autoreleasepool {
+        if (handle == NULL) {
+            return;
+        }
+        DFPrivateSimulatorDisplayBridge *bridge = CFBridgingRelease(handle);
+        [bridge disconnect];
+    }
+}
+
+bool xcw_native_input_send_multitouch(void *handle, double x1, double y1, double x2, double y2, const char *phase, char **error_message) {
+    @autoreleasepool {
+        if (handle == NULL) {
+            XCWSetErrorMessage(error_message, [NSError errorWithDomain:@"XcodeCanvasWeb.NativeInput"
+                                                                   code:1
+                                                               userInfo:@{NSLocalizedDescriptionKey: @"Native input handle is null."}]);
+            return false;
+        }
+        NSError *phaseError = nil;
+        DFPrivateSimulatorTouchPhase touchPhase = DFPrivateSimulatorTouchPhaseMoved;
+        if (!XCWTouchPhaseFromString(XCWStringFromCString(phase), &touchPhase, &phaseError)) {
+            XCWSetErrorMessage(error_message, phaseError);
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [(__bridge DFPrivateSimulatorDisplayBridge *)handle sendMultiTouchAtNormalizedX1:x1
+                                                                                       normalizedY1:y1
+                                                                                       normalizedX2:x2
+                                                                                       normalizedY2:y2
+                                                                                             phase:touchPhase
+                                                                                             error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_send_key(const char *udid, uint16_t key_code, uint32_t modifiers, char **error_message) {
+    @autoreleasepool {
+        DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
+        if (bridge == nil) {
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [bridge sendKeyCode:key_code modifiers:modifiers error:&error];
+        [bridge disconnect];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_send_key_event(const char *udid, uint16_t key_code, bool down, char **error_message) {
+    @autoreleasepool {
+        DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
+        if (bridge == nil) {
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [bridge sendKeyCode:key_code down:down error:&error];
+        [bridge disconnect];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_press_home(const char *udid, char **error_message) {
+    @autoreleasepool {
+        DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
+        if (bridge == nil) {
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [bridge pressHomeButton:&error];
+        [bridge disconnect];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_press_button(const char *udid, const char *button_name, uint32_t duration_ms, char **error_message) {
+    @autoreleasepool {
+        DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
+        if (bridge == nil) {
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [bridge pressHardwareButtonNamed:XCWStringFromCString(button_name)
+                                        durationMs:(NSUInteger)duration_ms
+                                             error:&error];
+        [bridge disconnect];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_erase_simulator(const char *udid, char **error_message) {
+    @autoreleasepool {
+        XCWSimctl *simctl = [[XCWSimctl alloc] init];
+        NSError *error = nil;
+        BOOL ok = [simctl eraseSimulatorWithUDID:XCWStringFromCString(udid) error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_install_app(const char *udid, const char *app_path, char **error_message) {
+    @autoreleasepool {
+        XCWSimctl *simctl = [[XCWSimctl alloc] init];
+        NSError *error = nil;
+        BOOL ok = [simctl installAppAtPath:XCWStringFromCString(app_path)
+                             simulatorUDID:XCWStringFromCString(udid)
+                                      error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_uninstall_app(const char *udid, const char *bundle_id, char **error_message) {
+    @autoreleasepool {
+        XCWSimctl *simctl = [[XCWSimctl alloc] init];
+        NSError *error = nil;
+        BOOL ok = [simctl uninstallBundleID:XCWStringFromCString(bundle_id)
+                              simulatorUDID:XCWStringFromCString(udid)
+                                       error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_set_pasteboard_text(const char *udid, const char *text, char **error_message) {
+    @autoreleasepool {
+        XCWSimctl *simctl = [[XCWSimctl alloc] init];
+        NSError *error = nil;
+        BOOL ok = [simctl setPasteboardText:XCWStringFromCString(text)
+                              simulatorUDID:XCWStringFromCString(udid)
+                                       error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+char *xcw_native_get_pasteboard_text(const char *udid, char **error_message) {
+    @autoreleasepool {
+        XCWSimctl *simctl = [[XCWSimctl alloc] init];
+        NSError *error = nil;
+        NSString *text = [simctl pasteboardTextForSimulatorUDID:XCWStringFromCString(udid) error:&error];
+        if (text == nil) {
+            XCWSetErrorMessage(error_message, error);
+            return NULL;
+        }
+        return XCWCopyCString(text);
     }
 }
 
@@ -274,6 +538,22 @@ bool xcw_native_session_send_touch(void *handle, double x, double y, const char 
                                                                  y:y
                                                              phase:XCWStringFromCString(phase)
                                                              error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_session_send_multitouch(void *handle, double x1, double y1, double x2, double y2, const char *phase, char **error_message) {
+    @autoreleasepool {
+        NSError *error = nil;
+        BOOL ok = [XCWNativeSessionFromHandle(handle) sendMultiTouchAtX1:x1
+                                                                      y1:y1
+                                                                      x2:x2
+                                                                      y2:y2
+                                                                   phase:XCWStringFromCString(phase)
+                                                                   error:&error];
         if (!ok) {
             XCWSetErrorMessage(error_message, error);
         }

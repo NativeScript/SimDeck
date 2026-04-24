@@ -3,10 +3,20 @@ use anyhow::{anyhow, bail, Context};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const SERVICE_LABEL: &str = "dev.nativescript.xcode-canvas-web";
 
 pub fn enable(options: ServiceOptions) -> anyhow::Result<()> {
+    install(options)
+}
+
+pub fn restart(options: ServiceOptions) -> anyhow::Result<()> {
+    install(options)
+}
+
+fn install(options: ServiceOptions) -> anyhow::Result<()> {
     let plist_path = plist_path()?;
     let log_dir = log_dir()?;
     fs::create_dir_all(
@@ -37,6 +47,7 @@ pub fn enable(options: ServiceOptions) -> anyhow::Result<()> {
     let _ = Command::new("launchctl")
         .args(["bootout", &domain, plist_path.to_string_lossy().as_ref()])
         .output();
+    wait_for_port_release(options.port, Duration::from_secs(5))?;
 
     run_launchctl(["bootstrap", &domain, plist_path.to_string_lossy().as_ref()])?;
     run_launchctl(["kickstart", "-k", &format!("{domain}/{SERVICE_LABEL}")])?;
@@ -129,6 +140,25 @@ fn run_launchctl<const N: usize>(args: [&str; N]) -> anyhow::Result<()> {
             &stderr
         }
     );
+}
+
+fn wait_for_port_release(port: u16, timeout: Duration) -> anyhow::Result<()> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !port_has_listener(port)? {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    bail!("port {port} is still in use after waiting for previous service shutdown");
+}
+
+fn port_has_listener(port: u16) -> anyhow::Result<bool> {
+    let output = Command::new("lsof")
+        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-t"])
+        .output()
+        .context("run lsof")?;
+    Ok(!output.stdout.is_empty())
 }
 
 fn plist_contents(

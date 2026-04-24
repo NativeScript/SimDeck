@@ -10,7 +10,6 @@ interface StreamClientBackend {
   connect(target: StreamConnectTarget): void;
   destroy(): void;
   disconnect(): void;
-  resize(width: number, height: number, devicePixelRatio: number): void;
 }
 
 class WorkerStreamClient implements StreamClientBackend {
@@ -48,15 +47,6 @@ class WorkerStreamClient implements StreamClientBackend {
     this.worker.postMessage({ type: "clear" });
   }
 
-  resize(width: number, height: number, devicePixelRatio: number) {
-    this.worker.postMessage({
-      type: "resize",
-      width,
-      height,
-      devicePixelRatio,
-    });
-  }
-
   destroy() {
     this.worker.terminate();
   }
@@ -92,10 +82,6 @@ export class StreamWorkerClient {
 
   clear() {
     this.backend?.clear();
-  }
-
-  resize(width: number, height: number, devicePixelRatio: number) {
-    this.backend?.resize(width, height, devicePixelRatio);
   }
 
   destroy() {

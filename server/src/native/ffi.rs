@@ -62,12 +62,85 @@ unsafe extern "C" {
         udid: *const c_char,
         error_message: *mut *mut c_char,
     ) -> xcw_native_owned_bytes;
+    pub fn xcw_native_screenshot_png(
+        udid: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> xcw_native_owned_bytes;
     pub fn xcw_native_recent_logs(
         udid: *const c_char,
         seconds: f64,
         limit: usize,
         error_message: *mut *mut c_char,
     ) -> *mut c_char;
+    pub fn xcw_native_accessibility_snapshot(
+        udid: *const c_char,
+        has_point: bool,
+        x: f64,
+        y: f64,
+        error_message: *mut *mut c_char,
+    ) -> *mut c_char;
+    pub fn xcw_native_send_touch(
+        udid: *const c_char,
+        x: f64,
+        y: f64,
+        phase: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_send_key(
+        udid: *const c_char,
+        key_code: u16,
+        modifiers: u32,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_send_key_event(
+        udid: *const c_char,
+        key_code: u16,
+        down: bool,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_press_home(udid: *const c_char, error_message: *mut *mut c_char) -> bool;
+    pub fn xcw_native_press_button(
+        udid: *const c_char,
+        button_name: *const c_char,
+        duration_ms: u32,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_erase_simulator(udid: *const c_char, error_message: *mut *mut c_char)
+        -> bool;
+    pub fn xcw_native_install_app(
+        udid: *const c_char,
+        app_path: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_uninstall_app(
+        udid: *const c_char,
+        bundle_id: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_set_pasteboard_text(
+        udid: *const c_char,
+        text: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_get_pasteboard_text(
+        udid: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> *mut c_char;
+
+    pub fn xcw_native_input_create(
+        udid: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> *mut c_void;
+    pub fn xcw_native_input_destroy(handle: *mut c_void);
+    pub fn xcw_native_input_send_multitouch(
+        handle: *mut c_void,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        phase: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> bool;
 
     pub fn xcw_native_session_create(
         udid: *const c_char,

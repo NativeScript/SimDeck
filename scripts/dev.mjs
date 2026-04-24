@@ -28,13 +28,33 @@ function findListeningPids(port) {
   }
 }
 
+function commandForPid(pid) {
+  try {
+    return execFileSync("ps", ["-o", "command=", "-p", String(pid)], {
+      cwd: ROOT,
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function isManagedCliProcess(pid) {
+  const command = commandForPid(pid);
+  return (
+    command.includes(SERVER_BIN) ||
+    command.includes("xcode-canvas-web serve") ||
+    command.includes("xcode-canvas-web-bin")
+  );
+}
+
 function stopStaleCliProcesses() {
   const stalePids = new Set([
     ...findListeningPids(4310),
     ...findListeningPids(4311),
   ]);
   for (const pid of stalePids) {
-    if (pid === process.pid) {
+    if (pid === process.pid || !isManagedCliProcess(pid)) {
       continue;
     }
 

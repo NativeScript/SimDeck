@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import {
   isEditableTarget,
@@ -12,6 +12,12 @@ interface UseKeyboardInputOptions {
 }
 
 export function useKeyboardInput({ enabled, onKey }: UseKeyboardInputOptions) {
+  const onKeyRef = useRef(onKey);
+
+  useEffect(() => {
+    onKeyRef.current = onKey;
+  }, [onKey]);
+
   useEffect(() => {
     if (!enabled) {
       return;
@@ -28,10 +34,10 @@ export function useKeyboardInput({ enabled, onKey }: UseKeyboardInputOptions) {
       }
 
       event.preventDefault();
-      onKey({ keyCode, modifiers: keyboardModifiers(event) });
+      onKeyRef.current({ keyCode, modifiers: keyboardModifiers(event) });
     }
 
     window.addEventListener("keydown", handleWindowKeyDown);
     return () => window.removeEventListener("keydown", handleWindowKeyDown);
-  }, [enabled, onKey]);
+  }, [enabled]);
 }

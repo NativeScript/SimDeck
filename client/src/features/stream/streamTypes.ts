@@ -65,5 +65,4 @@ export type MainToWorkerMessage =
   | { type: "attach-canvas"; canvas: OffscreenCanvas }
   | { type: "clear" }
   | { type: "connect"; target: StreamConnectTarget }
-  | { type: "disconnect" }
-  | { type: "resize"; devicePixelRatio: number; width: number; height: number };
+  | { type: "disconnect" };

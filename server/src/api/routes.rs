@@ -111,7 +111,7 @@ const INSPECTOR_AGENT_HOST: &str = "127.0.0.1";
 const INSPECTOR_AGENT_DEFAULT_PORT: u16 = 47370;
 const INSPECTOR_AGENT_PORT_SCAN_LIMIT: u16 = 32;
 const INSPECTOR_AGENT_TIMEOUT: Duration = Duration::from_millis(900);
-const SOURCE_AXE: &str = "axe";
+const SOURCE_NATIVE_AX: &str = "native-ax";
 const SOURCE_NATIVE_SCRIPT: &str = "nativescript";
 const SOURCE_UIKIT: &str = "in-app-inspector";
 
@@ -138,6 +138,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/launch", post(launch_bundle))
         .route("/api/simulators/{udid}/touch", post(send_touch))
         .route("/api/simulators/{udid}/key", post(send_key))
+        .route(
+            "/api/simulators/{udid}/dismiss-keyboard",
+            post(dismiss_keyboard),
+        )
         .route("/api/simulators/{udid}/home", post(press_home))
         .route(
             "/api/simulators/{udid}/app-switcher",
@@ -283,6 +287,7 @@ async fn boot_simulator(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    state.registry.remove(&udid);
     state.registry.bridge().boot_simulator(&udid)?;
     simulator_payload(&state, &udid)
 }
@@ -309,7 +314,10 @@ async fn refresh_stream(
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let session = state.registry.get_or_create_async(&udid).await?;
-    session.ensure_started_async().await?;
+    if let Err(error) = session.ensure_started_async().await {
+        state.registry.remove(&udid);
+        return Err(error);
+    }
     session.request_refresh();
     Ok(json(json_value!({ "ok": true })))
 }
@@ -360,6 +368,15 @@ async fn send_key(
 ) -> Result<Json<Value>, AppError> {
     let session = state.registry.get_or_create(&udid)?;
     session.send_key(payload.key_code, payload.modifiers.unwrap_or(0))?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
+async fn dismiss_keyboard(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let session = state.registry.get_or_create(&udid)?;
+    session.dismiss_keyboard()?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -431,36 +448,38 @@ async fn accessibility_tree(
     Query(query): Query<AccessibilityTreeQuery>,
 ) -> Result<Json<Value>, AppError> {
     let requested_source = AccessibilityHierarchySource::parse(query.source.as_deref())?;
-    let axe_snapshot = run_axe_describe_ui(&udid, None).await?.0;
 
-    if requested_source == AccessibilityHierarchySource::Axe {
+    if requested_source == AccessibilityHierarchySource::NativeAX {
+        let native_snapshot = match state.registry.bridge().accessibility_snapshot(&udid, None) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return Ok(json(empty_accessibility_tree(
+                    SOURCE_NATIVE_AX,
+                    &available_sources_with_native_ax(None),
+                    suppress_native_ax_translation_error(&error.to_string()),
+                )));
+            }
+        };
         let availability = inspector_session_for_state(&state, &udid).await.ok();
-        let available_sources = foreground_available_sources(&axe_snapshot, availability.as_ref());
-        let snapshot = attach_available_sources(axe_snapshot, &available_sources);
+        let available_sources =
+            foreground_available_sources(&native_snapshot, availability.as_ref());
+        let snapshot = attach_available_sources(native_snapshot, &available_sources);
         return Ok(json(snapshot));
     }
 
     match inspector_session_for_state(&state, &udid).await {
         Ok(session) => {
-            let available_sources = foreground_available_sources(&axe_snapshot, Some(&session));
-            if !axe_snapshot_contains_pid(&axe_snapshot, session.process_identifier) {
-                return Ok(json(attach_tree_metadata(
-                    axe_snapshot,
-                    &available_sources,
-                    Some("The in-app inspector process is not the foreground app.".to_owned()),
-                )));
-            }
-
             let hierarchy_source = match requested_source {
                 AccessibilityHierarchySource::Auto => InAppHierarchySource::Automatic,
                 AccessibilityHierarchySource::NativeScript => InAppHierarchySource::Automatic,
                 AccessibilityHierarchySource::UIKit => InAppHierarchySource::UIKit,
-                AccessibilityHierarchySource::Axe => unreachable!(),
+                AccessibilityHierarchySource::NativeAX => unreachable!(),
             };
             match run_in_app_inspector_hierarchy(&state, &session, hierarchy_source).await {
                 Ok(snapshot) => {
+                    let base_sources = available_sources_with_native_ax(Some(&session));
                     let available_sources =
-                        available_sources_for_snapshot(&available_sources, &snapshot);
+                        available_sources_for_snapshot(&base_sources, &snapshot);
                     let fallback_reason = if requested_source
                         == AccessibilityHierarchySource::NativeScript
                         && snapshot.get("source").and_then(Value::as_str)
@@ -477,26 +496,42 @@ async fn accessibility_tree(
                     )))
                 }
                 Err(inspector_error) => {
-                    let available_sources = available_sources_with_axe(None);
-                    let fallback = attach_tree_metadata(
-                        axe_snapshot,
-                        &available_sources,
-                        Some(inspector_error),
-                    );
-                    Ok(json(fallback))
+                    let available_sources = available_sources_with_native_ax(Some(&session));
+                    match state.registry.bridge().accessibility_snapshot(&udid, None) {
+                        Ok(native_snapshot) => Ok(json(attach_tree_metadata(
+                            native_snapshot,
+                            &available_sources,
+                            Some(inspector_error),
+                        ))),
+                        Err(native_ax_error) => Ok(json(empty_accessibility_tree(
+                            SOURCE_NATIVE_AX,
+                            &available_sources,
+                            suppress_native_ax_translation_error(&native_ax_error.to_string()),
+                        ))),
+                    }
                 }
             }
         }
         Err(inspector_error) => {
-            let available_sources = available_sources_with_axe(None);
-            let fallback =
-                attach_tree_metadata(axe_snapshot, &available_sources, Some(inspector_error));
-            Ok(json(fallback))
+            let available_sources = available_sources_with_native_ax(None);
+            match state.registry.bridge().accessibility_snapshot(&udid, None) {
+                Ok(native_snapshot) => Ok(json(attach_tree_metadata(
+                    native_snapshot,
+                    &available_sources,
+                    Some(inspector_error),
+                ))),
+                Err(native_ax_error) => Ok(json(empty_accessibility_tree(
+                    SOURCE_NATIVE_AX,
+                    &available_sources,
+                    suppress_native_ax_translation_error(&native_ax_error.to_string()),
+                ))),
+            }
         }
     }
 }
 
 async fn accessibility_point(
+    State(state): State<AppState>,
     Path(udid): Path<String>,
     Query(query): Query<AccessibilityPointQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -506,7 +541,11 @@ async fn accessibility_point(
         ));
     }
 
-    run_axe_describe_ui(&udid, Some((query.x, query.y))).await
+    let snapshot = state
+        .registry
+        .bridge()
+        .accessibility_snapshot(&udid, Some((query.x, query.y)))?;
+    Ok(json(snapshot))
 }
 
 async fn inspector_request(
@@ -583,7 +622,7 @@ enum AccessibilityHierarchySource {
     Auto,
     NativeScript,
     UIKit,
-    Axe,
+    NativeAX,
 }
 
 impl AccessibilityHierarchySource {
@@ -592,7 +631,7 @@ impl AccessibilityHierarchySource {
             "" | "auto" => Ok(Self::Auto),
             "nativescript" | "ns" => Ok(Self::NativeScript),
             "uikit" | "in-app-inspector" => Ok(Self::UIKit),
-            "axe" => Ok(Self::Axe),
+            "ax" | "native-ax" | "native-accessibility" | "axe" => Ok(Self::NativeAX),
             source => Err(AppError::bad_request(format!(
                 "Unsupported accessibility hierarchy source `{source}`."
             ))),
@@ -844,43 +883,50 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
     sources
 }
 
-fn available_sources_with_axe(session: Option<&InspectorSession>) -> Vec<String> {
+fn push_unique_source(sources: &mut Vec<String>, source: &str) {
+    if !sources.iter().any(|value| value == source) {
+        sources.push(source.to_owned());
+    }
+}
+
+fn available_sources_for_session(session: &InspectorSession) -> Vec<String> {
     let mut sources = Vec::new();
-    if let Some(session) = session {
-        if matches!(session.transport, InspectorSessionTransport::Connected)
-            && !sources.iter().any(|source| source == SOURCE_NATIVE_SCRIPT)
-        {
-            sources.push(SOURCE_NATIVE_SCRIPT.to_owned());
-        }
-        if session
+    if matches!(session.transport, InspectorSessionTransport::Connected)
+        || session
             .available_sources
             .iter()
             .any(|source| source == SOURCE_NATIVE_SCRIPT)
-        {
-            sources.push(SOURCE_NATIVE_SCRIPT.to_owned());
-        }
-        if session
-            .available_sources
-            .iter()
-            .any(|source| source == SOURCE_UIKIT)
-        {
-            sources.push(SOURCE_UIKIT.to_owned());
-        }
+    {
+        push_unique_source(&mut sources, SOURCE_NATIVE_SCRIPT);
     }
-    sources.push(SOURCE_AXE.to_owned());
+    if session
+        .available_sources
+        .iter()
+        .any(|source| source == SOURCE_UIKIT)
+    {
+        push_unique_source(&mut sources, SOURCE_UIKIT);
+    }
+    sources
+}
+
+fn available_sources_with_native_ax(session: Option<&InspectorSession>) -> Vec<String> {
+    let mut sources = session
+        .map(available_sources_for_session)
+        .unwrap_or_default();
+    push_unique_source(&mut sources, SOURCE_NATIVE_AX);
     sources
 }
 
 fn foreground_available_sources(
-    axe_snapshot: &Value,
+    native_ax_snapshot: &Value,
     session: Option<&InspectorSession>,
 ) -> Vec<String> {
     if let Some(session) = session {
-        if axe_snapshot_contains_pid(axe_snapshot, session.process_identifier) {
-            return available_sources_with_axe(Some(session));
+        if native_ax_snapshot_contains_pid(native_ax_snapshot, session.process_identifier) {
+            return available_sources_with_native_ax(Some(session));
         }
     }
-    available_sources_with_axe(None)
+    available_sources_with_native_ax(None)
 }
 
 fn available_sources_for_snapshot(base_sources: &[String], snapshot: &Value) -> Vec<String> {
@@ -904,20 +950,20 @@ fn available_sources_for_snapshot(base_sources: &[String], snapshot: &Value) -> 
     sources
 }
 
-fn axe_snapshot_contains_pid(snapshot: &Value, pid: i64) -> bool {
+fn native_ax_snapshot_contains_pid(snapshot: &Value, pid: i64) -> bool {
     match snapshot {
         Value::Array(values) => values
             .iter()
-            .any(|value| axe_snapshot_contains_pid(value, pid)),
+            .any(|value| native_ax_snapshot_contains_pid(value, pid)),
         Value::Object(object) => {
             object.get("pid").and_then(Value::as_i64) == Some(pid)
                 || object
                     .get("children")
-                    .map(|children| axe_snapshot_contains_pid(children, pid))
+                    .map(|children| native_ax_snapshot_contains_pid(children, pid))
                     .unwrap_or(false)
                 || object
                     .get("roots")
-                    .map(|roots| axe_snapshot_contains_pid(roots, pid))
+                    .map(|roots| native_ax_snapshot_contains_pid(roots, pid))
                     .unwrap_or(false)
         }
         _ => false,
@@ -926,6 +972,28 @@ fn axe_snapshot_contains_pid(snapshot: &Value, pid: i64) -> bool {
 
 fn attach_available_sources(snapshot: Value, available_sources: &[String]) -> Value {
     attach_tree_metadata(snapshot, available_sources, None)
+}
+
+fn empty_accessibility_tree(
+    source: &str,
+    available_sources: &[String],
+    fallback_reason: Option<String>,
+) -> Value {
+    attach_tree_metadata(
+        json_value!({
+            "roots": [],
+            "source": source,
+        }),
+        available_sources,
+        fallback_reason,
+    )
+}
+
+fn suppress_native_ax_translation_error(message: &str) -> Option<String> {
+    if message.contains("No translation object returned for simulator") {
+        return None;
+    }
+    Some(message.to_owned())
 }
 
 fn attach_tree_metadata(
@@ -945,10 +1013,10 @@ fn attach_tree_metadata(
         );
         if let Some(reason) = fallback_reason {
             object.insert("fallbackReason".to_owned(), Value::String(reason));
-            if object.get("source").and_then(Value::as_str) == Some(SOURCE_AXE) {
+            if object.get("source").and_then(Value::as_str) == Some(SOURCE_NATIVE_AX) {
                 object.insert(
                     "fallbackSource".to_owned(),
-                    Value::String(SOURCE_AXE.to_owned()),
+                    Value::String(SOURCE_NATIVE_AX.to_owned()),
                 );
             }
         }
@@ -1314,54 +1382,6 @@ fn split_filter_values(value: Option<&str>) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(|part| part.to_lowercase())
         .collect()
-}
-
-async fn run_axe_describe_ui(
-    udid: &str,
-    point: Option<(f64, f64)>,
-) -> Result<Json<Value>, AppError> {
-    let mut command = Command::new("axe");
-    command.arg("describe-ui").arg("--udid").arg(udid);
-    if let Some((x, y)) = point {
-        command.arg("--point").arg(format!("{x},{y}"));
-    }
-
-    let output = timeout(Duration::from_secs(8), command.output())
-        .await
-        .map_err(|_| AppError::native("Timed out waiting for AXe accessibility snapshot."))?
-        .map_err(|error| {
-            AppError::native(format!(
-                "Unable to run `axe describe-ui`. Install AXe or ensure `axe` is on PATH. {error}"
-            ))
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let detail = stderr.trim();
-        let fallback = stdout.trim();
-        return Err(AppError::native(if !detail.is_empty() {
-            detail.to_owned()
-        } else if !fallback.is_empty() {
-            fallback.to_owned()
-        } else {
-            format!("`axe describe-ui` exited with status {}.", output.status)
-        }));
-    }
-
-    let value: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
-        AppError::native(format!(
-            "AXe returned accessibility output that was not valid JSON. {error}"
-        ))
-    })?;
-    let roots = match value {
-        Value::Array(roots) => roots,
-        root => vec![root],
-    };
-    Ok(json(json_value!({
-        "roots": roots,
-        "source": "axe",
-    })))
 }
 
 fn simulator_payload(state: &AppState, udid: &str) -> Result<Json<Value>, AppError> {
