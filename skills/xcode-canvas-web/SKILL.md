@@ -1,210 +1,157 @@
 # Xcode Canvas Web
 
-Use this skill when you need to operate the local Xcode Canvas Web project: build the CLI, manage simulators from the command line, or launch the local server and browser client.
+Use this skill when developing, debugging, or testing an iOS app in a simulator
+from an agent workflow. This includes UIKit, SwiftUI, React Native, Expo, and
+NativeScript apps.
 
-## What This Project Does
+Xcode Canvas Web gives agents a simple CLI for full simulator control and a web
+UI the user can watch inside their IDE. Use it to boot/select a simulator,
+install and launch the app, inspect the current UI hierarchy as JSON, drive
+touch/keyboard/gesture input, capture screenshots, and run repeatable end-to-end
+flows without depending on AXe.
 
-`xcode-canvas-web` is a local simulator control plane.
+## Start The Viewer
 
-- The product server lives in `server/` and is written in Rust.
-- The native simulator bridge lives in `cli/` and is written in Objective-C.
-- The browser client lives in `client/` and is built with React.
-- The NativeScript in-app inspector runtime lives in `packages/nativescript-inspector/`
-  and is written in TypeScript.
-- The Rust CLI serves the HTTP API and the built web app, and exposes WebTransport for video.
-
-## Build Commands
-
-Build the client bundle:
-
-```sh
-./scripts/build-client.sh
-```
-
-Build the native CLI:
-
-```sh
-./scripts/build-cli.sh
-```
-
-The compiled binary lands at:
-
-```sh
-./build/xcode-canvas-web
-```
-
-Install the CLI globally from this checkout:
-
-```sh
-npm install -g .
-```
-
-## Launch The Web Server
+Start the local server before interactive testing:
 
 ```sh
 xcode-canvas-web serve --port 4310
 ```
 
-Use software H.264 when macOS screen recording starves the hardware encoder:
+If `xcode-canvas-web` is not on `PATH` and you are inside this repository, build
+and use the local binary:
 
 ```sh
-xcode-canvas-web serve --port 4310 --video-codec h264-software
-```
-
-Open:
-
-```sh
-http://127.0.0.1:4310
-```
-
-If the IDE has an in-app browser capability, open that URL so the user can see
-the simulator while agents build and test. To focus a specific simulator in the
-web UI, include the simulator UDID:
-
-```sh
-http://127.0.0.1:4310?device=<udid>
-```
-
-The server also exposes WebTransport on `4311` when the HTTP port is `4310`.
-The client should discover the exact URL template and certificate hash from `GET /api/health`.
-
-From a local checkout without a global install, the equivalent command is:
-
-```sh
+./scripts/build-cli.sh
 ./build/xcode-canvas-web serve --port 4310
 ```
 
-You can point the server at a different built client directory if needed:
+If the IDE has an in-app browser capability, open the web UI so the user can see
+the app being built and tested live:
 
-```sh
-xcode-canvas-web serve --port 4310 --client-root /absolute/path/to/client/dist
+```text
+http://127.0.0.1:4310
 ```
 
-Enable the per-user `launchd` service:
+To open the viewer focused on one simulator, include the simulator UDID:
 
-```sh
-xcode-canvas-web service on --port 4310
+```text
+http://127.0.0.1:4310?device=<udid>
 ```
 
-Restart the per-user `launchd` service:
+The web UI is for human visibility and manual checks. The CLI is the primary
+agent control surface.
+
+## Pick A Simulator
+
+List simulators and choose a booted device, or boot the one you need:
 
 ```sh
-xcode-canvas-web service restart
+xcode-canvas-web list
+xcode-canvas-web boot <udid>
+xcode-canvas-web shutdown <udid>
 ```
 
-Disable it:
-
-```sh
-xcode-canvas-web service off
-```
-
-Restart the CoreSimulator service layer when `simctl` reports a stale service
-version or the display stream gets stuck waiting for the first frame:
+If CoreSimulator is wedged or a display stream never produces frames, restart
+the service layer:
 
 ```sh
 xcode-canvas-web core-simulator restart
 ```
 
-Start or shut down the CoreSimulator service layer explicitly:
+## Install And Run Apps
+
+Build the app using the project’s normal tooling, then install and launch the
+resulting `.app` bundle:
 
 ```sh
-xcode-canvas-web core-simulator start
-xcode-canvas-web core-simulator shutdown
+xcode-canvas-web install <udid> /path/to/App.app
+xcode-canvas-web launch <udid> com.example.App
 ```
 
-## Simulator CLI Commands
-
-List simulators:
+Useful app-management commands:
 
 ```sh
-xcode-canvas-web list
-```
-
-Boot a simulator:
-
-```sh
-xcode-canvas-web boot <udid>
-```
-
-Shut a simulator down:
-
-```sh
-xcode-canvas-web shutdown <udid>
-```
-
-Open a URL inside a simulator:
-
-```sh
+xcode-canvas-web uninstall <udid> com.example.App
+xcode-canvas-web erase <udid>
+xcode-canvas-web open-url <udid> myapp://route
 xcode-canvas-web open-url <udid> https://example.com
+xcode-canvas-web toggle-appearance <udid>
 ```
 
-Launch an installed app by bundle identifier:
+For NativeScript apps, the CLI can always read native accessibility state. When
+the app also includes the NativeScript inspector runtime, the server can expose
+NativeScript/UIKit hierarchy details through the inspector source as well.
 
-```sh
-xcode-canvas-web launch <udid> com.apple.Preferences
-```
+## Inspect UI State
 
-Dismiss the software keyboard when it is visible:
-
-```sh
-xcode-canvas-web dismiss-keyboard <udid>
-```
-
-Inspect the native accessibility tree as JSON, without AXe:
+Use hierarchy inspection before acting whenever possible. It returns JSON with
+labels, values, roles, identifiers, frames, and children:
 
 ```sh
 xcode-canvas-web describe-ui <udid>
 xcode-canvas-web describe-ui <udid> --point 120,240
 ```
 
-Capture a PNG screenshot:
+Prefer selector-based commands when stable labels or identifiers exist:
 
 ```sh
-xcode-canvas-web screenshot <udid> --output screen.png
-xcode-canvas-web screenshot <udid> --stdout > screen.png
+xcode-canvas-web tap <udid> --id LoginButton --wait-timeout-ms 5000
+xcode-canvas-web tap <udid> --label "Continue" --element-type Button
 ```
 
-Interact with the simulator from agent scripts. Coordinates are screen
-coordinates from `describe-ui` unless `--normalized` is present:
+Coordinates from `describe-ui` are screen coordinates. Add `--normalized` when
+passing `0.0..1.0` coordinates directly.
+
+## Touch And Gestures
+
+Basic touch:
 
 ```sh
 xcode-canvas-web tap <udid> 120 240
-xcode-canvas-web tap <udid> --id LoginButton --wait-timeout-ms 5000
-xcode-canvas-web tap <udid> --label "Continue" --element-type Button
+xcode-canvas-web touch <udid> 0.5 0.5 --phase began --normalized
+xcode-canvas-web touch <udid> 0.5 0.5 --phase ended --normalized
+xcode-canvas-web touch <udid> 120 240 --down --up --delay-ms 800
+```
+
+Swipe and gesture presets:
+
+```sh
 xcode-canvas-web swipe <udid> 200 700 200 200
 xcode-canvas-web swipe <udid> 200 700 200 200 --duration-ms 500 --pre-delay-ms 100 --post-delay-ms 250
 xcode-canvas-web gesture <udid> scroll-up
+xcode-canvas-web gesture <udid> scroll-down
 xcode-canvas-web gesture <udid> swipe-from-left-edge
+xcode-canvas-web gesture <udid> swipe-from-right-edge
+```
+
+True two-touch gestures:
+
+```sh
 xcode-canvas-web pinch <udid> --start-distance 160 --end-distance 80
 xcode-canvas-web pinch <udid> --start-distance 0.20 --end-distance 0.35 --normalized --duration-ms 250 --steps 8
 xcode-canvas-web rotate-gesture <udid> --radius 100 --degrees 90
 xcode-canvas-web rotate-gesture <udid> --radius 0.12 --degrees 45 --normalized --duration-ms 250 --steps 8
-xcode-canvas-web touch <udid> 0.5 0.5 --phase began --normalized
-xcode-canvas-web touch <udid> 0.5 0.5 --phase ended --normalized
-xcode-canvas-web touch <udid> 120 240 --down --up --delay-ms 800
+```
+
+## Keyboard And Text
+
+Send text, keys, sequences, and modifier combos:
+
+```sh
+xcode-canvas-web type <udid> "hello"
+xcode-canvas-web type <udid> --stdin
+xcode-canvas-web type <udid> --file message.txt
 xcode-canvas-web key <udid> enter
 xcode-canvas-web key <udid> 42 --duration-ms 500
 xcode-canvas-web key-sequence <udid> --keycodes h,e,l,l,o --delay-ms 75
 xcode-canvas-web key-combo <udid> --modifiers cmd,shift --key z
-xcode-canvas-web type <udid> "hello"
-xcode-canvas-web type <udid> --stdin
-xcode-canvas-web type <udid> --file message.txt
+xcode-canvas-web dismiss-keyboard <udid>
 ```
 
-Use batch for multi-step agent flows. Batch accepts one source: repeated
-`--step`, `--file`, or `--stdin`. Step lines support `tap`, `swipe`, `gesture`,
-`pinch`, `rotate-gesture`, `touch`, `type`, `button`, `key`, `key-sequence`,
-`key-combo`, and `sleep`.
+## Hardware And System Controls
 
-```sh
-xcode-canvas-web batch <udid> \
-  --step "tap --label Continue --wait-timeout-ms 5000" \
-  --step "type 'hello world'" \
-  --step "gesture scroll-down" \
-  --step "pinch --start-distance 0.20 --end-distance 0.35 --normalized"
-```
-
-Use hardware/system controls:
+Everything the web UI exposes should also be available from the CLI:
 
 ```sh
 xcode-canvas-web button <udid> home
@@ -219,64 +166,65 @@ xcode-canvas-web rotate-right <udid>
 xcode-canvas-web toggle-appearance <udid>
 ```
 
-Manage simulator app state and pasteboard:
+Pasteboard:
 
 ```sh
-xcode-canvas-web install <udid> /path/to/App.app
-xcode-canvas-web uninstall <udid> com.example.App
-xcode-canvas-web erase <udid>
 xcode-canvas-web pasteboard set <udid> "text"
 xcode-canvas-web pasteboard get <udid>
 ```
 
-Read diagnostics and chrome metadata:
+## Screenshots, Logs, And Metadata
+
+Use screenshots for visual evidence and logs for diagnostics:
 
 ```sh
+xcode-canvas-web screenshot <udid> --output screen.png
+xcode-canvas-web screenshot <udid> --stdout > screen.png
 xcode-canvas-web logs <udid> --seconds 30 --limit 200
 xcode-canvas-web chrome-profile <udid>
 ```
 
-## Current API Shape
+The CLI intentionally omits AXe-style record-video, MJPEG streaming, raw JPEG
+streaming, and BGRA piping. Use `screenshot` for still PNG capture and the web
+UI’s live stream for visual monitoring.
 
-The route inventory changes faster than this operator guide. Treat
-`server/src/api/routes.rs` as the canonical source for the live API surface.
+## Batch Agent Flows
 
-The most commonly used routes are:
+Use `batch` for repeatable end-to-end tests. Batch accepts exactly one source:
+repeated `--step`, `--file`, or `--stdin`.
 
-- `GET /api/health`
-- `GET /api/metrics`
-- `GET /api/simulators`
-- `POST /api/simulators/:udid/boot`
-- `POST /api/simulators/:udid/shutdown`
-- `POST /api/simulators/:udid/open-url`
-- `POST /api/simulators/:udid/launch`
-- `POST /api/simulators/:udid/touch`
-- `POST /api/simulators/:udid/key`
-- `POST /api/simulators/:udid/home`
-- `POST /api/simulators/:udid/app-switcher`
-- `POST /api/simulators/:udid/rotate-left`
-- `POST /api/simulators/:udid/rotate-right`
-- `POST /api/simulators/:udid/toggle-appearance`
-- `POST /api/simulators/:udid/refresh`
-- `GET /api/simulators/:udid/chrome-profile`
-- `GET /api/simulators/:udid/chrome.png`
-- `GET /api/simulators/:udid/accessibility-tree`
-- `GET /api/simulators/:udid/accessibility-point`
-- `POST /api/simulators/:udid/inspector/request`
-- `GET /api/simulators/:udid/logs`
-- `GET /api/inspector/connect`
-- `GET /api/inspector/poll`
-- `POST /api/inspector/response`
-- `GET /api/client-stream-stats`
-- `POST /api/client-stream-stats`
+Step lines support `tap`, `swipe`, `gesture`, `pinch`, `rotate-gesture`,
+`touch`, `type`, `button`, `key`, `key-sequence`, `key-combo`, and `sleep`.
 
-## Important Notes
+```sh
+xcode-canvas-web batch <udid> \
+  --step "tap --label Continue --wait-timeout-ms 5000" \
+  --step "type 'hello world'" \
+  --step "gesture scroll-down" \
+  --step "pinch --start-distance 0.20 --end-distance 0.35 --normalized"
+```
 
-- The live frame pane comes from the vendored private display bridge.
-- The native accessibility tree comes from the local
-  `AccessibilityPlatformTranslation` bridge. Do not add an AXe CLI dependency
-  for simulator inspection.
-- The live video path is WebTransport-only after the Rust server cutover. Do not add `/stream.h264` back as a fallback.
-- The CLI intentionally omits AXe-style record-video, MJPEG streaming, raw JPEG streaming, and BGRA piping. Use `screenshot` for still PNG capture and the web UI for live viewing.
-- Device chrome comes from CoreSimulator device-type chrome PDFs rendered by `cli/XCWChromeRenderer.*`.
-- If you change CLI flags or API routes, update `README.md` and `AGENTS.md` in the same pass.
+Use `--continue-on-error` when collecting multiple failures in one pass is more
+useful than stopping at the first failed step.
+
+## Recommended Agent Loop
+
+1. Start `xcode-canvas-web serve --port 4310`.
+2. Open `http://127.0.0.1:4310?device=<udid>` in the IDE in-app browser when
+   available.
+3. Build the user’s app with its normal project commands.
+4. Install and launch the `.app` with `xcode-canvas-web install` and `launch`.
+5. Run `describe-ui` and choose selectors or coordinates.
+6. Drive the app with `tap`, `type`, `gesture`, `pinch`, `rotate-gesture`, and
+   `batch`.
+7. Capture screenshots and logs when verifying behavior or debugging failures.
+
+## Notes
+
+- `describe-ui` uses the built-in private CoreSimulator accessibility bridge,
+  not AXe.
+- Keep app-specific build steps in the app project. Xcode Canvas Web controls
+  the simulator and viewer; it does not replace Xcode, `xcodebuild`,
+  NativeScript CLI, Expo CLI, or other app build tools.
+- If CLI flags change, update this skill so agents can continue to use the
+  simulator without guessing.
