@@ -495,13 +495,12 @@ async fn accessibility_tree(
                         fallback_reason,
                     )))
                 }
-                Err(inspector_error) => {
+                Err(_inspector_error) => {
                     let available_sources = available_sources_with_native_ax(Some(&session));
                     match state.registry.bridge().accessibility_snapshot(&udid, None) {
-                        Ok(native_snapshot) => Ok(json(attach_tree_metadata(
+                        Ok(native_snapshot) => Ok(json(attach_available_sources(
                             native_snapshot,
                             &available_sources,
-                            Some(inspector_error),
                         ))),
                         Err(native_ax_error) => Ok(json(empty_accessibility_tree(
                             SOURCE_NATIVE_AX,
@@ -512,13 +511,12 @@ async fn accessibility_tree(
                 }
             }
         }
-        Err(inspector_error) => {
+        Err(_inspector_error) => {
             let available_sources = available_sources_with_native_ax(None);
             match state.registry.bridge().accessibility_snapshot(&udid, None) {
-                Ok(native_snapshot) => Ok(json(attach_tree_metadata(
+                Ok(native_snapshot) => Ok(json(attach_available_sources(
                     native_snapshot,
                     &available_sources,
-                    Some(inspector_error),
                 ))),
                 Err(native_ax_error) => Ok(json(empty_accessibility_tree(
                     SOURCE_NATIVE_AX,
@@ -990,10 +988,18 @@ fn empty_accessibility_tree(
 }
 
 fn suppress_native_ax_translation_error(message: &str) -> Option<String> {
-    if message.contains("No translation object returned for simulator") {
+    if message.contains("No translation object returned for simulator")
+        || is_core_simulator_service_mismatch(message)
+    {
         return None;
     }
     Some(message.to_owned())
+}
+
+fn is_core_simulator_service_mismatch(message: &str) -> bool {
+    message.contains("CoreSimulator.framework was changed while the process was running")
+        || message.contains("Service version")
+            && message.contains("does not match expected service version")
 }
 
 fn attach_tree_metadata(

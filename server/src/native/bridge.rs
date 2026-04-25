@@ -4,6 +4,7 @@ use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
 use std::ffi::{c_void, CStr, CString};
 use std::ptr;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Simulator {
@@ -254,11 +255,13 @@ impl NativeBridge {
         point: Option<(f64, f64)>,
     ) -> Result<serde_json::Value, AppError> {
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
-        let json = unsafe {
-            let mut error = ptr::null_mut();
-            let raw =
-                ffi::xcw_native_accessibility_snapshot(udid.as_ptr(), false, 0.0, 0.0, &mut error);
-            string_from_raw(raw, error)?
+        let json = match native_accessibility_snapshot_json(&udid) {
+            Ok(json) => json,
+            Err(error) if is_core_simulator_service_mismatch(&error.to_string()) => {
+                std::thread::sleep(Duration::from_millis(250));
+                native_accessibility_snapshot_json(&udid)?
+            }
+            Err(error) => return Err(error),
         };
         let snapshot: serde_json::Value =
             serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))?;
@@ -611,6 +614,21 @@ impl Drop for NativeSession {
             ffi::xcw_native_session_destroy(self.handle);
         }
     }
+}
+
+fn native_accessibility_snapshot_json(udid: &CString) -> Result<String, AppError> {
+    unsafe {
+        let mut error = ptr::null_mut();
+        let raw =
+            ffi::xcw_native_accessibility_snapshot(udid.as_ptr(), false, 0.0, 0.0, &mut error);
+        string_from_raw(raw, error)
+    }
+}
+
+fn is_core_simulator_service_mismatch(message: &str) -> bool {
+    message.contains("CoreSimulator.framework was changed while the process was running")
+        || message.contains("Service version")
+            && message.contains("does not match expected service version")
 }
 
 fn accessibility_snapshot_at_point(
