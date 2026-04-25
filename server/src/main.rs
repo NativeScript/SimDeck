@@ -34,12 +34,12 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
-const RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV: &str = "XCW_RESTART_ON_CORE_SIMULATOR_MISMATCH";
+const RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV: &str = "SIMDECK_RESTART_ON_CORE_SIMULATOR_MISMATCH";
 const SERVER_FD_RESTART_THRESHOLD: usize = 4096;
 
 #[derive(Parser)]
-#[command(name = "xcode-canvas-web")]
-#[command(bin_name = "xcode-canvas-web")]
+#[command(name = "simdeck")]
+#[command(bin_name = "simdeck")]
 #[command(about = "Local simulator control plane and browser transport server")]
 struct Cli {
     #[command(subcommand)]
@@ -884,7 +884,7 @@ fn serve_with_appkit(
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
 ) -> anyhow::Result<()> {
-    std::env::set_var("XCW_VIDEO_CODEC", video_codec.as_env_value());
+    std::env::set_var("SIMDECK_VIDEO_CODEC", video_codec.as_env_value());
     std::env::set_var(RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV, "1");
     start_fd_pressure_watchdog();
     unsafe {
@@ -929,7 +929,7 @@ fn start_fd_pressure_watchdog() {
             continue;
         }
         eprintln!(
-            "Open file descriptor count reached {fd_count}; restarting xcode-canvas-web server process."
+            "Open file descriptor count reached {fd_count}; restarting simdeck server process."
         );
         std::process::exit(RECOVERABLE_RESTART_EXIT_CODE);
     });

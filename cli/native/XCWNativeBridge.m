@@ -263,7 +263,7 @@ static BOOL XCWTouchPhaseFromString(NSString *phase, DFPrivateSimulatorTouchPhas
         return YES;
     }
     if (error != NULL) {
-        *error = [NSError errorWithDomain:@"XcodeCanvasWeb.NativeBridge"
+        *error = [NSError errorWithDomain:@"SimDeck.NativeBridge"
                                      code:1
                                  userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Unsupported touch phase `%@`.", phase ?: @""] }];
     }
@@ -326,7 +326,7 @@ void xcw_native_input_destroy(void *handle) {
 bool xcw_native_input_send_multitouch(void *handle, double x1, double y1, double x2, double y2, const char *phase, char **error_message) {
     @autoreleasepool {
         if (handle == NULL) {
-            XCWSetErrorMessage(error_message, [NSError errorWithDomain:@"XcodeCanvasWeb.NativeInput"
+            XCWSetErrorMessage(error_message, [NSError errorWithDomain:@"SimDeck.NativeInput"
                                                                    code:1
                                                                userInfo:@{NSLocalizedDescriptionKey: @"Native input handle is null."}]);
             return false;

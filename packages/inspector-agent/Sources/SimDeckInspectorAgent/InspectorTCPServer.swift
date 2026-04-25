@@ -2,14 +2,14 @@ import Foundation
 import Network
 
 final class InspectorTCPServer {
-    private let configuration: XcodeCanvasInspectorAgent.Configuration
+    private let configuration: SimDeckInspectorAgent.Configuration
     private let requestHandler: (Data, @escaping (Data) -> Void) -> Void
-    private let queue = DispatchQueue(label: "dev.xcode-canvas.inspector-agent.tcp")
+    private let queue = DispatchQueue(label: "dev.simdeck.inspector-agent.tcp")
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: InspectorClientConnection] = [:]
 
     init(
-        configuration: XcodeCanvasInspectorAgent.Configuration,
+        configuration: SimDeckInspectorAgent.Configuration,
         requestHandler: @escaping (Data, @escaping (Data) -> Void) -> Void
     ) {
         self.configuration = configuration
@@ -73,7 +73,7 @@ final class InspectorTCPServer {
         if configuration.advertiseBonjour {
             listener.service = NWListener.Service(
                 name: configuration.serviceName,
-                type: "_xcwinspector._tcp"
+                type: "_simdeckinspector._tcp"
             )
         }
 
@@ -86,7 +86,7 @@ final class InspectorTCPServer {
                 startup.succeed()
             case let .failed(error):
                 startup.fail(error)
-                NSLog("XcodeCanvasInspectorAgent listener failed: \(error)")
+                NSLog("SimDeckInspectorAgent listener failed: \(error)")
             default:
                 break
             }
@@ -238,7 +238,7 @@ private final class InspectorClientConnection {
     private func send(_ data: Data) {
         connection.send(content: data, completion: .contentProcessed { error in
             if let error {
-                NSLog("XcodeCanvasInspectorAgent send failed: \(error)")
+                NSLog("SimDeckInspectorAgent send failed: \(error)")
             }
         })
     }

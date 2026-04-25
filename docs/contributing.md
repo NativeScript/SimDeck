@@ -22,8 +22,8 @@ Optional:
 Clone, install dependencies, and build everything:
 
 ```sh
-git clone https://github.com/DjDeveloperr/xcode-canvas-web.git
-cd xcode-canvas-web
+git clone https://github.com/DjDeveloperr/SimDeck.git
+cd simdeck
 npm install
 npm run build
 ```
@@ -41,7 +41,7 @@ This starts the Rust server in the background and runs the Vite dev server for t
 To run only the production server:
 
 ```sh
-./build/xcode-canvas-web serve --port 4310
+./build/simdeck serve --port 4310
 ```
 
 ## Layout
@@ -146,7 +146,7 @@ When you change something in the repo that the docs already cover — a CLI flag
 - Open an issue for anything that requires discussion before code.
 - For straightforward fixes, a PR is fine without a paired issue.
 - Include reproduction steps and the macOS / Xcode version when filing simulator-related bugs.
-- Include the server log (foreground or `~/Library/Logs/xcode-canvas-web*.log`) when filing video-stream bugs.
+- Include the server log (foreground or `~/Library/Logs/simdeck*.log`) when filing video-stream bugs.
 
 ## License
 

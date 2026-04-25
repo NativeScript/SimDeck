@@ -7,7 +7,7 @@ SimDeck binds to `127.0.0.1` by default. You can move it to a LAN-reachable inte
 Use `--bind` to listen on a non-loopback address:
 
 ```sh
-xcode-canvas-web serve --port 4310 --bind 0.0.0.0
+simdeck serve --port 4310 --bind 0.0.0.0
 ```
 
 Both the HTTP server and the WebTransport server bind to the requested address. The HTTP server is plain HTTP, so any browser on the LAN can reach it through `http://<your-mac-ip>:4310`.
@@ -19,7 +19,7 @@ WebTransport needs a hostname or IP that matches the certificate the server gene
 Tell the server what host to advertise to remote clients:
 
 ```sh
-xcode-canvas-web serve \
+simdeck serve \
   --port 4310 \
   --bind 0.0.0.0 \
   --advertise-host 192.168.1.50
@@ -38,9 +38,9 @@ If you skip `--advertise-host` while binding to `0.0.0.0`, the server prints a w
 You can advertise either a DNS name (preferred when you have a stable mDNS or DHCP entry) or an IP literal. Examples:
 
 ```sh
-xcode-canvas-web serve --bind 0.0.0.0 --advertise-host my-mac.lan
-xcode-canvas-web serve --bind 0.0.0.0 --advertise-host 192.168.1.50
-xcode-canvas-web serve --bind ::      --advertise-host my-mac.local
+simdeck serve --bind 0.0.0.0 --advertise-host my-mac.lan
+simdeck serve --bind 0.0.0.0 --advertise-host 192.168.1.50
+simdeck serve --bind ::      --advertise-host my-mac.local
 ```
 
 Whatever you advertise must be resolvable from the remote client.

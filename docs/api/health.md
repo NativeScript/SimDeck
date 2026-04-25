@@ -91,7 +91,7 @@ Returns a snapshot of every server-side counter and the rolling buffer of client
 
 `client_streams` is a rolling buffer of the most recent reports a client posted to `POST /api/client-stream-stats`. The server keeps the last 48 entries per `(clientId, kind)` pair.
 
-The browser client uses these to render its in-app diagnostics overlay and to size its decoder workers. Every field is optional except `clientId` and `kind`; see [`ClientStreamStats`](https://github.com/DjDeveloperr/xcode-canvas-web/blob/main/server/src/metrics/counters.rs) for the full schema.
+The browser client uses these to render its in-app diagnostics overlay and to size its decoder workers. Every field is optional except `clientId` and `kind`; see [`ClientStreamStats`](https://github.com/DjDeveloperr/SimDeck/blob/main/server/src/metrics/counters.rs) for the full schema.
 
 ## Submitting client stats
 

@@ -74,22 +74,22 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           ARTIFACTS_DIR="${RUNNER_TEMP}/release-assets"
-          BUNDLE_DIR="${RUNNER_TEMP}/xcode-canvas-web-${VERSION}-macos"
+          BUNDLE_DIR="${RUNNER_TEMP}/simdeck-${VERSION}-macos"
 
           rm -rf "${ARTIFACTS_DIR}" "${BUNDLE_DIR}"
           mkdir -p "${ARTIFACTS_DIR}" "${BUNDLE_DIR}"
 
-          cp build/xcode-canvas-web "${BUNDLE_DIR}/"
-          cp build/xcode-canvas-web-bin "${BUNDLE_DIR}/"
+          cp build/simdeck "${BUNDLE_DIR}/"
+          cp build/simdeck-bin "${BUNDLE_DIR}/"
           cp README.md LICENSE "${BUNDLE_DIR}/"
 
-          tar -czf "${ARTIFACTS_DIR}/xcode-canvas-web-${VERSION}-macos.tar.gz" \
+          tar -czf "${ARTIFACTS_DIR}/simdeck-${VERSION}-macos.tar.gz" \
             -C "${RUNNER_TEMP}" \
-            "xcode-canvas-web-${VERSION}-macos"
+            "simdeck-${VERSION}-macos"
 
           ditto -c -k --keepParent \
             "${BUNDLE_DIR}" \
-            "${ARTIFACTS_DIR}/xcode-canvas-web-${VERSION}-macos.zip"
+            "${ARTIFACTS_DIR}/simdeck-${VERSION}-macos.zip"
 
           npm pack --pack-destination "${ARTIFACTS_DIR}"
           (
@@ -102,13 +102,13 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          if npm view "xcode-canvas-web@${VERSION}" version >/dev/null 2>&1; then
-            echo "xcode-canvas-web@${VERSION} is already published on npm."
+          if npm view "simdeck@${VERSION}" version >/dev/null 2>&1; then
+            echo "simdeck@${VERSION} is already published on npm."
             exit 0
           fi
 
           if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "NPM_TOKEN repository secret is required to publish xcode-canvas-web@${VERSION}." >&2
+            echo "NPM_TOKEN repository secret is required to publish simdeck@${VERSION}." >&2
             exit 1
           fi
 
@@ -119,13 +119,13 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          if npm view "@nativescript/xcode-canvas-inspector@${VERSION}" version >/dev/null 2>&1; then
-            echo "@nativescript/xcode-canvas-inspector@${VERSION} is already published on npm."
+          if npm view "@nativescript/simdeck-inspector@${VERSION}" version >/dev/null 2>&1; then
+            echo "@nativescript/simdeck-inspector@${VERSION} is already published on npm."
             exit 0
           fi
 
           if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "NPM_TOKEN repository secret is required to publish @nativescript/xcode-canvas-inspector@${VERSION}." >&2
+            echo "NPM_TOKEN repository secret is required to publish @nativescript/simdeck-inspector@${VERSION}." >&2
             exit 1
           fi
 

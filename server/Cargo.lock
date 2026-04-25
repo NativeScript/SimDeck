@@ -1339,6 +1339,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "simdeck-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64",
+ "bytes",
+ "cc",
+ "clap",
+ "futures",
+ "hex",
+ "http",
+ "rcgen 0.13.2",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "wtransport",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2069,32 +2095,6 @@ dependencies = [
  "rusticata-macros",
  "thiserror",
  "time",
-]
-
-[[package]]
-name = "xcode-canvas-web-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "base64",
- "bytes",
- "cc",
- "clap",
- "futures",
- "hex",
- "http",
- "rcgen 0.13.2",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "tokio",
- "tokio-stream",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "wtransport",
 ]
 
 [[package]]

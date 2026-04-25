@@ -1,6 +1,6 @@
 import { defineConfig } from "vitepress";
 
-const repoName = "xcode-canvas-web";
+const repoName = "SimDeck";
 const githubUrl = `https://github.com/DjDeveloperr/${repoName}`;
 
 export default defineConfig({

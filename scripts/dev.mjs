@@ -5,7 +5,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const SERVER_BIN = resolve(ROOT, "build/xcode-canvas-web");
+const SERVER_BIN = resolve(ROOT, "build/simdeck");
 const LOG_PATH = resolve(ROOT, "build/cli.log");
 const SERVER_PORT = "4310";
 
@@ -43,8 +43,8 @@ function isManagedCliProcess(pid) {
   const command = commandForPid(pid);
   return (
     command.includes(SERVER_BIN) ||
-    command.includes("xcode-canvas-web serve") ||
-    command.includes("xcode-canvas-web-bin")
+    command.includes("simdeck serve") ||
+    command.includes("simdeck-bin")
   );
 }
 

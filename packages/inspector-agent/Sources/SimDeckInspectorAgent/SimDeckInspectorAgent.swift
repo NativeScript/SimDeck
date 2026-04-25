@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 
-public final class XcodeCanvasInspectorAgent {
+public final class SimDeckInspectorAgent {
     public struct Configuration {
         public var port: UInt16
         public var portSearchLimit: UInt16
@@ -29,7 +29,7 @@ public final class XcodeCanvasInspectorAgent {
         public static let debugDefault = Configuration()
     }
 
-    public static let shared = XcodeCanvasInspectorAgent()
+    public static let shared = SimDeckInspectorAgent()
 
     private let snapshotter = ViewHierarchySnapshotter()
     private let interactionPerformer = ViewInteractionPerformer()
@@ -53,7 +53,7 @@ public final class XcodeCanvasInspectorAgent {
         let port = try server.start()
         self.server = server
         self.activePort = port
-        NSLog("XcodeCanvasInspectorAgent listening on TCP port \(port)")
+        NSLog("SimDeckInspectorAgent listening on TCP port \(port)")
         return port
     }
 
@@ -70,7 +70,7 @@ public final class XcodeCanvasInspectorAgent {
 
     public func publishHierarchySnapshot(source: String, snapshotJSON: String) throws {
         let data = Data(snapshotJSON.utf8)
-        let snapshot = try JSONDecoder.xcwInspector.decode(JSONValue.self, from: data)
+        let snapshot = try JSONDecoder.simDeckInspector.decode(JSONValue.self, from: data)
         let source = source.trimmingCharacters(in: .whitespacesAndNewlines)
         let published = PublishedHierarchySnapshot(
             source: source.isEmpty ? "app" : source,
@@ -108,7 +108,7 @@ public final class XcodeCanvasInspectorAgent {
     private func handle(_ data: Data, respond: @escaping (Data) -> Void) {
         let request: InspectorRequest
         do {
-            request = try JSONDecoder.xcwInspector.decode(InspectorRequest.self, from: data)
+            request = try JSONDecoder.simDeckInspector.decode(InspectorRequest.self, from: data)
         } catch {
             respond(InspectorProtocol.failure(id: nil, InspectorFailure.invalidRequest("Request must be a JSON object with id, method, and optional params.")))
             return
@@ -146,14 +146,14 @@ public final class XcodeCanvasInspectorAgent {
             if params.string("source") != "uikit", let publishedHierarchySnapshot {
                 return try enrichPublishedHierarchySnapshot(publishedHierarchySnapshot)
             }
-            return try xcwJSONValue(snapshotter.snapshot(includeHidden: includeHidden, maxDepth: maxDepth))
+            return try simDeckJSONValue(snapshotter.snapshot(includeHidden: includeHidden, maxDepth: maxDepth))
 
         case "View.get":
             let id = try requiredString("id", in: params)
             guard let view = snapshotter.view(withId: id) else {
                 throw InspectorFailure.targetNotFound(id)
             }
-            return try xcwJSONValue(snapshotter.node(for: view, includeHidden: true, maxDepth: params.int("maxDepth"), depth: 0))
+            return try simDeckJSONValue(snapshotter.node(for: view, includeHidden: true, maxDepth: params.int("maxDepth"), depth: 0))
 
         case "View.hitTest":
             let point = try point(in: params)
@@ -161,7 +161,7 @@ public final class XcodeCanvasInspectorAgent {
                 return .object(["view": .null])
             }
             return .object([
-                "view": try xcwJSONValue(snapshotter.node(for: view, includeHidden: true, maxDepth: params.int("maxDepth") ?? 2, depth: 0)),
+                "view": try simDeckJSONValue(snapshotter.node(for: view, includeHidden: true, maxDepth: params.int("maxDepth") ?? 2, depth: 0)),
             ])
 
         case "View.describeAtPoint":
@@ -206,7 +206,7 @@ public final class XcodeCanvasInspectorAgent {
             "bundleIdentifier": .string(bundle.bundleIdentifier ?? ""),
             "bundleName": .string(bundle.object(forInfoDictionaryKey: "CFBundleName") as? String ?? ""),
             "displayScale": .number(Double(screen.scale)),
-            "screenBounds": try xcwJSONValue(InspectorRect(screen.bounds)),
+            "screenBounds": try simDeckJSONValue(InspectorRect(screen.bounds)),
             "coordinateSpace": .string("screen-points"),
             "methods": .array(InspectorProtocol.methods.map(JSONValue.string)),
             "appHierarchy": .object([
@@ -216,7 +216,7 @@ public final class XcodeCanvasInspectorAgent {
             ]),
             "swiftUI": .object([
                 "automaticHostDetection": .bool(true),
-                "tagModifier": .string("View.xcwInspectorTag(_:id:metadata:)"),
+                "tagModifier": .string("View.simDeckInspectorTag(_:id:metadata:)"),
             ]),
         ])
     }
@@ -241,12 +241,12 @@ public final class XcodeCanvasInspectorAgent {
         var ancestors: [JSONValue] = []
         var current: UIView? = view
         while let item = current {
-            ancestors.append(try xcwJSONValue(snapshotter.node(for: item, includeHidden: true, maxDepth: 0, depth: 0)))
+            ancestors.append(try simDeckJSONValue(snapshotter.node(for: item, includeHidden: true, maxDepth: 0, depth: 0)))
             current = item.superview
         }
 
         return .object([
-            "view": try xcwJSONValue(snapshotter.node(for: view, includeHidden: true, maxDepth: 2, depth: 0)),
+            "view": try simDeckJSONValue(snapshotter.node(for: view, includeHidden: true, maxDepth: 2, depth: 0)),
             "ancestors": .array(ancestors),
         ])
     }

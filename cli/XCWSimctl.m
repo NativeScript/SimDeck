@@ -5,7 +5,7 @@
 #import "XCWPrivateSimulatorBooter.h"
 #import "XCWProcessRunner.h"
 
-static NSString * const XCWSimctlErrorDomain = @"XcodeCanvasWeb.Simctl";
+static NSString * const XCWSimctlErrorDomain = @"SimDeck.Simctl";
 
 static NSArray *XCWArrayPayload(id payload, NSString *nestedKey) {
     if ([payload isKindOfClass:[NSArray class]]) {
@@ -280,7 +280,7 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 }
 
 - (nullable NSData *)screenshotPNGForSimulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
-    NSString *filename = [NSString stringWithFormat:@"xcode-canvas-web-%@.png", NSUUID.UUID.UUIDString];
+    NSString *filename = [NSString stringWithFormat:@"simdeck-%@.png", NSUUID.UUID.UUIDString];
     NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:filename];
     XCWProcessResult *result = [self.class runSimctl:@[@"io", udid, @"screenshot", @"--type=png", path] error:error];
     if (result == nil) {

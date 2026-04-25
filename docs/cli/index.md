@@ -1,11 +1,11 @@
 # CLI
 
-The `xcode-canvas-web` binary is the only entrypoint SimDeck ships. It hosts the HTTP server, manages the launchd service, and exposes a small set of simulator-control subcommands that are convenient from scripts.
+The `simdeck` binary is the only entrypoint SimDeck ships. It hosts the HTTP server, manages the launchd service, and exposes a small set of simulator-control subcommands that are convenient from scripts.
 
 ## Synopsis
 
 ```sh
-xcode-canvas-web <COMMAND> [OPTIONS]
+simdeck <COMMAND> [OPTIONS]
 ```
 
 ## Top-level commands
@@ -27,7 +27,7 @@ Every subcommand returns an exit code that follows shell conventions: zero on su
 Most subcommands print JSON. This makes the CLI easy to consume from scripts:
 
 ```sh
-xcode-canvas-web list | jq '.simulators[] | select(.isBooted)'
+simdeck list | jq '.simulators[] | select(.isBooted)'
 ```
 
 Errors print a short human-readable message to stderr and a non-zero exit code. They do not print structured JSON for failure cases.

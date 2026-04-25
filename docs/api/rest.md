@@ -7,7 +7,7 @@ CORS is wide open (`Access-Control-Allow-Origin: *`) so you can call the API fro
 ## Conventions
 
 - Method casing follows REST conventions. `GET` for queries, `POST` for state changes.
-- Path parameters use `{name}` notation in this reference. UDIDs come from `GET /api/simulators` (or `xcode-canvas-web list`).
+- Path parameters use `{name}` notation in this reference. UDIDs come from `GET /api/simulators` (or `simdeck list`).
 - All control endpoints that mutate a simulator return the refreshed simulator metadata in `{ "simulator": ... }`.
 - Times are reported as ISO-8601 strings unless explicitly numeric.
 
@@ -301,7 +301,7 @@ For the full method semantics, see the [Inspector Protocol](/api/inspector-proto
 
 ### `GET /api/inspector/connect`
 
-Upgrades to a WebSocket. Used by the [`@nativescript/xcode-canvas-inspector`](/inspector/nativescript) runtime to register itself as an in-app inspector.
+Upgrades to a WebSocket. Used by the [`@nativescript/simdeck-inspector`](/inspector/nativescript) runtime to register itself as an in-app inspector.
 
 After connection the server sends `Inspector.getInfo` and waits for a response that includes a `processIdentifier`. Once registered, the server uses this socket as the preferred transport for `accessibility-tree` and `inspector/request` calls that target the same process.
 

@@ -3,7 +3,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
 
-static NSString * const XCWChromeRendererErrorDomain = @"XcodeCanvasWeb.ChromeRenderer";
+static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer";
 
 @implementation XCWChromeRenderer
 

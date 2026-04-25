@@ -10,8 +10,8 @@ There are currently no global flags. Every option is scoped to a subcommand.
 Pass `--help` to any subcommand to see the same flag list directly from the binary, including any flags that may have been added after this page was written:
 
 ```sh
-xcode-canvas-web serve --help
-xcode-canvas-web service on --help
+simdeck serve --help
+simdeck service on --help
 ```
 
 :::
@@ -73,7 +73,7 @@ Subcommands that take positionals expect them in the order shown:
 
 | Command    | Positionals         | Notes                                        |
 | ---------- | ------------------- | -------------------------------------------- |
-| `boot`     | `<udid>`            | Simulator UDID from `xcode-canvas-web list`. |
+| `boot`     | `<udid>`            | Simulator UDID from `simdeck list`.          |
 | `shutdown` | `<udid>`            |                                              |
 | `open-url` | `<udid> <url>`      | Any URL scheme accepted by `simctl openurl`. |
 | `launch`   | `<udid> <bundleId>` | App must already be installed.               |

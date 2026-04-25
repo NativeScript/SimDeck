@@ -1,16 +1,16 @@
-# NativeScript Xcode Canvas Inspector
+# NativeScript SimDeck Inspector
 
-Debug-only NativeScript runtime agent for `xcode-canvas-web`.
+Debug-only NativeScript runtime agent for `simdeck`.
 
 ```sh
-npm install @nativescript/xcode-canvas-inspector
+npm install @nativescript/simdeck-inspector
 ```
 
 ```ts
-import { startXcodeCanvasInspector } from "@nativescript/xcode-canvas-inspector";
+import { startSimDeckInspector } from "@nativescript/simdeck-inspector";
 
 if (__DEV__) {
-  startXcodeCanvasInspector({ port: 4310 });
+  startSimDeckInspector({ port: 4310 });
 }
 ```
 
@@ -33,6 +33,6 @@ It implements the same inspector methods used by the Swift debug framework:
 `View.getHierarchy` returns the NativeScript logical tree by default and falls
 back to raw UIKit when called with `{ "source": "uikit" }`.
 
-For Angular NativeScript apps, call `startXcodeCanvasInspector()` before
+For Angular NativeScript apps, call `startSimDeckInspector()` before
 `runNativeScriptAngularApp()`. The package installs a small compatibility shim
 for Angular 20 dev-mode template source locations on NativeScript views.
