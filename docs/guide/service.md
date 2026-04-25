@@ -1,6 +1,6 @@
 # Background Service
 
-Simdeck can install itself as a per-user `launchd` service so the server starts automatically at login and survives terminal closures, crashes, and reboots.
+SimDeck can install itself as a per-user `launchd` service so the server starts automatically at login and survives terminal closures, crashes, and reboots.
 
 The service runs under your user account, not as `root`. It can therefore reach private CoreSimulator APIs and the iOS Simulator just like an interactive shell session would.
 
@@ -76,7 +76,7 @@ Logs under `~/Library/Logs` are kept so you can review past output.
 
 ## Updating the service
 
-When you install a new version of Simdeck, the launchd service still points at the old binary path until you re-bootstrap it:
+When you install a new version of SimDeck, the launchd service still points at the old binary path until you re-bootstrap it:
 
 ```sh
 xcode-canvas-web service off

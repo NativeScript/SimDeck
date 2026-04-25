@@ -1,10 +1,10 @@
 # Installation
 
-Simdeck ships as a single npm package that contains the launcher, the client bundle, and a postinstall hook that compiles the native CLI on macOS.
+SimDeck ships as a single npm package that contains the launcher, the client bundle, and a postinstall hook that compiles the native CLI on macOS.
 
 ## Prerequisites
 
-Simdeck only runs on macOS. The native bridge links private `CoreSimulator` and `SimulatorKit` frameworks, so it cannot run on Linux or Windows.
+SimDeck only runs on macOS. The native bridge links private `CoreSimulator` and `SimulatorKit` frameworks, so it cannot run on Linux or Windows.
 
 | Requirement                        | Why                                                                                  |
 | ---------------------------------- | ------------------------------------------------------------------------------------ |
@@ -30,13 +30,13 @@ xcode-canvas-web --help
 ```
 
 ::: tip Future package name
-Simdeck is being renamed. The npm package will move from `xcode-canvas-web` to a new name once the rename lands; the install command will switch to:
+SimDeck is being renamed. The npm package will move from `xcode-canvas-web` to a new name once the rename lands; the install command will switch to:
 
 ```sh
 npm install -g simdeck
 ```
 
-Until then, the documentation refers to the product as **Simdeck** and the package/binary as `xcode-canvas-web`.
+Until then, the documentation refers to the product as **SimDeck** and the package/binary as `xcode-canvas-web`.
 :::
 
 ## Install from source

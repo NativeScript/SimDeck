@@ -1,6 +1,6 @@
 # VS Code Extension
 
-A bundled VS Code extension opens the Simdeck browser client inside an editor panel and auto-starts the local server when needed. The extension lives in `packages/vscode-extension/` and ships pre-bundled with the npm package.
+A bundled VS Code extension opens the SimDeck browser client inside an editor panel and auto-starts the local server when needed. The extension lives in `packages/vscode-extension/` and ships pre-bundled with the npm package.
 
 ## Install
 
@@ -39,7 +39,7 @@ All settings live under the `xcodeCanvasWeb.*` namespace in VS Code settings:
 
 | Setting                          | Default                 | Notes                                                                                                   |
 | -------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------- |
-| `xcodeCanvasWeb.serverUrl`       | `http://127.0.0.1:4310` | URL the webview loads. Change this to point at a remote Simdeck instance.                               |
+| `xcodeCanvasWeb.serverUrl`       | `http://127.0.0.1:4310` | URL the webview loads. Change this to point at a remote SimDeck instance.                               |
 | `xcodeCanvasWeb.cliPath`         | _empty_                 | Optional explicit path to the `xcode-canvas-web` CLI. Empty means: workspace `build/`, then `PATH`.     |
 | `xcodeCanvasWeb.port`            | `4310`                  | Port used when auto-starting the server.                                                                |
 | `xcodeCanvasWeb.bindAddress`     | `127.0.0.1`             | Bind address used when auto-starting the server.                                                        |
@@ -57,7 +57,7 @@ If none of those resolve, the extension surfaces an error in the output channel 
 
 ## Talking to a remote server
 
-Set `xcodeCanvasWeb.serverUrl` to any reachable Simdeck endpoint. The extension is purely a webview shell — it doesn't validate the URL, doesn't open WebTransport itself, and doesn't ship its own version of the React client. Whatever the server responds with is what you get.
+Set `xcodeCanvasWeb.serverUrl` to any reachable SimDeck endpoint. The extension is purely a webview shell — it doesn't validate the URL, doesn't open WebTransport itself, and doesn't ship its own version of the React client. Whatever the server responds with is what you get.
 
 For [LAN-reachable servers](/guide/lan-access), point the extension at `http://<advertise-host>:<port>` and disable `autoStartServer` so the extension doesn't try to spawn a local CLI.
 

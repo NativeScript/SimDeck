@@ -31,7 +31,7 @@ Serving client from /usr/local/lib/node_modules/xcode-canvas-web/client/dist
 
 ## `service on`
 
-Install Simdeck as a per-user `launchd` service. Same flags as `serve`:
+Install SimDeck as a per-user `launchd` service. Same flags as `serve`:
 
 ```sh
 xcode-canvas-web service on [--port <u16>] [--bind <ip>] [--advertise-host <host>]
@@ -94,7 +94,7 @@ xcode-canvas-web list
 }
 ```
 
-This is roughly equivalent to `xcrun simctl list devices --json`, but the output is filtered down to the fields Simdeck exposes through `GET /api/simulators`.
+This is roughly equivalent to `xcrun simctl list devices --json`, but the output is filtered down to the fields SimDeck exposes through `GET /api/simulators`.
 
 ## `boot`
 

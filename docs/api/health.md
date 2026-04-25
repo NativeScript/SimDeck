@@ -1,6 +1,6 @@
 # Health & Metrics
 
-Two endpoints expose every observable signal Simdeck collects: `GET /api/health` for the bootstrap surface and `GET /api/metrics` for the running counters.
+Two endpoints expose every observable signal SimDeck collects: `GET /api/health` for the bootstrap surface and `GET /api/metrics` for the running counters.
 
 ## `GET /api/health`
 

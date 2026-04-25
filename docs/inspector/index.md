@@ -1,6 +1,6 @@
 # Inspector Overview
 
-Simdeck blends three different ways to inspect what an iOS app is rendering:
+SimDeck blends three different ways to inspect what an iOS app is rendering:
 
 | Source                   | Coverage                                                              | When to use it                                                                                 |
 | ------------------------ | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
@@ -43,7 +43,7 @@ Every accessibility tree response includes:
 ## Choosing the right inspector
 
 - **You own the iOS app and write Swift / Objective-C.** Link the [Swift in-app agent](/inspector/swift). It exposes the most semantic data — UIView properties, SwiftUI probes, custom actions — and lets the browser client edit values in place.
-- **You ship a NativeScript app.** Use the [NativeScript runtime inspector](/inspector/nativescript). It connects outbound to the Simdeck server and publishes both the NativeScript logical tree and the underlying UIKit hierarchy.
+- **You ship a NativeScript app.** Use the [NativeScript runtime inspector](/inspector/nativescript). It connects outbound to the SimDeck server and publishes both the NativeScript logical tree and the underlying UIKit hierarchy.
 - **You can't link anything into the app.** Stick with [AXe](/inspector/accessibility). It only sees what the iOS accessibility stack exposes, but it works for every app.
 
 ## Editing properties

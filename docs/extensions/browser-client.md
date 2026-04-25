@@ -1,6 +1,6 @@
 # Browser Client
 
-The default UI Simdeck serves at `/` is a React app built with Vite. It lives at `client/` in this repo and is bundled into `client/dist/` for production. The Rust server serves the bundle as static assets.
+The default UI SimDeck serves at `/` is a React app built with Vite. It lives at `client/` in this repo and is bundled into `client/dist/` for production. The Rust server serves the bundle as static assets.
 
 You almost certainly don't need to know about the internals — the client just works. This page is for contributors and for anyone who wants to embed the same surface somewhere else.
 
@@ -42,7 +42,7 @@ client/
 
 | Folder                    | Responsibility                                                          |
 | ------------------------- | ----------------------------------------------------------------------- |
-| `api/`                    | Typed wrappers around the Simdeck REST API and shared TypeScript types. |
+| `api/`                    | Typed wrappers around the SimDeck REST API and shared TypeScript types. |
 | `features/simulators/`    | Sidebar list of simulators plus boot/shutdown affordances.              |
 | `features/viewport/`      | Frame canvas, chrome compositing, hit testing.                          |
 | `features/stream/`        | WebTransport reader, decoder workers, frame queueing.                   |
@@ -72,7 +72,7 @@ npm run dev
 This:
 
 - Builds the Rust CLI if it isn't built.
-- Stops any stale Simdeck server listening on `4310` or `4311`.
+- Stops any stale SimDeck server listening on `4310` or `4311`.
 - Starts the Rust server in the background, logging to `build/cli.log`.
 - Runs `vite` from `client/` against the local server, with hot-module reload.
 
@@ -103,4 +103,4 @@ The browser client is designed to live inside any container that can host a webv
 
 1. Point the host at `http://<simdeck-host>:<port>/`.
 2. Allow the host to talk to the same WebTransport endpoint exposed by the server.
-3. Optionally, gate the host behind your own auth — Simdeck assumes a trusted local network.
+3. Optionally, gate the host behind your own auth — SimDeck assumes a trusted local network.

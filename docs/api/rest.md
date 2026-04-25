@@ -1,6 +1,6 @@
 # REST Endpoints
 
-The Simdeck server exposes one REST API over plain HTTP. Every route lives under `/api/`. Responses are JSON unless explicitly noted otherwise. Errors return a JSON body with `{"error": {"message": "..."}}` and an appropriate HTTP status.
+The SimDeck server exposes one REST API over plain HTTP. Every route lives under `/api/`. Responses are JSON unless explicitly noted otherwise. Errors return a JSON body with `{"error": {"message": "..."}}` and an appropriate HTTP status.
 
 CORS is wide open (`Access-Control-Allow-Origin: *`) so you can call the API from any browser tab on the same network.
 
@@ -75,7 +75,7 @@ Required fields: `clientId` and `kind`. Every other field is optional but typed 
 
 ### `GET /api/simulators`
 
-Returns every simulator known to the native bridge, enriched with any session state Simdeck has attached:
+Returns every simulator known to the native bridge, enriched with any session state SimDeck has attached:
 
 ```json
 {

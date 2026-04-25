@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Most Simdeck issues fall into one of three buckets: simulator boot, video stream, or accessibility/inspector. This page lists the symptoms and fixes for the ones we hit most often.
+Most SimDeck issues fall into one of three buckets: simulator boot, video stream, or accessibility/inspector. This page lists the symptoms and fixes for the ones we hit most often.
 
 ## Server won't start
 
@@ -18,7 +18,7 @@ Or find what's holding it:
 lsof -nP -iTCP:4310 -sTCP:LISTEN
 ```
 
-If the holder is an old Simdeck instance, the bundled `npm run dev` script auto-kills stale listeners on `4310` and `4311` for you.
+If the holder is an old SimDeck instance, the bundled `npm run dev` script auto-kills stale listeners on `4310` and `4311` for you.
 
 ### `xcode-canvas-web is not built yet`
 
@@ -48,7 +48,7 @@ The native bridge falls back to `xcrun simctl boot` when private CoreSimulator A
 xcrun simctl boot <udid>
 ```
 
-If `simctl` succeeds but Simdeck still fails, capture the server log and file an issue.
+If `simctl` succeeds but SimDeck still fails, capture the server log and file an issue.
 
 ### CoreSimulator service unhealthy
 

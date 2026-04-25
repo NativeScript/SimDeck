@@ -1,6 +1,6 @@
 # LAN Access
 
-Simdeck binds to `127.0.0.1` by default. You can move it to a LAN-reachable interface so other devices on your network — another Mac, an iPad, a phone — can stream the simulator.
+SimDeck binds to `127.0.0.1` by default. You can move it to a LAN-reachable interface so other devices on your network — another Mac, an iPad, a phone — can stream the simulator.
 
 ## Bind to all interfaces
 
@@ -14,7 +14,7 @@ Both the HTTP server and the WebTransport server bind to the requested address. 
 
 ## Advertise the right host
 
-WebTransport needs a hostname or IP that matches the certificate the server generates. By default Simdeck advertises `localhost`, which only works for browsers running on the same Mac.
+WebTransport needs a hostname or IP that matches the certificate the server generates. By default SimDeck advertises `localhost`, which only works for browsers running on the same Mac.
 
 Tell the server what host to advertise to remote clients:
 
@@ -72,19 +72,19 @@ Restarting the server invalidates the previous certificate. Open clients reconne
 
 ## Authentication and security
 
-Simdeck assumes a trusted local network. The HTTP API has no built-in authentication and the WebTransport endpoint accepts any client that knows the URL.
+SimDeck assumes a trusted local network. The HTTP API has no built-in authentication and the WebTransport endpoint accepts any client that knows the URL.
 
 Recommended practice for shared networks:
 
-- Run Simdeck only on networks you control.
+- Run SimDeck only on networks you control.
 - Combine with macOS Application Firewall to restrict inbound access to known peers.
 - For shared NativeScript inspectors, set an `authToken` when starting the [Swift in-app agent](/inspector/swift#auth-token) so app-side requests must include the token.
 
-A roadmap item is to add an optional bearer-token header for the HTTP API and WebTransport `?token=` parameter. Until that lands, treat Simdeck like any unauthenticated dev tool.
+A roadmap item is to add an optional bearer-token header for the HTTP API and WebTransport `?token=` parameter. Until that lands, treat SimDeck like any unauthenticated dev tool.
 
 ## Quick checklist
 
-To make a Simdeck server reachable from another device:
+To make a SimDeck server reachable from another device:
 
 1. `--bind 0.0.0.0` (or `--bind ::`).
 2. `--advertise-host <reachable-host-or-ip>`.

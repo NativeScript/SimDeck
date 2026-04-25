@@ -1,6 +1,6 @@
 # Video Pipeline
 
-Simdeck streams the iOS Simulator over WebTransport using a binary frame protocol. This page walks through the encoder choices, the keyframe handshake, and the metrics you can use to tune them.
+SimDeck streams the iOS Simulator over WebTransport using a binary frame protocol. This page walks through the encoder choices, the keyframe handshake, and the metrics you can use to tune them.
 
 ## Codec selection
 
