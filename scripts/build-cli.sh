@@ -21,6 +21,20 @@ cat > "$OUTPUT" <<EOF
 set -euo pipefail
 
 SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+if [[ "\${1:-}" == "serve" ]]; then
+  while true; do
+    set +e
+    "\$SCRIPT_DIR/$(basename "$OUTPUT_BIN")" "\$@"
+    child_status=\$?
+    set -e
+    if [[ "\$child_status" == "75" ]]; then
+      sleep 0.5
+      continue
+    fi
+    exit "\$child_status"
+  done
+fi
+
 exec "\$SCRIPT_DIR/$(basename "$OUTPUT_BIN")" "\$@"
 EOF
 chmod +x "$OUTPUT"

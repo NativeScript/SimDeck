@@ -9,6 +9,10 @@ static NSString * const XCWAccessibilityBridgeErrorDomain = @"XcodeCanvasWeb.Acc
 static NSString * const XCWCoreSimulatorPath = @"/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator";
 static NSString * const XCWAccessibilityPlatformTranslationPath = @"/System/Library/PrivateFrameworks/AccessibilityPlatformTranslation.framework/AccessibilityPlatformTranslation";
 static const NSUInteger XCWAXMaxDepth = 80;
+static NSObject *XCWAXDeviceCacheLock = nil;
+static id XCWAXCachedServiceContext = nil;
+static id XCWAXCachedDeviceSet = nil;
+static NSMutableDictionary<NSString *, id> *XCWAXCachedDevicesByUDID = nil;
 
 typedef id _Nullable (^XCWAXTranslationCallback)(id request);
 
@@ -50,6 +54,19 @@ static NSString *XCWAXUDIDString(id device) {
 }
 
 static id XCWAXDeviceForUDID(NSString *udid, NSError **error) {
+    static dispatch_once_t cacheOnceToken;
+    dispatch_once(&cacheOnceToken, ^{
+        XCWAXDeviceCacheLock = [NSObject new];
+        XCWAXCachedDevicesByUDID = [NSMutableDictionary dictionary];
+    });
+
+    @synchronized (XCWAXDeviceCacheLock) {
+        id cachedDevice = XCWAXCachedDevicesByUDID[udid];
+        if (cachedDevice != nil) {
+            return cachedDevice;
+        }
+    }
+
     Class serviceContextClass = NSClassFromString(@"SimServiceContext");
     if (serviceContextClass == Nil) {
         if (error != NULL) {
@@ -58,35 +75,50 @@ static id XCWAXDeviceForUDID(NSString *udid, NSError **error) {
         return nil;
     }
 
-    NSError *serviceError = nil;
-    id contextAlloc = ((id(*)(id, SEL))objc_msgSend)(serviceContextClass, sel_registerName("alloc"));
-    id serviceContext = ((id(*)(id, SEL, id, long long, NSError **))objc_msgSend)(
-        contextAlloc,
-        sel_registerName("initWithDeveloperDir:connectionType:error:"),
-        nil,
-        0LL,
-        &serviceError
-    );
-    if (serviceContext == nil) {
-        if (error != NULL) {
-            *error = serviceError ?: XCWAXError(4, @"Unable to create a CoreSimulator service context.");
-        }
-        return nil;
-    }
+    @synchronized (XCWAXDeviceCacheLock) {
+        if (XCWAXCachedDeviceSet == nil) {
+            NSError *serviceError = nil;
+            id contextAlloc = ((id(*)(id, SEL))objc_msgSend)(serviceContextClass, sel_registerName("alloc"));
+            XCWAXCachedServiceContext = ((id(*)(id, SEL, id, long long, NSError **))objc_msgSend)(
+                contextAlloc,
+                sel_registerName("initWithDeveloperDir:connectionType:error:"),
+                nil,
+                0LL,
+                &serviceError
+            );
+            if (XCWAXCachedServiceContext == nil) {
+                if (error != NULL) {
+                    *error = serviceError ?: XCWAXError(4, @"Unable to create a CoreSimulator service context.");
+                }
+                return nil;
+            }
 
-    NSError *deviceSetError = nil;
-    id deviceSet = ((id(*)(id, SEL, NSError **))objc_msgSend)(serviceContext, sel_registerName("defaultDeviceSetWithError:"), &deviceSetError);
-    if (deviceSet == nil) {
-        if (error != NULL) {
-            *error = deviceSetError ?: XCWAXError(5, @"Unable to access the default CoreSimulator device set.");
+            NSError *deviceSetError = nil;
+            XCWAXCachedDeviceSet = ((id(*)(id, SEL, NSError **))objc_msgSend)(
+                XCWAXCachedServiceContext,
+                sel_registerName("defaultDeviceSetWithError:"),
+                &deviceSetError
+            );
+            if (XCWAXCachedDeviceSet == nil) {
+                XCWAXCachedServiceContext = nil;
+                if (error != NULL) {
+                    *error = deviceSetError ?: XCWAXError(5, @"Unable to access the default CoreSimulator device set.");
+                }
+                return nil;
+            }
         }
-        return nil;
-    }
 
-    NSArray *devices = ((id(*)(id, SEL))objc_msgSend)(deviceSet, sel_registerName("devices"));
-    for (id candidate in devices) {
-        if ([XCWAXUDIDString(candidate) isEqualToString:udid]) {
-            return candidate;
+        NSArray *devices = ((id(*)(id, SEL))objc_msgSend)(XCWAXCachedDeviceSet, sel_registerName("devices"));
+        for (id candidate in devices) {
+            NSString *candidateUDID = XCWAXUDIDString(candidate);
+            if (candidateUDID.length > 0) {
+                XCWAXCachedDevicesByUDID[candidateUDID] = candidate;
+            }
+        }
+
+        id device = XCWAXCachedDevicesByUDID[udid];
+        if (device != nil) {
+            return device;
         }
     }
 

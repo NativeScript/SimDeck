@@ -178,18 +178,12 @@ impl SimulatorSession {
     }
 
     pub fn snapshot(&self) -> serde_json::Value {
-        let native = self.inner.native.session_info().unwrap_or_else(|error| {
-            serde_json::json!({
-                "nativeStatsError": error.to_string(),
-            })
-        });
         serde_json::json!({
             "displayReady": self.inner.display_ready.load(Ordering::Relaxed),
             "displayStatus": self.inner.state.lock().unwrap().as_str(),
             "displayWidth": self.inner.display_width.load(Ordering::Relaxed),
             "displayHeight": self.inner.display_height.load(Ordering::Relaxed),
             "frameSequence": self.inner.frame_sequence.load(Ordering::Relaxed),
-            "native": native,
         })
     }
 }

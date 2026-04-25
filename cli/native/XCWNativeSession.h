@@ -12,7 +12,6 @@ NS_ASSUME_NONNULL_BEGIN
                                 error:(NSError * _Nullable * _Nullable)error NS_DESIGNATED_INITIALIZER;
 
 - (BOOL)start:(NSError * _Nullable * _Nullable)error;
-- (NSDictionary *)sessionInfoRepresentation;
 - (void)requestRefresh;
 - (BOOL)sendTouchAtX:(double)x
                    y:(double)y

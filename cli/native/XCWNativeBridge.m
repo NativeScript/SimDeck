@@ -518,13 +518,6 @@ bool xcw_native_session_start(void *handle, char **error_message) {
     }
 }
 
-char *xcw_native_session_info(void *handle, char **error_message) {
-    @autoreleasepool {
-        NSDictionary *info = [XCWNativeSessionFromHandle(handle) sessionInfoRepresentation];
-        return XCWJSONStringFromObject(info ?: @{}, error_message);
-    }
-}
-
 void xcw_native_session_request_refresh(void *handle) {
     @autoreleasepool {
         [XCWNativeSessionFromHandle(handle) requestRefresh];

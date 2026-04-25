@@ -148,10 +148,6 @@ unsafe extern "C" {
     ) -> *mut c_void;
     pub fn xcw_native_session_destroy(handle: *mut c_void);
     pub fn xcw_native_session_start(handle: *mut c_void, error_message: *mut *mut c_char) -> bool;
-    pub fn xcw_native_session_info(
-        handle: *mut c_void,
-        error_message: *mut *mut c_char,
-    ) -> *mut c_char;
     pub fn xcw_native_session_request_refresh(handle: *mut c_void);
     pub fn xcw_native_session_send_touch(
         handle: *mut c_void,

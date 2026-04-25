@@ -4,7 +4,13 @@ use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
 use std::ffi::{c_void, CStr, CString};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
+const RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV: &str = "XCW_RESTART_ON_CORE_SIMULATOR_MISMATCH";
+
+static RECOVERABLE_RESTART_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Simulator {
@@ -518,15 +524,6 @@ unsafe impl Send for NativeSession {}
 unsafe impl Sync for NativeSession {}
 
 impl NativeSession {
-    pub fn session_info(&self) -> Result<serde_json::Value, AppError> {
-        let json = unsafe {
-            let mut error = ptr::null_mut();
-            let raw = ffi::xcw_native_session_info(self.handle, &mut error);
-            string_from_raw(raw, error)?
-        };
-        serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))
-    }
-
     pub fn start(&self) -> Result<(), AppError> {
         unsafe {
             let mut error = ptr::null_mut();
@@ -719,5 +716,23 @@ unsafe fn take_error(raw: *mut i8) -> Option<AppError> {
     }
     let message = CStr::from_ptr(raw).to_string_lossy().into_owned();
     ffi::xcw_native_free_string(raw);
+    schedule_recoverable_restart_if_needed(&message);
     Some(AppError::native(message))
+}
+
+fn schedule_recoverable_restart_if_needed(message: &str) {
+    if std::env::var_os(RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV).is_none()
+        || !is_core_simulator_service_mismatch(message)
+        || RECOVERABLE_RESTART_SCHEDULED.swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+
+    eprintln!(
+        "CoreSimulator service mismatch detected; restarting xcode-canvas-web server process."
+    );
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_millis(100));
+        std::process::exit(RECOVERABLE_RESTART_EXIT_CODE);
+    });
 }

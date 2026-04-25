@@ -33,6 +33,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
 
+const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
+const RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV: &str = "XCW_RESTART_ON_CORE_SIMULATOR_MISMATCH";
+const SERVER_FD_RESTART_THRESHOLD: usize = 4096;
+
 #[derive(Parser)]
 #[command(name = "xcode-canvas-web")]
 #[command(bin_name = "xcode-canvas-web")]
@@ -881,6 +885,8 @@ fn serve_with_appkit(
     video_codec: VideoCodecMode,
 ) -> anyhow::Result<()> {
     std::env::set_var("XCW_VIDEO_CODEC", video_codec.as_env_value());
+    std::env::set_var(RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV, "1");
+    start_fd_pressure_watchdog();
     unsafe {
         ffi::xcw_native_initialize_app();
     }
@@ -911,6 +917,26 @@ fn serve_with_appkit(
             },
         }
     }
+}
+
+fn start_fd_pressure_watchdog() {
+    std::thread::spawn(|| loop {
+        std::thread::sleep(Duration::from_secs(1));
+        let Ok(fd_count) = open_fd_count() else {
+            continue;
+        };
+        if fd_count <= SERVER_FD_RESTART_THRESHOLD {
+            continue;
+        }
+        eprintln!(
+            "Open file descriptor count reached {fd_count}; restarting xcode-canvas-web server process."
+        );
+        std::process::exit(RECOVERABLE_RESTART_EXIT_CODE);
+    });
+}
+
+fn open_fd_count() -> io::Result<usize> {
+    fs::read_dir("/dev/fd").map(|entries| entries.count())
 }
 
 fn run_session_action_with_appkit<F>(

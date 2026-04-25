@@ -30,8 +30,6 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
     NSData *_latestKeyFrameDecoderConfig;
     CGSize _latestKeyFrameDimensions;
     NSUInteger _latestKeyFrameSequenceValue;
-    NSUInteger _displayFrameCount;
-    NSUInteger _manualRefreshFrameCount;
     BOOL _displayReadyValue;
     BOOL _didSignalReadiness;
 }
@@ -143,55 +141,6 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
     return hasFrame;
 }
 
-- (NSDictionary *)sessionInfoRepresentation {
-    __block NSDictionary *representation = nil;
-    dispatch_sync(_stateQueue, ^{
-        NSMutableDictionary *payload = [@{
-            @"displayReady": @(self->_displayReadyValue),
-            @"displayStatus": self->_displayStatusValue ?: @"",
-            @"displayWidth": @(self->_displaySizeValue.width),
-            @"displayHeight": @(self->_displaySizeValue.height),
-            @"frameSequence": @(self->_encodedFrameSequenceValue),
-            @"displayFrameCount": @(self->_displayFrameCount),
-            @"manualRefreshFrameCount": @(self->_manualRefreshFrameCount),
-            @"encoder": [self->_videoEncoder statsRepresentation],
-        } mutableCopy];
-        if (self->_latestKeyFrameCodec.length > 0) {
-            payload[@"latestKeyFrameCodec"] = self->_latestKeyFrameCodec;
-        }
-        if (self->_latestKeyFrameDecoderConfig.length > 0) {
-            payload[@"latestDecoderConfigBytes"] = @(self->_latestKeyFrameDecoderConfig.length);
-        }
-        representation = payload;
-    });
-    return representation;
-}
-
-- (nullable NSDictionary *)latestEncodedKeyFrameRepresentation {
-    __block NSDictionary *representation = nil;
-    dispatch_sync(_stateQueue, ^{
-        if (self->_latestKeyFrameData.length == 0) {
-            return;
-        }
-
-        NSMutableDictionary *payload = [@{
-            @"sampleData": self->_latestKeyFrameData,
-            @"frameSequence": @(self->_latestKeyFrameSequenceValue),
-            @"timestampUs": @(self->_latestKeyFrameTimestampUs),
-            @"width": @(self->_latestKeyFrameDimensions.width),
-            @"height": @(self->_latestKeyFrameDimensions.height),
-        } mutableCopy];
-        if (self->_latestKeyFrameCodec.length > 0) {
-            payload[@"codec"] = self->_latestKeyFrameCodec;
-        }
-        if (self->_latestKeyFrameDecoderConfig.length > 0) {
-            payload[@"decoderConfig"] = self->_latestKeyFrameDecoderConfig;
-        }
-        representation = payload;
-    });
-    return representation;
-}
-
 - (void)refreshCurrentFrame {
     CVPixelBufferRef pixelBuffer = [_displayBridge copyPixelBuffer];
     if (pixelBuffer == nil) {
@@ -200,7 +149,6 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
 
     CGSize displaySize = CGSizeMake((CGFloat)CVPixelBufferGetWidth(pixelBuffer), (CGFloat)CVPixelBufferGetHeight(pixelBuffer));
     dispatch_async(_stateQueue, ^{
-        self->_manualRefreshFrameCount += 1;
         self->_displaySizeValue = displaySize;
         self->_displayReadyValue = YES;
         self->_displayStatusValue = [NSString stringWithFormat:@"Private display ready (%.0fx%.0f)", displaySize.width, displaySize.height];
@@ -363,7 +311,6 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
 - (void)privateSimulatorDisplayBridge:(DFPrivateSimulatorDisplayBridge *)bridge didUpdateFrame:(CVPixelBufferRef)pixelBuffer {
     CGSize displaySize = CGSizeMake((CGFloat)CVPixelBufferGetWidth(pixelBuffer), (CGFloat)CVPixelBufferGetHeight(pixelBuffer));
     dispatch_async(_stateQueue, ^{
-        self->_displayFrameCount += 1;
         self->_displaySizeValue = displaySize;
         self->_displayReadyValue = YES;
         self->_displayStatusValue = [NSString stringWithFormat:@"Private display ready (%.0fx%.0f)", displaySize.width, displaySize.height];
@@ -393,7 +340,6 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
     if (pixelBuffer != nil) {
         CGSize displaySize = CGSizeMake((CGFloat)CVPixelBufferGetWidth(pixelBuffer), (CGFloat)CVPixelBufferGetHeight(pixelBuffer));
         dispatch_async(_stateQueue, ^{
-            self->_manualRefreshFrameCount += 1;
             self->_displaySizeValue = displaySize;
             self->_displayReadyValue = YES;
             self->_displayStatusValue = [NSString stringWithFormat:@"Private display ready (%.0fx%.0f)", displaySize.width, displaySize.height];
