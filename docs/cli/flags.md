@@ -1,6 +1,6 @@
 # Flags & Options
 
-A consolidated list of every flag accepted by the Simdeck CLI, grouped by where it applies.
+A consolidated list of every flag accepted by the SimDeck CLI, grouped by where it applies.
 
 ## Global flags
 
@@ -49,7 +49,7 @@ Bind address for both the HTTP server and the WebTransport server. Common values
 
 Hostname or IP that gets baked into the WebTransport URL template advertised at `GET /api/health`, and added to the certificate's Subject Alternative Names.
 
-If you bind to `0.0.0.0` and don't pass `--advertise-host`, Simdeck warns at startup because the default `localhost` won't work for remote clients.
+If you bind to `0.0.0.0` and don't pass `--advertise-host`, SimDeck warns at startup because the default `localhost` won't work for remote clients.
 
 ### `--client-root <path>`
 

@@ -1,6 +1,6 @@
 # Contributing
 
-Simdeck welcomes contributions. This page covers the toolchain, the layout, and the working rules to follow when proposing a change.
+SimDeck welcomes contributions. This page covers the toolchain, the layout, and the working rules to follow when proposing a change.
 
 ## Toolchain
 
@@ -150,4 +150,4 @@ When you change something in the repo that the docs already cover — a CLI flag
 
 ## License
 
-Simdeck is licensed under the Apache License 2.0. By contributing you agree to license your changes under the same terms.
+SimDeck is licensed under the Apache License 2.0. By contributing you agree to license your changes under the same terms.

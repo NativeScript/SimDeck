@@ -1,10 +1,10 @@
 # Accessibility (AXe)
 
-Simdeck's universal fallback inspector uses [AXe](https://github.com/cameroncooke/AXe), an open-source CLI that wraps the iOS Simulator accessibility APIs. It works against any simulator app — no SDK linking required — but only reports what the system accessibility stack exposes.
+SimDeck's universal fallback inspector uses [AXe](https://github.com/cameroncooke/AXe), an open-source CLI that wraps the iOS Simulator accessibility APIs. It works against any simulator app — no SDK linking required — but only reports what the system accessibility stack exposes.
 
 ## Install AXe
 
-Follow the AXe project's install instructions. The Simdeck server expects an `axe` binary on `PATH`:
+Follow the AXe project's install instructions. The SimDeck server expects an `axe` binary on `PATH`:
 
 ```sh
 which axe
@@ -58,7 +58,7 @@ For those, you need to link the [Swift in-app agent](/inspector/swift) or use th
 - **AXe is a separate process.** Each call spawns `axe` with an 8 second timeout. Repeated calls incur per-process startup cost.
 - **Foreground app only.** Like the iOS accessibility stack, AXe sees the foreground app at the time of the call. If you switch apps mid-call, the snapshot may straddle two processes.
 - **Coordinates are in UIKit points.** Multiply by `displayScale` (from the inspector metadata or the simulator's device profile) when correlating with pixel-space frames.
-- **Errors surface as plain text.** Failures are returned as JSON `{"error":{"message":"..."}}` from the Simdeck endpoint with HTTP `500`. The original AXe stderr is included verbatim.
+- **Errors surface as plain text.** Failures are returned as JSON `{"error":{"message":"..."}}` from the SimDeck endpoint with HTTP `500`. The original AXe stderr is included verbatim.
 
 ## Combining with in-app inspectors
 

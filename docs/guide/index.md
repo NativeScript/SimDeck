@@ -1,10 +1,10 @@
 # Introduction
 
-Simdeck is a local-first control plane for the iOS Simulator. It bundles a Rust HTTP server, a native Objective-C bridge for private CoreSimulator and SimulatorKit APIs, and a React client into a single CLI you can run on any modern Mac.
+SimDeck is a local-first control plane for the iOS Simulator. It bundles a Rust HTTP server, a native Objective-C bridge for private CoreSimulator and SimulatorKit APIs, and a React client into a single CLI you can run on any modern Mac.
 
 The goal is simple: turn a booted Simulator into a streamable, scriptable surface that any tool — a browser, VS Code, a NativeScript runtime, an automation script — can drive over plain HTTP.
 
-## Why Simdeck?
+## Why SimDeck?
 
 The default Simulator is great when it sits in front of you. It is much less great when:
 
@@ -14,11 +14,11 @@ The default Simulator is great when it sits in front of you. It is much less gre
 - You want to inspect a NativeScript or Swift app's view hierarchy without linking the Xcode debugger.
 - You want a single, predictable URL that always points at "the Simulator on this Mac".
 
-Simdeck addresses all of those by exposing one HTTP server, one WebTransport endpoint, and one CLI binary.
+SimDeck addresses all of those by exposing one HTTP server, one WebTransport endpoint, and one CLI binary.
 
 ## What's in the box
 
-Simdeck ships as a single npm package (`xcode-canvas-web`, soon to be renamed) that installs three things:
+SimDeck ships as a single npm package (`xcode-canvas-web`, soon to be renamed) that installs three things:
 
 1. **A native CLI server.** Rust + Objective-C, compiled on install. It serves the HTTP API and a self-signed WebTransport endpoint for live video frames.
 2. **A bundled React client.** Talks to the local server, renders a streamable Simulator surface, and ships the inspector UIs.
@@ -32,7 +32,7 @@ Optional companion packages:
 
 ## High-level architecture
 
-The repository splits cleanly along the layers Simdeck talks to:
+The repository splits cleanly along the layers SimDeck talks to:
 
 - **`server/`** holds the Rust HTTP server, WebTransport hub, inspector hub, and metrics. It serves the REST API at `/api/*`, live video at `/wt/simulators/{udid}`, and the inspector WebSocket at `/api/inspector/connect`.
 - **`cli/`** holds the Objective-C native bridge that links private `CoreSimulator` and `SimulatorKit` APIs. The Rust server calls into it through a narrow C ABI for boot, frame capture, encode, and HID input.

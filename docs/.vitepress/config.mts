@@ -4,7 +4,7 @@ const repoName = "xcode-canvas-web";
 const githubUrl = `https://github.com/DjDeveloperr/${repoName}`;
 
 export default defineConfig({
-  title: "Simdeck",
+  title: "SimDeck",
   description:
     "A local-first iOS Simulator control plane with a browser UI, REST API, and WebTransport video.",
   lang: "en-US",
@@ -15,7 +15,7 @@ export default defineConfig({
   head: [
     ["meta", { name: "theme-color", content: "#0a84ff" }],
     ["meta", { property: "og:type", content: "website" }],
-    ["meta", { property: "og:title", content: "Simdeck" }],
+    ["meta", { property: "og:title", content: "SimDeck" }],
     [
       "meta",
       {
@@ -34,7 +34,7 @@ export default defineConfig({
   ],
 
   themeConfig: {
-    siteTitle: "Simdeck",
+    siteTitle: "SimDeck",
 
     nav: [
       { text: "Guide", link: "/guide/", activeMatch: "/guide/" },
@@ -85,7 +85,7 @@ export default defineConfig({
           ],
         },
         {
-          text: "Operating Simdeck",
+          text: "Operating SimDeck",
           items: [
             { text: "Troubleshooting", link: "/guide/troubleshooting" },
             { text: "Contributing", link: "/contributing" },
@@ -169,7 +169,7 @@ export default defineConfig({
 
     footer: {
       message: "Released under the Apache-2.0 License.",
-      copyright: `Copyright © 2026 Simdeck contributors.`,
+      copyright: `Copyright © 2026 SimDeck contributors.`,
     },
 
     outline: {

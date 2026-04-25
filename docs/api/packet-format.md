@@ -1,6 +1,6 @@
 # Packet Format
 
-The Simdeck WebTransport video stream uses a small fixed-header binary packet format. Every packet has the same shape regardless of codec.
+The SimDeck WebTransport video stream uses a small fixed-header binary packet format. Every packet has the same shape regardless of codec.
 
 ## Layout
 

@@ -1,6 +1,6 @@
 # Inspector Protocol
 
-In-app inspectors talk to Simdeck using a small newline-delimited JSON protocol called `XCWI/0.1`. Both transports (TCP and WebSocket) speak the same envelope and method set, so app-side code is interchangeable between them.
+In-app inspectors talk to SimDeck using a small newline-delimited JSON protocol called `XCWI/0.1`. Both transports (TCP and WebSocket) speak the same envelope and method set, so app-side code is interchangeable between them.
 
 ## Transports
 
@@ -18,7 +18,7 @@ The agent also advertises Bonjour service type `_xcwinspector._tcp`.
 
 ### WebSocket via the server
 
-NativeScript apps connect outbound to the Simdeck server:
+NativeScript apps connect outbound to the SimDeck server:
 
 ```text
 GET /api/inspector/connect
@@ -79,7 +79,7 @@ All point input and `frameInScreen` values use UIKit screen points, **not pixels
 
 ## Methods
 
-The full method list. The Simdeck HTTP proxy at `POST /api/simulators/{udid}/inspector/request` only allows a curated subset (see [REST endpoints](/api/rest#post-api-simulators-udid-inspector-request)); direct TCP/WebSocket clients can call any of them.
+The full method list. The SimDeck HTTP proxy at `POST /api/simulators/{udid}/inspector/request` only allows a curated subset (see [REST endpoints](/api/rest#post-api-simulators-udid-inspector-request)); direct TCP/WebSocket clients can call any of them.
 
 ### `Runtime.ping`
 
@@ -260,7 +260,7 @@ Text("Continue")
 
 ## Allowed proxy methods
 
-When you call the inspector via `POST /api/simulators/{udid}/inspector/request`, the Simdeck server enforces an allow-list to keep the HTTP surface small:
+When you call the inspector via `POST /api/simulators/{udid}/inspector/request`, the SimDeck server enforces an allow-list to keep the HTTP surface small:
 
 - `Runtime.ping`
 - `View.get`

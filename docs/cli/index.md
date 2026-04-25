@@ -1,6 +1,6 @@
 # CLI
 
-The `xcode-canvas-web` binary is the only entrypoint Simdeck ships. It hosts the HTTP server, manages the launchd service, and exposes a small set of simulator-control subcommands that are convenient from scripts.
+The `xcode-canvas-web` binary is the only entrypoint SimDeck ships. It hosts the HTTP server, manages the launchd service, and exposes a small set of simulator-control subcommands that are convenient from scripts.
 
 ## Synopsis
 

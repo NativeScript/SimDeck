@@ -1,10 +1,10 @@
 # Architecture
 
-Simdeck is intentionally split into a small number of clearly-scoped layers. Every layer has a single concern and a single owner directory in the repo.
+SimDeck is intentionally split into a small number of clearly-scoped layers. Every layer has a single concern and a single owner directory in the repo.
 
 ## High-level layout
 
-Simdeck has three layers stacked between the browser and the iOS Simulator:
+SimDeck has three layers stacked between the browser and the iOS Simulator:
 
 1. **Browser / VS Code** runs the React client from `client/`. It speaks HTTP for control and WebTransport for live video, both served by the Rust server.
 2. **The Rust server** (`server/`, built on `axum` + `tokio`) owns REST routes (`api/`), the WebTransport hub and packet codec (`transport/`), the inspector WebSocket hub (`inspector.rs`), the per-UDID session registry (`simulators/`), metrics, log streaming, and the `launchd` service installer.
@@ -104,13 +104,13 @@ The server discovers which inspectors are reachable for a given Simulator and su
 
 ## Process model
 
-Simdeck stays in one OS process. The Rust binary:
+SimDeck stays in one OS process. The Rust binary:
 
 1. Calls `xcw_native_initialize_app()` so AppKit creates an `NSApplication` on the main thread.
 2. Spawns a tokio runtime on a worker thread that owns the HTTP server, WebTransport server, inspector hub, and registry.
 3. Spins the AppKit main loop in 50 ms slices on the main thread to dispatch display and HID callbacks.
 
-`launchctl bootstrap` is the only sub-process Simdeck launches itself, and only when you opt into the [background service](/guide/service).
+`launchctl bootstrap` is the only sub-process SimDeck launches itself, and only when you opt into the [background service](/guide/service).
 
 ## Working rules
 

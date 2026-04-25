@@ -11,7 +11,7 @@ These SVGs are used by the feature grid in [`docs/index.md`](../../index.md). Th
 
 After downloading, two small tweaks are applied:
 
-1. `stroke="currentColor"` → `stroke="#0a84ff"` so the icon picks up the Simdeck accent color in both light and dark themes (VitePress renders feature icons via `<img>`, which doesn't inherit the page color).
+1. `stroke="currentColor"` → `stroke="#0a84ff"` so the icon picks up the SimDeck accent color in both light and dark themes (VitePress renders feature icons via `<img>`, which doesn't inherit the page color).
 2. `stroke-width="2"` → `stroke-width="1.75"` for a slightly lighter feel at small sizes.
 
 ## Adding a new icon

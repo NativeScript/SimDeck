@@ -1,6 +1,6 @@
 # NativeScript Runtime Inspector
 
-`@nativescript/xcode-canvas-inspector` is the runtime that connects a NativeScript app's view hierarchy to the Simdeck server without linking the Swift inspector framework. It implements the same [Inspector Protocol](/api/inspector-protocol) as the Swift agent but ships as a TypeScript package and runs entirely inside the NativeScript runtime.
+`@nativescript/xcode-canvas-inspector` is the runtime that connects a NativeScript app's view hierarchy to the SimDeck server without linking the Swift inspector framework. It implements the same [Inspector Protocol](/api/inspector-protocol) as the Swift agent but ships as a TypeScript package and runs entirely inside the NativeScript runtime.
 
 The package source lives at `packages/nativescript-inspector/` in this repo.
 
@@ -27,7 +27,7 @@ if (__DEV__) {
 ```
 
 ::: tip Port semantics
-`port` here is the **Simdeck server port**, not a per-app inspector port. NativeScript apps do not need to choose a unique local inspector port — they connect outbound to the server's WebSocket hub.
+`port` here is the **SimDeck server port**, not a per-app inspector port. NativeScript apps do not need to choose a unique local inspector port — they connect outbound to the server's WebSocket hub.
 :::
 
 ### NativeScript + Angular
@@ -64,11 +64,11 @@ Each NativeScript node carries:
 - `nativeScript` — NativeScript-specific metadata (CSS class names, IDs, bindings).
 - `sourceLocation` — file/line/column when source maps are available.
 
-When the in-app NativeScript inspector is the source, the Simdeck server returns `"source": "nativescript"` on the accessibility tree response and surfaces the matching `bundleIdentifier`, `processIdentifier`, and `displayScale` in the `inspector` block.
+When the in-app NativeScript inspector is the source, the SimDeck server returns `"source": "nativescript"` on the accessibility tree response and surfaces the matching `bundleIdentifier`, `processIdentifier`, and `displayScale` in the `inspector` block.
 
 ## Connection model
 
-The runtime opens a WebSocket from the simulator app to the Simdeck server:
+The runtime opens a WebSocket from the simulator app to the SimDeck server:
 
 ```text
 ws://127.0.0.1:4310/api/inspector/connect
@@ -134,7 +134,7 @@ With that in place, hierarchy nodes carry entries like:
 }
 ```
 
-The Simdeck browser client renders the file path inline so you can jump straight to source.
+The SimDeck browser client renders the file path inline so you can jump straight to source.
 
 ## Stopping the inspector
 
@@ -148,4 +148,4 @@ This closes the WebSocket and stops responding to inspector requests. Subsequent
 
 ## Coexistence with the Swift agent
 
-If both the Swift in-app inspector agent and the NativeScript runtime are present in the same app, the Simdeck server prefers the NativeScript runtime because it can publish the framework-level hierarchy. Direct TCP clients of the Swift agent are unaffected.
+If both the Swift in-app inspector agent and the NativeScript runtime are present in the same app, the SimDeck server prefers the NativeScript runtime because it can publish the framework-level hierarchy. Direct TCP clients of the Swift agent are unaffected.

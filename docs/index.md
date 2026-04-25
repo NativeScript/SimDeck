@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: Simdeck
+  name: SimDeck
   text: Local iOS Simulator control plane
   tagline: A Rust server, native bridge, and browser client that turn the iOS Simulator into a streamable, scriptable surface for everything from VS Code to NativeScript apps.
   actions:
@@ -10,7 +10,7 @@ hero:
       text: Get Started
       link: /guide/quick-start
     - theme: alt
-      text: Why Simdeck?
+      text: Why SimDeck?
       link: /guide/
     - theme: alt
       text: View on GitHub
@@ -40,7 +40,7 @@ features:
       width: 28
       height: 28
     title: First-class inspectors
-    details: Choose between AXe accessibility snapshots, the Swift in-app inspector agent, or the NativeScript runtime inspector — Simdeck routes the right one for each request.
+    details: Choose between AXe accessibility snapshots, the Swift in-app inspector agent, or the NativeScript runtime inspector — SimDeck routes the right one for each request.
   - icon:
       src: /icons/puzzle.svg
       width: 28
@@ -57,9 +57,9 @@ features:
 
 <div class="vp-doc" style="max-width: 1152px; margin: 4rem auto 0; padding: 0 24px;">
 
-## What you can do with Simdeck
+## What you can do with SimDeck
 
-Simdeck packages a full simulator workflow into one cross-tool surface:
+SimDeck packages a full simulator workflow into one cross-tool surface:
 
 - **Stream a Simulator into a browser tab.** No more juggling Xcode windows or screen recordings.
 - **Drive Simulators from JavaScript.** A REST API plus the NativeScript inspector turn any iOS app into a programmable target.

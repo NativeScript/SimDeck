@@ -1,6 +1,6 @@
 # Swift In-App Inspector Agent
 
-`XcodeCanvasInspectorAgent` is a debug-only iOS Swift package that exposes a UIKit hierarchy and live property edits through the [`XCWI/0.1`](/api/inspector-protocol) protocol. Apps that link it for `Debug` builds can be inspected from the Simdeck browser client without going through the system accessibility stack.
+`XcodeCanvasInspectorAgent` is a debug-only iOS Swift package that exposes a UIKit hierarchy and live property edits through the [`XCWI/0.1`](/api/inspector-protocol) protocol. Apps that link it for `Debug` builds can be inspected from the SimDeck browser client without going through the system accessibility stack.
 
 The package source lives at `packages/inspector-agent/` in this repo.
 
@@ -59,7 +59,7 @@ func application(
 
 The agent listens on TCP `127.0.0.1:47370` by default. If that port is already in use it tries the next 32 ports and listens on the first free one. It also advertises Bonjour service type `_xcwinspector._tcp` so other tools can find it without probing.
 
-The Simdeck server discovers the agent for a given simulator by:
+The SimDeck server discovers the agent for a given simulator by:
 
 1. Probing TCP `47370–47402` on `127.0.0.1`.
 2. Calling `Inspector.getInfo` to read the agent's `processIdentifier`.
@@ -147,6 +147,6 @@ For multi-user development setups (shared simulator hosts on a LAN, CI rigs), se
 
 ## Compatibility with the NativeScript inspector
 
-The Swift agent and the NativeScript runtime inspector implement the same protocol on different transports. Anything that can talk `XCWI/0.1` over TCP can also talk it over the Simdeck WebSocket hub, and vice versa.
+The Swift agent and the NativeScript runtime inspector implement the same protocol on different transports. Anything that can talk `XCWI/0.1` over TCP can also talk it over the SimDeck WebSocket hub, and vice versa.
 
-The Simdeck server prefers connected NativeScript inspectors over Swift TCP agents when both are present for the same process. Direct TCP clients can pick whichever transport they prefer.
+The SimDeck server prefers connected NativeScript inspectors over Swift TCP agents when both are present for the same process. Direct TCP clients can pick whichever transport they prefer.
