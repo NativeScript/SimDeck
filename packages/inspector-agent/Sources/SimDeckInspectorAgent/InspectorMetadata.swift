@@ -1,7 +1,7 @@
 import ObjectiveC
 import UIKit
 
-public struct XcodeCanvasInspectorTagPayload: Codable, Equatable {
+public struct SimDeckInspectorTagPayload: Codable, Equatable {
     public var id: String?
     public var name: String
     public var metadata: [String: String]
@@ -16,17 +16,17 @@ public struct XcodeCanvasInspectorTagPayload: Codable, Equatable {
 private var inspectorTagPayloadKey: UInt8 = 0
 
 public extension UIView {
-    func xcwSetInspectorTag(id: String? = nil, name: String, metadata: [String: String] = [:]) {
-        xcwInspectorTagPayload = XcodeCanvasInspectorTagPayload(
+    func simDeckSetInspectorTag(id: String? = nil, name: String, metadata: [String: String] = [:]) {
+        simDeckInspectorTagPayload = SimDeckInspectorTagPayload(
             id: id,
             name: name,
             metadata: metadata
         )
     }
 
-    var xcwInspectorTagPayload: XcodeCanvasInspectorTagPayload? {
+    var simDeckInspectorTagPayload: SimDeckInspectorTagPayload? {
         get {
-            objc_getAssociatedObject(self, &inspectorTagPayloadKey) as? XcodeCanvasInspectorTagPayload
+            objc_getAssociatedObject(self, &inspectorTagPayloadKey) as? SimDeckInspectorTagPayload
         }
         set {
             objc_setAssociatedObject(
@@ -39,22 +39,22 @@ public extension UIView {
     }
 }
 
-final class XcodeCanvasInspectorProbeUIView: UIView {
-    var payload: XcodeCanvasInspectorTagPayload {
+final class SimDeckInspectorProbeUIView: UIView {
+    var payload: SimDeckInspectorTagPayload {
         didSet {
-            xcwInspectorTagPayload = payload
+            simDeckInspectorTagPayload = payload
             accessibilityIdentifier = payload.id
             accessibilityLabel = payload.name
         }
     }
 
-    init(payload: XcodeCanvasInspectorTagPayload) {
+    init(payload: SimDeckInspectorTagPayload) {
         self.payload = payload
         super.init(frame: .zero)
         isUserInteractionEnabled = false
         isAccessibilityElement = false
         backgroundColor = .clear
-        xcwInspectorTagPayload = payload
+        simDeckInspectorTagPayload = payload
         accessibilityIdentifier = payload.id
         accessibilityLabel = payload.name
     }

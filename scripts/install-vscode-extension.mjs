@@ -6,12 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const packagePath = path.join(
-  root,
-  "build",
-  "vscode",
-  "xcode-canvas-web-vscode.vsix",
-);
+const packagePath = path.join(root, "build", "vscode", "simdeck-vscode.vsix");
 
 if (!existsSync(packagePath)) {
   const packageResult = spawnSync(

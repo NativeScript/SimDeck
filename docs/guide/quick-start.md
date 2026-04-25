@@ -7,7 +7,7 @@ This guide walks you from a fresh install to a Simulator streaming in your brows
 After [installing](/guide/installation), launch the local server:
 
 ```sh
-xcode-canvas-web serve --port 4310
+simdeck serve --port 4310
 ```
 
 The server prints the HTTP and WebTransport URLs as it boots:
@@ -15,7 +15,7 @@ The server prints the HTTP and WebTransport URLs as it boots:
 ```text
 HTTP listening on http://127.0.0.1:4310
 WebTransport listening on https://127.0.0.1:4311/wt/simulators/{udid}
-Serving client from /usr/local/lib/node_modules/xcode-canvas-web/client/dist
+Serving client from /usr/local/lib/node_modules/simdeck/client/dist
 ```
 
 Two listeners come up:
@@ -44,11 +44,11 @@ On a cold boot the server has to launch the Simulator, attach the private displa
 You can drive simulators directly from the command line in addition to the browser:
 
 ```sh
-xcode-canvas-web list
-xcode-canvas-web boot <udid>
-xcode-canvas-web open-url <udid> https://example.com
-xcode-canvas-web launch <udid> com.apple.Preferences
-xcode-canvas-web shutdown <udid>
+simdeck list
+simdeck boot <udid>
+simdeck open-url <udid> https://example.com
+simdeck launch <udid> com.apple.Preferences
+simdeck shutdown <udid>
 ```
 
 `list` returns the same data the React client renders — including which simulators are booted and which have an attached private display session.

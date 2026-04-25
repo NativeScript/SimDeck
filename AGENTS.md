@@ -1,4 +1,4 @@
-# Xcode Canvas Web Agents Guide
+# SimDeck Agents Guide
 
 This repository is a local-first simulator control plane. The product goal is a native CLI server that can manage iOS simulators, expose an HTTP API, and serve a React web client that shows live simulator output in the browser.
 
@@ -6,7 +6,7 @@ This repository is a local-first simulator control plane. The product goal is a 
 
 - `cli/` is the native boundary.
 - `client/` is the browser UI.
-- `skills/xcode-canvas-web/SKILL.md` is the operator guide for using the tool from Codex.
+- `skills/simdeck/SKILL.md` is the operator guide for using the tool from Codex.
 - `scripts/` holds repeatable build entrypoints.
 - `docs/` is the public VitePress documentation site (deployed to GitHub Pages by `.github/workflows/docs.yml`).
 
@@ -80,58 +80,58 @@ Build the native CLI:
 ./scripts/build-cli.sh
 ```
 
-This now builds the Rust server in `server/` and copies the resulting binary to `build/xcode-canvas-web`.
+This now builds the Rust server in `server/` and copies the resulting binary to `build/simdeck`.
 
 Run the local server:
 
 ```sh
-./build/xcode-canvas-web serve --port 4310
+./build/simdeck serve --port 4310
 ```
 
 Use software H.264 when macOS screen recording starves the hardware encoder:
 
 ```sh
-./build/xcode-canvas-web serve --port 4310 --video-codec h264-software
+./build/simdeck serve --port 4310 --video-codec h264-software
 ```
 
 For LAN access:
 
 ```sh
-./build/xcode-canvas-web serve --port 4310 --bind 0.0.0.0 --advertise-host 192.168.1.50
+./build/simdeck serve --port 4310 --bind 0.0.0.0 --advertise-host 192.168.1.50
 ```
 
 Useful direct commands:
 
 ```sh
-./build/xcode-canvas-web list
-./build/xcode-canvas-web boot <udid>
-./build/xcode-canvas-web shutdown <udid>
-./build/xcode-canvas-web erase <udid>
-./build/xcode-canvas-web install <udid> /path/to/App.app
-./build/xcode-canvas-web uninstall <udid> com.example.App
-./build/xcode-canvas-web open-url <udid> https://example.com
-./build/xcode-canvas-web launch <udid> com.apple.Preferences
-./build/xcode-canvas-web pasteboard set <udid> "hello"
-./build/xcode-canvas-web pasteboard get <udid>
-./build/xcode-canvas-web screenshot <udid> --output screen.png
-./build/xcode-canvas-web describe-ui <udid>
-./build/xcode-canvas-web tap <udid> 120 240
-./build/xcode-canvas-web tap <udid> --label "Continue" --wait-timeout-ms 5000
-./build/xcode-canvas-web swipe <udid> 200 700 200 200
-./build/xcode-canvas-web gesture <udid> scroll-down
-./build/xcode-canvas-web pinch <udid> --start-distance 160 --end-distance 80
-./build/xcode-canvas-web rotate-gesture <udid> --radius 100 --degrees 90
-./build/xcode-canvas-web key-sequence <udid> --keycodes h,e,l,l,o
-./build/xcode-canvas-web key-combo <udid> --modifiers cmd --key a
-./build/xcode-canvas-web type <udid> "hello"
-./build/xcode-canvas-web button <udid> lock --duration-ms 1000
-./build/xcode-canvas-web home <udid>
+./build/simdeck list
+./build/simdeck boot <udid>
+./build/simdeck shutdown <udid>
+./build/simdeck erase <udid>
+./build/simdeck install <udid> /path/to/App.app
+./build/simdeck uninstall <udid> com.example.App
+./build/simdeck open-url <udid> https://example.com
+./build/simdeck launch <udid> com.apple.Preferences
+./build/simdeck pasteboard set <udid> "hello"
+./build/simdeck pasteboard get <udid>
+./build/simdeck screenshot <udid> --output screen.png
+./build/simdeck describe-ui <udid>
+./build/simdeck tap <udid> 120 240
+./build/simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
+./build/simdeck swipe <udid> 200 700 200 200
+./build/simdeck gesture <udid> scroll-down
+./build/simdeck pinch <udid> --start-distance 160 --end-distance 80
+./build/simdeck rotate-gesture <udid> --radius 100 --degrees 90
+./build/simdeck key-sequence <udid> --keycodes h,e,l,l,o
+./build/simdeck key-combo <udid> --modifiers cmd --key a
+./build/simdeck type <udid> "hello"
+./build/simdeck button <udid> lock --duration-ms 1000
+./build/simdeck home <udid>
 ```
 
 ## Expectations For Future Changes
 
 - If you add an API route, add the matching client affordance or document why it stays CLI-only.
-- If you change the CLI invocation shape, update `README.md` and `skills/xcode-canvas-web/SKILL.md` in the same pass.
+- If you change the CLI invocation shape, update `README.md` and `skills/simdeck/SKILL.md` in the same pass.
 - If you change a CLI flag, REST route, packet format, or inspector method, update the matching page under `docs/` in the same pass.
 - If you expand the private framework bridge, document the Xcode/runtime assumptions here.
 - If a feature depends on a booted simulator, fail with a clear JSON error instead of silently returning an empty asset.

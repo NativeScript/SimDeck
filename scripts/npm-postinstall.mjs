@@ -5,9 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 if (process.platform !== "darwin") {
-  console.warn(
-    "xcode-canvas-web only supports macOS. Skipping native CLI build.",
-  );
+  console.warn("simdeck only supports macOS. Skipping native CLI build.");
   process.exit(0);
 }
 

@@ -28,7 +28,7 @@ declare const WebSocket: any | undefined;
 
 type JSONObject = Record<string, unknown>;
 
-export interface XcodeCanvasInspectorOptions {
+export interface SimDeckInspectorOptions {
   host?: string;
   path?: string;
   port?: number;
@@ -66,7 +66,7 @@ const controlEventValueChanged = 1 << 12;
 const controlEventPrimaryActionTriggered = 1 << 13;
 const controlEventEditingChanged = 1 << 17;
 const angularSourceLocationAttribute = "data-ng-source-location";
-const uikitLastScript = Symbol("xcodeCanvasLastUIKitScript");
+const uikitLastScript = Symbol("simDeckLastUIKitScript");
 const defaultEditableProperties = [
   "alpha",
   "backgroundColor",
@@ -78,25 +78,25 @@ const defaultEditableProperties = [
   "userInteractionEnabled",
 ];
 
-let sharedInspector: XcodeCanvasNativeScriptInspector | null = null;
-const nativeScriptDebugAttributes = Symbol("xcodeCanvasDebugAttributes");
+let sharedInspector: SimDeckNativeScriptInspector | null = null;
+const nativeScriptDebugAttributes = Symbol("simDeckDebugAttributes");
 const fallbackUIKitLastScripts = new WeakMap<object, string>();
 let angularSourceLocationCaptureInstalled = false;
 
-export function startXcodeCanvasInspector(
-  options: XcodeCanvasInspectorOptions = {},
-): XcodeCanvasNativeScriptInspector {
+export function startSimDeckInspector(
+  options: SimDeckInspectorOptions = {},
+): SimDeckNativeScriptInspector {
   installAngularDebugAttributeShim();
   installAngularSourceLocationCaptureShim();
   if (sharedInspector) {
     return sharedInspector;
   }
-  sharedInspector = new XcodeCanvasNativeScriptInspector(options);
+  sharedInspector = new SimDeckNativeScriptInspector(options);
   sharedInspector.start();
   return sharedInspector;
 }
 
-export function stopXcodeCanvasInspector(): void {
+export function stopSimDeckInspector(): void {
   sharedInspector?.stop();
   sharedInspector = null;
 }
@@ -198,8 +198,8 @@ function installAngularSourceLocationCaptureShim(): void {
   };
 }
 
-export class XcodeCanvasNativeScriptInspector {
-  private readonly options: Required<XcodeCanvasInspectorOptions>;
+export class SimDeckNativeScriptInspector {
+  private readonly options: Required<SimDeckInspectorOptions>;
   private socket: InspectorSocket | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private polling = false;
@@ -210,7 +210,7 @@ export class XcodeCanvasNativeScriptInspector {
   private readonly objects = new Map<string, any>();
   private readonly uikitScriptsById = new Map<string, string>();
 
-  constructor(options: XcodeCanvasInspectorOptions = {}) {
+  constructor(options: SimDeckInspectorOptions = {}) {
     this.options = {
       host: options.host ?? "127.0.0.1",
       path: options.path ?? "/api/inspector/connect",

@@ -16,7 +16,7 @@ Underneath all of that is the iOS Simulator itself — `CoreSimulator` for lifec
 
 ### `server/` — Rust HTTP and WebTransport
 
-Owns the public CLI shape (`xcode-canvas-web serve`, `boot`, `shutdown`, …), the HTTP API, the WebTransport hub, the inspector hub, log streaming, and metrics.
+Owns the public CLI shape (`simdeck serve`, `boot`, `shutdown`, …), the HTTP API, the WebTransport hub, the inspector hub, log streaming, and metrics.
 
 Key modules:
 
@@ -31,7 +31,7 @@ Key modules:
 | `server/src/simulators/session.rs`     | Frame broadcast channel, keyframe gating, refresh requests.                            |
 | `server/src/metrics/counters.rs`       | Atomic counters and per-client stream stats accepted via `/api/client-stream-stats`.   |
 | `server/src/logs.rs`                   | `os_log` log streaming and filtering.                                                  |
-| `server/src/service.rs`                | `xcode-canvas-web service on/off` — generates and bootstraps a `LaunchAgents` plist.   |
+| `server/src/service.rs`                | `simdeck service on/off` — generates and bootstraps a `LaunchAgents` plist.            |
 
 The Rust server runs the tokio runtime on a worker thread while the AppKit main loop spins on the main thread. The native bridge needs the main loop to deliver display callbacks and HID events.
 
@@ -72,8 +72,8 @@ The client never depends on private APIs and never assumes anything not exposed 
 
 ### `packages/` — companion packages
 
-- **`packages/nativescript-inspector/`** ships `@nativescript/xcode-canvas-inspector`, a TypeScript runtime that connects from a NativeScript app to the server's WebSocket inspector hub. See [NativeScript Runtime](/inspector/nativescript).
-- **`packages/inspector-agent/`** ships `XcodeCanvasInspectorAgent`, a Swift Package you can link from a debug iOS app to expose its UIKit hierarchy. See [Swift In-App Agent](/inspector/swift).
+- **`packages/nativescript-inspector/`** ships `@nativescript/simdeck-inspector`, a TypeScript runtime that connects from a NativeScript app to the server's WebSocket inspector hub. See [NativeScript Runtime](/inspector/nativescript).
+- **`packages/inspector-agent/`** ships `SimDeckInspectorAgent`, a Swift Package you can link from a debug iOS app to expose its UIKit hierarchy. See [Swift In-App Agent](/inspector/swift).
 - **`packages/vscode-extension/`** is the VS Code extension that opens the browser client inside a webview panel and auto-starts the server.
 
 ## Data flow
@@ -97,7 +97,7 @@ Touch and keyboard events POST to `/api/simulators/{udid}/touch` and `/key`. The
 The accessibility tree endpoint blends three sources, in priority order:
 
 1. **NativeScript runtime inspector** — preferred when the foreground app has connected to `/api/inspector/connect` over WebSocket.
-2. **Swift in-app inspector agent** — used when the foreground app links the `XcodeCanvasInspectorAgent` Swift Package and listens on a TCP port discovered between `47370` and `47402`.
+2. **Swift in-app inspector agent** — used when the foreground app links the `SimDeckInspectorAgent` Swift Package and listens on a TCP port discovered between `47370` and `47402`.
 3. **AXe accessibility snapshot** — a final fallback that shells out to the `axe describe-ui` CLI. Always available as long as `axe` is on `PATH`.
 
 The server discovers which inspectors are reachable for a given Simulator and surfaces the available list in the `availableSources` field on every accessibility-tree response.

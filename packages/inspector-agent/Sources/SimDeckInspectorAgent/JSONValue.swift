@@ -127,7 +127,7 @@ extension Dictionary where Key == String, Value == JSONValue {
 }
 
 extension JSONEncoder {
-    static let xcwInspector: JSONEncoder = {
+    static let simDeckInspector: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes]
         return encoder
@@ -135,10 +135,10 @@ extension JSONEncoder {
 }
 
 extension JSONDecoder {
-    static let xcwInspector = JSONDecoder()
+    static let simDeckInspector = JSONDecoder()
 }
 
-func xcwJSONValue<T: Encodable>(_ value: T) throws -> JSONValue {
-    let data = try JSONEncoder.xcwInspector.encode(value)
-    return try JSONDecoder.xcwInspector.decode(JSONValue.self, from: data)
+func simDeckJSONValue<T: Encodable>(_ value: T) throws -> JSONValue {
+    let data = try JSONEncoder.simDeckInspector.encode(value)
+    return try JSONDecoder.simDeckInspector.decode(JSONValue.self, from: data)
 }

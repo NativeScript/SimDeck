@@ -9,11 +9,11 @@ const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
-const binaryPath = path.join(packageRoot, "build", "xcode-canvas-web-bin");
+const binaryPath = path.join(packageRoot, "build", "simdeck-bin");
 
 if (!existsSync(binaryPath)) {
   console.error(
-    "xcode-canvas-web is not built yet. Reinstall or rebuild the package so the native CLI is available.",
+    "simdeck is not built yet. Reinstall or rebuild the package so the native CLI is available.",
   );
   process.exit(1);
 }

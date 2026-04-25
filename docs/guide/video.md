@@ -15,7 +15,7 @@ The server can encode the simulator display in three modes, picked at startup wi
 You can switch at any time by restarting the server with a different flag:
 
 ```sh
-xcode-canvas-web serve --port 4310 --video-codec h264-software
+simdeck serve --port 4310 --video-codec h264-software
 ```
 
 The chosen codec is reported to clients in two places:

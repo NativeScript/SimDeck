@@ -2,11 +2,11 @@
 
 SimDeck blends three different ways to inspect what an iOS app is rendering:
 
-| Source                   | Coverage                                                              | When to use it                                                                                 |
-| ------------------------ | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| **AXe**                  | Any simulator app via the system accessibility stack.                 | Default fallback. Always available if [AXe](https://github.com/cameroncooke/AXe) is on `PATH`. |
-| **Swift in-app agent**   | Apps that link `XcodeCanvasInspectorAgent` in DEBUG.                  | Best for native iOS apps you control.                                                          |
-| **NativeScript runtime** | NativeScript apps that import `@nativescript/xcode-canvas-inspector`. | Best for NativeScript apps — exposes the logical view tree, not just UIKit.                    |
+| Source                   | Coverage                                                         | When to use it                                                                                 |
+| ------------------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| **AXe**                  | Any simulator app via the system accessibility stack.            | Default fallback. Always available if [AXe](https://github.com/cameroncooke/AXe) is on `PATH`. |
+| **Swift in-app agent**   | Apps that link `SimDeckInspectorAgent` in DEBUG.                 | Best for native iOS apps you control.                                                          |
+| **NativeScript runtime** | NativeScript apps that import `@nativescript/simdeck-inspector`. | Best for NativeScript apps — exposes the logical view tree, not just UIKit.                    |
 
 The HTTP API picks the most specific source available, falls back to the next one when something goes wrong, and tells the client which sources were available so the UI can offer a switch.
 

@@ -10,33 +10,29 @@ let serverProcess;
 let simulatorPanel;
 
 function activate(context) {
-  outputChannel = vscode.window.createOutputChannel("Xcode Canvas Web");
+  outputChannel = vscode.window.createOutputChannel("SimDeck");
 
   context.subscriptions.push(
     outputChannel,
-    vscode.commands.registerCommand(
-      "xcodeCanvasWeb.openSimulatorView",
-      async () => {
-        try {
-          const serverUrl = getServerUrl();
-          await ensureServerRunning(context, serverUrl);
-          openSimulatorPanel(serverUrl);
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          outputChannel.appendLine(message);
-          outputChannel.show(true);
-          void vscode.window.showErrorMessage(message);
-        }
-      },
-    ),
-    vscode.commands.registerCommand("xcodeCanvasWeb.stopServer", async () => {
+    vscode.commands.registerCommand("simdeck.openSimulatorView", async () => {
+      try {
+        const serverUrl = getServerUrl();
+        await ensureServerRunning(context, serverUrl);
+        openSimulatorPanel(serverUrl);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        outputChannel.appendLine(message);
+        outputChannel.show(true);
+        void vscode.window.showErrorMessage(message);
+      }
+    }),
+    vscode.commands.registerCommand("simdeck.stopServer", async () => {
       stopManagedServer();
       await vscode.window.showInformationMessage(
-        "Stopped the managed Xcode Canvas Web server.",
+        "Stopped the managed SimDeck server.",
       );
     }),
-    vscode.commands.registerCommand("xcodeCanvasWeb.showOutput", () => {
+    vscode.commands.registerCommand("simdeck.showOutput", () => {
       outputChannel.show(true);
     }),
     {
@@ -52,7 +48,7 @@ function deactivate() {
 }
 
 function getServerUrl() {
-  const config = vscode.workspace.getConfiguration("xcodeCanvasWeb");
+  const config = vscode.workspace.getConfiguration("simdeck");
   return config.get("serverUrl", "http://127.0.0.1:4310");
 }
 
@@ -61,11 +57,11 @@ async function ensureServerRunning(context, serverUrl) {
     return;
   }
 
-  const config = vscode.workspace.getConfiguration("xcodeCanvasWeb");
+  const config = vscode.workspace.getConfiguration("simdeck");
   const autoStart = config.get("autoStartServer", true);
   if (!autoStart) {
     throw new Error(
-      `Xcode Canvas Web is not reachable at ${serverUrl}. Enable auto-start or launch the server manually.`,
+      `SimDeck is not reachable at ${serverUrl}. Enable auto-start or launch the server manually.`,
     );
   }
 
@@ -81,16 +77,16 @@ async function ensureServerRunning(context, serverUrl) {
     await delay(250);
   }
 
-  throw new Error(`Timed out waiting for Xcode Canvas Web at ${serverUrl}.`);
+  throw new Error(`Timed out waiting for SimDeck at ${serverUrl}.`);
 }
 
 async function startServer(context) {
-  const config = vscode.workspace.getConfiguration("xcodeCanvasWeb");
+  const config = vscode.workspace.getConfiguration("simdeck");
   const cliPath = resolveCliPath(context, config.get("cliPath", ""));
   const port = String(config.get("port", 4310));
   const bindAddress = config.get("bindAddress", "127.0.0.1");
 
-  outputChannel.appendLine(`Starting Xcode Canvas Web using ${cliPath}`);
+  outputChannel.appendLine(`Starting SimDeck using ${cliPath}`);
 
   serverProcess = spawn(
     cliPath,
@@ -111,7 +107,7 @@ async function startServer(context) {
 
   serverProcess.on("exit", (code, signal) => {
     outputChannel.appendLine(
-      `Xcode Canvas Web server exited with ${signal ? `signal ${signal}` : `code ${code}`}.`,
+      `SimDeck server exited with ${signal ? `signal ${signal}` : `code ${code}`}.`,
     );
     serverProcess = undefined;
   });
@@ -128,7 +124,7 @@ function openSimulatorPanel(serverUrl) {
   }
 
   simulatorPanel = vscode.window.createWebviewPanel(
-    "xcodeCanvasWeb.simulator",
+    "simdeck.simulator",
     "Simulator View",
     vscode.ViewColumn.Beside,
     {
@@ -179,7 +175,7 @@ function getWebviewHtml(serverUrl) {
     </style>
   </head>
   <body>
-    <iframe src="${escapedUrl}" title="Xcode Canvas Web Simulator"></iframe>
+    <iframe src="${escapedUrl}" title="SimDeck Simulator"></iframe>
   </body>
 </html>`;
 }
@@ -191,7 +187,7 @@ function resolveCliPath(context, configuredPath) {
 
   const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
   for (const folder of workspaceFolders) {
-    const candidate = path.join(folder.uri.fsPath, "build", "xcode-canvas-web");
+    const candidate = path.join(folder.uri.fsPath, "build", "simdeck");
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -202,13 +198,13 @@ function resolveCliPath(context, configuredPath) {
     "..",
     "..",
     "build",
-    "xcode-canvas-web",
+    "simdeck",
   );
   if (fs.existsSync(extensionWorkspaceCandidate)) {
     return extensionWorkspaceCandidate;
   }
 
-  return "xcode-canvas-web";
+  return "simdeck";
 }
 
 function resolveWorkingDirectory(context) {

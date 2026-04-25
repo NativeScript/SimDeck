@@ -14,7 +14,7 @@ hero:
       link: /guide/
     - theme: alt
       text: View on GitHub
-      link: https://github.com/DjDeveloperr/xcode-canvas-web
+      link: https://github.com/DjDeveloperr/SimDeck
 
 features:
   - icon:

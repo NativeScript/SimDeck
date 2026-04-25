@@ -1,6 +1,6 @@
-# Xcode Canvas Web
+# SimDeck
 
-`xcode-canvas-web` is a local simulator control plane with a Rust server, native Objective-C simulator bridge, and a React client.
+`simdeck` is a local simulator control plane with a Rust server, native Objective-C simulator bridge, and a React client.
 
 - Rust product server in `server/`
 - native Objective-C simulator/private-framework bridge in `cli/`
@@ -32,7 +32,7 @@ Requirements:
 Install the published CLI globally:
 
 ```sh
-npm install -g xcode-canvas-web
+npm install -g simdeck
 ```
 
 The npm package builds the native Rust/Objective-C CLI during `postinstall`; it
@@ -44,16 +44,16 @@ Install the current local checkout globally from source:
 npm install -g .
 ```
 
-After a global install, use the `xcode-canvas-web` command directly. From a local checkout, you can also run `./build/xcode-canvas-web`.
+After a global install, use the `simdeck` command directly. From a local checkout, you can also run `./build/simdeck`.
 
 ## Documentation
 
-Full documentation lives at [djdeveloperr.github.io/xcode-canvas-web](https://djdeveloperr.github.io/xcode-canvas-web/), with guides, the CLI reference, the REST API, the WebTransport video pipeline, and the inspector protocols. The source for the site lives in [`docs/`](docs/) — preview it locally with `npm run docs:dev`.
+Full documentation lives at [djdeveloperr.github.io/SimDeck](https://djdeveloperr.github.io/SimDeck/), with guides, the CLI reference, the REST API, the WebTransport video pipeline, and the inspector protocols. The source for the site lives in [`docs/`](docs/) — preview it locally with `npm run docs:dev`.
 
 ## Run
 
 ```sh
-xcode-canvas-web serve --port 4310
+simdeck serve --port 4310
 ```
 
 Then open [http://127.0.0.1:4310](http://127.0.0.1:4310).
@@ -69,74 +69,74 @@ certificate hash, and packet version needed by the client.
 Enable the per-user background service with `launchd`:
 
 ```sh
-xcode-canvas-web service on --port 4310
+simdeck service on --port 4310
 ```
 
 Restart it:
 
 ```sh
-xcode-canvas-web service restart
+simdeck service restart
 ```
 
 Disable it:
 
 ```sh
-xcode-canvas-web service off
+simdeck service off
 ```
 
 Restart the CoreSimulator service layer when `simctl` reports a stale service
 version or the live display gets stuck before the first frame:
 
 ```sh
-xcode-canvas-web core-simulator restart
+simdeck core-simulator restart
 ```
 
 You can also start or stop the CoreSimulator service layer explicitly:
 
 ```sh
-xcode-canvas-web core-simulator start
-xcode-canvas-web core-simulator shutdown
+simdeck core-simulator start
+simdeck core-simulator shutdown
 ```
 
 ## CLI
 
 ```sh
-xcode-canvas-web list
-xcode-canvas-web boot <udid>
-xcode-canvas-web shutdown <udid>
-xcode-canvas-web erase <udid>
-xcode-canvas-web install <udid> /path/to/App.app
-xcode-canvas-web uninstall <udid> com.example.App
-xcode-canvas-web open-url <udid> https://example.com
-xcode-canvas-web launch <udid> com.apple.Preferences
-xcode-canvas-web toggle-appearance <udid>
-xcode-canvas-web pasteboard set <udid> "hello"
-xcode-canvas-web pasteboard get <udid>
-xcode-canvas-web screenshot <udid> --output screen.png
-xcode-canvas-web describe-ui <udid>
-xcode-canvas-web describe-ui <udid> --point 120,240
-xcode-canvas-web tap <udid> 120 240
-xcode-canvas-web tap <udid> --label "Continue" --wait-timeout-ms 5000
-xcode-canvas-web swipe <udid> 200 700 200 200
-xcode-canvas-web gesture <udid> scroll-down
-xcode-canvas-web pinch <udid> --start-distance 160 --end-distance 80
-xcode-canvas-web rotate-gesture <udid> --radius 100 --degrees 90
-xcode-canvas-web touch <udid> 0.5 0.5 --phase began --normalized
-xcode-canvas-web touch <udid> 120 240 --down --up --delay-ms 800
-xcode-canvas-web key <udid> enter
-xcode-canvas-web key-sequence <udid> --keycodes h,e,l,l,o
-xcode-canvas-web key-combo <udid> --modifiers cmd --key a
-xcode-canvas-web type <udid> "hello"
-xcode-canvas-web type <udid> --file message.txt
-xcode-canvas-web button <udid> lock --duration-ms 1000
-xcode-canvas-web batch <udid> --step "tap --label Continue" --step "type 'hello'"
-xcode-canvas-web dismiss-keyboard <udid>
-xcode-canvas-web home <udid>
-xcode-canvas-web app-switcher <udid>
-xcode-canvas-web rotate-left <udid>
-xcode-canvas-web rotate-right <udid>
-xcode-canvas-web chrome-profile <udid>
-xcode-canvas-web logs <udid> --seconds 30 --limit 200
+simdeck list
+simdeck boot <udid>
+simdeck shutdown <udid>
+simdeck erase <udid>
+simdeck install <udid> /path/to/App.app
+simdeck uninstall <udid> com.example.App
+simdeck open-url <udid> https://example.com
+simdeck launch <udid> com.apple.Preferences
+simdeck toggle-appearance <udid>
+simdeck pasteboard set <udid> "hello"
+simdeck pasteboard get <udid>
+simdeck screenshot <udid> --output screen.png
+simdeck describe-ui <udid>
+simdeck describe-ui <udid> --point 120,240
+simdeck tap <udid> 120 240
+simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
+simdeck swipe <udid> 200 700 200 200
+simdeck gesture <udid> scroll-down
+simdeck pinch <udid> --start-distance 160 --end-distance 80
+simdeck rotate-gesture <udid> --radius 100 --degrees 90
+simdeck touch <udid> 0.5 0.5 --phase began --normalized
+simdeck touch <udid> 120 240 --down --up --delay-ms 800
+simdeck key <udid> enter
+simdeck key-sequence <udid> --keycodes h,e,l,l,o
+simdeck key-combo <udid> --modifiers cmd --key a
+simdeck type <udid> "hello"
+simdeck type <udid> --file message.txt
+simdeck button <udid> lock --duration-ms 1000
+simdeck batch <udid> --step "tap --label Continue" --step "type 'hello'"
+simdeck dismiss-keyboard <udid>
+simdeck home <udid>
+simdeck app-switcher <udid>
+simdeck rotate-left <udid>
+simdeck rotate-right <udid>
+simdeck chrome-profile <udid>
+simdeck logs <udid> --seconds 30 --limit 200
 ```
 
 `describe-ui` uses the built-in private CoreSimulator accessibility bridge and
@@ -153,10 +153,10 @@ their NativeScript logical hierarchy plus raw UIKit backing views without
 linking the Swift inspector framework:
 
 ```ts
-import { startXcodeCanvasInspector } from "@nativescript/xcode-canvas-inspector";
+import { startSimDeckInspector } from "@nativescript/simdeck-inspector";
 
 if (__DEV__) {
-  startXcodeCanvasInspector({ port: 4310 });
+  startSimDeckInspector({ port: 4310 });
 }
 ```
 
@@ -173,7 +173,7 @@ Package the local VS Code extension from this checkout:
 npm run package:vscode-extension
 ```
 
-This writes `build/vscode/xcode-canvas-web-vscode.vsix`.
+This writes `build/vscode/simdeck-vscode.vsix`.
 
 Install that local package into VS Code:
 
@@ -182,11 +182,11 @@ npm run install:vscode-extension
 ```
 
 The install script packages the extension first if the `.vsix` does not exist,
-then runs the VS Code CLI with `--install-extension build/vscode/xcode-canvas-web-vscode.vsix --force`.
+then runs the VS Code CLI with `--install-extension build/vscode/simdeck-vscode.vsix --force`.
 If the `code` command is not available, install it from VS Code with
 `Shell Command: Install 'code' command in PATH`.
 
-Then run `Xcode Canvas Web: Open Simulator View` from the Command Palette. The extension will open the simulator
+Then run `SimDeck: Open Simulator View` from the Command Palette. The extension will open the simulator
 inside a VS Code panel and auto-start the local server when it is not already reachable.
 
 ## License

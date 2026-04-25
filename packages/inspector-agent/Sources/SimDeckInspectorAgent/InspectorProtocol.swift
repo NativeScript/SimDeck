@@ -104,7 +104,7 @@ enum InspectorProtocol {
     }
 
     private static func encode(_ value: [String: JSONValue]) throws -> Data {
-        var data = try JSONEncoder.xcwInspector.encode(value)
+        var data = try JSONEncoder.simDeckInspector.encode(value)
         data.append(0x0A)
         return data
     }

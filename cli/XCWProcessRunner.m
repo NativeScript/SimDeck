@@ -9,7 +9,7 @@
 
 extern char **environ;
 
-static NSString * const XCWProcessRunnerErrorDomain = @"XcodeCanvasWeb.ProcessRunner";
+static NSString * const XCWProcessRunnerErrorDomain = @"SimDeck.ProcessRunner";
 
 static void XCWCloseFD(int *fd) {
     if (fd != NULL && *fd >= 0) {

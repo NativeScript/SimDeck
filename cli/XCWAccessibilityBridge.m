@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 
-static NSString * const XCWAccessibilityBridgeErrorDomain = @"XcodeCanvasWeb.AccessibilityBridge";
+static NSString * const XCWAccessibilityBridgeErrorDomain = @"SimDeck.AccessibilityBridge";
 static NSString * const XCWCoreSimulatorPath = @"/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator";
 static NSString * const XCWAccessibilityPlatformTranslationPath = @"/System/Library/PrivateFrameworks/AccessibilityPlatformTranslation.framework/AccessibilityPlatformTranslation";
 static const NSUInteger XCWAXMaxDepth = 80;
@@ -155,7 +155,7 @@ static long long XCWAXDeviceState(id device) {
         return nil;
     }
     _translator = translator;
-    _callbackQueue = dispatch_queue_create("com.xcodecanvasweb.accessibility.callback", DISPATCH_QUEUE_SERIAL);
+    _callbackQueue = dispatch_queue_create("com.simdeck.accessibility.callback", DISPATCH_QUEUE_SERIAL);
     _devicesByToken = [NSMutableDictionary dictionary];
     return self;
 }

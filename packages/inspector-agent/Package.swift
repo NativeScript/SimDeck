@@ -3,20 +3,20 @@
 import PackageDescription
 
 let package = Package(
-    name: "XcodeCanvasInspectorAgent",
+    name: "SimDeckInspectorAgent",
     platforms: [
         .iOS(.v13)
     ],
     products: [
         .library(
-            name: "XcodeCanvasInspectorAgent",
-            targets: ["XcodeCanvasInspectorAgent"]
+            name: "SimDeckInspectorAgent",
+            targets: ["SimDeckInspectorAgent"]
         )
     ],
     targets: [
         .target(
-            name: "XcodeCanvasInspectorAgent",
-            path: "Sources/XcodeCanvasInspectorAgent"
+            name: "SimDeckInspectorAgent",
+            path: "Sources/SimDeckInspectorAgent"
         )
     ]
 )

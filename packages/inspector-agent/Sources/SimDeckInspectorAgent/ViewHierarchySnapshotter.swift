@@ -117,7 +117,7 @@ final class ViewHierarchySnapshotter {
     }
 
     private func findView(withId id: String, in root: UIView) -> UIView? {
-        if Self.id(for: root) == id || root.xcwInspectorTagPayload?.id == id {
+        if Self.id(for: root) == id || root.simDeckInspectorTagPayload?.id == id {
             return root
         }
 
@@ -146,11 +146,11 @@ final class ViewHierarchySnapshotter {
     }
 
     private func swiftUIInfo(for view: UIView, className: String) -> InspectorSwiftUIInfo? {
-        let payload = view.xcwInspectorTagPayload
+        let payload = view.simDeckInspectorTagPayload
         let isHost = className.contains("SwiftUI")
             || className.contains("UIHosting")
             || String(describing: type(of: view.next)).contains("UIHosting")
-        let isProbe = view is XcodeCanvasInspectorProbeUIView || payload != nil
+        let isProbe = view is SimDeckInspectorProbeUIView || payload != nil
 
         guard isHost || isProbe else {
             return nil

@@ -1,6 +1,6 @@
-# Xcode Canvas Inspector Agent
+# SimDeck Inspector Agent
 
-`XcodeCanvasInspectorAgent` is a debug-only iOS framework that an app can link to expose its UIKit view hierarchy over a small network protocol.
+`SimDeckInspectorAgent` is a debug-only iOS framework that an app can link to expose its UIKit view hierarchy over a small network protocol.
 
 It is intended to complement the generic accessibility inspector. Accessibility works for any simulator app; this agent works best for apps you control and can link in DEBUG builds.
 
@@ -12,7 +12,7 @@ Add this folder as a local Swift Package dependency:
 packages/inspector-agent
 ```
 
-Then link the `XcodeCanvasInspectorAgent` product into your app target for Debug only.
+Then link the `SimDeckInspectorAgent` product into your app target for Debug only.
 
 ## Start The Agent
 
@@ -20,14 +20,14 @@ Call the initializer early in app startup, guarded by `#if DEBUG`.
 
 ```swift
 #if DEBUG
-import XcodeCanvasInspectorAgent
+import SimDeckInspectorAgent
 #endif
 
 @main
 struct DemoApp: App {
     init() {
         #if DEBUG
-        try? XcodeCanvasInspectorAgent.shared.start()
+        try? SimDeckInspectorAgent.shared.start()
         #endif
     }
 
@@ -43,11 +43,11 @@ UIKit apps can do the same from `application(_:didFinishLaunchingWithOptions:)`.
 
 ```swift
 #if DEBUG
-try? XcodeCanvasInspectorAgent.shared.start()
+try? SimDeckInspectorAgent.shared.start()
 #endif
 ```
 
-The default server starts at TCP `127.0.0.1:47370`. If that port is already used by another simulator app, it automatically tries the next 32 ports and listens on the first free one. It also advertises Bonjour service type `_xcwinspector._tcp`.
+The default server starts at TCP `127.0.0.1:47370`. If that port is already used by another simulator app, it automatically tries the next 32 ports and listens on the first free one. It also advertises Bonjour service type `_simdeckinspector._tcp`.
 
 ## Query It
 
@@ -70,7 +70,7 @@ The agent automatically reports SwiftUI hosting/bridge UIViews. SwiftUI's value 
 
 ```swift
 Text("Continue")
-    .xcwInspectorTag("continue-label", id: "onboarding.continue.label")
+    .simDeckInspectorTag("continue-label", id: "onboarding.continue.label")
 ```
 
 The tag is represented by a lightweight, non-interactive probe view in the UIKit hierarchy.
@@ -80,7 +80,7 @@ The tag is represented by a lightweight, non-interactive probe view in the UIKit
 Frameworks with their own logical tree can publish that tree into the agent. When a published snapshot exists, `View.getHierarchy` returns it by default; pass `"source": "uikit"` to force the raw UIKit tree.
 
 ```swift
-try? XcodeCanvasInspectorAgent.shared.publishHierarchySnapshot(
+try? SimDeckInspectorAgent.shared.publishHierarchySnapshot(
     source: "nativescript",
     snapshotJSON: #"{"source":"nativescript","roots":[]}"#
 )
@@ -110,22 +110,22 @@ For NativeScript apps, use the companion runtime package instead of linking this
 Swift package directly into your app code:
 
 ```sh
-npm install @nativescript/xcode-canvas-inspector
+npm install @nativescript/simdeck-inspector
 ```
 
 Start it as early as possible in app startup, before bootstrapping the app:
 
 ```ts
-import { startXcodeCanvasInspector } from "@nativescript/xcode-canvas-inspector";
+import { startSimDeckInspector } from "@nativescript/simdeck-inspector";
 
 if (__DEV__) {
-  startXcodeCanvasInspector({ port: 4310 });
+  startSimDeckInspector({ port: 4310 });
 }
 ```
 
 Important:
 
-- `port` here is the `xcode-canvas-web` server port, not a per-app inspector port.
+- `port` here is the `simdeck` server port, not a per-app inspector port.
 - NativeScript apps do not need to choose or manage a unique local inspector port.
 - The package connects to `/api/inspector/connect` and falls back to `/api/inspector/poll`.
 - The separate auto-discovered local TCP ports described above are for the Swift in-app inspector transport, not the NativeScript package.
@@ -136,13 +136,13 @@ raw UIKit hierarchy.
 
 ### Angular
 
-For Angular NativeScript apps, call `startXcodeCanvasInspector()` before
+For Angular NativeScript apps, call `startSimDeckInspector()` before
 `runNativeScriptAngularApp()`.
 
 ```ts
-import { startXcodeCanvasInspector } from "@nativescript/xcode-canvas-inspector";
+import { startSimDeckInspector } from "@nativescript/simdeck-inspector";
 
-startXcodeCanvasInspector({ port: 4310 });
+startSimDeckInspector({ port: 4310 });
 
 runNativeScriptAngularApp({
   appModuleBootstrap: () =>
@@ -199,7 +199,7 @@ That lets the NativeScript inspector attach `sourceLocation` metadata such as
 For shared-network simulator sessions, start with a token and require every request to include top-level `token`.
 
 ```swift
-try? XcodeCanvasInspectorAgent.shared.start(
+try? SimDeckInspectorAgent.shared.start(
     configuration: .init(
         port: 47370,
         bindToLocalhostOnly: false,

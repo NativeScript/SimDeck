@@ -66,7 +66,7 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
 - (BOOL)start:(NSError * _Nullable __autoreleasing *)error {
     if (![self.session waitUntilReadyWithTimeout:10.0]) {
         if (error != NULL) {
-            *error = [NSError errorWithDomain:@"XcodeCanvasWeb.NativeSession"
+            *error = [NSError errorWithDomain:@"SimDeck.NativeSession"
                                          code:1
                                      userInfo:@{
                 NSLocalizedDescriptionKey: @"Timed out waiting for the private simulator display to become ready.",
@@ -78,7 +78,7 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
     [self.session requestKeyFrameRefresh];
     if (![self.session waitForFirstEncodedFrameWithTimeout:2.0]) {
         if (error != NULL) {
-            *error = [NSError errorWithDomain:@"XcodeCanvasWeb.NativeSession"
+            *error = [NSError errorWithDomain:@"SimDeck.NativeSession"
                                          code:2
                                      userInfo:@{
                 NSLocalizedDescriptionKey: @"Timed out waiting for the first encoded simulator frame.",

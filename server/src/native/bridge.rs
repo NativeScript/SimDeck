@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
-const RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV: &str = "XCW_RESTART_ON_CORE_SIMULATOR_MISMATCH";
+const RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV: &str = "SIMDECK_RESTART_ON_CORE_SIMULATOR_MISMATCH";
 
 static RECOVERABLE_RESTART_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
@@ -728,9 +728,7 @@ fn schedule_recoverable_restart_if_needed(message: &str) {
         return;
     }
 
-    eprintln!(
-        "CoreSimulator service mismatch detected; restarting xcode-canvas-web server process."
-    );
+    eprintln!("CoreSimulator service mismatch detected; restarting simdeck server process.");
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_millis(100));
         std::process::exit(RECOVERABLE_RESTART_EXIT_CODE);

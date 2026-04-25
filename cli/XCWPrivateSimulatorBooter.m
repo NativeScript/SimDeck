@@ -3,7 +3,7 @@
 #import <dlfcn.h>
 #import <objc/message.h>
 
-static NSString * const XCWPrivateSimulatorBooterErrorDomain = @"XcodeCanvasWeb.PrivateSimulatorBooter";
+static NSString * const XCWPrivateSimulatorBooterErrorDomain = @"SimDeck.PrivateSimulatorBooter";
 static NSString * const XCWCoreSimulatorPath = @"/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator";
 
 typedef NS_ENUM(NSInteger, XCWPrivateSimulatorBooterErrorCode) {

@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
-OUTPUT="$BUILD_DIR/xcode-canvas-web"
-OUTPUT_BIN="$BUILD_DIR/xcode-canvas-web-bin"
+OUTPUT="$BUILD_DIR/simdeck"
+OUTPUT_BIN="$BUILD_DIR/simdeck-bin"
 MANIFEST_PATH="$ROOT_DIR/server/Cargo.toml"
-SERVER_BIN="$ROOT_DIR/server/target/release/xcode-canvas-web-server"
+SERVER_BIN="$ROOT_DIR/server/target/release/simdeck-server"
 
 mkdir -p "$BUILD_DIR"
 

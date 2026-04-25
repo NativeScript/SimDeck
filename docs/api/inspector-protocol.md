@@ -1,6 +1,6 @@
 # Inspector Protocol
 
-In-app inspectors talk to SimDeck using a small newline-delimited JSON protocol called `XCWI/0.1`. Both transports (TCP and WebSocket) speak the same envelope and method set, so app-side code is interchangeable between them.
+In-app inspectors talk to SimDeck using a small newline-delimited JSON protocol called `SDI/0.1`. Both transports (TCP and WebSocket) speak the same envelope and method set, so app-side code is interchangeable between them.
 
 ## Transports
 
@@ -14,7 +14,7 @@ The original Swift in-app agent listens on TCP. The default port is `47370`; if 
 printf '{"id":1,"method":"Inspector.getInfo"}\n' | nc 127.0.0.1 47370
 ```
 
-The agent also advertises Bonjour service type `_xcwinspector._tcp`.
+The agent also advertises Bonjour service type `_simdeckinspector._tcp`.
 
 ### WebSocket via the server
 
@@ -251,11 +251,11 @@ Evaluates a small UIKit script against a view. Used by the browser inspector to 
 SwiftUI's value tree is not publicly enumerable at runtime. The agent therefore exposes SwiftUI in two ways:
 
 1. **Automatic detection.** UIKit bridge or hosting views whose runtime classes contain `SwiftUI` or `UIHosting` are reported with `swiftUI.isHost` or `swiftUI.isProbe` markers.
-2. **Source-level tags.** Apps can tag SwiftUI views with `View.xcwInspectorTag(_:id:metadata:)` from the Swift agent. Tagged views appear as lightweight probe `UIView`s with `swiftUI.isProbe = true`.
+2. **Source-level tags.** Apps can tag SwiftUI views with `View.simDeckInspectorTag(_:id:metadata:)` from the Swift agent. Tagged views appear as lightweight probe `UIView`s with `swiftUI.isProbe = true`.
 
 ```swift
 Text("Continue")
-    .xcwInspectorTag("continue-label", id: "onboarding.continue.label")
+    .simDeckInspectorTag("continue-label", id: "onboarding.continue.label")
 ```
 
 ## Allowed proxy methods

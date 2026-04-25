@@ -6,7 +6,7 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const SERVICE_LABEL: &str = "dev.nativescript.xcode-canvas-web";
+const SERVICE_LABEL: &str = "dev.nativescript.simdeck";
 
 pub fn enable(options: ServiceOptions) -> anyhow::Result<()> {
     install(options)
@@ -31,8 +31,8 @@ fn install(options: ServiceOptions) -> anyhow::Result<()> {
         None => default_client_root()?,
     };
     let executable = std::env::current_exe().context("resolve current executable path")?;
-    let stdout_log = log_dir.join("xcode-canvas-web.log");
-    let stderr_log = log_dir.join("xcode-canvas-web.err.log");
+    let stdout_log = log_dir.join("simdeck.log");
+    let stderr_log = log_dir.join("simdeck.err.log");
     let plist = plist_contents(
         &executable,
         &client_root,

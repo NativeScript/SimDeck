@@ -18,7 +18,7 @@ SimDeck addresses all of those by exposing one HTTP server, one WebTransport end
 
 ## What's in the box
 
-SimDeck ships as a single npm package (`xcode-canvas-web`, soon to be renamed) that installs three things:
+SimDeck ships as a single npm package (`simdeck`) that installs three things:
 
 1. **A native CLI server.** Rust + Objective-C, compiled on install. It serves the HTTP API and a self-signed WebTransport endpoint for live video frames.
 2. **A bundled React client.** Talks to the local server, renders a streamable Simulator surface, and ships the inspector UIs.
@@ -26,7 +26,7 @@ SimDeck ships as a single npm package (`xcode-canvas-web`, soon to be renamed) t
 
 Optional companion packages:
 
-- [`@nativescript/xcode-canvas-inspector`](/inspector/nativescript) — a debug-only NativeScript inspector runtime.
+- [`@nativescript/simdeck-inspector`](/inspector/nativescript) — a debug-only NativeScript inspector runtime.
 - [`packages/inspector-agent`](/inspector/swift) — a Swift Package you can link from your iOS app to expose its UIKit hierarchy.
 - [`packages/vscode-extension`](/extensions/vscode) — opens the simulator inside a VS Code panel.
 

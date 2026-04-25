@@ -9,7 +9,7 @@ Most SimDeck issues fall into one of three buckets: simulator boot, video stream
 Another process already owns the HTTP port. Pick a different one:
 
 ```sh
-xcode-canvas-web serve --port 4320
+simdeck serve --port 4320
 ```
 
 Or find what's holding it:
@@ -20,12 +20,12 @@ lsof -nP -iTCP:4310 -sTCP:LISTEN
 
 If the holder is an old SimDeck instance, the bundled `npm run dev` script auto-kills stale listeners on `4310` and `4311` for you.
 
-### `xcode-canvas-web is not built yet`
+### `simdeck is not built yet`
 
 The launcher script could not find the compiled binary. Reinstall the package or run the local build:
 
 ```sh
-npm install -g xcode-canvas-web
+npm install -g simdeck
 # or, from a checkout:
 ./scripts/build-cli.sh
 ```
@@ -77,11 +77,11 @@ The encoder did not produce a keyframe within 3 seconds. The most common causes:
 - **VideoToolbox is busy.** macOS screen recording can starve the HEVC encoder. Switch to software H.264:
 
   ```sh
-  xcode-canvas-web serve --port 4310 --video-codec h264-software
+  simdeck serve --port 4310 --video-codec h264-software
   ```
 
 - **The Simulator window is minimised or off-screen.** The private display bridge captures from a headless context, so this is rare, but if you see it after waking from sleep, shut the simulator down and boot it again.
-- **The simulator is mid-shutdown.** Wait for `xcode-canvas-web list` to report `isBooted: true`.
+- **The simulator is mid-shutdown.** Wait for `simdeck list` to report `isBooted: true`.
 
 ### Frequent stutter or "Refresh stream" loops
 
@@ -100,7 +100,7 @@ Common reasons:
 | `fallbackReason`                                                    | Fix                                                                                      |
 | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `The in-app inspector process is not the foreground app.`           | Bring the inspector-enabled app to the foreground.                                       |
-| `NativeScript hierarchy is not published by the app.`               | Make sure the app calls `startXcodeCanvasInspector(...)` before bootstrapping.           |
+| `NativeScript hierarchy is not published by the app.`               | Make sure the app calls `startSimDeckInspector(...)` before bootstrapping.               |
 | `No connected NativeScript inspector ...`                           | The NativeScript inspector hasn't completed its WebSocket handshake yet. Reload the app. |
 | `No in-app inspector found ... on ports 47370-47402`                | The Swift agent isn't listening; confirm the app links and starts the agent in DEBUG.    |
 | `Unable to run \`axe describe-ui\`. Install AXe or ensure on PATH.` | Install AXe; the fallback can't run without it.                                          |
@@ -109,9 +109,9 @@ For more on the inspector matrix, see the [Inspector Overview](/inspector/).
 
 ## NativeScript inspector won't connect
 
-- Confirm `startXcodeCanvasInspector({ port: 4310 })` runs in the simulator app's main thread before bootstrap.
+- Confirm `startSimDeckInspector({ port: 4310 })` runs in the simulator app's main thread before bootstrap.
 - Confirm the simulator can reach the host: from inside the app, `fetch('http://127.0.0.1:4310/api/health')` should succeed.
-- For Angular apps, make sure `startXcodeCanvasInspector(...)` runs **before** `runNativeScriptAngularApp(...)`.
+- For Angular apps, make sure `startSimDeckInspector(...)` runs **before** `runNativeScriptAngularApp(...)`.
 - Watch the server log for messages such as `Registered NativeScript inspector for process …`. If you don't see one, the WebSocket never completed.
 
 ## Logs
@@ -119,6 +119,6 @@ For more on the inspector matrix, see the [Inspector Overview](/inspector/).
 When all else fails, capture the server log:
 
 - Foreground server: redirect output to a file.
-- Background service: read `~/Library/Logs/xcode-canvas-web.log` and `~/Library/Logs/xcode-canvas-web.err.log`.
+- Background service: read `~/Library/Logs/simdeck.log` and `~/Library/Logs/simdeck.err.log`.
 
-Include both files when filing an issue, along with `xcode-canvas-web --version` (when implemented), the macOS version, and the Xcode version.
+Include both files when filing an issue, along with `simdeck --version` (when implemented), the macOS version, and the Xcode version.

@@ -1,28 +1,28 @@
 # NativeScript Runtime Inspector
 
-`@nativescript/xcode-canvas-inspector` is the runtime that connects a NativeScript app's view hierarchy to the SimDeck server without linking the Swift inspector framework. It implements the same [Inspector Protocol](/api/inspector-protocol) as the Swift agent but ships as a TypeScript package and runs entirely inside the NativeScript runtime.
+`@nativescript/simdeck-inspector` is the runtime that connects a NativeScript app's view hierarchy to the SimDeck server without linking the Swift inspector framework. It implements the same [Inspector Protocol](/api/inspector-protocol) as the Swift agent but ships as a TypeScript package and runs entirely inside the NativeScript runtime.
 
 The package source lives at `packages/nativescript-inspector/` in this repo.
 
 ## Install
 
 ```sh
-npm install @nativescript/xcode-canvas-inspector
+npm install @nativescript/simdeck-inspector
 ```
 
 The package is `darwin`-friendly because the underlying NativeScript runtime is iOS-only; it works fine in NativeScript-iOS builds.
 
 ## Start the inspector
 
-Call `startXcodeCanvasInspector(...)` as early as possible in app startup, ideally before any view is bootstrapped.
+Call `startSimDeckInspector(...)` as early as possible in app startup, ideally before any view is bootstrapped.
 
 ### NativeScript Core
 
 ```ts
-import { startXcodeCanvasInspector } from "@nativescript/xcode-canvas-inspector";
+import { startSimDeckInspector } from "@nativescript/simdeck-inspector";
 
 if (__DEV__) {
-  startXcodeCanvasInspector({ port: 4310 });
+  startSimDeckInspector({ port: 4310 });
 }
 ```
 
@@ -32,12 +32,12 @@ if (__DEV__) {
 
 ### NativeScript + Angular
 
-For Angular NativeScript apps, call `startXcodeCanvasInspector()` **before** `runNativeScriptAngularApp()`:
+For Angular NativeScript apps, call `startSimDeckInspector()` **before** `runNativeScriptAngularApp()`:
 
 ```ts
-import { startXcodeCanvasInspector } from "@nativescript/xcode-canvas-inspector";
+import { startSimDeckInspector } from "@nativescript/simdeck-inspector";
 
-startXcodeCanvasInspector({ port: 4310 });
+startSimDeckInspector({ port: 4310 });
 
 runNativeScriptAngularApp({
   appModuleBootstrap: () =>
@@ -139,12 +139,12 @@ The SimDeck browser client renders the file path inline so you can jump straight
 ## Stopping the inspector
 
 ```ts
-import { stopXcodeCanvasInspector } from "@nativescript/xcode-canvas-inspector";
+import { stopSimDeckInspector } from "@nativescript/simdeck-inspector";
 
-stopXcodeCanvasInspector();
+stopSimDeckInspector();
 ```
 
-This closes the WebSocket and stops responding to inspector requests. Subsequent calls to `startXcodeCanvasInspector(...)` will spin a fresh runtime.
+This closes the WebSocket and stops responding to inspector requests. Subsequent calls to `startSimDeckInspector(...)` will spin a fresh runtime.
 
 ## Coexistence with the Swift agent
 

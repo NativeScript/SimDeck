@@ -1,7 +1,7 @@
 {
-  "name": "@nativescript/xcode-canvas-inspector",
+  "name": "@nativescript/simdeck-inspector",
   "version": "0.1.0",
-  "description": "Debug-only NativeScript runtime inspector for xcode-canvas-web",
+  "description": "Debug-only NativeScript runtime inspector for simdeck",
   "license": "Apache-2.0",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -24,7 +24,7 @@
     "nativescript",
     "uikit",
     "inspector",
-    "xcode-canvas-web"
+    "simdeck"
   ],
   "sideEffects": false,
   "nativescript": {

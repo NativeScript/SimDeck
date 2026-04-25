@@ -1,10 +1,10 @@
 {
-  "name": "xcode-canvas-web",
+  "name": "simdeck",
   "version": "0.1.0",
   "description": "Native macOS simulator control plane with a browser client",
   "license": "Apache-2.0",
   "bin": {
-    "xcode-canvas-web": "bin/xcode-canvas-web.mjs"
+    "simdeck": "bin/simdeck.mjs"
   },
   "files": [
     "LICENSE",

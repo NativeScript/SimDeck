@@ -1,6 +1,6 @@
 # Swift In-App Inspector Agent
 
-`XcodeCanvasInspectorAgent` is a debug-only iOS Swift package that exposes a UIKit hierarchy and live property edits through the [`XCWI/0.1`](/api/inspector-protocol) protocol. Apps that link it for `Debug` builds can be inspected from the SimDeck browser client without going through the system accessibility stack.
+`SimDeckInspectorAgent` is a debug-only iOS Swift package that exposes a UIKit hierarchy and live property edits through the [`SDI/0.1`](/api/inspector-protocol) protocol. Apps that link it for `Debug` builds can be inspected from the SimDeck browser client without going through the system accessibility stack.
 
 The package source lives at `packages/inspector-agent/` in this repo.
 
@@ -12,7 +12,7 @@ Add the local Swift package to your app:
 packages/inspector-agent
 ```
 
-Then link the `XcodeCanvasInspectorAgent` product into your app target for `Debug` configurations only.
+Then link the `SimDeckInspectorAgent` product into your app target for `Debug` configurations only.
 
 ## Start the agent
 
@@ -22,14 +22,14 @@ Call the initializer early in app startup, behind a `#if DEBUG` guard.
 
 ```swift
 #if DEBUG
-import XcodeCanvasInspectorAgent
+import SimDeckInspectorAgent
 #endif
 
 @main
 struct DemoApp: App {
     init() {
         #if DEBUG
-        try? XcodeCanvasInspectorAgent.shared.start()
+        try? SimDeckInspectorAgent.shared.start()
         #endif
     }
 
@@ -49,7 +49,7 @@ func application(
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
 ) -> Bool {
     #if DEBUG
-    try? XcodeCanvasInspectorAgent.shared.start()
+    try? SimDeckInspectorAgent.shared.start()
     #endif
     return true
 }
@@ -57,7 +57,7 @@ func application(
 
 ## How discovery works
 
-The agent listens on TCP `127.0.0.1:47370` by default. If that port is already in use it tries the next 32 ports and listens on the first free one. It also advertises Bonjour service type `_xcwinspector._tcp` so other tools can find it without probing.
+The agent listens on TCP `127.0.0.1:47370` by default. If that port is already in use it tries the next 32 ports and listens on the first free one. It also advertises Bonjour service type `_simdeckinspector._tcp` so other tools can find it without probing.
 
 The SimDeck server discovers the agent for a given simulator by:
 
@@ -84,7 +84,7 @@ The agent automatically reports SwiftUI hosting and bridge `UIView`s, but SwiftU
 
 ```swift
 Text("Continue")
-    .xcwInspectorTag("continue-label", id: "onboarding.continue.label")
+    .simDeckInspectorTag("continue-label", id: "onboarding.continue.label")
 ```
 
 Tagged SwiftUI views appear as lightweight, non-interactive probe `UIView`s in the hierarchy with `swiftUI.isProbe = true`. The browser client surfaces them in the inspector pane.
@@ -94,7 +94,7 @@ Tagged SwiftUI views appear as lightweight, non-interactive probe `UIView`s in t
 Frameworks with their own logical tree can publish that tree into the agent. When a published snapshot exists, `View.getHierarchy` returns it by default; pass `"source": "uikit"` to force the raw UIKit tree.
 
 ```swift
-try? XcodeCanvasInspectorAgent.shared.publishHierarchySnapshot(
+try? SimDeckInspectorAgent.shared.publishHierarchySnapshot(
     source: "nativescript",
     snapshotJSON: #"{"source":"nativescript","roots":[]}"#
 )
@@ -124,7 +124,7 @@ The browser client uses these to jump from the hierarchy back to source.
 For shared-network simulator sessions, start the agent with a token and require every request to include a top-level `token`:
 
 ```swift
-try? XcodeCanvasInspectorAgent.shared.start(
+try? SimDeckInspectorAgent.shared.start(
     configuration: .init(
         port: 47370,
         bindToLocalhostOnly: false,
@@ -147,6 +147,6 @@ For multi-user development setups (shared simulator hosts on a LAN, CI rigs), se
 
 ## Compatibility with the NativeScript inspector
 
-The Swift agent and the NativeScript runtime inspector implement the same protocol on different transports. Anything that can talk `XCWI/0.1` over TCP can also talk it over the SimDeck WebSocket hub, and vice versa.
+The Swift agent and the NativeScript runtime inspector implement the same protocol on different transports. Anything that can talk `SDI/0.1` over TCP can also talk it over the SimDeck WebSocket hub, and vice versa.
 
 The SimDeck server prefers connected NativeScript inspectors over Swift TCP agents when both are present for the same process. Direct TCP clients can pick whichever transport they prefer.

@@ -6,7 +6,7 @@
 #import "DFPrivateSimulatorDisplayBridge.h"
 #import "XCWH264Encoder.h"
 
-static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb.PrivateSimulatorSession";
+static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.PrivateSimulatorSession";
 
 @interface XCWPrivateSimulatorSession () <DFPrivateSimulatorDisplayBridgeDelegate>
 
@@ -57,7 +57,7 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"XcodeCanvasWeb
     _displayBridge.delegate = self;
     dispatch_queue_attr_t queueAttributes =
         dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
-    _stateQueue = dispatch_queue_create("com.xcodecanvasweb.private-session.state", queueAttributes);
+    _stateQueue = dispatch_queue_create("com.simdeck.private-session.state", queueAttributes);
     _readinessSemaphore = dispatch_semaphore_create(0);
     _encodedFrameListeners = [NSMutableDictionary dictionary];
     _displayStatusValue = bridge.displayStatus ?: @"Initializing private simulator display";

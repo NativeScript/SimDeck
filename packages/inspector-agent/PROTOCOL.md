@@ -1,6 +1,6 @@
-# Xcode Canvas Inspector Protocol
+# SimDeck Inspector Protocol
 
-The inspector agent speaks `XCWI/0.1`: newline-delimited JSON messages over TCP. Every request and response is one UTF-8 JSON object followed by `\n`.
+The inspector agent speaks `SDI/0.1`: newline-delimited JSON messages over TCP. Every request and response is one UTF-8 JSON object followed by `\n`.
 
 The protocol is intentionally JSON-RPC-like, but small enough to use from `nc` while the server-side proxy is still evolving.
 
@@ -28,7 +28,7 @@ Default bind mode:
 The app may also advertise Bonjour service type:
 
 ```text
-_xcwinspector._tcp
+_simdeckinspector._tcp
 ```
 
 NativeScript apps can also connect out to the Rust server over WebSocket:
@@ -252,13 +252,13 @@ should reject unsafe property names and coerce structured UIKit values such as
 SwiftUI's value tree is not publicly enumerable at runtime. The agent therefore exposes SwiftUI in two ways:
 
 - Automatic detection of UIKit bridge/hosting views whose runtime classes include `SwiftUI` or `UIHosting`.
-- Optional source-level tags using `View.xcwInspectorTag(_:id:metadata:)`.
+- Optional source-level tags using `View.simDeckInspectorTag(_:id:metadata:)`.
 
 Tagged SwiftUI example:
 
 ```swift
 Text("Checkout")
-    .xcwInspectorTag("checkout-title", id: "checkout.title")
+    .simDeckInspectorTag("checkout-title", id: "checkout.title")
 ```
 
 Tagged views appear as lightweight probe UIViews in the hierarchy with `swiftUI.isProbe = true`.

@@ -18,7 +18,7 @@ typedef NS_ENUM(NSUInteger, XCWVideoEncoderMode) {
 };
 
 static XCWVideoEncoderMode XCWVideoEncoderModeFromEnvironment(void) {
-    NSString *value = [[[NSProcessInfo processInfo] environment][@"XCW_VIDEO_CODEC"] lowercaseString];
+    NSString *value = [[[NSProcessInfo processInfo] environment][@"SIMDECK_VIDEO_CODEC"] lowercaseString];
     if ([value isEqualToString:@"h264"] || [value isEqualToString:@"h264-hardware"] || [value isEqualToString:@"avc"]) {
         return XCWVideoEncoderModeH264Hardware;
     }
@@ -369,7 +369,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _outputHandler = [outputHandler copy];
     dispatch_queue_attr_t queueAttributes =
         dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
-    _queue = dispatch_queue_create("com.xcodecanvasweb.h264-encoder", queueAttributes);
+    _queue = dispatch_queue_create("com.simdeck.h264-encoder", queueAttributes);
     _pendingLock = OS_UNFAIR_LOCK_INIT;
     _needsKeyFrame = YES;
     _encoderMode = XCWVideoEncoderModeFromEnvironment();

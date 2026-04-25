@@ -19,10 +19,10 @@
 #define DFGSEventHostFlag 0x20000
 #define DFGSEventTypeDeviceOrientationChanged 50
 
-static NSString * const DFPrivateSimulatorErrorDomain = @"XcodeCanvasWeb.PrivateSimulator";
+static NSString * const DFPrivateSimulatorErrorDomain = @"SimDeck.PrivateSimulator";
 static NSString * const DFSimulatorKitPath = @"/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit";
 static NSString * const DFCoreSimulatorPath = @"/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator";
-static NSString * const DFPrivateSimulatorLogPath = @"/tmp/xcode-canvas-web-private-bridge.log";
+static NSString * const DFPrivateSimulatorLogPath = @"/tmp/simdeck-private-bridge.log";
 static const void *DFPrivateSimulatorCallbackQueueKey = &DFPrivateSimulatorCallbackQueueKey;
 static const void *DFDigitizerDelegateAssociationKey = &DFDigitizerDelegateAssociationKey;
 static const void *DFDigitizerWakeDelegateAssociationKey = &DFDigitizerWakeDelegateAssociationKey;
@@ -1313,7 +1313,7 @@ static BOOL DFSendPurpleOrientationEvent(id device, NSInteger orientationValue) 
 // idb uses in FBSimulatorHID.postDarwinNotification:error:. This is the fallback
 // channel we use to signal orientation changes because on iOS 26 the GSEvent
 // orientation pipe no longer drives UIKit autorotation. Apps can observe
-// `org.nativescript.xcodecanvasweb.rotate.<name>` and force a geometry update.
+// `org.nativescript.simdeck.rotate.<name>` and force a geometry update.
 static BOOL DFPostSimDeviceDarwinNotification(id device, NSString *notificationName) {
     if (device == nil || notificationName.length == 0) {
         return NO;
@@ -1338,10 +1338,10 @@ static BOOL DFPostSimDeviceDarwinNotification(id device, NSString *notificationN
 static NSString *DFRotationNotificationNameForOrientation(NSInteger orientationValue) {
     // Matches UIDeviceOrientation enum.
     switch (orientationValue) {
-    case 1: return @"org.nativescript.xcodecanvasweb.rotate.portrait";
-    case 2: return @"org.nativescript.xcodecanvasweb.rotate.portrait-upside-down";
-    case 3: return @"org.nativescript.xcodecanvasweb.rotate.landscape-left";
-    case 4: return @"org.nativescript.xcodecanvasweb.rotate.landscape-right";
+    case 1: return @"org.nativescript.simdeck.rotate.portrait";
+    case 2: return @"org.nativescript.simdeck.rotate.portrait-upside-down";
+    case 3: return @"org.nativescript.simdeck.rotate.landscape-left";
+    case 4: return @"org.nativescript.simdeck.rotate.landscape-right";
     default: return nil;
     }
 }
@@ -2063,7 +2063,7 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
         return nil;
     }
 
-    _callbackQueue = dispatch_queue_create("org.nativescript.xcode-canvas-web.private-screen", DISPATCH_QUEUE_SERIAL);
+    _callbackQueue = dispatch_queue_create("org.nativescript.simdeck.private-screen", DISPATCH_QUEUE_SERIAL);
     dispatch_queue_set_specific(_callbackQueue, DFPrivateSimulatorCallbackQueueKey, (void *)DFPrivateSimulatorCallbackQueueKey, NULL);
     [self updateStatus:[NSString stringWithFormat:@"Starting private CoreSimulator attach for %@", udid]];
 

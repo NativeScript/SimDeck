@@ -92,7 +92,7 @@ npm run --prefix client test
 The Rust server takes a `--client-root <path>` flag. You can ship a completely different UI by pointing it at a directory of static files:
 
 ```sh
-xcode-canvas-web serve --port 4310 --client-root /path/to/your/dist
+simdeck serve --port 4310 --client-root /path/to/your/dist
 ```
 
 As long as your client speaks the documented [REST API](/api/rest), [WebTransport](/api/webtransport), and [Packet Format](/api/packet-format), it will work end to end.
