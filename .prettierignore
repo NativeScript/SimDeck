@@ -7,3 +7,5 @@ packages/inspector-agent/.build
 packages/nativescript-inspector/dist
 node_modules
 server/target
+docs/.vitepress/dist
+docs/.vitepress/cache

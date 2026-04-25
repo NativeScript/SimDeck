@@ -36,6 +36,10 @@ npm install -g .
 
 After a global install, use the `xcode-canvas-web` command directly. From a local checkout, you can also run `./build/xcode-canvas-web`.
 
+## Documentation
+
+Full documentation lives at [djdeveloperr.github.io/xcode-canvas-web](https://djdeveloperr.github.io/xcode-canvas-web/), with guides, the CLI reference, the REST API, the WebTransport video pipeline, and the inspector protocols. The source for the site lives in [`docs/`](docs/) — preview it locally with `npm run docs:dev`.
+
 ## Run
 
 ```sh
