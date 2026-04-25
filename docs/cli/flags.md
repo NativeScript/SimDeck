@@ -67,6 +67,14 @@ Override the static client directory. The Rust server serves the contents at the
 
 Encoder used by the native bridge. See [Video Pipeline](/guide/video) for when to switch.
 
+### `--access-token <token>`
+
+| Default | generated at startup |
+| ------- | -------------------- |
+| Type    | string               |
+
+HTTP API and WebTransport access token. The served browser UI receives it automatically through a strict same-site cookie, so normal local use does not require copying the token. Direct API callers should send either `X-SimDeck-Token: <token>` or `Authorization: Bearer <token>`.
+
 ## Positional arguments
 
 Subcommands that take positionals expect them in the order shown:

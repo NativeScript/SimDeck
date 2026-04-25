@@ -63,6 +63,7 @@ To focus a specific simulator, open
 The Rust server exposes HTTP on the requested port and WebTransport on `port + 1`.
 The browser bootstrap comes from `GET /api/health`, which returns the WebTransport URL template,
 certificate hash, and packet version needed by the client.
+The served browser UI receives the generated API access token automatically; direct HTTP callers can use the startup token with `X-SimDeck-Token` or `Authorization: Bearer`.
 
 ## Service
 

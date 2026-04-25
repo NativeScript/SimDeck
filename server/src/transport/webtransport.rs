@@ -1,4 +1,5 @@
 use crate::api::routes::AppState;
+use crate::auth;
 use crate::metrics::counters::Metrics;
 use crate::simulators::session::SimulatorSession;
 use crate::transport::packet::{ControlHello, ForeignBytes, SharedFrame, PACKET_VERSION};
@@ -42,6 +43,12 @@ pub async fn serve(endpoint: Endpoint<Server>, state: AppState) -> anyhow::Resul
         let incoming_session = endpoint.accept().await;
         let incoming_request = incoming_session.await?;
         let path = incoming_request.path().to_owned();
+        let origin = incoming_request.origin().map(str::to_owned);
+        if !auth::webtransport_request_authorized(&state.config, &path, origin.as_deref()) {
+            incoming_request.forbidden().await;
+            warn!("rejected unauthorized WebTransport session: {path}");
+            continue;
+        }
         let session = incoming_request.accept().await?;
         let state = state.clone();
         tokio::spawn(async move {
@@ -57,7 +64,8 @@ async fn handle_session(
     path: String,
     connection: wtransport::Connection,
 ) -> anyhow::Result<()> {
-    let Some(udid) = path.strip_prefix("/wt/simulators/") else {
+    let path_without_query = auth::strip_query(&path);
+    let Some(udid) = path_without_query.strip_prefix("/wt/simulators/") else {
         anyhow::bail!("unexpected WebTransport path: {path}");
     };
     let session = started_session(&state, udid).await?;

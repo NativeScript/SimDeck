@@ -103,4 +103,4 @@ The browser client is designed to live inside any container that can host a webv
 
 1. Point the host at `http://<simdeck-host>:<port>/`.
 2. Allow the host to talk to the same WebTransport endpoint exposed by the server.
-3. Optionally, gate the host behind your own auth — SimDeck assumes a trusted local network.
+3. For direct API calls outside the served origin, pass the SimDeck access token with `X-SimDeck-Token` or `Authorization: Bearer`.

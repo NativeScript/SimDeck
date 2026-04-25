@@ -185,6 +185,10 @@ fn plist_contents(
         program_arguments.push("--advertise-host".to_string());
         program_arguments.push(advertise_host.clone());
     }
+    if let Some(access_token) = options.access_token.as_ref() {
+        program_arguments.push("--access-token".to_string());
+        program_arguments.push(access_token.clone());
+    }
 
     let program_arguments_xml = program_arguments
         .into_iter()

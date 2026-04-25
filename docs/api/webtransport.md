@@ -7,10 +7,10 @@ Live video and the per-session control handshake travel over WebTransport. The h
 The exact URL is reported by `GET /api/health`. The template looks like:
 
 ```text
-https://<advertise-host>:<wt-port>/wt/simulators/{udid}
+https://<advertise-host>:<wt-port>/wt/simulators/{udid}?simdeckToken=<token>
 ```
 
-Replace `{udid}` with the simulator UDID from `GET /api/simulators`.
+Replace `{udid}` with the simulator UDID from `GET /api/simulators`. The `simdeckToken` query parameter is included in the authenticated `/api/health` response and is required by the WebTransport server.
 
 ## Certificate pinning
 

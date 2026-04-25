@@ -18,6 +18,8 @@ Start the local server before interactive testing:
 simdeck serve --port 4310
 ```
 
+The served browser UI receives the generated API token automatically. If an agent calls the HTTP API directly, pass the startup token as `X-SimDeck-Token` or `Authorization: Bearer`.
+
 If `simdeck` is not on `PATH` and you are inside this repository, build
 and use the local binary:
 

@@ -21,6 +21,7 @@ You can pass any of:
 | `--advertise-host` | matches `--bind`      | Hostname advertised to remote clients.                             |
 | `--client-root`    | bundled `client/dist` | Override the static client directory.                              |
 | `--video-codec`    | `hevc`                | One of `hevc`, `h264`, `h264-software`. See [Video](/guide/video). |
+| `--access-token`   | generated at startup  | Stable API token for direct HTTP/WebTransport integrations.        |
 
 The command:
 

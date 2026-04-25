@@ -6,7 +6,7 @@ use crate::simulators::state::SessionState;
 use crate::transport::packet::{ForeignBytes, FramePacket, SharedFrame};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tokio::task;
@@ -56,7 +56,7 @@ impl SimulatorSession {
             last_refresh_ms: AtomicU64::new(0),
         });
 
-        let user_data = Arc::into_raw(inner.clone()) as *mut c_void;
+        let user_data = Weak::into_raw(Arc::downgrade(&inner)) as *mut c_void;
         unsafe {
             inner
                 .native
@@ -196,7 +196,7 @@ impl Drop for SimulatorSession {
                 self.inner
                     .native
                     .set_frame_callback(None, std::ptr::null_mut());
-                let _ = Arc::from_raw(self.callback_user_data as *const SimulatorSessionInner);
+                let _ = Weak::from_raw(self.callback_user_data as *const SimulatorSessionInner);
             }
         }
     }
@@ -219,9 +219,11 @@ unsafe extern "C" fn native_frame_callback(
         return;
     }
 
-    let inner = Arc::from_raw(user_data as *const SimulatorSessionInner);
-    inner.handle_frame(&*frame);
-    let _ = Arc::into_raw(inner);
+    let weak = Weak::from_raw(user_data as *const SimulatorSessionInner);
+    if let Some(inner) = weak.upgrade() {
+        inner.handle_frame(&*frame);
+    }
+    let _ = Weak::into_raw(weak);
 }
 
 impl SimulatorSessionInner {

@@ -56,7 +56,7 @@ The server generates a fresh self-signed certificate every time it starts. The c
   "wtPort": 4311,
   "videoCodec": "hevc",
   "webTransport": {
-    "urlTemplate": "https://192.168.1.50:4311/wt/simulators/{udid}",
+    "urlTemplate": "https://192.168.1.50:4311/wt/simulators/{udid}?simdeckToken=...",
     "certificateHash": {
       "algorithm": "sha-256",
       "value": "..."
@@ -72,15 +72,23 @@ Restarting the server invalidates the previous certificate. Open clients reconne
 
 ## Authentication and security
 
-SimDeck assumes a trusted local network. The HTTP API has no built-in authentication and the WebTransport endpoint accepts any client that knows the URL.
+SimDeck generates an API access token at startup unless you pass `--access-token <token>`. The served browser UI receives the token automatically through a strict same-site cookie, so opening `http://<advertise-host>:<port>` remains seamless.
+
+Direct API callers must send one of:
+
+```text
+X-SimDeck-Token: <token>
+Authorization: Bearer <token>
+```
+
+The WebTransport URL template returned by authenticated `GET /api/health` includes a `simdeckToken` query parameter for the browser stream worker.
 
 Recommended practice for shared networks:
 
 - Run SimDeck only on networks you control.
+- Use `--access-token <stable-secret>` for background services or scripted LAN access.
 - Combine with macOS Application Firewall to restrict inbound access to known peers.
 - For shared NativeScript inspectors, set an `authToken` when starting the [Swift in-app agent](/inspector/swift#auth-token) so app-side requests must include the token.
-
-A roadmap item is to add an optional bearer-token header for the HTTP API and WebTransport `?token=` parameter. Until that lands, treat SimDeck like any unauthenticated dev tool.
 
 ## Quick checklist
 

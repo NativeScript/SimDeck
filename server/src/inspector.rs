@@ -10,7 +10,9 @@ use tokio::time::{timeout, Instant};
 use tracing::{debug, warn};
 
 const INSPECTOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_POLLED_AGENTS: usize = 64;
 const POLLED_INFO_REQUEST_ID: u64 = 0;
+const POLLED_AGENT_TTL: Duration = Duration::from_secs(60);
 
 type InspectorResponse = Result<Value, String>;
 type PendingResponseSender = oneshot::Sender<InspectorResponse>;
@@ -27,6 +29,15 @@ struct InspectorHubState {
     agents: HashMap<i64, InspectorAgentHandle>,
 }
 
+impl InspectorHubState {
+    fn prune_stale_polled_agents(&mut self) {
+        let now = Instant::now();
+        self.agents.retain(|_, agent| {
+            !agent.info.is_null() || now.duration_since(agent.created_at) < POLLED_AGENT_TTL
+        });
+    }
+}
+
 #[derive(Clone)]
 pub struct ConnectedInspector {
     pub process_identifier: i64,
@@ -36,6 +47,7 @@ pub struct ConnectedInspector {
 #[derive(Clone)]
 struct InspectorAgentHandle {
     connection_id: u64,
+    created_at: Instant,
     info: Value,
     outgoing: mpsc::Sender<Value>,
     outbox: Arc<Mutex<VecDeque<Value>>>,
@@ -68,6 +80,7 @@ impl InspectorHub {
 
         let handle = InspectorAgentHandle {
             connection_id,
+            created_at: Instant::now(),
             info: Value::Null,
             outgoing: outgoing_tx,
             outbox,
@@ -155,11 +168,15 @@ impl InspectorHub {
             .collect()
     }
 
-    pub async fn ensure_polled_agent(&self, process_identifier: i64) {
+    pub async fn ensure_polled_agent(&self, process_identifier: i64) -> Result<(), String> {
         {
-            let inner = self.inner.lock().await;
+            let mut inner = self.inner.lock().await;
+            inner.prune_stale_polled_agents();
             if inner.agents.contains_key(&process_identifier) {
-                return;
+                return Ok(());
+            }
+            if inner.agents.len() >= MAX_POLLED_AGENTS {
+                return Err("Too many pending NativeScript inspector agents.".to_owned());
             }
         }
 
@@ -174,6 +191,7 @@ impl InspectorHub {
 
         let agent = InspectorAgentHandle {
             connection_id,
+            created_at: Instant::now(),
             info: Value::Null,
             outgoing,
             outbox,
@@ -183,6 +201,7 @@ impl InspectorHub {
         };
 
         self.register(process_identifier, agent).await;
+        Ok(())
     }
 
     pub async fn query_with_timeout(
@@ -344,6 +363,7 @@ impl InspectorAgentHandle {
     fn with_info(&self, info: Value) -> Self {
         Self {
             connection_id: self.connection_id,
+            created_at: self.created_at,
             info,
             outgoing: self.outgoing.clone(),
             outbox: self.outbox.clone(),

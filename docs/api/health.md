@@ -14,7 +14,7 @@ Returns the static bootstrap information the browser client needs to open a WebT
   "timestamp": 1714094761.234,
   "videoCodec": "hevc",
   "webTransport": {
-    "urlTemplate": "https://127.0.0.1:4311/wt/simulators/{udid}",
+    "urlTemplate": "https://127.0.0.1:4311/wt/simulators/{udid}?simdeckToken=...",
     "certificateHash": {
       "algorithm": "sha-256",
       "value": "3f...e9"
@@ -30,11 +30,11 @@ Returns the static bootstrap information the browser client needs to open a WebT
 | `httpPort` / `wtPort`                | Numeric ports for the HTTP and WebTransport servers. WebTransport is always `httpPort + 1`.   |
 | `timestamp`                          | Server-side `time.now()` as a fractional Unix epoch in seconds.                               |
 | `videoCodec`                         | Active encoder. One of `hevc`, `h264`, `h264-software`. See [Video Pipeline](/guide/video).   |
-| `webTransport.urlTemplate`           | URL with a `{udid}` placeholder for the simulator stream. Substitute and dial.                |
+| `webTransport.urlTemplate`           | URL with a `{udid}` placeholder and access token query for the simulator stream.              |
 | `webTransport.certificateHash.value` | SHA-256 of the server's self-signed cert. Pin via `serverCertificateHashes` in the WT client. |
 | `webTransport.packetVersion`         | The current binary packet protocol version. Clients should refuse to parse unknown versions.  |
 
-The certificate is regenerated every time the server restarts. A client that caches the hash should refetch `/api/health` after any disconnection.
+The certificate and default access token are regenerated every time the server restarts. A client that caches the hash should refetch `/api/health` after any disconnection.
 
 ## `GET /api/metrics`
 

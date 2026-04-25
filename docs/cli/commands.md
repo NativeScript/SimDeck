@@ -9,6 +9,7 @@ Start the HTTP and WebTransport servers in the foreground. This is the only comm
 ```sh
 simdeck serve [--port <u16>] [--bind <ip>] [--advertise-host <host>]
                        [--client-root <path>] [--video-codec <codec>]
+                       [--access-token <token>]
 ```
 
 | Flag               | Default               | Description                                                                            |
@@ -18,6 +19,7 @@ simdeck serve [--port <u16>] [--bind <ip>] [--advertise-host <host>]
 | `--advertise-host` | matches `--bind`      | Hostname or IP advertised to remote clients in the WebTransport URL template and cert. |
 | `--client-root`    | bundled `client/dist` | Override the static client directory.                                                  |
 | `--video-codec`    | `hevc`                | One of `hevc`, `h264`, `h264-software`. See [Video Pipeline](/guide/video).            |
+| `--access-token`   | generated at startup  | Token accepted by `X-SimDeck-Token`, `Authorization: Bearer`, or the served UI cookie. |
 
 When the server is up it prints something like:
 
@@ -25,6 +27,7 @@ When the server is up it prints something like:
 HTTP listening on http://127.0.0.1:4310
 WebTransport listening on https://127.0.0.1:4311/wt/simulators/{udid}
 Serving client from /usr/local/lib/node_modules/simdeck/client/dist
+API access token: 9f...
 ```
 
 `Ctrl-C` shuts both servers down cleanly.
@@ -36,6 +39,7 @@ Install SimDeck as a per-user `launchd` service. Same flags as `serve`:
 ```sh
 simdeck service on [--port <u16>] [--bind <ip>] [--advertise-host <host>]
                             [--client-root <path>] [--video-codec <codec>]
+                            [--access-token <token>]
 ```
 
 The command writes `~/Library/LaunchAgents/dev.nativescript.simdeck.plist`, bootstraps it into `gui/<uid>`, and immediately kickstarts it. See [Background Service](/guide/service) for details.

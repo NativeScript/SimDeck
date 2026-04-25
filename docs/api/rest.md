@@ -1,8 +1,8 @@
 # REST Endpoints
 
-The SimDeck server exposes one REST API over plain HTTP. Every route lives under `/api/`. Responses are JSON unless explicitly noted otherwise. Errors return a JSON body with `{"error": {"message": "..."}}` and an appropriate HTTP status.
+The SimDeck server exposes one REST API over plain HTTP. Every route lives under `/api/`. Responses are JSON unless explicitly noted otherwise. Errors return a JSON body with `{"error": "..."}` and an appropriate HTTP status.
 
-CORS is wide open (`Access-Control-Allow-Origin: *`) so you can call the API from any browser tab on the same network.
+The served browser UI receives the generated access token automatically through a strict same-site cookie. Direct API callers must send `X-SimDeck-Token: <token>` or `Authorization: Bearer <token>`.
 
 ## Conventions
 
@@ -25,7 +25,7 @@ Returns server health, the WebTransport URL template, and the certificate hash t
   "timestamp": 1714094761.234,
   "videoCodec": "hevc",
   "webTransport": {
-    "urlTemplate": "https://127.0.0.1:4311/wt/simulators/{udid}",
+    "urlTemplate": "https://127.0.0.1:4311/wt/simulators/{udid}?simdeckToken=...",
     "certificateHash": {
       "algorithm": "sha-256",
       "value": "3f...e9"

@@ -1,29 +1,33 @@
 use crate::api::json::json;
+use crate::auth;
 use crate::config::Config;
 use crate::error::AppError;
 use crate::inspector::InspectorHub;
 use crate::logs::LogRegistry;
 use crate::metrics::counters::{ClientStreamStats, Metrics};
-use crate::native::bridge::LogFilters;
+use crate::native::bridge::{LogFilters, NativeBridge};
 use crate::simulators::registry::SessionRegistry;
+use crate::simulators::session::SimulatorSession;
 use crate::transport::packet::PACKET_VERSION;
+use axum::body::Body;
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, Method, StatusCode};
-use axum::middleware::map_response;
+use axum::extract::{ConnectInfo, Path, Query, State};
+use axum::http::{header, HeaderMap, Method, Request, StatusCode};
+use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::Map;
 use serde_json::{json as json_value, Value};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::Command;
+use tokio::task;
 use tokio::time::timeout;
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 #[derive(Clone)]
@@ -33,7 +37,6 @@ pub struct AppState {
     pub logs: LogRegistry,
     pub inspectors: InspectorHub,
     pub metrics: Arc<Metrics>,
-    pub wt_endpoint_template: String,
     pub certificate_hash_hex: String,
 }
 
@@ -164,26 +167,53 @@ pub fn router(state: AppState) -> Router {
             post(inspector_request),
         )
         .route("/api/simulators/{udid}/logs", get(simulator_logs))
+        .route_layer(from_fn_with_state(state.clone(), require_api_auth))
         .with_state(state)
-        .layer(map_response(append_cors_headers))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_headers(Any)
-                .allow_methods([Method::GET, Method::POST, Method::OPTIONS]),
-        )
         .layer(TraceLayer::new_for_http())
 }
 
-async fn append_cors_headers(mut response: Response) -> Response {
-    let headers = response.headers_mut();
-    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_METHODS,
-        "GET, POST, OPTIONS".parse().unwrap(),
-    );
-    headers.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, "*".parse().unwrap());
+async fn require_api_auth(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if is_inspector_agent_transport_path(request.uri().path()) {
+        return next.run(request).await;
+    }
+
+    if request.method() == Method::OPTIONS {
+        return auth::preflight_response(&state.config, request.headers());
+    }
+
+    let peer_is_loopback = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(address)| address.ip().is_loopback())
+        .unwrap_or(false);
+
+    if !auth::api_request_authorized(
+        &state.config,
+        request.method(),
+        request.headers(),
+        peer_is_loopback,
+    ) {
+        return auth::unauthorized_response(&state.config, request.headers());
+    }
+
+    let request_headers = request.headers().clone();
+    let mut response = next.run(request).await;
+    auth::append_cors_headers(&state.config, &request_headers, response.headers_mut());
+    if peer_is_loopback {
+        auth::append_access_cookie(response.headers_mut(), &state.config.access_token);
+    }
     response
+}
+
+fn is_inspector_agent_transport_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/inspector/connect" | "/api/inspector/poll" | "/api/inspector/response"
+    )
 }
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
@@ -194,7 +224,7 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64(),
         "videoCodec": state.config.video_codec,
         "webTransport": {
-            "urlTemplate": state.wt_endpoint_template,
+            "urlTemplate": auth::tokenized_webtransport_template(&state.config),
             "certificateHash": {
                 "algorithm": "sha-256",
                 "value": state.certificate_hash_hex,
@@ -241,10 +271,16 @@ async fn inspector_poll(
     State(state): State<AppState>,
     Query(query): Query<InspectorPollQuery>,
 ) -> Result<Response, AppError> {
+    if query.process_identifier <= 0 {
+        return Err(AppError::bad_request(
+            "`processIdentifier` must be a positive process id.",
+        ));
+    }
     state
         .inspectors
         .ensure_polled_agent(query.process_identifier)
-        .await;
+        .await
+        .map_err(AppError::native)?;
     match state
         .inspectors
         .poll(query.process_identifier, Duration::from_secs(25))
@@ -277,7 +313,7 @@ async fn inspector_response(
 }
 
 async fn list_simulators(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
-    let simulators = state.registry.bridge().list_simulators()?;
+    let simulators = run_bridge_action(state.clone(), |bridge| bridge.list_simulators()).await?;
     Ok(json(json_value!({
         "simulators": state.registry.enrich_simulators(simulators),
     })))
@@ -288,8 +324,12 @@ async fn boot_simulator(
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     state.registry.remove(&udid);
-    state.registry.bridge().boot_simulator(&udid)?;
-    simulator_payload(&state, &udid)
+    let action_udid = udid.clone();
+    run_bridge_action(state.clone(), move |bridge| {
+        bridge.boot_simulator(&action_udid)
+    })
+    .await?;
+    simulator_payload(state, udid).await
 }
 
 async fn shutdown_simulator(
@@ -297,16 +337,24 @@ async fn shutdown_simulator(
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     state.registry.remove(&udid);
-    state.registry.bridge().shutdown_simulator(&udid)?;
-    simulator_payload(&state, &udid)
+    let action_udid = udid.clone();
+    run_bridge_action(state.clone(), move |bridge| {
+        bridge.shutdown_simulator(&action_udid)
+    })
+    .await?;
+    simulator_payload(state, udid).await
 }
 
 async fn toggle_appearance(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    state.registry.bridge().toggle_appearance(&udid)?;
-    simulator_payload(&state, &udid)
+    let action_udid = udid.clone();
+    run_bridge_action(state.clone(), move |bridge| {
+        bridge.toggle_appearance(&action_udid)
+    })
+    .await?;
+    simulator_payload(state, udid).await
 }
 
 async fn refresh_stream(
@@ -330,8 +378,12 @@ async fn open_url(
     if payload.url.trim().is_empty() {
         return Err(AppError::bad_request("Request body must include `url`."));
     }
-    state.registry.bridge().open_url(&udid, &payload.url)?;
-    simulator_payload(&state, &udid)
+    let action_udid = udid.clone();
+    run_bridge_action(state.clone(), move |bridge| {
+        bridge.open_url(&action_udid, &payload.url)
+    })
+    .await?;
+    simulator_payload(state, udid).await
 }
 
 async fn launch_bundle(
@@ -344,11 +396,12 @@ async fn launch_bundle(
             "Request body must include `bundleId`.",
         ));
     }
-    state
-        .registry
-        .bridge()
-        .launch_bundle(&udid, &payload.bundle_id)?;
-    simulator_payload(&state, &udid)
+    let action_udid = udid.clone();
+    run_bridge_action(state.clone(), move |bridge| {
+        bridge.launch_bundle(&action_udid, &payload.bundle_id)
+    })
+    .await?;
+    simulator_payload(state, udid).await
 }
 
 async fn send_touch(
@@ -356,8 +409,15 @@ async fn send_touch(
     Path(udid): Path<String>,
     Json(payload): Json<TouchPayload>,
 ) -> Result<Json<Value>, AppError> {
-    let session = state.registry.get_or_create(&udid)?;
-    session.send_touch(payload.x, payload.y, &payload.phase)?;
+    if !payload.x.is_finite() || !payload.y.is_finite() {
+        return Err(AppError::bad_request(
+            "`x` and `y` must be finite normalized numbers.",
+        ));
+    }
+    let x = payload.x.clamp(0.0, 1.0);
+    let y = payload.y.clamp(0.0, 1.0);
+    let phase = payload.phase;
+    run_session_action(state, udid, move |session| session.send_touch(x, y, &phase)).await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -366,8 +426,10 @@ async fn send_key(
     Path(udid): Path<String>,
     Json(payload): Json<KeyPayload>,
 ) -> Result<Json<Value>, AppError> {
-    let session = state.registry.get_or_create(&udid)?;
-    session.send_key(payload.key_code, payload.modifiers.unwrap_or(0))?;
+    run_session_action(state, udid, move |session| {
+        session.send_key(payload.key_code, payload.modifiers.unwrap_or(0))
+    })
+    .await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -375,8 +437,7 @@ async fn dismiss_keyboard(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let session = state.registry.get_or_create(&udid)?;
-    session.dismiss_keyboard()?;
+    run_session_action(state, udid, |session| session.dismiss_keyboard()).await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -384,8 +445,7 @@ async fn press_home(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let session = state.registry.get_or_create(&udid)?;
-    session.press_home()?;
+    run_session_action(state, udid, |session| session.press_home()).await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -393,10 +453,12 @@ async fn open_app_switcher(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let session = state.registry.get_or_create(&udid)?;
-    session.press_home()?;
-    tokio::time::sleep(Duration::from_millis(140)).await;
-    session.press_home()?;
+    run_session_action(state, udid, |session| {
+        session.press_home()?;
+        std::thread::sleep(Duration::from_millis(140));
+        session.press_home()
+    })
+    .await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -404,9 +466,12 @@ async fn rotate_right(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let session = state.registry.get_or_create(&udid)?;
-    session.rotate_right()?;
-    session.request_refresh();
+    run_session_action(state, udid, |session| {
+        session.rotate_right()?;
+        session.request_refresh();
+        Ok(())
+    })
+    .await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -414,9 +479,12 @@ async fn rotate_left(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let session = state.registry.get_or_create(&udid)?;
-    session.rotate_left()?;
-    session.request_refresh();
+    run_session_action(state, udid, |session| {
+        session.rotate_left()?;
+        session.request_refresh();
+        Ok(())
+    })
+    .await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -424,7 +492,7 @@ async fn chrome_profile(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let profile = state.registry.bridge().chrome_profile(&udid)?;
+    let profile = run_bridge_action(state, move |bridge| bridge.chrome_profile(&udid)).await?;
     Ok(json(json_value!(profile)))
 }
 
@@ -432,7 +500,7 @@ async fn chrome_png(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<(StatusCode, HeaderMap, Vec<u8>), AppError> {
-    let png = state.registry.bridge().chrome_png(&udid)?;
+    let png = run_bridge_action(state, move |bridge| bridge.chrome_png(&udid)).await?;
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
     headers.insert(
@@ -450,7 +518,8 @@ async fn accessibility_tree(
     let requested_source = AccessibilityHierarchySource::parse(query.source.as_deref())?;
 
     if requested_source == AccessibilityHierarchySource::NativeAX {
-        let native_snapshot = match state.registry.bridge().accessibility_snapshot(&udid, None) {
+        let native_snapshot = match accessibility_snapshot(state.clone(), udid.clone(), None).await
+        {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 return Ok(json(empty_accessibility_tree(
@@ -497,7 +566,7 @@ async fn accessibility_tree(
                 }
                 Err(_inspector_error) => {
                     let available_sources = available_sources_with_native_ax(Some(&session));
-                    match state.registry.bridge().accessibility_snapshot(&udid, None) {
+                    match accessibility_snapshot(state.clone(), udid.clone(), None).await {
                         Ok(native_snapshot) => Ok(json(attach_available_sources(
                             native_snapshot,
                             &available_sources,
@@ -513,7 +582,7 @@ async fn accessibility_tree(
         }
         Err(_inspector_error) => {
             let available_sources = available_sources_with_native_ax(None);
-            match state.registry.bridge().accessibility_snapshot(&udid, None) {
+            match accessibility_snapshot(state.clone(), udid.clone(), None).await {
                 Ok(native_snapshot) => Ok(json(attach_available_sources(
                     native_snapshot,
                     &available_sources,
@@ -539,10 +608,7 @@ async fn accessibility_point(
         ));
     }
 
-    let snapshot = state
-        .registry
-        .bridge()
-        .accessibility_snapshot(&udid, Some((query.x, query.y)))?;
+    let snapshot = accessibility_snapshot(state, udid, Some((query.x, query.y))).await?;
     Ok(json(snapshot))
 }
 
@@ -602,10 +668,10 @@ async fn simulator_logs(
     );
     let entries = if query.backfill.unwrap_or(false) {
         let seconds = query.seconds.unwrap_or(30.0).clamp(1.0, 1800.0);
-        state
-            .registry
-            .bridge()
-            .recent_logs(&udid, seconds, limit, &filters)?
+        run_bridge_action(state.clone(), move |bridge| {
+            bridge.recent_logs(&udid, seconds, limit, &filters)
+        })
+        .await?
     } else {
         state.logs.ensure_started(&udid).await?;
         state.logs.snapshot(&udid, &filters, limit).await
@@ -1390,12 +1456,49 @@ fn split_filter_values(value: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-fn simulator_payload(state: &AppState, udid: &str) -> Result<Json<Value>, AppError> {
-    let simulators = state.registry.bridge().list_simulators()?;
+async fn run_session_action<F>(state: AppState, udid: String, action: F) -> Result<(), AppError>
+where
+    F: FnOnce(SimulatorSession) -> Result<(), AppError> + Send + 'static,
+{
+    let registry = state.registry.clone();
+    task::spawn_blocking(move || {
+        let session = registry.get_or_create(&udid)?;
+        action(session)
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("Failed to join native session task: {error}")))?
+}
+
+async fn run_bridge_action<F, T>(state: AppState, action: F) -> Result<T, AppError>
+where
+    F: FnOnce(NativeBridge) -> Result<T, AppError> + Send + 'static,
+    T: Send + 'static,
+{
+    let bridge = state.registry.bridge().clone();
+    task::spawn_blocking(move || action(bridge))
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("Failed to join native bridge task: {error}"))
+        })?
+}
+
+async fn accessibility_snapshot(
+    state: AppState,
+    udid: String,
+    point: Option<(f64, f64)>,
+) -> Result<Value, AppError> {
+    run_bridge_action(state, move |bridge| {
+        bridge.accessibility_snapshot(&udid, point)
+    })
+    .await
+}
+
+async fn simulator_payload(state: AppState, udid: String) -> Result<Json<Value>, AppError> {
+    let simulators = run_bridge_action(state.clone(), |bridge| bridge.list_simulators()).await?;
     let enriched = state.registry.enrich_simulators(simulators);
     let simulator = enriched
         .into_iter()
-        .find(|entry| entry.get("udid").and_then(Value::as_str) == Some(udid))
+        .find(|entry| entry.get("udid").and_then(Value::as_str) == Some(udid.as_str()))
         .ok_or_else(|| AppError::not_found(format!("Unknown simulator {udid}")))?;
     Ok(json(json_value!({ "simulator": simulator })))
 }

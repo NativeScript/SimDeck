@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub access_token: String,
     pub advertise_host: String,
     pub bind_ip: IpAddr,
     pub http_port: u16,
@@ -18,6 +19,7 @@ impl Config {
         bind_ip: IpAddr,
         advertise_host: Option<String>,
         video_codec: String,
+        access_token: Option<String>,
     ) -> Self {
         let wt_port = http_port.saturating_add(1);
         let advertise_host = advertise_host.unwrap_or_else(|| match bind_ip {
@@ -26,6 +28,7 @@ impl Config {
             _ => bind_ip.to_string(),
         });
         Self {
+            access_token: access_token.unwrap_or_else(crate::auth::generate_access_token),
             advertise_host,
             bind_ip,
             http_port,

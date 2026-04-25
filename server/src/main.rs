@@ -1,4 +1,5 @@
 mod api;
+mod auth;
 mod config;
 mod core_simulator;
 mod error;
@@ -26,7 +27,7 @@ use serde_json::Value;
 use simulators::registry::SessionRegistry;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -59,6 +60,8 @@ enum Command {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
         video_codec: VideoCodecMode,
+        #[arg(long)]
+        access_token: Option<String>,
     },
     Service {
         #[command(subcommand)]
@@ -314,6 +317,8 @@ enum ServiceCommand {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
         video_codec: VideoCodecMode,
+        #[arg(long)]
+        access_token: Option<String>,
     },
     Restart {
         #[arg(long, default_value_t = 4310)]
@@ -326,6 +331,8 @@ enum ServiceCommand {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
         video_codec: VideoCodecMode,
+        #[arg(long)]
+        access_token: Option<String>,
     },
     Off,
 }
@@ -381,7 +388,15 @@ fn main() -> anyhow::Result<()> {
             advertise_host,
             client_root,
             video_codec,
-        } => serve_with_appkit(port, bind, advertise_host, client_root, video_codec),
+            access_token,
+        } => serve_with_appkit(
+            port,
+            bind,
+            advertise_host,
+            client_root,
+            video_codec,
+            access_token,
+        ),
         Command::Service { command } => match command {
             ServiceCommand::On {
                 port,
@@ -389,12 +404,14 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
+                access_token,
             } => service::enable(ServiceOptions {
                 port,
                 bind,
                 advertise_host,
                 client_root,
                 video_codec,
+                access_token,
             }),
             ServiceCommand::Restart {
                 port,
@@ -402,12 +419,14 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
+                access_token,
             } => service::restart(ServiceOptions {
                 port,
                 bind,
                 advertise_host,
                 client_root,
                 video_codec,
+                access_token,
             }),
             ServiceCommand::Off => service::disable(),
         },
@@ -875,6 +894,7 @@ struct ServiceOptions {
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
+    access_token: Option<String>,
 }
 
 fn serve_with_appkit(
@@ -883,6 +903,7 @@ fn serve_with_appkit(
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
+    access_token: Option<String>,
 ) -> anyhow::Result<()> {
     std::env::set_var("SIMDECK_VIDEO_CODEC", video_codec.as_env_value());
     std::env::set_var(RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV, "1");
@@ -898,9 +919,14 @@ fn serve_with_appkit(
             .build()
             .context("build tokio runtime");
         let result = match runtime {
-            Ok(runtime) => {
-                runtime.block_on(serve(port, bind, advertise_host, client_root, video_codec))
-            }
+            Ok(runtime) => runtime.block_on(serve(
+                port,
+                bind,
+                advertise_host,
+                client_root,
+                video_codec,
+                access_token,
+            )),
             Err(error) => Err(error),
         };
         let _ = result_tx.send(result);
@@ -2081,6 +2107,7 @@ async fn serve(
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
+    access_token: Option<String>,
 ) -> anyhow::Result<()> {
     let root = match client_root {
         Some(root) => root,
@@ -2092,6 +2119,7 @@ async fn serve(
         bind,
         advertise_host,
         video_codec.as_env_value().to_owned(),
+        access_token,
     );
     let metrics = Arc::new(Metrics::default());
     let bridge = NativeBridge;
@@ -2105,7 +2133,6 @@ async fn serve(
         logs,
         inspectors,
         metrics,
-        wt_endpoint_template: wt_runtime.endpoint_url_template.clone(),
         certificate_hash_hex: wt_runtime.certificate_hash_hex.clone(),
     };
 
@@ -2122,6 +2149,7 @@ async fn serve(
         wt_runtime.endpoint_url_template
     );
     info!("Serving client from {}", config.client_root.display());
+    info!("API access token: {}", config.access_token);
     if config.bind_ip.is_unspecified() && config.advertise_host == Ipv4Addr::LOCALHOST.to_string() {
         warn!(
             "Server is listening on all interfaces, but WebTransport is still advertised as localhost. \
@@ -2130,9 +2158,12 @@ Use --advertise-host <LAN-IP-or-DNS-name> for remote browser access."
     }
 
     let http_task = tokio::spawn(async move {
-        axum::serve(http_listener, http_router)
-            .await
-            .context("serve HTTP")
+        axum::serve(
+            http_listener,
+            http_router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .context("serve HTTP")
     });
     let wt_task =
         tokio::spawn(async move { transport::webtransport::serve(wt_endpoint, state).await });
