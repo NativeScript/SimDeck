@@ -23,7 +23,8 @@
     "node": ">=18"
   },
   "os": [
-    "darwin"
+    "darwin",
+    "linux"
   ],
   "publishConfig": {
     "access": "public"
