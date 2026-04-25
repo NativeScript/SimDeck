@@ -41,11 +41,15 @@
     "test": "cargo test --manifest-path server/Cargo.toml && npm run --prefix client test",
     "ci": "npm run lint && npm run build && npm run test && npm run package:vscode-extension",
     "dev": "npm run build:cli && node scripts/dev.mjs",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
     "postinstall": "node scripts/npm-postinstall.mjs",
     "prepack": "npm run build:client"
   },
   "devDependencies": {
     "@vscode/vsce": "^3.6.2",
-    "prettier": "^3.6.2"
+    "prettier": "^3.6.2",
+    "vitepress": "^1.6.4"
   }
 }

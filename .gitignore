@@ -8,6 +8,8 @@ client/dist/
 packages/inspector-agent/.build/
 packages/inspector-agent/.swiftpm/
 packages/nativescript-inspector/dist/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
 
 # Package manager installs and caches
 node_modules/

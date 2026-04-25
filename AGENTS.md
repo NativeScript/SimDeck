@@ -8,6 +8,7 @@ This repository is a local-first simulator control plane. The product goal is a 
 - `client/` is the browser UI.
 - `skills/xcode-canvas-web/SKILL.md` is the operator guide for using the tool from Codex.
 - `scripts/` holds repeatable build entrypoints.
+- `docs/` is the public VitePress documentation site (deployed to GitHub Pages by `.github/workflows/docs.yml`).
 
 The native side should own anything that depends on macOS frameworks, `xcrun simctl`, or private CoreSimulator/SimulatorKit APIs. The web client should stay thin and consume the CLI API.
 
@@ -131,6 +132,7 @@ Useful direct commands:
 
 - If you add an API route, add the matching client affordance or document why it stays CLI-only.
 - If you change the CLI invocation shape, update `README.md` and `skills/xcode-canvas-web/SKILL.md` in the same pass.
+- If you change a CLI flag, REST route, packet format, or inspector method, update the matching page under `docs/` in the same pass.
 - If you expand the private framework bridge, document the Xcode/runtime assumptions here.
 - If a feature depends on a booted simulator, fail with a clear JSON error instead of silently returning an empty asset.
 - Do not reintroduce legacy `/stream.h264` handling. The supported live path is Rust-managed WebTransport.
