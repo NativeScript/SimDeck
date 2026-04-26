@@ -16,7 +16,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)uninstallBundleID:(NSString *)bundleID simulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)setPasteboardText:(NSString *)text simulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (nullable NSString *)pasteboardTextForSimulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
-- (nullable NSArray<NSDictionary *> *)recentLogEntriesForSimulatorUDID:(NSString *)udid seconds:(NSTimeInterval)seconds error:(NSError * _Nullable * _Nullable)error;
+- (nullable NSArray<NSDictionary *> *)recentLogEntriesForSimulatorUDID:(NSString *)udid seconds:(NSTimeInterval)seconds limit:(NSUInteger)limit error:(NSError * _Nullable * _Nullable)error;
 - (nullable NSDictionary *)simulatorWithUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 
 @end

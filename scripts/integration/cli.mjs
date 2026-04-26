@@ -14,6 +14,7 @@ const origin = serverUrl;
 const fixtureBundleId = "dev.nativescript.simdeck.integration.fixture";
 const fixtureUrlScheme = "simdeck-fixture";
 const fixtureUrl = "simdeck-fixture://integration";
+const fixtureFocusUrl = "simdeck-fixture://focus-message";
 const verbose = process.env.SIMDECK_INTEGRATION_VERBOSE === "1";
 const traceHttp = process.env.SIMDECK_INTEGRATION_TRACE_HTTP === "1";
 const showSimulator = process.env.SIMDECK_INTEGRATION_SHOW_SIMULATOR === "1";
@@ -30,6 +31,8 @@ const httpActionBudgetMs = Number(
 
 let simulatorUDID = "";
 let serverProcess = null;
+const stepTimings = [];
+let activeTiming = null;
 
 process.on("SIGINT", () => {
   cleanup();
@@ -43,10 +46,12 @@ process.on("exit", cleanup);
 
 main()
   .then(() => {
+    printTimingSummary();
     cleanup();
     process.exit(0);
   })
   .catch((error) => {
+    printTimingSummary();
     console.error(error?.stack ?? error);
     cleanup();
     process.exit(1);
@@ -82,69 +87,90 @@ async function main() {
     openSimulatorApp(simulatorUDID);
   }
 
-  const fixture = buildFixtureApp();
-
-  assertSimulatorListed(simulatorUDID);
-  assertJson(simdeckJson(["chrome-profile", simulatorUDID]), "chrome-profile");
-  assertJson(
-    simdeckJson(["logs", simulatorUDID, "--seconds", "5", "--limit", "5"]),
-    "logs",
+  const fixture = await measuredStep("build SwiftUI fixture", () =>
+    buildFixtureApp(),
   );
 
-  simdeckJson(["install", simulatorUDID, fixture.appPath]);
-  preapproveFixtureUrlScheme();
-  await verifyUi("after install");
+  await measuredStep("CLI list", () => assertSimulatorListed(simulatorUDID));
+  await measuredStep("CLI chrome-profile", () =>
+    assertJson(
+      simdeckJson(["chrome-profile", simulatorUDID]),
+      "chrome-profile",
+    ),
+  );
+  await measuredStep("CLI logs", () =>
+    assertJson(
+      simdeckJson(["logs", simulatorUDID, "--seconds", "1", "--limit", "1"]),
+      "logs",
+    ),
+  );
+
+  await measuredStep("CLI install fixture", async () => {
+    simdeckJson(["install", simulatorUDID, fixture.appPath]);
+    preapproveFixtureUrlScheme();
+    await verifyUi("after install");
+  });
 
   startServer();
-  await waitForHealth();
+  await measuredStep("server health", () => waitForHealth());
   logStep(`server ready at ${serverUrl}`);
 
-  const fullTree = await retrySimdeckJson(
-    ["describe-ui", simulatorUDID, "--direct", "--max-depth", "2"],
-    "direct describe-ui json",
+  const fullTree = await measuredStep("direct describe-ui json", () =>
+    retrySimdeckJson(
+      ["describe-ui", simulatorUDID, "--direct", "--max-depth", "2"],
+      "direct describe-ui json",
+    ),
   );
   assertRoots(fullTree, "direct describe-ui json");
   const queryPoint = pointFromSnapshot(fullTree);
   assertJson(
-    await retrySimdeckJson(
-      [
-        "describe-ui",
-        simulatorUDID,
-        "--direct",
-        "--format",
-        "compact-json",
-        "--max-depth",
-        "2",
-      ],
-      "direct describe-ui compact-json",
+    await measuredStep("direct describe-ui compact-json", () =>
+      retrySimdeckJson(
+        [
+          "describe-ui",
+          simulatorUDID,
+          "--direct",
+          "--format",
+          "compact-json",
+          "--max-depth",
+          "2",
+        ],
+        "direct describe-ui compact-json",
+      ),
     ),
     "direct describe-ui compact-json",
   );
-  const agentTree = simdeckText([
-    "describe-ui",
-    simulatorUDID,
-    "--server-url",
-    serverUrl,
-    "--format",
-    "agent",
-    "--max-depth",
-    "2",
-  ]);
+  const agentTree = await measuredStep("server describe-ui agent", () =>
+    simdeckText([
+      "describe-ui",
+      simulatorUDID,
+      "--server-url",
+      serverUrl,
+      "--source",
+      "native-ax",
+      "--format",
+      "agent",
+      "--max-depth",
+      "2",
+    ]),
+  );
   if (!agentTree.includes("source:") || !agentTree.includes("- ")) {
     throw new Error("agent describe-ui output did not look like a hierarchy");
   }
   assertRoots(
-    await retrySimdeckJson(
-      [
-        "describe-ui",
-        simulatorUDID,
-        "--point",
-        `${queryPoint.x},${queryPoint.y}`,
-        "--format",
-        "compact-json",
-        "--direct",
-      ],
-      "point describe-ui compact-json",
+    await measuredStep("point describe-ui compact-json", () =>
+      retrySimdeckJson(
+        [
+          "describe-ui",
+          simulatorUDID,
+          "--point",
+          `${queryPoint.x},${queryPoint.y}`,
+          "--format",
+          "compact-json",
+          "--direct",
+        ],
+        "point describe-ui compact-json",
+      ),
     ),
     "point describe-ui compact-json",
   );
@@ -153,201 +179,291 @@ async function main() {
   await runCliControls();
 
   const screenshotPath = path.join(tempRoot, "screen.png");
-  simdeckJson(["screenshot", simulatorUDID, "--output", screenshotPath]);
-  assertPng(screenshotPath);
-  await verifyUi("after screenshot file");
+  await measuredStep("CLI screenshot file", async () => {
+    simdeckJson(["screenshot", simulatorUDID, "--output", screenshotPath]);
+    assertPng(screenshotPath);
+    await verifyUi("after screenshot file");
+  });
   const stdoutPng = path.join(tempRoot, "screen-stdout.png");
-  fs.writeFileSync(
-    stdoutPng,
-    runBuffer(simdeck, ["screenshot", simulatorUDID, "--stdout"], {
-      timeoutMs: 300_000,
-      maxBuffer: 64 * 1024 * 1024,
-    }),
-  );
-  assertPng(stdoutPng);
-  await verifyUi("after screenshot stdout");
-
-  simdeckJson(["pasteboard", "set", simulatorUDID, "simdeck integration"]);
-  await verifyUi("after pasteboard set");
-  const pasteboard = simdeckJson(["pasteboard", "get", simulatorUDID]);
-  if (pasteboard.text !== "simdeck integration") {
-    throw new Error(
-      `pasteboard round-trip failed: ${JSON.stringify(pasteboard)}`,
+  await measuredStep("CLI screenshot stdout", async () => {
+    fs.writeFileSync(
+      stdoutPng,
+      runBuffer(simdeck, ["screenshot", simulatorUDID, "--stdout"], {
+        timeoutMs: 300_000,
+        maxBuffer: 64 * 1024 * 1024,
+      }),
     );
-  }
-  await verifyUi("after pasteboard get");
+    assertPng(stdoutPng);
+    await verifyUi("after screenshot stdout");
+  });
+
+  await measuredStep("CLI pasteboard set", async () => {
+    simdeckJson(["pasteboard", "set", simulatorUDID, "simdeck integration"]);
+    await verifyUi("after pasteboard set");
+  });
+  await measuredStep("CLI pasteboard get", async () => {
+    const pasteboard = simdeckJson(["pasteboard", "get", simulatorUDID]);
+    if (pasteboard.text !== "simdeck integration") {
+      throw new Error(
+        `pasteboard round-trip failed: ${JSON.stringify(pasteboard)}`,
+      );
+    }
+    await verifyUi("after pasteboard get");
+  });
 
   const fileInput = path.join(tempRoot, "type.txt");
   fs.writeFileSync(fileInput, "file input");
-  simdeckJson(["type", simulatorUDID, "--file", fileInput]);
-  await verifyUi("after type file");
-  simdeckJson(["type", simulatorUDID, "--stdin"], {
-    input: "stdin input",
+  await measuredStep("CLI type file", async () => {
+    simdeckJson(["type", simulatorUDID, "--file", fileInput]);
+    await verifyUi("after type file");
   });
-  await verifyUi("after type stdin");
+  await measuredStep("CLI type stdin", async () => {
+    simdeckJson(["type", simulatorUDID, "--stdin"], {
+      input: "stdin input",
+    });
+    await verifyUi("after type stdin");
+  });
 
-  const batch = simdeckJson([
-    "batch",
-    simulatorUDID,
-    "--step",
-    "button home",
-    "--step",
-    "tap --x 200 --y 700 --duration-ms 20",
-    "--step",
-    "type batch",
-    "--continue-on-error",
-  ]);
-  if (batch.ok !== true || batch.failureCount !== 0) {
-    throw new Error(`batch command failed: ${JSON.stringify(batch)}`);
-  }
-  await verifyUi("after batch");
+  await measuredStep("CLI batch", async () => {
+    const batch = simdeckJson([
+      "batch",
+      simulatorUDID,
+      "--step",
+      "button home",
+      "--step",
+      "tap --x 200 --y 700 --duration-ms 20",
+      "--step",
+      "type batch",
+      "--continue-on-error",
+    ]);
+    if (batch.ok !== true || batch.failureCount !== 0) {
+      throw new Error(`batch command failed: ${JSON.stringify(batch)}`);
+    }
+    await verifyUi("after batch");
+  });
 
   await runHardwareButtonControls();
 
-  simdeckJson(["uninstall", simulatorUDID, fixtureBundleId]);
-  simdeckJson(["shutdown", simulatorUDID]);
-  simdeckJson(["erase", simulatorUDID]);
-  simdeckJson(["boot", simulatorUDID]);
-  runText("xcrun", ["simctl", "bootstatus", simulatorUDID, "-b"], {
-    timeoutMs: 600_000,
-  });
-  assertRoots(
-    await retrySimdeckJson(
-      [
-        "describe-ui",
-        simulatorUDID,
-        "--direct",
-        "--format",
-        "compact-json",
-        "--max-depth",
-        "1",
-      ],
-      "post-erase describe-ui",
-    ),
-    "post-erase describe-ui",
+  await measuredStep("CLI uninstall fixture", () =>
+    simdeckJson(["uninstall", simulatorUDID, fixtureBundleId]),
   );
+  await measuredStep("CLI shutdown", () =>
+    simdeckJson(["shutdown", simulatorUDID]),
+  );
+  await measuredStep("CLI erase", () => simdeckJson(["erase", simulatorUDID]));
+  await measuredStep("CLI boot after erase", () =>
+    simdeckJson(["boot", simulatorUDID]),
+  );
+  await measuredStep("simctl bootstatus after erase", () =>
+    runText("xcrun", ["simctl", "bootstatus", simulatorUDID, "-b"], {
+      timeoutMs: 600_000,
+    }),
+  );
+  await measuredStep("post-erase describe-ui", async () => {
+    assertRoots(
+      await retrySimdeckJson(
+        [
+          "describe-ui",
+          simulatorUDID,
+          "--direct",
+          "--format",
+          "compact-json",
+          "--max-depth",
+          "1",
+        ],
+        "post-erase describe-ui",
+      ),
+      "post-erase describe-ui",
+    );
+  });
 
   console.log("SimDeck CLI integration suite passed");
 }
 
 async function runCliControls() {
   await cliStep("CLI home", ["home", simulatorUDID]);
-  await cliStep("CLI tap", [
-    "tap",
-    simulatorUDID,
-    "200",
-    "700",
-    "--duration-ms",
-    "20",
-  ]);
-  await cliStep("CLI touch began", [
-    "touch",
-    simulatorUDID,
-    "0.5",
-    "0.5",
-    "--phase",
-    "began",
-    "--normalized",
-  ]);
-  await cliStep("CLI touch ended", [
-    "touch",
-    simulatorUDID,
-    "0.5",
-    "0.5",
-    "--phase",
-    "ended",
-    "--normalized",
-  ]);
-  await cliStep("CLI touch down/up", [
-    "touch",
-    simulatorUDID,
-    "120",
-    "240",
-    "--down",
-    "--up",
-    "--delay-ms",
-    "20",
-  ]);
-  await cliStep("CLI swipe", [
-    "swipe",
-    simulatorUDID,
-    "200",
-    "700",
-    "200",
-    "300",
-    "--duration-ms",
-    "100",
-    "--steps",
-    "4",
-  ]);
-  await cliStep("CLI gesture scroll-down", [
-    "gesture",
-    simulatorUDID,
-    "scroll-down",
-    "--duration-ms",
-    "100",
-    "--delta",
-    "100",
-  ]);
-  await cliStep("CLI gesture edge swipe", [
-    "gesture",
-    simulatorUDID,
-    "swipe-from-left-edge",
-    "--duration-ms",
-    "100",
-  ]);
-  await cliStep("CLI pinch", [
-    "pinch",
-    simulatorUDID,
-    "--start-distance",
-    "0.15",
-    "--end-distance",
-    "0.25",
-    "--normalized",
-    "--duration-ms",
-    "100",
-    "--steps",
-    "4",
-  ]);
-  await cliStep("CLI rotate gesture", [
-    "rotate-gesture",
-    simulatorUDID,
-    "--radius",
-    "0.10",
-    "--degrees",
-    "30",
-    "--normalized",
-    "--duration-ms",
-    "100",
-    "--steps",
-    "4",
-  ]);
-  await cliStep("CLI key enter", ["key", simulatorUDID, "enter"]);
-  await cliStep("CLI key sequence", [
-    "key-sequence",
-    simulatorUDID,
-    "--keycodes",
-    "h,e,l,l,o",
-    "--delay-ms",
-    "5",
-  ]);
-  await cliStep("CLI key combo", [
-    "key-combo",
-    simulatorUDID,
-    "--modifiers",
-    "cmd",
-    "--key",
-    "a",
-  ]);
-  await cliStep("CLI type", ["type", simulatorUDID, "qa"]);
-  await cliStep("CLI dismiss keyboard", ["dismiss-keyboard", simulatorUDID]);
+  await cliStep(
+    "CLI launch SwiftUI fixture",
+    ["launch", simulatorUDID, fixtureBundleId],
+    { attempts: 3, delayMs: 5_000, timeoutMs: 180_000 },
+    { expectFixture: true },
+  );
+  await cliStep(
+    "CLI tap",
+    [
+      "tap",
+      simulatorUDID,
+      "0.5",
+      "0.525",
+      "--normalized",
+      "--duration-ms",
+      "20",
+    ],
+    {},
+    { expectFixture: true, expectText: "Continue Tapped" },
+  );
+  await cliStep(
+    "CLI touch began",
+    [
+      "touch",
+      simulatorUDID,
+      "0.5",
+      "0.525",
+      "--phase",
+      "began",
+      "--normalized",
+    ],
+    {},
+    { expectFixture: true },
+  );
+  await cliStep(
+    "CLI touch ended",
+    [
+      "touch",
+      simulatorUDID,
+      "0.5",
+      "0.525",
+      "--phase",
+      "ended",
+      "--normalized",
+    ],
+    {},
+    { expectFixture: true, expectText: "Continue Tapped" },
+  );
+  await cliStep(
+    "CLI touch down/up",
+    [
+      "touch",
+      simulatorUDID,
+      "0.5",
+      "0.525",
+      "--down",
+      "--up",
+      "--normalized",
+      "--delay-ms",
+      "20",
+    ],
+    {},
+    { expectFixture: true, expectText: "Continue Tapped" },
+  );
+  await cliStep(
+    "CLI swipe",
+    [
+      "swipe",
+      simulatorUDID,
+      "0.5",
+      "0.75",
+      "0.5",
+      "0.25",
+      "--normalized",
+      "--duration-ms",
+      "100",
+      "--steps",
+      "4",
+    ],
+    {},
+    { expectFixture: true },
+  );
+  await cliStep(
+    "CLI gesture scroll-down",
+    [
+      "gesture",
+      simulatorUDID,
+      "scroll-down",
+      "--duration-ms",
+      "100",
+      "--delta",
+      "100",
+    ],
+    {},
+    { expectFixture: true },
+  );
+  await cliStep(
+    "CLI gesture edge swipe",
+    ["gesture", simulatorUDID, "swipe-from-left-edge", "--duration-ms", "100"],
+    {},
+    { expectFixture: true },
+  );
+  await cliStep(
+    "CLI pinch",
+    [
+      "pinch",
+      simulatorUDID,
+      "--start-distance",
+      "0.15",
+      "--end-distance",
+      "0.25",
+      "--normalized",
+      "--duration-ms",
+      "100",
+      "--steps",
+      "4",
+    ],
+    {},
+    { expectFixture: true },
+  );
+  await cliStep(
+    "CLI rotate gesture",
+    [
+      "rotate-gesture",
+      simulatorUDID,
+      "--radius",
+      "0.10",
+      "--degrees",
+      "30",
+      "--normalized",
+      "--duration-ms",
+      "100",
+      "--steps",
+      "4",
+    ],
+    {},
+    { expectFixture: true },
+  );
+  await cliStep(
+    "CLI key enter",
+    ["key", simulatorUDID, "enter"],
+    {},
+    { expectFixture: true },
+  );
+  await cliStep(
+    "CLI key sequence",
+    [
+      "key-sequence",
+      simulatorUDID,
+      "--keycodes",
+      "h,e,l,l,o",
+      "--delay-ms",
+      "5",
+    ],
+    {},
+    { expectFixture: true },
+  );
+  await cliStep(
+    "CLI key combo",
+    ["key-combo", simulatorUDID, "--modifiers", "cmd", "--key", "a"],
+    {},
+    { expectFixture: true },
+  );
+  await cliStep(
+    "CLI type",
+    ["type", simulatorUDID, "qa"],
+    {},
+    { expectFixture: true },
+  );
+  await cliStep(
+    "CLI dismiss keyboard",
+    ["dismiss-keyboard", simulatorUDID],
+    {},
+    { expectFixture: true },
+  );
   await cliStep("CLI app switcher", ["app-switcher", simulatorUDID]);
   await cliStep("CLI home after switcher", ["home", simulatorUDID]);
   await cliStep("CLI rotate left", ["rotate-left", simulatorUDID]);
   await cliStep("CLI rotate right", ["rotate-right", simulatorUDID]);
   await cliStep("CLI toggle appearance", ["toggle-appearance", simulatorUDID]);
   await cliStep(
-    "CLI launch SwiftUI fixture",
+    "CLI relaunch SwiftUI fixture",
     ["launch", simulatorUDID, fixtureBundleId],
     { attempts: 3, delayMs: 5_000, timeoutMs: 180_000 },
     { expectFixture: true },
@@ -365,20 +481,9 @@ async function runCliControls() {
   );
   await cliStep(
     "CLI focus fixture text field",
-    [
-      "tap",
-      simulatorUDID,
-      "--id",
-      "fixture.message",
-      "--wait-timeout-ms",
-      "5000",
-      "--duration-ms",
-      "120",
-      "--post-delay-ms",
-      "500",
-    ],
-    {},
-    { expectFixture: true },
+    ["open-url", simulatorUDID, fixtureFocusUrl],
+    { attempts: 3, delayMs: 5_000, timeoutMs: 180_000 },
+    { expectFixture: true, expectText: "Message Focused" },
   );
   await cliStep(
     "CLI type fixture text",
@@ -437,35 +542,45 @@ async function runHardwareButtonControls() {
 }
 
 async function runRestControls(queryPoint) {
-  const simulators = await httpJson("GET", "/api/simulators");
-  if (
-    !simulators.simulators?.some(
-      (simulator) => simulator.udid === simulatorUDID,
-    )
-  ) {
-    throw new Error("REST simulator list did not include temp simulator");
-  }
-  assertRoots(
-    await httpJson(
-      "GET",
-      `/api/simulators/${simulatorUDID}/accessibility-tree?maxDepth=1`,
-    ),
-    "REST accessibility-tree",
-  );
-  assertRoots(
-    await httpJson(
-      "GET",
-      `/api/simulators/${simulatorUDID}/accessibility-point?x=${queryPoint.x}&y=${queryPoint.y}`,
-    ),
-    "REST accessibility-point",
-  );
-  assertJson(
-    await httpJson("GET", `/api/simulators/${simulatorUDID}/chrome-profile`),
-    "REST chrome-profile",
-  );
-  assertPngBuffer(
-    await httpBuffer("GET", `/api/simulators/${simulatorUDID}/chrome.png`),
-  );
+  await measuredStep("REST simulator list", async () => {
+    const simulators = await httpJson("GET", "/api/simulators");
+    if (
+      !simulators.simulators?.some(
+        (simulator) => simulator.udid === simulatorUDID,
+      )
+    ) {
+      throw new Error("REST simulator list did not include temp simulator");
+    }
+  });
+  await measuredStep("REST accessibility-tree", async () => {
+    assertRoots(
+      await httpJson(
+        "GET",
+        `/api/simulators/${simulatorUDID}/accessibility-tree?source=native-ax&maxDepth=1`,
+      ),
+      "REST accessibility-tree",
+    );
+  });
+  await measuredStep("REST accessibility-point", async () => {
+    assertRoots(
+      await httpJson(
+        "GET",
+        `/api/simulators/${simulatorUDID}/accessibility-point?x=${queryPoint.x}&y=${queryPoint.y}`,
+      ),
+      "REST accessibility-point",
+    );
+  });
+  await measuredStep("REST chrome-profile", async () => {
+    assertJson(
+      await httpJson("GET", `/api/simulators/${simulatorUDID}/chrome-profile`),
+      "REST chrome-profile",
+    );
+  });
+  await measuredStep("REST chrome.png", async () => {
+    assertPngBuffer(
+      await httpBuffer("GET", `/api/simulators/${simulatorUDID}/chrome.png`),
+    );
+  });
 
   await httpStep(
     "REST rotate-left",
@@ -695,8 +810,13 @@ struct FixtureView: View {
         .frame(width: 240)
     }
     .padding()
-    .onOpenURL { _ in
-      status = "URL Opened"
+    .onOpenURL { url in
+      if url.host == "focus-message" {
+        status = "Message Focused"
+        messageFocused = true
+      } else {
+        status = "URL Opened"
+      }
     }
   }
 }
@@ -822,12 +942,14 @@ async function retrySimdeckText(args, label, options = {}) {
 }
 
 async function cliStep(label, args, commandOptions = {}, verifyOptions = {}) {
-  const result = await retrySimdeckJson(args, label, {
-    maxElapsedMs: cliCommandBudgetMs,
-    ...commandOptions,
+  return measuredStep(label, async () => {
+    const result = await retrySimdeckJson(args, label, {
+      maxElapsedMs: cliCommandBudgetMs,
+      ...commandOptions,
+    });
+    await verifyUi(label, verifyOptions);
+    return result;
   });
-  await verifyUi(label, verifyOptions);
-  return result;
 }
 
 async function httpStep(
@@ -838,16 +960,18 @@ async function httpStep(
   requestOptions = {},
   verifyOptions = {},
 ) {
-  logStep(`${label}`);
-  const result = await retryHttpJson(
-    method,
-    requestPath,
-    body,
-    label,
-    requestOptions,
-  );
-  await verifyUi(label, verifyOptions);
-  return result;
+  return measuredStep(label, async () => {
+    logStep(`${label}`);
+    const result = await retryHttpJson(
+      method,
+      requestPath,
+      body,
+      label,
+      requestOptions,
+    );
+    await verifyUi(label, verifyOptions);
+    return result;
+  });
 }
 
 async function verifyUi(label, options = {}) {
@@ -858,15 +982,7 @@ async function verifyUi(label, options = {}) {
     let snapshot;
     try {
       snapshot = await retrySimdeckText(
-        [
-          "describe-ui",
-          simulatorUDID,
-          "--direct",
-          "--format",
-          "agent",
-          "--max-depth",
-          "5",
-        ],
+        describeUiVerificationArgs(),
         `${label} describe-ui`,
         {
           attempts: 1,
@@ -921,15 +1037,7 @@ async function resolveKnownSystemPrompts(snapshot, label) {
     action.run();
     await sleep(1_500);
     current = await retrySimdeckText(
-      [
-        "describe-ui",
-        simulatorUDID,
-        "--direct",
-        "--format",
-        "agent",
-        "--max-depth",
-        "5",
-      ],
+      describeUiVerificationArgs(),
       `${label} describe-ui after ${action.label}`,
       {
         attempts: 3,
@@ -947,6 +1055,25 @@ async function resolveKnownSystemPrompts(snapshot, label) {
     }
   }
   return current;
+}
+
+function describeUiVerificationArgs() {
+  const args = [
+    "describe-ui",
+    simulatorUDID,
+    "--source",
+    "native-ax",
+    "--format",
+    "agent",
+    "--max-depth",
+    "2",
+  ];
+  if (serverProcess) {
+    args.push("--server-url", serverUrl);
+  } else {
+    args.push("--direct");
+  }
+  return args;
 }
 
 function openUrlPromptActions(snapshot) {
@@ -1528,8 +1655,79 @@ function hasUsableFrame(node) {
   );
 }
 
+async function measuredStep(label, fn) {
+  const parentTiming = activeTiming;
+  const timing = {
+    label,
+    startedAt: Date.now(),
+    elapsedMs: 0,
+    sleepMs: 0,
+    ok: false,
+  };
+  activeTiming = timing;
+  try {
+    const result = await fn();
+    timing.ok = true;
+    return result;
+  } finally {
+    timing.elapsedMs = Date.now() - timing.startedAt;
+    stepTimings.push(timing);
+    activeTiming = parentTiming;
+    logStep(
+      `timing ${label}: active ${formatDuration(timing.elapsedMs - timing.sleepMs)} (${formatDuration(timing.elapsedMs)} wall, ${formatDuration(timing.sleepMs)} artificial delay)`,
+    );
+  }
+}
+
 function sleep(ms) {
+  if (activeTiming) {
+    activeTiming.sleepMs += ms;
+  }
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function printTimingSummary() {
+  if (stepTimings.length === 0) {
+    return;
+  }
+  const rows = stepTimings.map((timing) => ({
+    label: timing.label,
+    activeMs: Math.max(0, timing.elapsedMs - timing.sleepMs),
+    elapsedMs: timing.elapsedMs,
+    sleepMs: timing.sleepMs,
+    ok: timing.ok,
+  }));
+  const totalActiveMs = rows.reduce((sum, row) => sum + row.activeMs, 0);
+  const totalElapsedMs = rows.reduce((sum, row) => sum + row.elapsedMs, 0);
+  const totalSleepMs = rows.reduce((sum, row) => sum + row.sleepMs, 0);
+
+  console.log(
+    "\nIntegration timing summary (artificial delays excluded from active):",
+  );
+  console.log("active\twall\tdelay\tstatus\tstep");
+  for (const row of rows.toSorted(
+    (left, right) => right.activeMs - left.activeMs,
+  )) {
+    console.log(
+      `${formatDuration(row.activeMs)}\t${formatDuration(row.elapsedMs)}\t${formatDuration(row.sleepMs)}\t${row.ok ? "ok" : "fail"}\t${row.label}`,
+    );
+  }
+  console.log(
+    `total active ${formatDuration(totalActiveMs)} / wall ${formatDuration(totalElapsedMs)} / artificial delay ${formatDuration(totalSleepMs)}`,
+  );
+}
+
+function formatDuration(ms) {
+  if (!Number.isFinite(ms)) {
+    return "n/a";
+  }
+  if (ms >= 60_000) {
+    return `${(ms / 60_000).toFixed(2)}m`;
+  }
+  if (ms >= 1_000) {
+    return `${(ms / 1_000).toFixed(2)}s`;
+  }
+  return `${Math.max(0, Math.round(ms))}ms`;
 }
 
 function logStep(message) {

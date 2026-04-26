@@ -216,11 +216,11 @@ xcw_native_owned_bytes xcw_native_screenshot_png(const char *udid, char **error_
 
 char *xcw_native_recent_logs(const char *udid, double seconds, size_t limit, char **error_message) {
     @autoreleasepool {
-        (void)limit;
         XCWSimctl *simctl = [[XCWSimctl alloc] init];
         NSError *error = nil;
         NSArray<NSDictionary *> *entries = [simctl recentLogEntriesForSimulatorUDID:XCWStringFromCString(udid)
                                                                             seconds:seconds
+                                                                              limit:limit
                                                                               error:&error];
         if (entries == nil) {
             XCWSetErrorMessage(error_message, error);
@@ -231,12 +231,13 @@ char *xcw_native_recent_logs(const char *udid, double seconds, size_t limit, cha
     }
 }
 
-char *xcw_native_accessibility_snapshot(const char *udid, bool has_point, double x, double y, char **error_message) {
+char *xcw_native_accessibility_snapshot(const char *udid, bool has_point, double x, double y, size_t max_depth, char **error_message) {
     @autoreleasepool {
         NSError *error = nil;
         NSValue *pointValue = has_point ? [NSValue valueWithPoint:NSMakePoint(x, y)] : nil;
         NSDictionary *snapshot = [XCWAccessibilityBridge accessibilitySnapshotForSimulatorUDID:XCWStringFromCString(udid)
                                                                                        atPoint:pointValue
+                                                                                     maxDepth:max_depth
                                                                                          error:&error];
         if (snapshot == nil) {
             XCWSetErrorMessage(error_message, error);
@@ -388,6 +389,44 @@ bool xcw_native_input_send_multitouch(void *handle, double x1, double y1, double
                                                                                        normalizedY2:y2
                                                                                              phase:touchPhase
                                                                                              error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_input_send_key(void *handle, uint16_t key_code, uint32_t modifiers, char **error_message) {
+    @autoreleasepool {
+        if (handle == NULL) {
+            XCWSetErrorMessage(error_message, [NSError errorWithDomain:@"SimDeck.NativeInput"
+                                                                   code:1
+                                                               userInfo:@{NSLocalizedDescriptionKey: @"Native input handle is null."}]);
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [(__bridge DFPrivateSimulatorDisplayBridge *)handle sendKeyCode:key_code
+                                                                        modifiers:modifiers
+                                                                            error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_input_send_key_event(void *handle, uint16_t key_code, bool down, char **error_message) {
+    @autoreleasepool {
+        if (handle == NULL) {
+            XCWSetErrorMessage(error_message, [NSError errorWithDomain:@"SimDeck.NativeInput"
+                                                                   code:1
+                                                               userInfo:@{NSLocalizedDescriptionKey: @"Native input handle is null."}]);
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [(__bridge DFPrivateSimulatorDisplayBridge *)handle sendKeyCode:key_code
+                                                                             down:down
+                                                                            error:&error];
         if (!ok) {
             XCWSetErrorMessage(error_message, error);
         }

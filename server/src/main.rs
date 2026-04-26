@@ -747,7 +747,7 @@ fn main() -> anyhow::Result<()> {
                     duration_ms: duration_ms.unwrap_or(gesture.duration_ms),
                     ..gesture
                 },
-                12,
+                4,
             )?;
             sleep_ms(post_delay_ms);
             println_json(
@@ -820,9 +820,10 @@ fn main() -> anyhow::Result<()> {
             let key_code = parse_hid_key(&key)?;
             sleep_ms(pre_delay_ms);
             if duration_ms > 0 && modifiers == 0 {
-                bridge.send_key_event(&udid, key_code, true)?;
+                let input = bridge.create_input_session(&udid)?;
+                input.send_key_event(key_code, true)?;
                 sleep_ms(duration_ms);
-                bridge.send_key_event(&udid, key_code, false)?;
+                input.send_key_event(key_code, false)?;
             } else {
                 bridge.send_key(&udid, key_code, modifiers)?;
             }
@@ -836,8 +837,9 @@ fn main() -> anyhow::Result<()> {
             delay_ms,
         } => {
             let keys = parse_key_list(&keycodes)?;
+            let input = bridge.create_input_session(&udid)?;
             for (index, key) in keys.iter().enumerate() {
-                bridge.send_key(&udid, *key, 0)?;
+                input.send_key(*key, 0)?;
                 if index + 1 < keys.len() {
                     sleep_ms(delay_ms);
                 }
@@ -1220,13 +1222,14 @@ fn type_text(
     text: &str,
     delay_ms: u64,
 ) -> Result<(), crate::error::AppError> {
+    let input = bridge.create_input_session(udid)?;
     for character in text.chars() {
         let Some((key_code, modifiers)) = hid_for_character(character) else {
             return Err(crate::error::AppError::bad_request(format!(
                 "Unsupported character for HID typing: {character:?}"
             )));
         };
-        bridge.send_key(udid, key_code, modifiers)?;
+        input.send_key(key_code, modifiers)?;
         sleep_ms(delay_ms);
     }
     Ok(())
@@ -1291,8 +1294,7 @@ fn describe_ui_snapshot(
         );
     }
 
-    let snapshot = bridge.accessibility_snapshot(udid, point)?;
-    Ok(trim_snapshot_depth(snapshot, max_depth))
+    Ok(bridge.accessibility_snapshot_with_max_depth(udid, point, max_depth)?)
 }
 
 fn fetch_service_accessibility_tree(
@@ -1483,33 +1485,6 @@ impl DescribeUiSource {
             Self::Nativescript => "nativescript",
             Self::Uikit => "uikit",
             Self::NativeAx => "native-ax",
-        }
-    }
-}
-
-fn trim_snapshot_depth(mut snapshot: Value, max_depth: Option<usize>) -> Value {
-    let Some(max_depth) = max_depth else {
-        return snapshot;
-    };
-    if let Some(roots) = snapshot.get_mut("roots").and_then(Value::as_array_mut) {
-        for root in roots {
-            trim_describe_node_depth(root, 0, max_depth);
-        }
-    }
-    snapshot
-}
-
-fn trim_describe_node_depth(node: &mut Value, depth: usize, max_depth: usize) {
-    let Some(object) = node.as_object_mut() else {
-        return;
-    };
-    if depth >= max_depth {
-        object.insert("children".to_owned(), Value::Array(Vec::new()));
-        return;
-    }
-    if let Some(children) = object.get_mut("children").and_then(Value::as_array_mut) {
-        for child in children {
-            trim_describe_node_depth(child, depth + 1, max_depth);
         }
     }
 }
@@ -2522,8 +2497,9 @@ fn run_batch_step(
                         crate::error::AppError::bad_request("key-sequence requires --keycodes.")
                     })?,
             )?;
+            let input = bridge.create_input_session(udid)?;
             for (index, key) in keys.iter().enumerate() {
-                bridge.send_key(udid, *key, 0)?;
+                input.send_key(*key, 0)?;
                 if index + 1 < keys.len() {
                     sleep_ms(
                         args.value("delay-ms")
