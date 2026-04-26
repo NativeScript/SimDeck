@@ -12,6 +12,7 @@ const serverPort = Number(process.env.SIMDECK_INTEGRATION_PORT ?? "4510");
 const serverUrl = `http://127.0.0.1:${serverPort}`;
 const origin = serverUrl;
 const fixtureBundleId = "dev.nativescript.simdeck.integration.fixture";
+const fixtureUrlScheme = "simdeck-fixture";
 const fixtureUrl = "simdeck-fixture://integration";
 const verbose = process.env.SIMDECK_INTEGRATION_VERBOSE === "1";
 const traceHttp = process.env.SIMDECK_INTEGRATION_TRACE_HTTP === "1";
@@ -91,6 +92,7 @@ async function main() {
   );
 
   simdeckJson(["install", simulatorUDID, fixture.appPath]);
+  preapproveFixtureUrlScheme();
   await verifyUi("after install");
 
   startServer();
@@ -1379,6 +1381,44 @@ function openSimulatorApp(udid) {
     cwd: root,
     stdio: verbose ? "inherit" : "ignore",
   });
+}
+
+function preapproveFixtureUrlScheme() {
+  const plist = path.join(
+    os.homedir(),
+    "Library",
+    "Developer",
+    "CoreSimulator",
+    "Devices",
+    simulatorUDID,
+    "data",
+    "Library",
+    "Preferences",
+    "com.apple.launchservices.schemeapproval.plist",
+  );
+  const key = `com.apple.CoreSimulator.CoreSimulatorBridge-->${fixtureUrlScheme}`;
+  fs.mkdirSync(path.dirname(plist), { recursive: true });
+
+  const setResult = spawnSync(
+    "/usr/libexec/PlistBuddy",
+    ["-c", `Set :${key} ${fixtureBundleId}`, plist],
+    {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 60_000,
+    },
+  );
+  if (setResult.status === 0) {
+    logStep(`preapproved fixture URL scheme in ${path.basename(plist)}`);
+    return;
+  }
+
+  runText(
+    "/usr/libexec/PlistBuddy",
+    ["-c", `Add :${key} string ${fixtureBundleId}`, plist],
+    { timeoutMs: 60_000 },
+  );
+  logStep(`preapproved fixture URL scheme in ${path.basename(plist)}`);
 }
 
 function assertSimulatorListed(udid) {

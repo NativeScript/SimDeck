@@ -40,3 +40,5 @@ jobs:
 
       - name: CLI simulator integration tests
         run: npm run test:integration:cli
+        env:
+          SIMDECK_INTEGRATION_VERBOSE: "1"
