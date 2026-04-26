@@ -18,28 +18,6 @@ static void XCWCloseFD(int *fd) {
     }
 }
 
-static NSData *XCWReadAllAndCloseFD(int fd) {
-    if (fd < 0) {
-        return [NSData data];
-    }
-
-    NSMutableData *data = [NSMutableData data];
-    uint8_t buffer[16384];
-    for (;;) {
-        ssize_t count = read(fd, buffer, sizeof(buffer));
-        if (count > 0) {
-            [data appendBytes:buffer length:(NSUInteger)count];
-            continue;
-        }
-        if (count < 0 && errno == EINTR) {
-            continue;
-        }
-        break;
-    }
-    close(fd);
-    return data;
-}
-
 static void XCWWriteAllAndCloseFD(int fd, NSData *data) {
     if (fd < 0) {
         return;
@@ -68,6 +46,33 @@ static NSError *XCWProcessRunnerError(NSInteger code, NSString *description) {
                            userInfo:@{ NSLocalizedDescriptionKey: description ?: @"Process failed." }];
 }
 
+static int XCWCreateTemporaryOutputFile(NSString **path, NSError * _Nullable __autoreleasing *error) {
+    NSString *templatePath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"simdeck-process-XXXXXX"];
+    char *fileTemplate = strdup(templatePath.fileSystemRepresentation);
+    if (fileTemplate == NULL) {
+        if (error != NULL) {
+            *error = XCWProcessRunnerError(6, @"Failed to allocate temporary output path.");
+        }
+        return -1;
+    }
+
+    int fd = mkstemp(fileTemplate);
+    if (fd < 0) {
+        if (error != NULL) {
+            *error = XCWProcessRunnerError(7, [NSString stringWithFormat:@"Failed to create temporary output file: %s", strerror(errno)]);
+        }
+        free(fileTemplate);
+        return -1;
+    }
+
+    if (path != NULL) {
+        *path = [[NSFileManager defaultManager] stringWithFileSystemRepresentation:fileTemplate
+                                                                            length:strlen(fileTemplate)];
+    }
+    free(fileTemplate);
+    return fd;
+}
+
 @implementation XCWProcessResult
 
 - (instancetype)initWithTerminationStatus:(int)terminationStatus
@@ -94,23 +99,32 @@ static NSError *XCWProcessRunnerError(NSInteger code, NSString *description) {
                           arguments:(NSArray<NSString *> *)arguments
                           inputData:(NSData *)inputData
                               error:(NSError * _Nullable __autoreleasing *)error {
-    int stdoutPipe[2] = { -1, -1 };
-    int stderrPipe[2] = { -1, -1 };
+    int stdoutFD = -1;
+    int stderrFD = -1;
     int stdinPipe[2] = { -1, -1 };
+    NSString *stdoutPath = nil;
+    NSString *stderrPath = nil;
     posix_spawn_file_actions_t fileActions;
     BOOL fileActionsInitialized = NO;
     char **argv = NULL;
 
-    if (pipe(stdoutPipe) != 0 || pipe(stderrPipe) != 0 || (inputData != nil && pipe(stdinPipe) != 0)) {
+    NSError *creationError = nil;
+    stdoutFD = XCWCreateTemporaryOutputFile(&stdoutPath, &creationError);
+    stderrFD = XCWCreateTemporaryOutputFile(&stderrPath, &creationError);
+    if (stdoutFD < 0 || stderrFD < 0 || (inputData != nil && pipe(stdinPipe) != 0)) {
         if (error != NULL) {
-            *error = XCWProcessRunnerError(1, [NSString stringWithFormat:@"Failed to create process pipes: %s", strerror(errno)]);
+            *error = creationError ?: XCWProcessRunnerError(1, [NSString stringWithFormat:@"Failed to create process pipes: %s", strerror(errno)]);
         }
-        XCWCloseFD(&stdoutPipe[0]);
-        XCWCloseFD(&stdoutPipe[1]);
-        XCWCloseFD(&stderrPipe[0]);
-        XCWCloseFD(&stderrPipe[1]);
+        XCWCloseFD(&stdoutFD);
+        XCWCloseFD(&stderrFD);
         XCWCloseFD(&stdinPipe[0]);
         XCWCloseFD(&stdinPipe[1]);
+        if (stdoutPath != nil) {
+            [[NSFileManager defaultManager] removeItemAtPath:stdoutPath error:nil];
+        }
+        if (stderrPath != nil) {
+            [[NSFileManager defaultManager] removeItemAtPath:stderrPath error:nil];
+        }
         return nil;
     }
 
@@ -118,27 +132,25 @@ static NSError *XCWProcessRunnerError(NSInteger code, NSString *description) {
         if (error != NULL) {
             *error = XCWProcessRunnerError(2, [NSString stringWithFormat:@"Failed to initialize spawn actions: %s", strerror(errno)]);
         }
-        XCWCloseFD(&stdoutPipe[0]);
-        XCWCloseFD(&stdoutPipe[1]);
-        XCWCloseFD(&stderrPipe[0]);
-        XCWCloseFD(&stderrPipe[1]);
+        XCWCloseFD(&stdoutFD);
+        XCWCloseFD(&stderrFD);
         XCWCloseFD(&stdinPipe[0]);
         XCWCloseFD(&stdinPipe[1]);
+        [[NSFileManager defaultManager] removeItemAtPath:stdoutPath error:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:stderrPath error:nil];
         return nil;
     }
     fileActionsInitialized = YES;
 
-    posix_spawn_file_actions_adddup2(&fileActions, stdoutPipe[1], STDOUT_FILENO);
-    posix_spawn_file_actions_adddup2(&fileActions, stderrPipe[1], STDERR_FILENO);
+    posix_spawn_file_actions_adddup2(&fileActions, stdoutFD, STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&fileActions, stderrFD, STDERR_FILENO);
     if (inputData != nil) {
         posix_spawn_file_actions_adddup2(&fileActions, stdinPipe[0], STDIN_FILENO);
     } else {
         posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
     }
-    posix_spawn_file_actions_addclose(&fileActions, stdoutPipe[0]);
-    posix_spawn_file_actions_addclose(&fileActions, stdoutPipe[1]);
-    posix_spawn_file_actions_addclose(&fileActions, stderrPipe[0]);
-    posix_spawn_file_actions_addclose(&fileActions, stderrPipe[1]);
+    posix_spawn_file_actions_addclose(&fileActions, stdoutFD);
+    posix_spawn_file_actions_addclose(&fileActions, stderrFD);
     if (inputData != nil) {
         posix_spawn_file_actions_addclose(&fileActions, stdinPipe[0]);
         posix_spawn_file_actions_addclose(&fileActions, stdinPipe[1]);
@@ -151,12 +163,12 @@ static NSError *XCWProcessRunnerError(NSInteger code, NSString *description) {
             *error = XCWProcessRunnerError(3, @"Failed to allocate process arguments.");
         }
         posix_spawn_file_actions_destroy(&fileActions);
-        XCWCloseFD(&stdoutPipe[0]);
-        XCWCloseFD(&stdoutPipe[1]);
-        XCWCloseFD(&stderrPipe[0]);
-        XCWCloseFD(&stderrPipe[1]);
+        XCWCloseFD(&stdoutFD);
+        XCWCloseFD(&stderrFD);
         XCWCloseFD(&stdinPipe[0]);
         XCWCloseFD(&stdinPipe[1]);
+        [[NSFileManager defaultManager] removeItemAtPath:stdoutPath error:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:stderrPath error:nil];
         return nil;
     }
     argv[0] = (char *)launchPath.fileSystemRepresentation;
@@ -173,39 +185,23 @@ static NSError *XCWProcessRunnerError(NSInteger code, NSString *description) {
         }
         posix_spawn_file_actions_destroy(&fileActions);
         free(argv);
-        XCWCloseFD(&stdoutPipe[0]);
-        XCWCloseFD(&stdoutPipe[1]);
-        XCWCloseFD(&stderrPipe[0]);
-        XCWCloseFD(&stderrPipe[1]);
+        XCWCloseFD(&stdoutFD);
+        XCWCloseFD(&stderrFD);
         XCWCloseFD(&stdinPipe[0]);
         XCWCloseFD(&stdinPipe[1]);
+        [[NSFileManager defaultManager] removeItemAtPath:stdoutPath error:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:stderrPath error:nil];
         return nil;
     }
 
-    __block NSData *stdoutData = [NSData data];
-    __block NSData *stderrData = [NSData data];
-    dispatch_group_t readGroup = dispatch_group_create();
-    dispatch_queue_t readQueue = dispatch_get_global_queue(QOS_CLASS_UTILITY, 0);
-    int stdoutReadFD = stdoutPipe[0];
-    int stderrReadFD = stderrPipe[0];
-    stdoutPipe[0] = -1;
-    stderrPipe[0] = -1;
-
-    dispatch_group_async(readGroup, readQueue, ^{
-        stdoutData = XCWReadAllAndCloseFD(stdoutReadFD);
-    });
-
-    dispatch_group_async(readGroup, readQueue, ^{
-        stderrData = XCWReadAllAndCloseFD(stderrReadFD);
-    });
-
-    XCWCloseFD(&stdoutPipe[1]);
-    XCWCloseFD(&stderrPipe[1]);
+    XCWCloseFD(&stdoutFD);
+    XCWCloseFD(&stderrFD);
+    dispatch_group_t writeGroup = inputData != nil ? dispatch_group_create() : nil;
     if (inputData != nil) {
         XCWCloseFD(&stdinPipe[0]);
         int stdinWriteFD = stdinPipe[1];
         stdinPipe[1] = -1;
-        dispatch_group_async(readGroup, readQueue, ^{
+        dispatch_group_async(writeGroup, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             XCWWriteAllAndCloseFD(stdinWriteFD, inputData);
         });
     }
@@ -215,7 +211,9 @@ static NSError *XCWProcessRunnerError(NSInteger code, NSString *description) {
     do {
         waitResult = waitpid(pid, &waitStatus, 0);
     } while (waitResult < 0 && errno == EINTR);
-    dispatch_group_wait(readGroup, DISPATCH_TIME_FOREVER);
+    if (writeGroup != nil) {
+        dispatch_group_wait(writeGroup, DISPATCH_TIME_FOREVER);
+    }
     int terminationStatus = 1;
     if (waitResult < 0) {
         if (error != NULL) {
@@ -231,6 +229,11 @@ static NSError *XCWProcessRunnerError(NSInteger code, NSString *description) {
         posix_spawn_file_actions_destroy(&fileActions);
     }
     free(argv);
+
+    NSData *stdoutData = [NSData dataWithContentsOfFile:stdoutPath] ?: [NSData data];
+    NSData *stderrData = [NSData dataWithContentsOfFile:stderrPath] ?: [NSData data];
+    [[NSFileManager defaultManager] removeItemAtPath:stdoutPath error:nil];
+    [[NSFileManager defaultManager] removeItemAtPath:stderrPath error:nil];
 
     return [[XCWProcessResult alloc] initWithTerminationStatus:terminationStatus
                                                     stdoutData:stdoutData

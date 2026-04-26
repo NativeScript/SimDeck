@@ -72,8 +72,11 @@ struct AccessibilityPointQuery {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AccessibilityTreeQuery {
     source: Option<String>,
+    max_depth: Option<usize>,
+    include_hidden: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -466,12 +469,7 @@ async fn rotate_right(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_session_action(state, udid, |session| {
-        session.rotate_right()?;
-        session.request_refresh();
-        Ok(())
-    })
-    .await?;
+    run_bridge_action(state, move |bridge| bridge.rotate_right(&udid)).await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -479,12 +477,7 @@ async fn rotate_left(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_session_action(state, udid, |session| {
-        session.rotate_left()?;
-        session.request_refresh();
-        Ok(())
-    })
-    .await?;
+    run_bridge_action(state, move |bridge| bridge.rotate_left(&udid)).await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -516,6 +509,8 @@ async fn accessibility_tree(
     Query(query): Query<AccessibilityTreeQuery>,
 ) -> Result<Json<Value>, AppError> {
     let requested_source = AccessibilityHierarchySource::parse(query.source.as_deref())?;
+    let max_depth = query.max_depth.map(|depth| depth.min(80));
+    let include_hidden = query.include_hidden.unwrap_or(false);
 
     if requested_source == AccessibilityHierarchySource::NativeAX {
         let native_snapshot = match accessibility_snapshot(state.clone(), udid.clone(), None).await
@@ -532,7 +527,10 @@ async fn accessibility_tree(
         let availability = inspector_session_for_state(&state, &udid).await.ok();
         let available_sources =
             foreground_available_sources(&native_snapshot, availability.as_ref());
-        let snapshot = attach_available_sources(native_snapshot, &available_sources);
+        let snapshot = attach_available_sources(
+            trim_tree_depth(native_snapshot, max_depth),
+            &available_sources,
+        );
         return Ok(json(snapshot));
     }
 
@@ -544,7 +542,15 @@ async fn accessibility_tree(
                 AccessibilityHierarchySource::UIKit => InAppHierarchySource::UIKit,
                 AccessibilityHierarchySource::NativeAX => unreachable!(),
             };
-            match run_in_app_inspector_hierarchy(&state, &session, hierarchy_source).await {
+            match run_in_app_inspector_hierarchy(
+                &state,
+                &session,
+                hierarchy_source,
+                max_depth,
+                include_hidden,
+            )
+            .await
+            {
                 Ok(snapshot) => {
                     let base_sources = available_sources_with_native_ax(Some(&session));
                     let available_sources =
@@ -568,7 +574,7 @@ async fn accessibility_tree(
                     let available_sources = available_sources_with_native_ax(Some(&session));
                     match accessibility_snapshot(state.clone(), udid.clone(), None).await {
                         Ok(native_snapshot) => Ok(json(attach_available_sources(
-                            native_snapshot,
+                            trim_tree_depth(native_snapshot, max_depth),
                             &available_sources,
                         ))),
                         Err(native_ax_error) => Ok(json(empty_accessibility_tree(
@@ -584,7 +590,7 @@ async fn accessibility_tree(
             let available_sources = available_sources_with_native_ax(None);
             match accessibility_snapshot(state.clone(), udid.clone(), None).await {
                 Ok(native_snapshot) => Ok(json(attach_available_sources(
-                    native_snapshot,
+                    trim_tree_depth(native_snapshot, max_depth),
                     &available_sources,
                 ))),
                 Err(native_ax_error) => Ok(json(empty_accessibility_tree(
@@ -867,13 +873,18 @@ async fn run_in_app_inspector_hierarchy(
     state: &AppState,
     session: &InspectorSession,
     source: InAppHierarchySource,
+    max_depth: Option<usize>,
+    include_hidden: bool,
 ) -> Result<Value, String> {
+    let max_depth = max_depth.unwrap_or(80);
     let params = match source {
         InAppHierarchySource::Automatic => json_value!({
-            "maxDepth": 80,
+            "includeHidden": include_hidden,
+            "maxDepth": max_depth,
         }),
         InAppHierarchySource::UIKit => json_value!({
-            "maxDepth": 80,
+            "includeHidden": include_hidden,
+            "maxDepth": max_depth,
             "source": "uikit",
         }),
     };
@@ -1036,6 +1047,33 @@ fn native_ax_snapshot_contains_pid(snapshot: &Value, pid: i64) -> bool {
 
 fn attach_available_sources(snapshot: Value, available_sources: &[String]) -> Value {
     attach_tree_metadata(snapshot, available_sources, None)
+}
+
+fn trim_tree_depth(mut snapshot: Value, max_depth: Option<usize>) -> Value {
+    let Some(max_depth) = max_depth else {
+        return snapshot;
+    };
+    if let Some(roots) = snapshot.get_mut("roots").and_then(Value::as_array_mut) {
+        for root in roots {
+            trim_node_depth(root, 0, max_depth);
+        }
+    }
+    snapshot
+}
+
+fn trim_node_depth(node: &mut Value, depth: usize, max_depth: usize) {
+    let Some(object) = node.as_object_mut() else {
+        return;
+    };
+    if depth >= max_depth {
+        object.insert("children".to_owned(), Value::Array(Vec::new()));
+        return;
+    }
+    if let Some(children) = object.get_mut("children").and_then(Value::as_array_mut) {
+        for child in children {
+            trim_node_depth(child, depth + 1, max_depth);
+        }
+    }
 }
 
 fn empty_accessibility_tree(

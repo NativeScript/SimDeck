@@ -100,6 +100,24 @@ simdeck list
 
 This is roughly equivalent to `xcrun simctl list devices --json`, but the output is filtered down to the fields SimDeck exposes through `GET /api/simulators`.
 
+## `describe-ui`
+
+Print the current UI hierarchy. By default the command tries the running local
+SimDeck service first so it can use NativeScript or UIKit in-app inspectors, then
+falls back to the private native accessibility bridge.
+
+```sh
+simdeck describe-ui <udid> [--format json|compact-json|agent]
+                         [--source auto|nativescript|uikit|native-ax]
+                         [--max-depth <n>] [--include-hidden] [--direct]
+                         [--point <x>,<y>] [--server-url <url>]
+```
+
+Use `--format agent` for compact hierarchy text intended for LLM planning, and
+`--format compact-json` when a script needs parseable lower-token output.
+`--point` returns the native element at a screen point and uses the native point
+query directly.
+
 ## `boot`
 
 Boot a simulator by UDID:

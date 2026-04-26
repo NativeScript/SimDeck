@@ -115,6 +115,7 @@ simdeck pasteboard set <udid> "hello"
 simdeck pasteboard get <udid>
 simdeck screenshot <udid> --output screen.png
 simdeck describe-ui <udid>
+simdeck describe-ui <udid> --format agent --max-depth 4
 simdeck describe-ui <udid> --point 120,240
 simdeck tap <udid> 120 240
 simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
@@ -140,8 +141,10 @@ simdeck chrome-profile <udid>
 simdeck logs <udid> --seconds 30 --limit 200
 ```
 
-`describe-ui` uses the built-in private CoreSimulator accessibility bridge and
-does not shell out to AXe. Coordinate commands accept screen coordinates from
+`describe-ui` can use the running local SimDeck service to prefer NativeScript or
+UIKit in-app inspectors, then falls back to the built-in private CoreSimulator
+accessibility bridge. Use `--format agent` or `--format compact-json` for
+lower-token hierarchy dumps. Coordinate commands accept screen coordinates from
 the accessibility tree by default; pass `--normalized` to send `0.0..1.0`
 coordinates directly. The CLI intentionally does not implement screenshot-based
 video streaming, MJPEG output, or screen recording; the live visual path remains

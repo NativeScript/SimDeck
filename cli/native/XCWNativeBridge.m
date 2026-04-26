@@ -169,7 +169,8 @@ char *xcw_native_get_chrome_profile(const char *udid, char **error_message) {
         }
 
         NSError *profileError = nil;
-        NSDictionary *profile = [XCWChromeRenderer profileForDeviceName:simulator[@"name"] ?: @""
+        NSString *deviceName = simulator[@"deviceTypeName"] ?: simulator[@"name"] ?: @"";
+        NSDictionary *profile = [XCWChromeRenderer profileForDeviceName:deviceName
                                                                   error:&profileError];
         if (profile == nil) {
             XCWSetErrorMessage(error_message, profileError);
@@ -188,7 +189,8 @@ xcw_native_owned_bytes xcw_native_render_chrome_png(const char *udid, char **err
         }
 
         NSError *renderError = nil;
-        NSData *pngData = [XCWChromeRenderer PNGDataForDeviceName:simulator[@"name"] ?: @""
+        NSString *deviceName = simulator[@"deviceTypeName"] ?: simulator[@"name"] ?: @"";
+        NSData *pngData = [XCWChromeRenderer PNGDataForDeviceName:deviceName
                                                             error:&renderError];
         if (pngData == nil) {
             XCWSetErrorMessage(error_message, renderError);
@@ -409,6 +411,38 @@ bool xcw_native_press_button(const char *udid, const char *button_name, uint32_t
         BOOL ok = [bridge pressHardwareButtonNamed:XCWStringFromCString(button_name)
                                         durationMs:(NSUInteger)duration_ms
                                              error:&error];
+        [bridge disconnect];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_rotate_right(const char *udid, char **error_message) {
+    @autoreleasepool {
+        DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
+        if (bridge == nil) {
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [bridge rotateRight:&error];
+        [bridge disconnect];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_rotate_left(const char *udid, char **error_message) {
+    @autoreleasepool {
+        DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
+        if (bridge == nil) {
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [bridge rotateLeft:&error];
         [bridge disconnect];
         if (!ok) {
             XCWSetErrorMessage(error_message, error);

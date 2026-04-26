@@ -266,7 +266,7 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 }
 
 - (BOOL)launchBundleID:(NSString *)bundleID simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
-    XCWProcessResult *result = [self.class runSimctl:@[@"launch", udid, bundleID] error:error];
+    XCWProcessResult *result = [self.class runSimctl:@[@"launch", @"--stdout=/dev/null", @"--stderr=/dev/null", udid, bundleID] error:error];
     if (result == nil) {
         return NO;
     }

@@ -49,6 +49,8 @@ bool xcw_native_send_key(const char * _Nonnull udid, uint16_t key_code, uint32_t
 bool xcw_native_send_key_event(const char * _Nonnull udid, uint16_t key_code, bool down, char * _Nullable * _Nullable error_message);
 bool xcw_native_press_home(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 bool xcw_native_press_button(const char * _Nonnull udid, const char * _Nonnull button_name, uint32_t duration_ms, char * _Nullable * _Nullable error_message);
+bool xcw_native_rotate_right(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
+bool xcw_native_rotate_left(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 bool xcw_native_erase_simulator(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 bool xcw_native_install_app(const char * _Nonnull udid, const char * _Nonnull app_path, char * _Nullable * _Nullable error_message);
 bool xcw_native_uninstall_app(const char * _Nonnull udid, const char * _Nonnull bundle_id, char * _Nullable * _Nullable error_message);

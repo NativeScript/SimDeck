@@ -105,6 +105,8 @@ unsafe extern "C" {
         duration_ms: u32,
         error_message: *mut *mut c_char,
     ) -> bool;
+    pub fn xcw_native_rotate_right(udid: *const c_char, error_message: *mut *mut c_char) -> bool;
+    pub fn xcw_native_rotate_left(udid: *const c_char, error_message: *mut *mut c_char) -> bool;
     pub fn xcw_native_erase_simulator(udid: *const c_char, error_message: *mut *mut c_char)
         -> bool;
     pub fn xcw_native_install_app(
@@ -163,14 +165,6 @@ unsafe extern "C" {
         error_message: *mut *mut c_char,
     ) -> bool;
     pub fn xcw_native_session_press_home(
-        handle: *mut c_void,
-        error_message: *mut *mut c_char,
-    ) -> bool;
-    pub fn xcw_native_session_rotate_right(
-        handle: *mut c_void,
-        error_message: *mut *mut c_char,
-    ) -> bool;
-    pub fn xcw_native_session_rotate_left(
         handle: *mut c_void,
         error_message: *mut *mut c_char,
     ) -> bool;

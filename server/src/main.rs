@@ -21,7 +21,6 @@ use inspector::InspectorHub;
 use logs::LogRegistry;
 use metrics::counters::Metrics;
 use native::bridge::NativeBridge;
-use native::bridge::NativeSession;
 use native::ffi;
 use serde_json::Value;
 use simulators::registry::SessionRegistry;
@@ -123,6 +122,18 @@ enum Command {
         udid: String,
         #[arg(long, value_parser = parse_point)]
         point: Option<(f64, f64)>,
+        #[arg(long, value_enum, default_value_t = DescribeUiFormat::Json)]
+        format: DescribeUiFormat,
+        #[arg(long, value_enum, default_value_t = DescribeUiSource::Auto)]
+        source: DescribeUiSource,
+        #[arg(long)]
+        max_depth: Option<usize>,
+        #[arg(long)]
+        include_hidden: bool,
+        #[arg(long)]
+        direct: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4310")]
+        server_url: String,
     },
     Touch {
         udid: String,
@@ -366,6 +377,21 @@ enum VideoCodecMode {
     H264Software,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum DescribeUiFormat {
+    Json,
+    CompactJson,
+    Agent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum DescribeUiSource {
+    Auto,
+    Nativescript,
+    Uikit,
+    NativeAx,
+}
+
 impl VideoCodecMode {
     fn as_env_value(self) -> &'static str {
         match self {
@@ -562,9 +588,27 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::DescribeUi { udid, point } => {
-            let snapshot = bridge.accessibility_snapshot(&udid, point)?;
-            println_json(&snapshot)?;
+        Command::DescribeUi {
+            udid,
+            point,
+            format,
+            source,
+            max_depth,
+            include_hidden,
+            direct,
+            server_url,
+        } => {
+            let snapshot = describe_ui_snapshot(
+                &bridge,
+                &udid,
+                point,
+                source,
+                max_depth,
+                include_hidden,
+                direct,
+                &server_url,
+            )?;
+            print_describe_ui(&snapshot, format)?;
             Ok(())
         }
         Command::Touch {
@@ -862,18 +906,14 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::RotateLeft { udid } => {
-            run_session_action_with_appkit("rotate left", udid.clone(), |session| {
-                session.rotate_left()
-            })?;
+            bridge.rotate_left(&udid)?;
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "rotate-left" }),
             )?;
             Ok(())
         }
         Command::RotateRight { udid } => {
-            run_session_action_with_appkit("rotate right", udid.clone(), |session| {
-                session.rotate_right()
-            })?;
+            bridge.rotate_right(&udid)?;
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "rotate-right" }),
             )?;
@@ -963,43 +1003,6 @@ fn start_fd_pressure_watchdog() {
 
 fn open_fd_count() -> io::Result<usize> {
     fs::read_dir("/dev/fd").map(|entries| entries.count())
-}
-
-fn run_session_action_with_appkit<F>(
-    label: &'static str,
-    udid: String,
-    action: F,
-) -> anyhow::Result<()>
-where
-    F: FnOnce(&NativeSession) -> Result<(), crate::error::AppError> + Send + 'static,
-{
-    unsafe {
-        ffi::xcw_native_initialize_app();
-    }
-
-    let (result_tx, result_rx) = mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let result: anyhow::Result<()> = (|| {
-            let bridge = NativeBridge;
-            let session = bridge.create_session(&udid)?;
-            session.start()?;
-            action(&session)?;
-            Ok(())
-        })();
-        let _ = result_tx.send(result);
-    });
-
-    loop {
-        match result_rx.try_recv() {
-            Ok(result) => return result,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                anyhow::bail!("{label} worker exited unexpectedly");
-            }
-            Err(mpsc::TryRecvError::Empty) => unsafe {
-                ffi::xcw_native_run_main_loop_slice(0.05);
-            },
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1169,6 +1172,536 @@ fn default_screenshot_path(udid: &str) -> PathBuf {
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
     PathBuf::from(format!("Simulator Screenshot - {udid} - {timestamp}.png"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn describe_ui_snapshot(
+    bridge: &NativeBridge,
+    udid: &str,
+    point: Option<(f64, f64)>,
+    source: DescribeUiSource,
+    max_depth: Option<usize>,
+    include_hidden: bool,
+    direct: bool,
+    server_url: &str,
+) -> anyhow::Result<Value> {
+    if point.is_none() && !direct && source != DescribeUiSource::NativeAx {
+        match fetch_service_accessibility_tree(udid, source, max_depth, include_hidden, server_url)
+        {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(error) if source != DescribeUiSource::Auto => return Err(error),
+            Err(_) => {}
+        }
+    }
+
+    if source != DescribeUiSource::Auto && source != DescribeUiSource::NativeAx {
+        anyhow::bail!(
+            "The `{}` hierarchy source requires a running SimDeck service. Start it with `simdeck serve --port 4310`, or use --source native-ax.",
+            source.as_query_value()
+        );
+    }
+
+    let snapshot = bridge.accessibility_snapshot(udid, point)?;
+    Ok(trim_snapshot_depth(snapshot, max_depth))
+}
+
+fn fetch_service_accessibility_tree(
+    udid: &str,
+    source: DescribeUiSource,
+    max_depth: Option<usize>,
+    include_hidden: bool,
+    server_url: &str,
+) -> anyhow::Result<Value> {
+    let mut query = vec![format!("source={}", source.as_query_value())];
+    if let Some(max_depth) = max_depth {
+        query.push(format!("maxDepth={}", max_depth.min(80)));
+    }
+    if include_hidden {
+        query.push("includeHidden=true".to_owned());
+    }
+    let path = format!(
+        "/api/simulators/{}/accessibility-tree?{}",
+        url_path_component(udid),
+        query.join("&")
+    );
+    http_get_json(server_url, &path)
+}
+
+fn http_get_json(server_url: &str, path: &str) -> anyhow::Result<Value> {
+    let endpoint = HttpEndpoint::parse(server_url)?;
+    let mut stream = std::net::TcpStream::connect((endpoint.host.as_str(), endpoint.port))
+        .with_context(|| format!("connect to SimDeck service at {server_url}"))?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+        endpoint.host_header()
+    );
+    stream.write_all(request.as_bytes())?;
+
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    let (status, headers, body) = parse_http_response(&response)?;
+    let body = if response_is_chunked(&headers) {
+        decode_chunked_body(body)?
+    } else {
+        body.to_vec()
+    };
+    if !(200..300).contains(&status) {
+        let message = String::from_utf8_lossy(&body).trim().to_owned();
+        anyhow::bail!(
+            "SimDeck service returned HTTP {status}{}",
+            if message.is_empty() {
+                String::new()
+            } else {
+                format!(": {message}")
+            }
+        );
+    }
+    serde_json::from_slice(&body).context("parse SimDeck service JSON response")
+}
+
+struct HttpEndpoint {
+    host: String,
+    port: u16,
+}
+
+type HttpHeaders = Vec<(String, String)>;
+
+impl HttpEndpoint {
+    fn parse(server_url: &str) -> anyhow::Result<Self> {
+        let without_scheme = server_url
+            .trim_end_matches('/')
+            .strip_prefix("http://")
+            .ok_or_else(|| anyhow::anyhow!("Only http:// server URLs are supported."))?;
+        let authority = without_scheme
+            .split('/')
+            .next()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("Server URL must include a host."))?;
+        let (host, port) = if let Some(host) = authority.strip_prefix('[') {
+            let (host, rest) = host
+                .split_once(']')
+                .ok_or_else(|| anyhow::anyhow!("Invalid IPv6 server URL host."))?;
+            let port = rest
+                .strip_prefix(':')
+                .map(parse_port)
+                .transpose()?
+                .unwrap_or(80);
+            (host.to_owned(), port)
+        } else if let Some((host, port)) = authority.rsplit_once(':') {
+            (host.to_owned(), parse_port(port)?)
+        } else {
+            (authority.to_owned(), 80)
+        };
+        Ok(Self { host, port })
+    }
+
+    fn host_header(&self) -> String {
+        if self.host.contains(':') {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+}
+
+fn parse_port(value: &str) -> anyhow::Result<u16> {
+    value
+        .parse::<u16>()
+        .with_context(|| format!("parse port `{value}`"))
+}
+
+fn parse_http_response(response: &[u8]) -> anyhow::Result<(u16, HttpHeaders, &[u8])> {
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| anyhow::anyhow!("SimDeck service returned a malformed HTTP response."))?;
+    let header_bytes = &response[..header_end];
+    let body = &response[header_end + 4..];
+    let header_text = std::str::from_utf8(header_bytes).context("parse HTTP headers as UTF-8")?;
+    let mut lines = header_text.lines();
+    let status_line = lines
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("SimDeck service returned an empty HTTP response."))?;
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| anyhow::anyhow!("HTTP response did not include a status code."))?
+        .parse::<u16>()
+        .context("parse HTTP status code")?;
+    let headers = lines
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim().to_ascii_lowercase(), value.trim().to_owned()))
+        })
+        .collect();
+    Ok((status, headers, body))
+}
+
+fn response_is_chunked(headers: &[(String, String)]) -> bool {
+    headers.iter().any(|(name, value)| {
+        name == "transfer-encoding"
+            && value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("chunked"))
+    })
+}
+
+fn decode_chunked_body(mut body: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut decoded = Vec::new();
+    loop {
+        let line_end = body
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .ok_or_else(|| anyhow::anyhow!("Chunked response ended before a chunk size."))?;
+        let size_text = std::str::from_utf8(&body[..line_end])
+            .context("parse chunk size as UTF-8")?
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim();
+        let size = usize::from_str_radix(size_text, 16).context("parse chunk size")?;
+        body = &body[line_end + 2..];
+        if size == 0 {
+            return Ok(decoded);
+        }
+        if body.len() < size + 2 {
+            anyhow::bail!("Chunked response ended before a full chunk.");
+        }
+        decoded.extend_from_slice(&body[..size]);
+        body = &body[size + 2..];
+    }
+}
+
+fn url_path_component(value: &str) -> String {
+    value
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![byte as char]
+            }
+            _ => format!("%{byte:02X}").chars().collect(),
+        })
+        .collect()
+}
+
+impl DescribeUiSource {
+    fn as_query_value(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Nativescript => "nativescript",
+            Self::Uikit => "uikit",
+            Self::NativeAx => "native-ax",
+        }
+    }
+}
+
+fn trim_snapshot_depth(mut snapshot: Value, max_depth: Option<usize>) -> Value {
+    let Some(max_depth) = max_depth else {
+        return snapshot;
+    };
+    if let Some(roots) = snapshot.get_mut("roots").and_then(Value::as_array_mut) {
+        for root in roots {
+            trim_describe_node_depth(root, 0, max_depth);
+        }
+    }
+    snapshot
+}
+
+fn trim_describe_node_depth(node: &mut Value, depth: usize, max_depth: usize) {
+    let Some(object) = node.as_object_mut() else {
+        return;
+    };
+    if depth >= max_depth {
+        object.insert("children".to_owned(), Value::Array(Vec::new()));
+        return;
+    }
+    if let Some(children) = object.get_mut("children").and_then(Value::as_array_mut) {
+        for child in children {
+            trim_describe_node_depth(child, depth + 1, max_depth);
+        }
+    }
+}
+
+fn print_describe_ui(snapshot: &Value, format: DescribeUiFormat) -> anyhow::Result<()> {
+    match format {
+        DescribeUiFormat::Json => println_json(snapshot),
+        DescribeUiFormat::CompactJson => {
+            println!(
+                "{}",
+                serde_json::to_string(&compact_accessibility_snapshot(snapshot))?
+            );
+            Ok(())
+        }
+        DescribeUiFormat::Agent => {
+            print!("{}", render_agent_accessibility_tree(snapshot));
+            Ok(())
+        }
+    }
+}
+
+fn compact_accessibility_snapshot(snapshot: &Value) -> Value {
+    let roots = snapshot
+        .get("roots")
+        .and_then(Value::as_array)
+        .map(|roots| {
+            roots
+                .iter()
+                .map(compact_accessibility_node)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut object = serde_json::Map::new();
+    object.insert(
+        "source".to_owned(),
+        snapshot
+            .get("source")
+            .cloned()
+            .unwrap_or_else(|| Value::String("unknown".to_owned())),
+    );
+    object.insert("roots".to_owned(), Value::Array(roots));
+    for field in ["availableSources", "fallbackReason", "fallbackSource"] {
+        if let Some(value) = snapshot.get(field) {
+            object.insert(field.to_owned(), value.clone());
+        }
+    }
+    Value::Object(object)
+}
+
+fn compact_accessibility_node(node: &Value) -> Value {
+    let mut object = serde_json::Map::new();
+    insert_string_alias(node, &mut object, "role", &["type", "role", "className"]);
+    insert_string_alias(
+        node,
+        &mut object,
+        "id",
+        &["AXIdentifier", "AXUniqueId", "inspectorId", "id"],
+    );
+    insert_string_alias(
+        node,
+        &mut object,
+        "label",
+        &["AXLabel", "label", "title", "text", "name"],
+    );
+    insert_string_alias(
+        node,
+        &mut object,
+        "value",
+        &["AXValue", "value", "placeholder"],
+    );
+    if let Some(frame) = compact_frame(node.get("frame").or_else(|| node.get("frameInScreen"))) {
+        object.insert("frame".to_owned(), frame);
+    }
+    if truthy_field(node, "hidden").unwrap_or(false)
+        || truthy_field(node, "isHidden").unwrap_or(false)
+    {
+        object.insert("hidden".to_owned(), Value::Bool(true));
+    }
+    if let Some(false) = truthy_field(node, "enabled") {
+        object.insert("enabled".to_owned(), Value::Bool(false));
+    }
+    if let Some(actions) = node
+        .get("custom_actions")
+        .or_else(|| {
+            node.get("control")
+                .and_then(|control| control.get("actions"))
+        })
+        .and_then(Value::as_array)
+    {
+        let actions = actions
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|action| Value::String(action.to_owned()))
+            .collect::<Vec<_>>();
+        if !actions.is_empty() {
+            object.insert("actions".to_owned(), Value::Array(actions));
+        }
+    }
+    if let Some(source_location) = node.get("sourceLocation").filter(|value| !value.is_null()) {
+        object.insert("sourceLocation".to_owned(), source_location.clone());
+    }
+    let children = node
+        .get("children")
+        .and_then(Value::as_array)
+        .map(|children| {
+            children
+                .iter()
+                .map(compact_accessibility_node)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !children.is_empty() {
+        object.insert("children".to_owned(), Value::Array(children));
+    }
+    Value::Object(object)
+}
+
+fn insert_string_alias(
+    source: &Value,
+    target: &mut serde_json::Map<String, Value>,
+    output_key: &str,
+    input_keys: &[&str],
+) {
+    if let Some(value) = input_keys
+        .iter()
+        .filter_map(|key| source.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+    {
+        target.insert(output_key.to_owned(), Value::String(value.to_owned()));
+    }
+}
+
+fn compact_frame(frame: Option<&Value>) -> Option<Value> {
+    let frame = frame?;
+    let x = frame.get("x")?.as_f64()?;
+    let y = frame.get("y")?.as_f64()?;
+    let width = frame.get("width")?.as_f64()?;
+    let height = frame.get("height")?.as_f64()?;
+    Some(serde_json::json!([
+        round_frame_value(x),
+        round_frame_value(y),
+        round_frame_value(width),
+        round_frame_value(height)
+    ]))
+}
+
+fn round_frame_value(value: f64) -> Value {
+    let rounded = (value * 10.0).round() / 10.0;
+    serde_json::Number::from_f64(rounded)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
+}
+
+fn truthy_field(node: &Value, field: &str) -> Option<bool> {
+    node.get(field).and_then(Value::as_bool)
+}
+
+fn render_agent_accessibility_tree(snapshot: &Value) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "source: {}",
+        snapshot
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    ));
+    if let Some(sources) = snapshot.get("availableSources").and_then(Value::as_array) {
+        let sources = sources
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(",");
+        if !sources.is_empty() {
+            lines.push(format!("available: {sources}"));
+        }
+    }
+    if let Some(reason) = snapshot.get("fallbackReason").and_then(Value::as_str) {
+        lines.push(format!("fallback: {}", compact_text(reason)));
+    }
+    if let Some(roots) = snapshot.get("roots").and_then(Value::as_array) {
+        for root in roots {
+            render_agent_node(root, 0, &mut lines);
+        }
+    }
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+fn render_agent_node(node: &Value, depth: usize, lines: &mut Vec<String>) {
+    let compact = compact_accessibility_node(node);
+    let object = compact.as_object();
+    let field = |name| {
+        object
+            .and_then(|object| object.get(name))
+            .and_then(Value::as_str)
+            .map(compact_text)
+            .filter(|value| !value.is_empty())
+    };
+    let role = field("role").unwrap_or_else(|| "View".to_owned());
+    let id = field("id");
+    let label = field("label");
+    let value = field("value");
+    let mut line = format!("{}- {}", "  ".repeat(depth), role);
+    if let Some(id) = id {
+        line.push_str(" #");
+        line.push_str(&id);
+    }
+    if let Some(label) = label.as_ref() {
+        line.push_str(": ");
+        line.push_str(label);
+    }
+    if let Some(value) = value.filter(|value| Some(value) != label.as_ref()) {
+        line.push_str(" = ");
+        line.push_str(&value);
+    }
+    if let Some(frame) = object
+        .and_then(|object| object.get("frame"))
+        .and_then(Value::as_array)
+        .filter(|frame| frame.len() == 4)
+    {
+        line.push_str(&format!(
+            " @{},{} {}x{}",
+            frame_value(&frame[0]),
+            frame_value(&frame[1]),
+            frame_value(&frame[2]),
+            frame_value(&frame[3])
+        ));
+    }
+    let mut flags = Vec::new();
+    if object
+        .and_then(|object| object.get("hidden"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        flags.push("hidden");
+    }
+    if object
+        .and_then(|object| object.get("enabled"))
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        flags.push("disabled");
+    }
+    if let Some(actions) = object
+        .and_then(|object| object.get("actions"))
+        .and_then(Value::as_array)
+    {
+        let actions = actions.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+        if !actions.is_empty() {
+            line.push_str(" actions=");
+            line.push_str(&actions.join(","));
+        }
+    }
+    if !flags.is_empty() {
+        line.push(' ');
+        line.push_str(&flags.join(","));
+    }
+    lines.push(line);
+
+    if let Some(children) = node.get("children").and_then(Value::as_array) {
+        for child in children {
+            render_agent_node(child, depth + 1, lines);
+        }
+    }
+}
+
+fn compact_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn frame_value(value: &Value) -> String {
+    value
+        .as_f64()
+        .map(|value| {
+            if value.fract() == 0.0 {
+                format!("{value:.0}")
+            } else {
+                format!("{value:.1}")
+            }
+        })
+        .unwrap_or_else(|| "?".to_owned())
 }
 
 fn resolve_tap_target(

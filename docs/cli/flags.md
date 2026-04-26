@@ -86,6 +86,18 @@ Subcommands that take positionals expect them in the order shown:
 | `open-url` | `<udid> <url>`      | Any URL scheme accepted by `simctl openurl`. |
 | `launch`   | `<udid> <bundleId>` | App must already be installed.               |
 
+## `describe-ui` flags
+
+| Flag                 | Default                         | Description                                                                      |
+| -------------------- | ------------------------------- | -------------------------------------------------------------------------------- |
+| `--format`           | `json`                          | Output format: `json`, `compact-json`, or `agent`.                               |
+| `--source`           | `auto`                          | Hierarchy source: `auto`, `nativescript`, `uikit`, or `native-ax`.               |
+| `--max-depth`        | unlimited native / `80` service | Trim descendants after the requested depth.                                      |
+| `--include-hidden`   | `false`                         | Include hidden in-app inspector views when supported.                            |
+| `--direct`           | `false`                         | Skip the local service and use the private native accessibility bridge directly. |
+| `--point <x>,<y>`    | unset                           | Return the native element at a screen point.                                     |
+| `--server-url <url>` | `http://127.0.0.1:4310`         | Local service URL used for source-aware hierarchy requests.                      |
+
 ## Exit codes
 
 | Exit code | Meaning                                                                    |

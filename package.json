@@ -40,6 +40,7 @@
     "format:check": "prettier --check . && cargo fmt --manifest-path server/Cargo.toml --check",
     "lint": "npm run format:check && cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings && npm run --prefix client typecheck",
     "test": "cargo test --manifest-path server/Cargo.toml && npm run --prefix client test",
+    "test:integration:cli": "node scripts/integration/cli.mjs",
     "ci": "npm run lint && npm run build && npm run test && npm run package:vscode-extension",
     "dev": "npm run build:cli && node scripts/dev.mjs",
     "docs:dev": "vitepress dev docs",

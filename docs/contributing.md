@@ -108,20 +108,33 @@ npm run test
 
 This runs the Cargo test suite for the server and the Vitest suite for the client.
 
+The simulator-backed CLI integration suite is separate because it creates,
+boots, drives, erases, and deletes a temporary iOS simulator:
+
+```sh
+npm run build:cli
+npm run build:client
+npm run test:integration:cli
+```
+
+GitHub Actions runs this suite on macOS after the normal build/test pipeline.
+
 ## Full CI pipeline
 
 ```sh
 npm run ci
 ```
 
-This is the same script that GitHub Actions runs:
+This is the normal local CI script:
 
 1. `npm run lint` — formatting and lint checks.
 2. `npm run build` — Rust + Objective-C, React client, NativeScript inspector.
 3. `npm run test` — Rust and TypeScript tests.
 4. `npm run package:vscode-extension` — VS Code `.vsix`.
 
-A clean `npm run ci` is required for any PR.
+GitHub Actions runs `npm run ci`, then `npm run test:integration:cli` for the
+temp-simulator CLI and REST control sweep. A clean `npm run ci` and integration
+run are required for any PR that changes simulator control behavior.
 
 ## Documentation
 

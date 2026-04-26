@@ -261,20 +261,17 @@ impl NativeBridge {
         point: Option<(f64, f64)>,
     ) -> Result<serde_json::Value, AppError> {
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
-        let json = match native_accessibility_snapshot_json(&udid) {
+        let json = match native_accessibility_snapshot_json(&udid, point) {
             Ok(json) => json,
             Err(error) if is_core_simulator_service_mismatch(&error.to_string()) => {
                 std::thread::sleep(Duration::from_millis(250));
-                native_accessibility_snapshot_json(&udid)?
+                native_accessibility_snapshot_json(&udid, point)?
             }
             Err(error) => return Err(error),
         };
         let snapshot: serde_json::Value =
             serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))?;
-        Ok(match point {
-            Some((x, y)) => accessibility_snapshot_at_point(snapshot, x, y),
-            None => snapshot,
-        })
+        Ok(snapshot)
     }
 
     pub fn send_touch(&self, udid: &str, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
@@ -331,6 +328,28 @@ impl NativeBridge {
                     duration_ms,
                     &mut error,
                 ),
+                error,
+            )
+        }
+    }
+
+    pub fn rotate_right(&self, udid: &str) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_rotate_right(udid.as_ptr(), &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn rotate_left(&self, udid: &str) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_rotate_left(udid.as_ptr(), &mut error),
                 error,
             )
         }
@@ -575,26 +594,6 @@ impl NativeSession {
         }
     }
 
-    pub fn rotate_right(&self) -> Result<(), AppError> {
-        unsafe {
-            let mut error = ptr::null_mut();
-            bool_result(
-                ffi::xcw_native_session_rotate_right(self.handle, &mut error),
-                error,
-            )
-        }
-    }
-
-    pub fn rotate_left(&self) -> Result<(), AppError> {
-        unsafe {
-            let mut error = ptr::null_mut();
-            bool_result(
-                ffi::xcw_native_session_rotate_left(self.handle, &mut error),
-                error,
-            )
-        }
-    }
-
     pub unsafe fn set_frame_callback(
         &self,
         callback: Option<ffi::xcw_native_frame_callback>,
@@ -613,11 +612,17 @@ impl Drop for NativeSession {
     }
 }
 
-fn native_accessibility_snapshot_json(udid: &CString) -> Result<String, AppError> {
+fn native_accessibility_snapshot_json(
+    udid: &CString,
+    point: Option<(f64, f64)>,
+) -> Result<String, AppError> {
     unsafe {
         let mut error = ptr::null_mut();
+        let (has_point, x, y) = point
+            .map(|(x, y)| (true, x, y))
+            .unwrap_or((false, 0.0, 0.0));
         let raw =
-            ffi::xcw_native_accessibility_snapshot(udid.as_ptr(), false, 0.0, 0.0, &mut error);
+            ffi::xcw_native_accessibility_snapshot(udid.as_ptr(), has_point, x, y, &mut error);
         string_from_raw(raw, error)
     }
 }
@@ -626,71 +631,6 @@ fn is_core_simulator_service_mismatch(message: &str) -> bool {
     message.contains("CoreSimulator.framework was changed while the process was running")
         || message.contains("Service version")
             && message.contains("does not match expected service version")
-}
-
-fn accessibility_snapshot_at_point(
-    snapshot: serde_json::Value,
-    x: f64,
-    y: f64,
-) -> serde_json::Value {
-    let source = snapshot
-        .get("source")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("native-ax")
-        .to_owned();
-    let mut best: Option<(usize, serde_json::Value)> = None;
-    if let Some(roots) = snapshot.get("roots").and_then(serde_json::Value::as_array) {
-        for root in roots {
-            accessibility_node_at_point(root, x, y, 0, &mut best);
-        }
-    }
-    serde_json::json!({
-        "roots": best.map(|(_, node)| vec![node]).unwrap_or_default(),
-        "source": source,
-    })
-}
-
-fn accessibility_node_at_point(
-    node: &serde_json::Value,
-    x: f64,
-    y: f64,
-    depth: usize,
-    best: &mut Option<(usize, serde_json::Value)>,
-) {
-    if !accessibility_frame_contains_point(node.get("frame"), x, y) {
-        return;
-    }
-    if best
-        .as_ref()
-        .map(|(best_depth, _)| depth >= *best_depth)
-        .unwrap_or(true)
-    {
-        *best = Some((depth, node.clone()));
-    }
-    if let Some(children) = node.get("children").and_then(serde_json::Value::as_array) {
-        for child in children {
-            accessibility_node_at_point(child, x, y, depth + 1, best);
-        }
-    }
-}
-
-fn accessibility_frame_contains_point(frame: Option<&serde_json::Value>, x: f64, y: f64) -> bool {
-    let Some(frame) = frame else {
-        return false;
-    };
-    let Some(frame_x) = frame.get("x").and_then(serde_json::Value::as_f64) else {
-        return false;
-    };
-    let Some(frame_y) = frame.get("y").and_then(serde_json::Value::as_f64) else {
-        return false;
-    };
-    let Some(width) = frame.get("width").and_then(serde_json::Value::as_f64) else {
-        return false;
-    };
-    let Some(height) = frame.get("height").and_then(serde_json::Value::as_f64) else {
-        return false;
-    };
-    x >= frame_x && y >= frame_y && x <= frame_x + width && y <= frame_y + height
 }
 
 unsafe fn string_from_raw(raw: *mut i8, error: *mut i8) -> Result<String, AppError> {

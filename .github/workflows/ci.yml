@@ -37,3 +37,6 @@ jobs:
 
       - name: Lint, build, and test
         run: npm run ci
+
+      - name: CLI simulator integration tests
+        run: npm run test:integration:cli

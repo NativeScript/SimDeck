@@ -87,13 +87,22 @@ NativeScript/UIKit hierarchy details through the inspector source as well.
 
 ## Inspect UI State
 
-Use hierarchy inspection before acting whenever possible. It returns JSON with
-labels, values, roles, identifiers, frames, and children:
+Use hierarchy inspection before acting whenever possible. It returns labels,
+values, roles, identifiers, frames, and children. Prefer `--format agent` for
+agent planning because it is much smaller than full JSON:
 
 ```sh
 simdeck describe-ui <udid>
+simdeck describe-ui <udid> --format agent --max-depth 4
+simdeck describe-ui <udid> --format compact-json
 simdeck describe-ui <udid> --point 120,240
 ```
+
+`describe-ui` uses a running local SimDeck service by default so it can prefer
+NativeScript or UIKit in-app inspector sources. Add `--direct` to force the
+private CoreSimulator accessibility bridge, or `--source native-ax` to bypass
+in-app inspector sources. Use `--source nativescript`, `--source uikit`, or
+`--source auto` when the service is running.
 
 Prefer selector-based commands when stable labels or identifiers exist:
 
@@ -223,8 +232,8 @@ useful than stopping at the first failed step.
 
 ## Notes
 
-- `describe-ui` uses the built-in private CoreSimulator accessibility bridge,
-  not AXe.
+- `describe-ui --direct` uses the built-in private CoreSimulator accessibility
+  bridge, not AXe.
 - Keep app-specific build steps in the app project. SimDeck controls
   the simulator and viewer; it does not replace Xcode, `xcodebuild`,
   NativeScript CLI, Expo CLI, or other app build tools.

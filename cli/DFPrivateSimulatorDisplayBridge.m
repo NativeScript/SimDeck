@@ -1123,7 +1123,7 @@ static BOOL __attribute__((unused)) DFCallSwiftUnitAngleMeasurementGetter(id sel
     return DFCallSwiftUnitAngleMeasurementGetterByFunction(selfObject, function, measurement);
 }
 
-static BOOL DFCallSwiftUnitAngleMeasurementGetterByPattern(id selfObject, const char *prefix, const char *suffix, const char *role, DFUnitAngleMeasurement *measurement) {
+static BOOL __attribute__((unused)) DFCallSwiftUnitAngleMeasurementGetterByPattern(id selfObject, const char *prefix, const char *suffix, const char *role, DFUnitAngleMeasurement *measurement) {
     if (selfObject == nil || measurement == NULL) return NO;
     void *function = DFResolveSwiftSymbol(prefix, suffix, role);
     return DFCallSwiftUnitAngleMeasurementGetterByFunction(selfObject, function, measurement);
@@ -1391,7 +1391,7 @@ static BOOL DFSendDeviceOrientationEvent(id device, NSInteger orientationValue) 
     return NO;
 }
 
-static BOOL DFSetDisplayRotationMeasurement(id object, DFUnitAngleMeasurement measurement, const char *prefix, const char *role) {
+static BOOL __attribute__((unused)) DFSetDisplayRotationMeasurement(id object, DFUnitAngleMeasurement measurement, const char *prefix, const char *role) {
     if (object == nil || prefix == NULL) {
         return NO;
     }
@@ -2735,54 +2735,14 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     __block NSError *dispatchError = nil;
 
     dispatch_block_t work = ^{
-        // Resolve `<View>.deviceRotation` getter/setter ObjC-thunks by stable
-        // mangled prefix; the Foundation.Measurement type tail in the middle is
-        // what shifts across Xcodes.
-        static const char *displayViewPrefix    = "$s12SimulatorKit14SimDisplayViewC14deviceRotation";
-        static const char *chromePrefix         = "$s12SimulatorKit20SimDisplayChromeViewC14deviceRotation";
-        static const char *chromeRenderPrefix   = "$s12SimulatorKit26SimDisplayChromeRenderViewC14deviceRotation";
-        static const char *digitizerPrefix      = "$s12SimulatorKit21SimDigitizerInputViewC14deviceRotation";
-        static const char *getterSuffix         = "vgTj";
-
-        // Seed the next target rotation from whatever SimulatorKit exposes (if anything).
-        // If every getter is missing on this Xcode/macOS build, fall back to our locally
-        // tracked ivar so the device still rotates even when we can't read SimulatorKit's
-        // internal rotation state.
+        // Avoid mutating SimulatorKit/AppKit view rotation directly here. Newer
+        // macOS builds can trap if those private views are changed during an
+        // AppKit window transaction. The simulator orientation event is the
+        // stable control path; display geometry is refreshed by the next frame.
         __block DFUnitAngleMeasurement measurement = { [NSUnitAngle degrees], self->_deviceRotationDegrees };
-        __block BOOL readFromSimulatorKit = NO;
         __block BOOL viewsUpdated = NO;
-
-        DFRunOnMainSync(^{
-            DFConfigureDisplayGeometry(self->_displayView, self->_displayPixelSize);
-
-            id chromeView = self->_displayView != nil
-                ? object_getIvar(self->_displayView, DFGetIvar(self->_displayView, "chromeView"))
-                : nil;
-            id chromeRenderView = chromeView != nil
-                ? object_getIvar(chromeView, DFGetIvar(chromeView, "_renderView"))
-                : nil;
-
-            DFUnitAngleMeasurement readMeasurement = { [NSUnitAngle degrees], 0 };
-            if (DFCallSwiftUnitAngleMeasurementGetterByPattern(self->_displayView,        displayViewPrefix, getterSuffix, "SimDisplayView.deviceRotation.getter",        &readMeasurement) ||
-                DFCallSwiftUnitAngleMeasurementGetterByPattern(chromeView,                chromePrefix,      getterSuffix, "SimDisplayChromeView.deviceRotation.getter",  &readMeasurement) ||
-                DFCallSwiftUnitAngleMeasurementGetterByPattern(self->_digitizerInputView, digitizerPrefix,   getterSuffix, "SimDigitizerInputView.deviceRotation.getter", &readMeasurement)) {
-                readFromSimulatorKit = YES;
-                measurement = readMeasurement;
-                if (measurement.unit == nil) {
-                    measurement.unit = [NSUnitAngle degrees];
-                }
-            }
-
-            measurement.value = DFNormalizedDegrees(measurement.value + deltaDegrees);
-            self->_deviceRotationDegrees = measurement.value;
-
-            if (readFromSimulatorKit) {
-                viewsUpdated |= DFSetDisplayRotationMeasurement(self->_displayView,        measurement, displayViewPrefix,  "SimDisplayView.deviceRotation.setter");
-                viewsUpdated |= DFSetDisplayRotationMeasurement(chromeView,                measurement, chromePrefix,       "SimDisplayChromeView.deviceRotation.setter");
-                viewsUpdated |= DFSetDisplayRotationMeasurement(chromeRenderView,          measurement, chromeRenderPrefix, "SimDisplayChromeRenderView.deviceRotation.setter");
-                viewsUpdated |= DFSetDisplayRotationMeasurement(self->_digitizerInputView, measurement, digitizerPrefix,    "SimDigitizerInputView.deviceRotation.setter");
-            }
-        });
+        measurement.value = DFNormalizedDegrees(measurement.value + deltaDegrees);
+        self->_deviceRotationDegrees = measurement.value;
 
         NSInteger orientationValue = DFOrientationEquivalentValueForMeasurement(measurement);
         BOOL propagatedOrientation = DFSendDeviceOrientationEvent(self->_device, orientationValue);

@@ -167,16 +167,6 @@ impl SimulatorSession {
         self.inner.native.press_home()
     }
 
-    pub fn rotate_right(&self) -> Result<(), AppError> {
-        self.ensure_started()?;
-        self.inner.native.rotate_right()
-    }
-
-    pub fn rotate_left(&self) -> Result<(), AppError> {
-        self.ensure_started()?;
-        self.inner.native.rotate_left()
-    }
-
     pub fn snapshot(&self) -> serde_json::Value {
         serde_json::json!({
             "displayReady": self.inner.display_ready.load(Ordering::Relaxed),

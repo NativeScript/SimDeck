@@ -224,7 +224,7 @@ Returns the rendered bezel as a PNG. Cache headers are set to `no-cache, no-stor
 
 ### `GET /api/simulators/{udid}/accessibility-tree`
 
-Returns the current accessibility tree. The server merges three sources: NativeScript, Swift in-app agent, and AXe. Use the `source` query parameter to ask for a specific one:
+Returns the current accessibility tree. The server merges three sources: NativeScript, Swift in-app agent, and AXe. Query parameters:
 
 | `source`                     | Behaviour                                                                                            |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------- |
@@ -232,6 +232,11 @@ Returns the current accessibility tree. The server merges three sources: NativeS
 | `nativescript` / `ns`        | Force the NativeScript logical tree if a NativeScript inspector is connected for the foreground app. |
 | `uikit` / `in-app-inspector` | Force the raw UIKit hierarchy from the in-app inspector agent (NativeScript or Swift).               |
 | `axe`                        | Always use the AXe accessibility snapshot.                                                           |
+
+| Parameter       | Default | Description                                                                                     |
+| --------------- | ------- | ----------------------------------------------------------------------------------------------- |
+| `maxDepth`      | `80`    | Limits returned descendants for in-app inspectors. Native AX responses are trimmed server-side. |
+| `includeHidden` | `false` | Includes hidden in-app inspector views when supported by the connected inspector runtime.       |
 
 The response always includes:
 
