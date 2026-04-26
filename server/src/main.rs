@@ -2743,27 +2743,6 @@ fn lerp(start: f64, end: f64, t: f64) -> f64 {
     start + (end - start) * t
 }
 
-#[cfg(test)]
-mod tests {
-    use super::normalize_accessibility_point_for_display;
-
-    #[test]
-    fn selector_tap_keeps_matching_orientation_coordinates() {
-        assert_eq!(
-            normalize_accessibility_point_for_display(240.0, 160.0, 480.0, 320.0, 1200.0, 800.0),
-            (0.5, 0.5)
-        );
-    }
-
-    #[test]
-    fn selector_tap_transposes_swapped_orientation_coordinates() {
-        assert_eq!(
-            normalize_accessibility_point_for_display(240.0, 226.0, 480.0, 320.0, 800.0, 1200.0),
-            (0.70625, 0.5)
-        );
-    }
-}
-
 fn hid_for_character(character: char) -> Option<(u16, u32)> {
     let shift: u32 = 1;
     let mapping = match character {
@@ -2915,4 +2894,25 @@ fn default_client_root() -> anyhow::Result<PathBuf> {
     }
 
     Ok(std::env::current_dir()?.join("client").join("dist"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_accessibility_point_for_display;
+
+    #[test]
+    fn selector_tap_keeps_matching_orientation_coordinates() {
+        assert_eq!(
+            normalize_accessibility_point_for_display(240.0, 160.0, 480.0, 320.0, 1200.0, 800.0),
+            (0.5, 0.5)
+        );
+    }
+
+    #[test]
+    fn selector_tap_transposes_swapped_orientation_coordinates() {
+        assert_eq!(
+            normalize_accessibility_point_for_display(240.0, 226.0, 480.0, 320.0, 800.0, 1200.0),
+            (0.70625, 0.5)
+        );
+    }
 }
