@@ -325,6 +325,32 @@ void xcw_native_input_destroy(void *handle) {
     }
 }
 
+bool xcw_native_input_send_touch(void *handle, double x, double y, const char *phase, char **error_message) {
+    @autoreleasepool {
+        if (handle == NULL) {
+            XCWSetErrorMessage(error_message, [NSError errorWithDomain:@"SimDeck.NativeInput"
+                                                                   code:1
+                                                               userInfo:@{NSLocalizedDescriptionKey: @"Native input handle is null."}]);
+            return false;
+        }
+        NSError *phaseError = nil;
+        DFPrivateSimulatorTouchPhase touchPhase = DFPrivateSimulatorTouchPhaseMoved;
+        if (!XCWTouchPhaseFromString(XCWStringFromCString(phase), &touchPhase, &phaseError)) {
+            XCWSetErrorMessage(error_message, phaseError);
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [(__bridge DFPrivateSimulatorDisplayBridge *)handle sendTouchAtNormalizedX:x
+                                                                                normalizedY:y
+                                                                                      phase:touchPhase
+                                                                                      error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
 bool xcw_native_input_send_multitouch(void *handle, double x1, double y1, double x2, double y2, const char *phase, char **error_message) {
     @autoreleasepool {
         if (handle == NULL) {

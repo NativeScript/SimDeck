@@ -147,26 +147,6 @@ impl SimulatorSession {
         self.inner.native.request_refresh();
     }
 
-    pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
-        self.ensure_started()?;
-        self.inner.native.send_touch(x, y, phase)
-    }
-
-    pub fn send_key(&self, key_code: u16, modifiers: u32) -> Result<(), AppError> {
-        self.ensure_started()?;
-        self.inner.native.send_key(key_code, modifiers)
-    }
-
-    pub fn dismiss_keyboard(&self) -> Result<(), AppError> {
-        self.ensure_started()?;
-        self.inner.native.dismiss_keyboard()
-    }
-
-    pub fn press_home(&self) -> Result<(), AppError> {
-        self.ensure_started()?;
-        self.inner.native.press_home()
-    }
-
     pub fn snapshot(&self) -> serde_json::Value {
         serde_json::json!({
             "displayReady": self.inner.display_ready.load(Ordering::Relaxed),

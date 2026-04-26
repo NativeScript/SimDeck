@@ -500,6 +500,17 @@ unsafe impl Send for NativeInputSession {}
 unsafe impl Sync for NativeInputSession {}
 
 impl NativeInputSession {
+    pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
+        let phase = CString::new(phase).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_input_send_touch(self.handle, x, y, phase.as_ptr(), &mut error),
+                error,
+            )
+        }
+    }
+
     pub fn send_multitouch(
         &self,
         x1: f64,
@@ -556,41 +567,6 @@ impl NativeSession {
     pub fn request_refresh(&self) {
         unsafe {
             ffi::xcw_native_session_request_refresh(self.handle);
-        }
-    }
-
-    pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
-        let phase = CString::new(phase).map_err(|e| AppError::bad_request(e.to_string()))?;
-        unsafe {
-            let mut error = ptr::null_mut();
-            bool_result(
-                ffi::xcw_native_session_send_touch(self.handle, x, y, phase.as_ptr(), &mut error),
-                error,
-            )
-        }
-    }
-
-    pub fn send_key(&self, key_code: u16, modifiers: u32) -> Result<(), AppError> {
-        unsafe {
-            let mut error = ptr::null_mut();
-            bool_result(
-                ffi::xcw_native_session_send_key(self.handle, key_code, modifiers, &mut error),
-                error,
-            )
-        }
-    }
-
-    pub fn dismiss_keyboard(&self) -> Result<(), AppError> {
-        self.send_key(41, 0)
-    }
-
-    pub fn press_home(&self) -> Result<(), AppError> {
-        unsafe {
-            let mut error = ptr::null_mut();
-            bool_result(
-                ffi::xcw_native_session_press_home(self.handle, &mut error),
-                error,
-            )
         }
     }
 

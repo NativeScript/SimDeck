@@ -15,7 +15,6 @@ Optional:
 
 - **`prettier`** for formatting (installed via `npm install`).
 - **`cargo fmt`** and **`cargo clippy`** for Rust formatting and lints (ship with rustup).
-- **AXe** if you want to test the accessibility fallback path.
 
 ## First-time setup
 
@@ -109,7 +108,9 @@ npm run test
 This runs the Cargo test suite for the server and the Vitest suite for the client.
 
 The simulator-backed CLI integration suite is separate because it creates,
-boots, drives, erases, and deletes a temporary iOS simulator:
+boots, drives, erases, and deletes a temporary iOS simulator. The suite also
+builds and installs a tiny SwiftUI fixture app directly with `swiftc` so install,
+uninstall, and opt-in launch checks use a deterministic local app bundle:
 
 ```sh
 npm run build:cli
@@ -117,7 +118,27 @@ npm run build:client
 npm run test:integration:cli
 ```
 
+For an interactive local run that opens Simulator.app and prints each CLI/HTTP
+step with timings:
+
+```sh
+npm run test:integration:cli:verbose
+```
+
+The integration runner captures `describe-ui` after each control step. If iOS
+shows a known system URL-opening confirmation, the runner handles it and then
+captures the UI again before continuing.
+
+Verbose mode prints CLI commands, command output, timings, and UI checkpoints.
+Set `SIMDECK_INTEGRATION_TRACE_HTTP=1` if you also need raw HTTP request logs.
+
+Set `SIMDECK_INTEGRATION_KEEP_SIMULATOR=1` with the verbose command if you want
+the temporary simulator left around for inspection after the suite exits.
+
 GitHub Actions runs this suite on macOS after the normal build/test pipeline.
+The integration suite does not require the live video display bridge; REST input
+routes use the non-display native input path, and the video stream is covered by
+lower-level protocol tests.
 
 ## Full CI pipeline
 

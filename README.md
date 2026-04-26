@@ -1,17 +1,16 @@
 # SimDeck
 
-`simdeck` is a local simulator control plane with a Rust server, native Objective-C simulator bridge, and a React client.
+`simdeck` is a local simulator control panel & agent-first CLI for driving the simulator
 
-- Rust product server in `server/`
-- native Objective-C simulator/private-framework bridge in `cli/`
+```sh
+npm i -g simdeck@latest
+```
+
 - `simctl`-backed simulator discovery and lifecycle commands
 - private CoreSimulator boot fallback
-- vendored private display bridge for continuous frames plus touch and keyboard injection
 - CoreSimulator chrome asset rendering for device bezels
 - NativeScript runtime inspector in `packages/nativescript-inspector/` for JS-driven UIKit querying and property edits
-- local HTTP API plus static client hosting in Rust
 - WebTransport video delivery over a self-signed local or LAN endpoint
-- React client in `client/`
 
 ## Build
 
@@ -28,12 +27,6 @@ Requirements:
 - Xcode or Command Line Tools
 - Rust toolchain (`cargo`)
 - Node.js 18+
-
-Install the published CLI globally:
-
-```sh
-npm install -g simdeck
-```
 
 The npm package builds the native Rust/Objective-C CLI during `postinstall`; it
 is not a prebuilt cross-platform binary.
@@ -146,9 +139,7 @@ UIKit in-app inspectors, then falls back to the built-in private CoreSimulator
 accessibility bridge. Use `--format agent` or `--format compact-json` for
 lower-token hierarchy dumps. Coordinate commands accept screen coordinates from
 the accessibility tree by default; pass `--normalized` to send `0.0..1.0`
-coordinates directly. The CLI intentionally does not implement screenshot-based
-video streaming, MJPEG output, or screen recording; the live visual path remains
-the web UI's WebTransport stream.
+coordinates directly.
 
 ## NativeScript Inspector
 

@@ -28,6 +28,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,6 +37,11 @@ use tracing::{info, warn};
 const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
 const RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV: &str = "SIMDECK_RESTART_ON_CORE_SIMULATOR_MISMATCH";
 const SERVER_FD_RESTART_THRESHOLD: usize = 4096;
+const SERVER_HEALTH_WATCHDOG_INITIAL_DELAY: Duration = Duration::from_secs(15);
+const SERVER_HEALTH_WATCHDOG_INTERVAL: Duration = Duration::from_secs(5);
+const SERVER_HEALTH_WATCHDOG_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+const SERVER_HEALTH_WATCHDOG_STALE_HEARTBEAT: Duration = Duration::from_secs(10);
+const SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD: usize = 3;
 
 #[derive(Parser)]
 #[command(name = "simdeck")]
@@ -623,14 +629,15 @@ fn main() -> anyhow::Result<()> {
         } => {
             let (x, y) = resolve_touch_point(&bridge, &udid, x, y, normalized)?;
             if down || up {
+                let input = bridge.create_input_session(&udid)?;
                 if down {
-                    bridge.send_touch(&udid, x, y, "began")?;
+                    input.send_touch(x, y, "began")?;
                 }
                 if down && up {
                     std::thread::sleep(Duration::from_millis(delay_ms));
                 }
                 if up {
-                    bridge.send_touch(&udid, x, y, "ended")?;
+                    input.send_touch(x, y, "ended")?;
                 }
             } else {
                 bridge.send_touch(&udid, x, y, &phase)?;
@@ -1005,6 +1012,61 @@ fn open_fd_count() -> io::Result<usize> {
     fs::read_dir("/dev/fd").map(|entries| entries.count())
 }
 
+fn start_server_health_watchdog(http_addr: SocketAddr, heartbeat: Arc<AtomicU64>) {
+    std::thread::spawn(move || {
+        std::thread::sleep(SERVER_HEALTH_WATCHDOG_INITIAL_DELAY);
+        let mut consecutive_failures = 0usize;
+
+        loop {
+            std::thread::sleep(SERVER_HEALTH_WATCHDOG_INTERVAL);
+
+            let heartbeat_age = now_secs().saturating_sub(heartbeat.load(Ordering::Relaxed));
+            let heartbeat_stale = heartbeat_age > SERVER_HEALTH_WATCHDOG_STALE_HEARTBEAT.as_secs();
+            let health_ok = http_health_probe(http_addr, SERVER_HEALTH_WATCHDOG_PROBE_TIMEOUT);
+
+            if heartbeat_stale || !health_ok {
+                consecutive_failures += 1;
+            } else {
+                consecutive_failures = 0;
+            }
+
+            if consecutive_failures >= SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD {
+                eprintln!(
+                    "SimDeck server health watchdog failed {consecutive_failures} consecutive checks \
+(heartbeat_age={heartbeat_age}s, http_health_ok={health_ok}); restarting server process."
+                );
+                std::process::exit(RECOVERABLE_RESTART_EXIT_CODE);
+            }
+        }
+    });
+}
+
+fn http_health_probe(address: SocketAddr, timeout: Duration) -> bool {
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, timeout) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let request = b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    if stream.write_all(request).is_err() {
+        return false;
+    }
+
+    let mut response = [0u8; 128];
+    let Ok(read) = stream.read(&mut response) else {
+        return false;
+    };
+    read > 12 && response[..read].starts_with(b"HTTP/1.1 200")
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_secs()
+}
+
 #[derive(Clone, Debug, Default)]
 struct ElementSelector {
     id: Option<String>,
@@ -1097,9 +1159,10 @@ fn perform_tap(
     y: f64,
     duration_ms: u64,
 ) -> Result<(), crate::error::AppError> {
-    bridge.send_touch(udid, x, y, "began")?;
+    let input = bridge.create_input_session(udid)?;
+    input.send_touch(x, y, "began")?;
     sleep_ms(duration_ms);
-    bridge.send_touch(udid, x, y, "ended")
+    input.send_touch(x, y, "ended")
 }
 
 fn perform_swipe(
@@ -1110,18 +1173,18 @@ fn perform_swipe(
 ) -> Result<(), crate::error::AppError> {
     let step_count = steps.max(1);
     let delay = Duration::from_millis(gesture.duration_ms / u64::from(step_count));
-    bridge.send_touch(udid, gesture.start_x, gesture.start_y, "began")?;
+    let input = bridge.create_input_session(udid)?;
+    input.send_touch(gesture.start_x, gesture.start_y, "began")?;
     for step in 1..step_count {
         let t = f64::from(step) / f64::from(step_count);
-        bridge.send_touch(
-            udid,
+        input.send_touch(
             lerp(gesture.start_x, gesture.end_x, t),
             lerp(gesture.start_y, gesture.end_y, t),
             "moved",
         )?;
         std::thread::sleep(delay);
     }
-    bridge.send_touch(udid, gesture.end_x, gesture.end_y, "ended")
+    input.send_touch(gesture.end_x, gesture.end_y, "ended")
 }
 
 fn type_text(
@@ -2312,8 +2375,9 @@ fn run_batch_step(
             let normalized = args.flag("normalized");
             let (x, y) = resolve_touch_point(bridge, udid, x, y, normalized)?;
             if args.flag("down") || args.flag("up") {
+                let input = bridge.create_input_session(udid)?;
                 if args.flag("down") {
-                    bridge.send_touch(udid, x, y, "began")?;
+                    input.send_touch(x, y, "began")?;
                 }
                 if args.flag("down") && args.flag("up") {
                     sleep_ms(
@@ -2323,7 +2387,7 @@ fn run_batch_step(
                     );
                 }
                 if args.flag("up") {
-                    bridge.send_touch(udid, x, y, "ended")?;
+                    input.send_touch(x, y, "ended")?;
                 }
             } else {
                 bridge.send_touch(udid, x, y, args.value("phase").unwrap_or("began"))?;
@@ -2675,6 +2739,8 @@ async fn serve(
     let http_listener = tokio::net::TcpListener::bind(config.http_addr())
         .await
         .with_context(|| format!("bind HTTP listener on {}", config.http_addr()))?;
+    let health_heartbeat = Arc::new(AtomicU64::new(now_secs()));
+    start_server_health_watchdog(config.http_addr(), health_heartbeat.clone());
 
     info!("HTTP listening on http://{}", config.http_addr());
     info!(
@@ -2698,11 +2764,18 @@ Use --advertise-host <LAN-IP-or-DNS-name> for remote browser access."
         .await
         .context("serve HTTP")
     });
+    let health_task = tokio::spawn(async move {
+        loop {
+            health_heartbeat.store(now_secs(), Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
     let wt_task =
         tokio::spawn(async move { transport::webtransport::serve(wt_endpoint, state).await });
 
     tokio::select! {
         result = http_task => result??,
+        result = health_task => result.context("server health heartbeat task panicked")?,
         result = wt_task => result??,
         _ = tokio::signal::ctrl_c() => {}
     }

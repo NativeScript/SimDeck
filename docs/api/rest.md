@@ -118,6 +118,10 @@ Tears down the live session (if any) and shuts the simulator down.
 
 Toggles between light and dark appearance via `simctl ui appearance`.
 
+```json
+{ "ok": true }
+```
+
 ### `POST /api/simulators/{udid}/refresh`
 
 Forces the encoder to emit a fresh keyframe. Useful after a discontinuity or when the client decoder drifts.
@@ -137,6 +141,10 @@ Content-Type: application/json
 { "url": "https://example.com" }
 ```
 
+```json
+{ "ok": true }
+```
+
 ### `POST /api/simulators/{udid}/launch`
 
 Launches an installed app:
@@ -146,6 +154,10 @@ POST /api/simulators/{udid}/launch
 Content-Type: application/json
 
 { "bundleId": "com.apple.Preferences" }
+```
+
+```json
+{ "ok": true }
 ```
 
 ## Input
@@ -224,14 +236,14 @@ Returns the rendered bezel as a PNG. Cache headers are set to `no-cache, no-stor
 
 ### `GET /api/simulators/{udid}/accessibility-tree`
 
-Returns the current accessibility tree. The server merges three sources: NativeScript, Swift in-app agent, and AXe. Query parameters:
+Returns the current accessibility tree. The server merges three sources: NativeScript, Swift in-app agent (UIKit), and accessibility tree. Query parameters:
 
 | `source`                     | Behaviour                                                                                            |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `auto` _(default)_ / unset   | Use the most accurate source available, falling back to AXe.                                         |
+| `auto` _(default)_ / unset   | Use the most accurate source available, falling back to AX.                                          |
 | `nativescript` / `ns`        | Force the NativeScript logical tree if a NativeScript inspector is connected for the foreground app. |
 | `uikit` / `in-app-inspector` | Force the raw UIKit hierarchy from the in-app inspector agent (NativeScript or Swift).               |
-| `axe`                        | Always use the AXe accessibility snapshot.                                                           |
+| `ax`                         | Always use the AX snapshot.                                                                          |
 
 | Parameter       | Default | Description                                                                                     |
 | --------------- | ------- | ----------------------------------------------------------------------------------------------- |
@@ -243,8 +255,8 @@ The response always includes:
 ```json
 {
   "roots": [...],
-  "source": "nativescript|in-app-inspector|axe",
-  "availableSources": ["nativescript", "in-app-inspector", "axe"],
+  "source": "nativescript|in-app-inspector|ax",
+  "availableSources": ["nativescript", "in-app-inspector", "ax"],
   "fallbackReason": "...",
   "inspector": { ... }
 }
@@ -254,7 +266,7 @@ The response always includes:
 
 ### `GET /api/simulators/{udid}/accessibility-point?x=...&y=...`
 
-Returns the AXe-style accessibility description of the topmost element at a screen point. `x` and `y` are in UIKit screen points and must be finite, non-negative numbers.
+Returns the AX-style accessibility description of the topmost element at a screen point. `x` and `y` are in UIKit screen points and must be finite, non-negative numbers.
 
 ## Inspector proxy
 
@@ -378,5 +390,5 @@ Error bodies look like:
 | ------ | ------------------------------------------------------------------------------------------- |
 | `400`  | Bad request body or query parameter (e.g. missing `url`, invalid `x`/`y`).                  |
 | `404`  | Unknown simulator.                                                                          |
-| `408`  | Timed out waiting for a downstream component (encoder keyframe, AXe, inspector).            |
+| `408`  | Timed out waiting for a downstream component (encoder keyframe, AX, inspector).             |
 | `500`  | Unhandled native bridge error. Always reported as JSON with the original message preserved. |

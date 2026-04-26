@@ -2185,7 +2185,17 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     }
 
     _bootstrapScreen = ((id(*)(id, SEL))objc_msgSend)(screenClass, sel_registerName("alloc"));
-    _bootstrapScreen = ((id(*)(id, SEL, id, uint32_t))objc_msgSend)(_bootstrapScreen, sel_registerName("initWithDevice:screenID:"), _device, 0);
+    SEL screenInitSelector = sel_registerName("initWithDevice:screenID:");
+    if (![_bootstrapScreen respondsToSelector:screenInitSelector]) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeDisplayAttachFailed,
+                @"SimulatorKit SimDeviceScreen does not support initWithDevice:screenID: on this runtime."
+            );
+        }
+        return nil;
+    }
+    _bootstrapScreen = ((id(*)(id, SEL, id, uint32_t))objc_msgSend)(_bootstrapScreen, screenInitSelector, _device, 0);
     [self updateStatus:@"Waiting for CoreSimulator screen adapter"];
     DFSpinRunLoop(0.5);
 
@@ -2262,7 +2272,16 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     DFLog(@"Discovered headless screens %@; selecting %@", sortedScreenIDs, selectedScreenID);
 
     _activeScreen = ((id(*)(id, SEL))objc_msgSend)(screenClass, sel_registerName("alloc"));
-    _activeScreen = ((id(*)(id, SEL, id, uint32_t))objc_msgSend)(_activeScreen, sel_registerName("initWithDevice:screenID:"), _device, _activeScreenID);
+    if (![_activeScreen respondsToSelector:screenInitSelector]) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeDisplayAttachFailed,
+                @"SimulatorKit SimDeviceScreen does not support initWithDevice:screenID: on this runtime."
+            );
+        }
+        return nil;
+    }
+    _activeScreen = ((id(*)(id, SEL, id, uint32_t))objc_msgSend)(_activeScreen, screenInitSelector, _device, _activeScreenID);
     _rawScreen = screens[selectedScreenID];
     DFLogRuntimeShape(_activeScreen, @"activeScreen");
     DFLogRuntimeShape(_rawScreen, @"rawScreen");
@@ -2816,7 +2835,6 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         buttonCodes = @{
-            // FBSimulatorHIDButton raw values used by fbsimctl/idb/AXe.
             @"apple-pay": @1,
             @"lock": @3,
             @"power": @3,

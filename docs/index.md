@@ -40,7 +40,7 @@ features:
       width: 28
       height: 28
     title: First-class inspectors
-    details: Choose between AXe accessibility snapshots, the Swift in-app inspector agent, or the NativeScript runtime inspector — SimDeck routes the right one for each request.
+    details: Choose between accessibility snapshots, the Swift in-app inspector agent, or the NativeScript runtime inspector — SimDeck routes the right one for each request.
   - icon:
       src: /icons/puzzle.svg
       width: 28
