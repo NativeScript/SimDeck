@@ -710,22 +710,26 @@ struct SimDeckFixtureApp: App {
 `,
   );
   const targetArch = process.arch === "arm64" ? "arm64" : "x86_64";
-  runText("xcrun", [
-    "--sdk",
-    "iphonesimulator",
-    "swiftc",
-    "-target",
-    `${targetArch}-apple-ios15.0-simulator`,
-    "-parse-as-library",
-    "-O",
-    "-framework",
-    "SwiftUI",
-    "-framework",
-    "UIKit",
-    main,
-    "-o",
-    path.join(appPath, executable),
-  ]);
+  runText(
+    "xcrun",
+    [
+      "--sdk",
+      "iphonesimulator",
+      "swiftc",
+      "-target",
+      `${targetArch}-apple-ios15.0-simulator`,
+      "-parse-as-library",
+      "-Onone",
+      "-framework",
+      "SwiftUI",
+      "-framework",
+      "UIKit",
+      main,
+      "-o",
+      path.join(appPath, executable),
+    ],
+    { timeoutMs: 300_000 },
+  );
   return { appPath };
 }
 
