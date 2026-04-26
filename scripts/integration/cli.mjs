@@ -1119,14 +1119,26 @@ function openButtonCandidateNormalizedPoints(snapshot) {
   }
   const x = point.x / bounds.width;
   const y = point.y / bounds.height;
+  return candidateNormalizedTransforms(x, y);
+}
+
+function candidateNormalizedTransforms(x, y) {
   return uniqueUnitPoints([
     { x, y },
     { x: y, y: x },
-    { x: y, y: 1 - x },
-    { x: 1 - y, y: x },
     { x: 1 - x, y },
     { x, y: 1 - y },
-  ]).filter((candidate) => candidate.x >= 0 && candidate.y >= 0);
+    { x: 1 - x, y: 1 - y },
+    { x: y, y: 1 - x },
+    { x: 1 - y, y: x },
+    { x: 1 - y, y: 1 - x },
+  ]).filter(
+    (candidate) =>
+      candidate.x >= 0 &&
+      candidate.x <= 1 &&
+      candidate.y >= 0 &&
+      candidate.y <= 1,
+  );
 }
 
 function rootBounds(snapshot) {
