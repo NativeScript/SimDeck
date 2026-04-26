@@ -43,7 +43,7 @@ char * _Nullable xcw_native_get_chrome_profile(const char * _Nonnull udid, char 
 xcw_native_owned_bytes xcw_native_render_chrome_png(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 xcw_native_owned_bytes xcw_native_screenshot_png(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 char * _Nullable xcw_native_recent_logs(const char * _Nonnull udid, double seconds, size_t limit, char * _Nullable * _Nullable error_message);
-char * _Nullable xcw_native_accessibility_snapshot(const char * _Nonnull udid, bool has_point, double x, double y, char * _Nullable * _Nullable error_message);
+char * _Nullable xcw_native_accessibility_snapshot(const char * _Nonnull udid, bool has_point, double x, double y, size_t max_depth, char * _Nullable * _Nullable error_message);
 bool xcw_native_send_touch(const char * _Nonnull udid, double x, double y, const char * _Nonnull phase, char * _Nullable * _Nullable error_message);
 bool xcw_native_send_key(const char * _Nonnull udid, uint16_t key_code, uint32_t modifiers, char * _Nullable * _Nullable error_message);
 bool xcw_native_send_key_event(const char * _Nonnull udid, uint16_t key_code, bool down, char * _Nullable * _Nullable error_message);
@@ -62,6 +62,8 @@ void xcw_native_input_destroy(void * _Nullable handle);
 bool xcw_native_input_display_size(void * _Nonnull handle, double * _Nullable width, double * _Nullable height);
 bool xcw_native_input_send_touch(void * _Nonnull handle, double x, double y, const char * _Nonnull phase, char * _Nullable * _Nullable error_message);
 bool xcw_native_input_send_multitouch(void * _Nonnull handle, double x1, double y1, double x2, double y2, const char * _Nonnull phase, char * _Nullable * _Nullable error_message);
+bool xcw_native_input_send_key(void * _Nonnull handle, uint16_t key_code, uint32_t modifiers, char * _Nullable * _Nullable error_message);
+bool xcw_native_input_send_key_event(void * _Nonnull handle, uint16_t key_code, bool down, char * _Nullable * _Nullable error_message);
 
 void * _Nullable xcw_native_session_create(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 void xcw_native_session_destroy(void * _Nullable handle);

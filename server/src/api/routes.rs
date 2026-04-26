@@ -509,24 +509,19 @@ async fn accessibility_tree(
     let include_hidden = query.include_hidden.unwrap_or(false);
 
     if requested_source == AccessibilityHierarchySource::NativeAX {
-        let native_snapshot = match accessibility_snapshot(state.clone(), udid.clone(), None).await
-        {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                return Ok(json(empty_accessibility_tree(
-                    SOURCE_NATIVE_AX,
-                    &available_sources_with_native_ax(None),
-                    suppress_native_ax_translation_error(&error.to_string()),
-                )));
-            }
-        };
-        let availability = inspector_session_for_state(&state, &udid).await.ok();
-        let available_sources =
-            foreground_available_sources(&native_snapshot, availability.as_ref());
-        let snapshot = attach_available_sources(
-            trim_tree_depth(native_snapshot, max_depth),
-            &available_sources,
-        );
+        let native_snapshot =
+            match accessibility_snapshot(state.clone(), udid.clone(), None, max_depth).await {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    return Ok(json(empty_accessibility_tree(
+                        SOURCE_NATIVE_AX,
+                        &available_sources_with_native_ax(None),
+                        suppress_native_ax_translation_error(&error.to_string()),
+                    )));
+                }
+            };
+        let snapshot =
+            attach_available_sources(native_snapshot, &available_sources_with_native_ax(None));
         return Ok(json(snapshot));
     }
 
@@ -568,7 +563,8 @@ async fn accessibility_tree(
                 }
                 Err(_inspector_error) => {
                     let available_sources = available_sources_with_native_ax(Some(&session));
-                    match accessibility_snapshot(state.clone(), udid.clone(), None).await {
+                    match accessibility_snapshot(state.clone(), udid.clone(), None, max_depth).await
+                    {
                         Ok(native_snapshot) => Ok(json(attach_available_sources(
                             trim_tree_depth(native_snapshot, max_depth),
                             &available_sources,
@@ -584,7 +580,7 @@ async fn accessibility_tree(
         }
         Err(_inspector_error) => {
             let available_sources = available_sources_with_native_ax(None);
-            match accessibility_snapshot(state.clone(), udid.clone(), None).await {
+            match accessibility_snapshot(state.clone(), udid.clone(), None, max_depth).await {
                 Ok(native_snapshot) => Ok(json(attach_available_sources(
                     trim_tree_depth(native_snapshot, max_depth),
                     &available_sources,
@@ -610,7 +606,7 @@ async fn accessibility_point(
         ));
     }
 
-    let snapshot = accessibility_snapshot(state, udid, Some((query.x, query.y))).await?;
+    let snapshot = accessibility_snapshot(state, udid, Some((query.x, query.y)), None).await?;
     Ok(json(snapshot))
 }
 
@@ -988,18 +984,6 @@ fn available_sources_with_native_ax(session: Option<&InspectorSession>) -> Vec<S
     sources
 }
 
-fn foreground_available_sources(
-    native_ax_snapshot: &Value,
-    session: Option<&InspectorSession>,
-) -> Vec<String> {
-    if let Some(session) = session {
-        if native_ax_snapshot_contains_pid(native_ax_snapshot, session.process_identifier) {
-            return available_sources_with_native_ax(Some(session));
-        }
-    }
-    available_sources_with_native_ax(None)
-}
-
 fn available_sources_for_snapshot(base_sources: &[String], snapshot: &Value) -> Vec<String> {
     let mut sources = base_sources.to_owned();
     let Some(source) = snapshot.get("source").and_then(Value::as_str) else {
@@ -1019,26 +1003,6 @@ fn available_sources_for_snapshot(base_sources: &[String], snapshot: &Value) -> 
         sources.insert(insert_at, SOURCE_UIKIT.to_owned());
     }
     sources
-}
-
-fn native_ax_snapshot_contains_pid(snapshot: &Value, pid: i64) -> bool {
-    match snapshot {
-        Value::Array(values) => values
-            .iter()
-            .any(|value| native_ax_snapshot_contains_pid(value, pid)),
-        Value::Object(object) => {
-            object.get("pid").and_then(Value::as_i64) == Some(pid)
-                || object
-                    .get("children")
-                    .map(|children| native_ax_snapshot_contains_pid(children, pid))
-                    .unwrap_or(false)
-                || object
-                    .get("roots")
-                    .map(|roots| native_ax_snapshot_contains_pid(roots, pid))
-                    .unwrap_or(false)
-        }
-        _ => false,
-    }
 }
 
 fn attach_available_sources(snapshot: Value, available_sources: &[String]) -> Value {
@@ -1507,9 +1471,10 @@ async fn accessibility_snapshot(
     state: AppState,
     udid: String,
     point: Option<(f64, f64)>,
+    max_depth: Option<usize>,
 ) -> Result<Value, AppError> {
     run_bridge_action(state, move |bridge| {
-        bridge.accessibility_snapshot(&udid, point)
+        bridge.accessibility_snapshot_with_max_depth(&udid, point, max_depth)
     })
     .await
 }

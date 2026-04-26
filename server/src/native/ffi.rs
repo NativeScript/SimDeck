@@ -77,6 +77,7 @@ unsafe extern "C" {
         has_point: bool,
         x: f64,
         y: f64,
+        max_depth: usize,
         error_message: *mut *mut c_char,
     ) -> *mut c_char;
     pub fn xcw_native_send_touch(
@@ -90,12 +91,6 @@ unsafe extern "C" {
         udid: *const c_char,
         key_code: u16,
         modifiers: u32,
-        error_message: *mut *mut c_char,
-    ) -> bool;
-    pub fn xcw_native_send_key_event(
-        udid: *const c_char,
-        key_code: u16,
-        down: bool,
         error_message: *mut *mut c_char,
     ) -> bool;
     pub fn xcw_native_press_home(udid: *const c_char, error_message: *mut *mut c_char) -> bool;
@@ -153,6 +148,18 @@ unsafe extern "C" {
         x2: f64,
         y2: f64,
         phase: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_input_send_key(
+        handle: *mut c_void,
+        key_code: u16,
+        modifiers: u32,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_input_send_key_event(
+        handle: *mut c_void,
+        key_code: u16,
+        down: bool,
         error_message: *mut *mut c_char,
     ) -> bool;
 

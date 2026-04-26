@@ -301,8 +301,8 @@ static NSDictionary *XCWAXDictionaryForElement(id element) {
     return values;
 }
 
-static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, NSHashTable *visited, NSUInteger depth) {
-    if (element == nil || depth > XCWAXMaxDepth || [visited containsObject:element]) {
+static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, NSHashTable *visited, NSUInteger depth, NSUInteger maxDepth) {
+    if (element == nil || depth > maxDepth || [visited containsObject:element]) {
         return nil;
     }
     [visited addObject:element];
@@ -314,10 +314,10 @@ static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, N
 
     NSMutableDictionary *values = [XCWAXDictionaryForElement(element) mutableCopy];
     NSMutableArray *childrenValues = [NSMutableArray array];
-    id children = XCWAXObject(element, "accessibilityChildren");
+    id children = depth < maxDepth ? XCWAXObject(element, "accessibilityChildren") : nil;
     if ([children isKindOfClass:NSArray.class]) {
         for (id child in (NSArray *)children) {
-            NSMutableDictionary *childValues = XCWAXSerializeElement(child, token, visited, depth + 1);
+            NSMutableDictionary *childValues = XCWAXSerializeElement(child, token, visited, depth + 1, maxDepth);
             if (childValues != nil) {
                 [childrenValues addObject:childValues];
             }
@@ -331,6 +331,7 @@ static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, N
 
 + (nullable NSDictionary *)accessibilitySnapshotForSimulatorUDID:(NSString *)udid
                                                          atPoint:(nullable NSValue *)pointValue
+                                                        maxDepth:(NSUInteger)maxDepth
                                                            error:(NSError * _Nullable __autoreleasing *)error {
     if (![self.class loadAndValidate:error]) {
         return nil;
@@ -413,7 +414,7 @@ static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, N
         }
 
         NSHashTable *visited = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
-        NSMutableDictionary *root = XCWAXSerializeElement(element, token, visited, 0);
+        NSMutableDictionary *root = XCWAXSerializeElement(element, token, visited, 0, MIN(maxDepth, XCWAXMaxDepth));
         NSArray *roots = root != nil ? @[root] : @[];
         return @{
             @"roots": roots,

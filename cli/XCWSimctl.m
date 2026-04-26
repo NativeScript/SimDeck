@@ -380,6 +380,7 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 
 - (nullable NSArray<NSDictionary *> *)recentLogEntriesForSimulatorUDID:(NSString *)udid
                                                                seconds:(NSTimeInterval)seconds
+                                                                 limit:(NSUInteger)limit
                                                                  error:(NSError * _Nullable __autoreleasing *)error {
     NSUInteger boundedSeconds = MIN(MAX((NSUInteger)ceil(seconds), 1), 1800);
     XCWProcessResult *result = [self.class runSimctl:@[
@@ -404,7 +405,8 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
         return nil;
     }
 
-    NSMutableArray<NSDictionary *> *entries = [NSMutableArray array];
+    NSUInteger boundedLimit = limit == 0 ? NSUIntegerMax : limit;
+    NSMutableArray<NSDictionary *> *entries = [NSMutableArray arrayWithCapacity:MIN(boundedLimit, 256)];
     NSArray<NSString *> *lines = [result.stdoutString componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
     for (NSString *line in lines) {
         NSString *trimmed = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -432,6 +434,9 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
             @"category": payload[@"category"] ?: @"",
             @"message": payload[@"eventMessage"] ?: payload[@"formatString"] ?: @"",
         }];
+        if (entries.count > boundedLimit) {
+            [entries removeObjectAtIndex:0];
+        }
     }
 
     return entries;

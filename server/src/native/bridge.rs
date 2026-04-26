@@ -260,12 +260,22 @@ impl NativeBridge {
         udid: &str,
         point: Option<(f64, f64)>,
     ) -> Result<serde_json::Value, AppError> {
+        self.accessibility_snapshot_with_max_depth(udid, point, None)
+    }
+
+    pub fn accessibility_snapshot_with_max_depth(
+        &self,
+        udid: &str,
+        point: Option<(f64, f64)>,
+        max_depth: Option<usize>,
+    ) -> Result<serde_json::Value, AppError> {
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
-        let json = match native_accessibility_snapshot_json(&udid, point) {
+        let max_depth = max_depth.unwrap_or(80).min(80);
+        let json = match native_accessibility_snapshot_json(&udid, point, max_depth) {
             Ok(json) => json,
             Err(error) if is_core_simulator_service_mismatch(&error.to_string()) => {
                 std::thread::sleep(Duration::from_millis(250));
-                native_accessibility_snapshot_json(&udid, point)?
+                native_accessibility_snapshot_json(&udid, point, max_depth)?
             }
             Err(error) => return Err(error),
         };
@@ -292,17 +302,6 @@ impl NativeBridge {
             let mut error = ptr::null_mut();
             bool_result(
                 ffi::xcw_native_send_key(udid.as_ptr(), key_code, modifiers, &mut error),
-                error,
-            )
-        }
-    }
-
-    pub fn send_key_event(&self, udid: &str, key_code: u16, down: bool) -> Result<(), AppError> {
-        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
-        unsafe {
-            let mut error = ptr::null_mut();
-            bool_result(
-                ffi::xcw_native_send_key_event(udid.as_ptr(), key_code, down, &mut error),
                 error,
             )
         }
@@ -553,6 +552,26 @@ impl NativeInputSession {
             )
         }
     }
+
+    pub fn send_key(&self, key_code: u16, modifiers: u32) -> Result<(), AppError> {
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_input_send_key(self.handle, key_code, modifiers, &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn send_key_event(&self, key_code: u16, down: bool) -> Result<(), AppError> {
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_input_send_key_event(self.handle, key_code, down, &mut error),
+                error,
+            )
+        }
+    }
 }
 
 impl Drop for NativeInputSession {
@@ -608,14 +627,21 @@ impl Drop for NativeSession {
 fn native_accessibility_snapshot_json(
     udid: &CString,
     point: Option<(f64, f64)>,
+    max_depth: usize,
 ) -> Result<String, AppError> {
     unsafe {
         let mut error = ptr::null_mut();
         let (has_point, x, y) = point
             .map(|(x, y)| (true, x, y))
             .unwrap_or((false, 0.0, 0.0));
-        let raw =
-            ffi::xcw_native_accessibility_snapshot(udid.as_ptr(), has_point, x, y, &mut error);
+        let raw = ffi::xcw_native_accessibility_snapshot(
+            udid.as_ptr(),
+            has_point,
+            x,
+            y,
+            max_depth,
+            &mut error,
+        );
         string_from_raw(raw, error)
     }
 }
