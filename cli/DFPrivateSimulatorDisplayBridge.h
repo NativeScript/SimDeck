@@ -37,6 +37,7 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
 @property (nonatomic, weak, nullable) id<DFPrivateSimulatorDisplayBridgeDelegate> delegate;
 @property (nonatomic, readonly, getter=isDisplayReady) BOOL displayReady;
 @property (nonatomic, readonly) NSString *displayStatus;
+@property (nonatomic, readonly) CGSize displaySize;
 
 - (nullable CVPixelBufferRef)copyPixelBuffer CF_RETURNS_RETAINED;
 

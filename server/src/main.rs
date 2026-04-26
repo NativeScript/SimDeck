@@ -20,7 +20,7 @@ use config::Config;
 use inspector::InspectorHub;
 use logs::LogRegistry;
 use metrics::counters::Metrics;
-use native::bridge::NativeBridge;
+use native::bridge::{NativeBridge, NativeInputSession};
 use native::ffi;
 use serde_json::Value;
 use simulators::registry::SessionRegistry;
@@ -660,7 +660,7 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
-            let (x, y) = resolve_tap_target(
+            let target = resolve_tap_target(
                 &bridge,
                 &udid,
                 TapTargetRequest {
@@ -678,7 +678,11 @@ fn main() -> anyhow::Result<()> {
                 },
             )?;
             sleep_ms(pre_delay_ms);
-            perform_tap(&bridge, &udid, x, y, duration_ms)?;
+            if let Some(input) = target.input.as_ref() {
+                perform_tap_with_input(input, target.x, target.y, duration_ms)?;
+            } else {
+                perform_tap(&bridge, &udid, target.x, target.y, duration_ms)?;
+            }
             sleep_ms(post_delay_ms);
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "tap" }))?;
             Ok(())
@@ -1094,6 +1098,20 @@ struct TapTargetRequest {
     poll_interval_ms: u64,
 }
 
+struct ResolvedTapTarget {
+    x: f64,
+    y: f64,
+    input: Option<NativeInputSession>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ElementTapTarget {
+    x: f64,
+    y: f64,
+    root_width: f64,
+    root_height: f64,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct MultiTouchFrame {
     x1: f64,
@@ -1160,6 +1178,15 @@ fn perform_tap(
     duration_ms: u64,
 ) -> Result<(), crate::error::AppError> {
     let input = bridge.create_input_session(udid)?;
+    perform_tap_with_input(&input, x, y, duration_ms)
+}
+
+fn perform_tap_with_input(
+    input: &NativeInputSession,
+    x: f64,
+    y: f64,
+    duration_ms: u64,
+) -> Result<(), crate::error::AppError> {
     input.send_touch(x, y, "began")?;
     sleep_ms(duration_ms);
     input.send_touch(x, y, "ended")
@@ -1771,7 +1798,7 @@ fn resolve_tap_target(
     bridge: &NativeBridge,
     udid: &str,
     request: TapTargetRequest,
-) -> Result<(f64, f64), crate::error::AppError> {
+) -> Result<ResolvedTapTarget, crate::error::AppError> {
     if request.selector.id.is_none()
         && request.selector.label.is_none()
         && request.selector.value.is_none()
@@ -1782,14 +1809,35 @@ fn resolve_tap_target(
         let y = request.y.ok_or_else(|| {
             crate::error::AppError::bad_request("Tap requires x and y or a selector.")
         })?;
-        return resolve_touch_point(bridge, udid, x, y, request.normalized);
+        let (x, y) = resolve_touch_point(bridge, udid, x, y, request.normalized)?;
+        return Ok(ResolvedTapTarget { x, y, input: None });
     }
 
     let deadline = std::time::Instant::now() + Duration::from_millis(request.wait_timeout_ms);
     loop {
         let snapshot = bridge.accessibility_snapshot(udid, None)?;
-        if let Some((point_x, point_y)) = find_element_center(&snapshot, &request.selector) {
-            return resolve_touch_point(bridge, udid, point_x, point_y, false);
+        if let Some(target) = find_element_tap_target(&snapshot, &request.selector) {
+            let input = bridge.create_input_session(udid)?;
+            let (x, y) = if let Some((display_width, display_height)) = input.display_size() {
+                normalize_accessibility_point_for_display(
+                    target.x,
+                    target.y,
+                    target.root_width,
+                    target.root_height,
+                    display_width,
+                    display_height,
+                )
+            } else {
+                (
+                    (target.x / target.root_width).clamp(0.0, 1.0),
+                    (target.y / target.root_height).clamp(0.0, 1.0),
+                )
+            };
+            return Ok(ResolvedTapTarget {
+                x,
+                y,
+                input: Some(input),
+            });
         }
         if request.wait_timeout_ms == 0 || std::time::Instant::now() >= deadline {
             return Err(crate::error::AppError::not_found(
@@ -1800,29 +1848,52 @@ fn resolve_tap_target(
     }
 }
 
-fn find_element_center(snapshot: &Value, selector: &ElementSelector) -> Option<(f64, f64)> {
+fn find_element_tap_target(
+    snapshot: &Value,
+    selector: &ElementSelector,
+) -> Option<ElementTapTarget> {
     let roots = snapshot.get("roots")?.as_array()?;
     let mut matches = Vec::new();
     for root in roots {
-        collect_matching_elements(root, selector, &mut matches);
+        let (root_width, root_height) = element_size(root)?;
+        collect_matching_elements(root, selector, root_width, root_height, &mut matches);
     }
     matches
         .into_iter()
-        .max_by_key(|node| is_actionable_element(node) as u8)
-        .and_then(element_center)
+        .max_by_key(|target| is_actionable_element(target.node) as u8)
+        .and_then(|target| {
+            element_center(target.node).map(|(x, y)| ElementTapTarget {
+                x,
+                y,
+                root_width: target.root_width,
+                root_height: target.root_height,
+            })
+        })
+}
+
+struct MatchedElement<'a> {
+    node: &'a Value,
+    root_width: f64,
+    root_height: f64,
 }
 
 fn collect_matching_elements<'a>(
     node: &'a Value,
     selector: &ElementSelector,
-    matches: &mut Vec<&'a Value>,
+    root_width: f64,
+    root_height: f64,
+    matches: &mut Vec<MatchedElement<'a>>,
 ) {
     if element_matches(node, selector) {
-        matches.push(node);
+        matches.push(MatchedElement {
+            node,
+            root_width,
+            root_height,
+        });
     }
     if let Some(children) = node.get("children").and_then(Value::as_array) {
         for child in children {
-            collect_matching_elements(child, selector, matches);
+            collect_matching_elements(child, selector, root_width, root_height, matches);
         }
     }
 }
@@ -1876,6 +1947,31 @@ fn element_center(node: &Value) -> Option<(f64, f64)> {
     let width = frame.get("width")?.as_f64()?;
     let height = frame.get("height")?.as_f64()?;
     (width > 0.0 && height > 0.0).then_some((x + width / 2.0, y + height / 2.0))
+}
+
+fn element_size(node: &Value) -> Option<(f64, f64)> {
+    let frame = node.get("frame")?;
+    let width = frame.get("width")?.as_f64()?;
+    let height = frame.get("height")?.as_f64()?;
+    (width > 0.0 && height > 0.0).then_some((width, height))
+}
+
+fn normalize_accessibility_point_for_display(
+    x: f64,
+    y: f64,
+    root_width: f64,
+    root_height: f64,
+    display_width: f64,
+    display_height: f64,
+) -> (f64, f64) {
+    let normalized_x = (x / root_width).clamp(0.0, 1.0);
+    let normalized_y = (y / root_height).clamp(0.0, 1.0);
+    let root_is_landscape = root_width > root_height;
+    let display_is_landscape = display_width > display_height;
+    if root_is_landscape != display_is_landscape {
+        return (normalized_y, normalized_x);
+    }
+    (normalized_x, normalized_y)
 }
 
 fn is_actionable_element(node: &Value) -> bool {
@@ -2242,7 +2338,11 @@ fn run_batch_step(
                         .unwrap_or(100),
                 },
             )?;
-            perform_tap(bridge, udid, target.0, target.1, duration_ms)?;
+            if let Some(input) = target.input.as_ref() {
+                perform_tap_with_input(input, target.x, target.y, duration_ms)?;
+            } else {
+                perform_tap(bridge, udid, target.x, target.y, duration_ms)?;
+            }
             Ok("tap")
         }
         "swipe" => {
@@ -2641,6 +2741,27 @@ fn chrome_screen_size(bridge: &NativeBridge, udid: &str) -> Option<(f64, f64)> {
 
 fn lerp(start: f64, end: f64, t: f64) -> f64 {
     start + (end - start) * t
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_accessibility_point_for_display;
+
+    #[test]
+    fn selector_tap_keeps_matching_orientation_coordinates() {
+        assert_eq!(
+            normalize_accessibility_point_for_display(240.0, 160.0, 480.0, 320.0, 1200.0, 800.0),
+            (0.5, 0.5)
+        );
+    }
+
+    #[test]
+    fn selector_tap_transposes_swapped_orientation_coordinates() {
+        assert_eq!(
+            normalize_accessibility_point_for_display(240.0, 226.0, 480.0, 320.0, 800.0, 1200.0),
+            (0.70625, 0.5)
+        );
+    }
 }
 
 fn hid_for_character(character: char) -> Option<(u16, u32)> {

@@ -134,6 +134,11 @@ unsafe extern "C" {
         error_message: *mut *mut c_char,
     ) -> *mut c_void;
     pub fn xcw_native_input_destroy(handle: *mut c_void);
+    pub fn xcw_native_input_display_size(
+        handle: *mut c_void,
+        width: *mut f64,
+        height: *mut f64,
+    ) -> bool;
     pub fn xcw_native_input_send_touch(
         handle: *mut c_void,
         x: f64,

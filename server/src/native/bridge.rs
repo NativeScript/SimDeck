@@ -500,6 +500,23 @@ unsafe impl Send for NativeInputSession {}
 unsafe impl Sync for NativeInputSession {}
 
 impl NativeInputSession {
+    pub fn display_size(&self) -> Option<(f64, f64)> {
+        unsafe {
+            let mut width = 0.0;
+            let mut height = 0.0;
+            if ffi::xcw_native_input_display_size(self.handle, &mut width, &mut height)
+                && width.is_finite()
+                && height.is_finite()
+                && width > 0.0
+                && height > 0.0
+            {
+                Some((width, height))
+            } else {
+                None
+            }
+        }
+    }
+
     pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
         let phase = CString::new(phase).map_err(|e| AppError::bad_request(e.to_string()))?;
         unsafe {

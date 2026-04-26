@@ -363,18 +363,13 @@ async function runCliControls() {
   );
   await cliStep(
     "CLI focus fixture text field",
-    ["tap", simulatorUDID, "--id", "fixture.message", "--wait-timeout-ms", "5000"],
-    {},
-    { expectFixture: true },
-  );
-  await cliStep(
-    "CLI focus fixture text field normalized",
     [
       "tap",
       simulatorUDID,
-      "0.708",
-      "0.5",
-      "--normalized",
+      "--id",
+      "fixture.message",
+      "--wait-timeout-ms",
+      "5000",
       "--duration-ms",
       "120",
       "--post-delay-ms",
@@ -900,7 +895,10 @@ async function verifyUi(label, options = {}) {
 }
 
 async function resolveKnownSystemPrompts(snapshot, label) {
-  if (!looksLikeOpenUrlPrompt(snapshot) && !looksLikeKeyboardTipPrompt(snapshot)) {
+  if (
+    !looksLikeOpenUrlPrompt(snapshot) &&
+    !looksLikeKeyboardTipPrompt(snapshot)
+  ) {
     return snapshot;
   }
   const promptKind = looksLikeOpenUrlPrompt(snapshot)
@@ -934,7 +932,10 @@ async function resolveKnownSystemPrompts(snapshot, label) {
         maxElapsedMs: describeUiBudgetMs,
       },
     );
-    if (!looksLikeOpenUrlPrompt(current) && !looksLikeKeyboardTipPrompt(current)) {
+    if (
+      !looksLikeOpenUrlPrompt(current) &&
+      !looksLikeKeyboardTipPrompt(current)
+    ) {
       logStep(`system ${promptKind} prompt cleared by ${action.label}`);
       return current;
     }
@@ -946,13 +947,21 @@ function openUrlPromptActions(snapshot) {
   const actions = [
     {
       label: "key enter",
-      run: () => simdeckJson(["key", simulatorUDID, "enter"], { timeoutMs: 60_000 }),
+      run: () =>
+        simdeckJson(["key", simulatorUDID, "enter"], { timeoutMs: 60_000 }),
     },
     {
       label: "tap Open by label",
       run: () =>
         simdeckJson(
-          ["tap", simulatorUDID, "--label", "Open", "--wait-timeout-ms", "5000"],
+          [
+            "tap",
+            simulatorUDID,
+            "--label",
+            "Open",
+            "--wait-timeout-ms",
+            "5000",
+          ],
           { timeoutMs: 60_000 },
         ),
     },
@@ -1064,10 +1073,7 @@ function buttonCandidatePoints(snapshot, label) {
     return [];
   }
   const bounds = rootBounds(snapshot);
-  const candidates = [
-    point,
-    { x: point.y, y: point.x },
-  ];
+  const candidates = [point, { x: point.y, y: point.x }];
   if (bounds) {
     candidates.push(
       { x: bounds.width - point.x, y: point.y },
@@ -1087,10 +1093,7 @@ function openButtonCandidatePoints(snapshot) {
     return [];
   }
   const bounds = rootBounds(snapshot);
-  const candidates = [
-    point,
-    { x: point.y, y: point.x },
-  ];
+  const candidates = [point, { x: point.y, y: point.x }];
   if (bounds) {
     candidates.push(
       { x: bounds.width - point.x, y: point.y },
@@ -1266,12 +1269,7 @@ function runBuffer(command, args, options = {}) {
       `${command} ${args.join(" ")} took ${elapsedMs}ms, above ${options.maxElapsedMs}ms budget`,
     );
   }
-  logCommandResult(
-    command,
-    args,
-    elapsedMs,
-    `<${result.stdout.length} bytes>`,
-  );
+  logCommandResult(command, args, elapsedMs, `<${result.stdout.length} bytes>`);
   return result.stdout;
 }
 

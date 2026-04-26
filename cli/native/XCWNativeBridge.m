@@ -325,6 +325,22 @@ void xcw_native_input_destroy(void *handle) {
     }
 }
 
+bool xcw_native_input_display_size(void *handle, double *width, double *height) {
+    @autoreleasepool {
+        if (handle == NULL) {
+            return false;
+        }
+        CGSize size = [(__bridge DFPrivateSimulatorDisplayBridge *)handle displaySize];
+        if (width != NULL) {
+            *width = size.width;
+        }
+        if (height != NULL) {
+            *height = size.height;
+        }
+        return size.width > 0.0 && size.height > 0.0;
+    }
+}
+
 bool xcw_native_input_send_touch(void *handle, double x, double y, const char *phase, char **error_message) {
     @autoreleasepool {
         if (handle == NULL) {

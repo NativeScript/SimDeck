@@ -2989,6 +2989,21 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     return status;
 }
 
+- (CGSize)displaySize {
+    __block CGSize size = CGSizeZero;
+    dispatch_block_t work = ^{
+        size = self->_displayPixelSize;
+    };
+
+    if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {
+        work();
+    } else {
+        dispatch_sync(_callbackQueue, work);
+    }
+
+    return size;
+}
+
 - (BOOL)sendTouchAtNormalizedX:(double)normalizedX
                    normalizedY:(double)normalizedY
                          phase:(DFPrivateSimulatorTouchPhase)phase

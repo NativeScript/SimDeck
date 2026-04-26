@@ -59,6 +59,7 @@ char * _Nullable xcw_native_get_pasteboard_text(const char * _Nonnull udid, char
 
 void * _Nullable xcw_native_input_create(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 void xcw_native_input_destroy(void * _Nullable handle);
+bool xcw_native_input_display_size(void * _Nonnull handle, double * _Nullable width, double * _Nullable height);
 bool xcw_native_input_send_touch(void * _Nonnull handle, double x, double y, const char * _Nonnull phase, char * _Nullable * _Nullable error_message);
 bool xcw_native_input_send_multitouch(void * _Nonnull handle, double x1, double y1, double x2, double y2, const char * _Nonnull phase, char * _Nullable * _Nullable error_message);
 
