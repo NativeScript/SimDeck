@@ -98,7 +98,7 @@ The accessibility tree endpoint blends three sources, in priority order:
 
 1. **NativeScript runtime inspector** — preferred when the foreground app has connected to `/api/inspector/connect` over WebSocket.
 2. **Swift in-app inspector agent** — used when the foreground app links the `SimDeckInspectorAgent` Swift Package and listens on a TCP port discovered between `47370` and `47402`.
-3. **AXe accessibility snapshot** — a final fallback that shells out to the `axe describe-ui` CLI. Always available as long as `axe` is on `PATH`.
+3. **Accessibility snapshot** — a final fallback that shells out to the accessibility snapshot
 
 The server discovers which inspectors are reachable for a given Simulator and surfaces the available list in the `availableSources` field on every accessibility-tree response.
 

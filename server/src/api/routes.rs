@@ -7,7 +7,6 @@ use crate::logs::LogRegistry;
 use crate::metrics::counters::{ClientStreamStats, Metrics};
 use crate::native::bridge::{LogFilters, NativeBridge};
 use crate::simulators::registry::SessionRegistry;
-use crate::simulators::session::SimulatorSession;
 use crate::transport::packet::PACKET_VERSION;
 use axum::body::Body;
 use axum::extract::ws::WebSocketUpgrade;
@@ -353,11 +352,8 @@ async fn toggle_appearance(
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let action_udid = udid.clone();
-    run_bridge_action(state.clone(), move |bridge| {
-        bridge.toggle_appearance(&action_udid)
-    })
-    .await?;
-    simulator_payload(state, udid).await
+    run_bridge_action(state, move |bridge| bridge.toggle_appearance(&action_udid)).await?;
+    Ok(json(json_value!({ "ok": true })))
 }
 
 async fn refresh_stream(
@@ -382,11 +378,11 @@ async fn open_url(
         return Err(AppError::bad_request("Request body must include `url`."));
     }
     let action_udid = udid.clone();
-    run_bridge_action(state.clone(), move |bridge| {
+    run_bridge_action(state, move |bridge| {
         bridge.open_url(&action_udid, &payload.url)
     })
     .await?;
-    simulator_payload(state, udid).await
+    Ok(json(json_value!({ "ok": true })))
 }
 
 async fn launch_bundle(
@@ -400,11 +396,11 @@ async fn launch_bundle(
         ));
     }
     let action_udid = udid.clone();
-    run_bridge_action(state.clone(), move |bridge| {
+    run_bridge_action(state, move |bridge| {
         bridge.launch_bundle(&action_udid, &payload.bundle_id)
     })
     .await?;
-    simulator_payload(state, udid).await
+    Ok(json(json_value!({ "ok": true })))
 }
 
 async fn send_touch(
@@ -420,7 +416,7 @@ async fn send_touch(
     let x = payload.x.clamp(0.0, 1.0);
     let y = payload.y.clamp(0.0, 1.0);
     let phase = payload.phase;
-    run_session_action(state, udid, move |session| session.send_touch(x, y, &phase)).await?;
+    run_bridge_action(state, move |bridge| bridge.send_touch(&udid, x, y, &phase)).await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -429,8 +425,8 @@ async fn send_key(
     Path(udid): Path<String>,
     Json(payload): Json<KeyPayload>,
 ) -> Result<Json<Value>, AppError> {
-    run_session_action(state, udid, move |session| {
-        session.send_key(payload.key_code, payload.modifiers.unwrap_or(0))
+    run_bridge_action(state, move |bridge| {
+        bridge.send_key(&udid, payload.key_code, payload.modifiers.unwrap_or(0))
     })
     .await?;
     Ok(json(json_value!({ "ok": true })))
@@ -440,7 +436,7 @@ async fn dismiss_keyboard(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_session_action(state, udid, |session| session.dismiss_keyboard()).await?;
+    run_bridge_action(state, move |bridge| bridge.send_key(&udid, 41, 0)).await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -448,7 +444,7 @@ async fn press_home(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_session_action(state, udid, |session| session.press_home()).await?;
+    run_bridge_action(state, move |bridge| bridge.press_home(&udid)).await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -456,10 +452,10 @@ async fn open_app_switcher(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_session_action(state, udid, |session| {
-        session.press_home()?;
+    run_bridge_action(state, move |bridge| {
+        bridge.press_home(&udid)?;
         std::thread::sleep(Duration::from_millis(140));
-        session.press_home()
+        bridge.press_home(&udid)
     })
     .await?;
     Ok(json(json_value!({ "ok": true })))
@@ -701,7 +697,7 @@ impl AccessibilityHierarchySource {
             "" | "auto" => Ok(Self::Auto),
             "nativescript" | "ns" => Ok(Self::NativeScript),
             "uikit" | "in-app-inspector" => Ok(Self::UIKit),
-            "ax" | "native-ax" | "native-accessibility" | "axe" => Ok(Self::NativeAX),
+            "ax" | "native-ax" | "native-accessibility" => Ok(Self::NativeAX),
             source => Err(AppError::bad_request(format!(
                 "Unsupported accessibility hierarchy source `{source}`."
             ))),
@@ -1492,19 +1488,6 @@ fn split_filter_values(value: Option<&str>) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(|part| part.to_lowercase())
         .collect()
-}
-
-async fn run_session_action<F>(state: AppState, udid: String, action: F) -> Result<(), AppError>
-where
-    F: FnOnce(SimulatorSession) -> Result<(), AppError> + Send + 'static,
-{
-    let registry = state.registry.clone();
-    task::spawn_blocking(move || {
-        let session = registry.get_or_create(&udid)?;
-        action(session)
-    })
-    .await
-    .map_err(|error| AppError::internal(format!("Failed to join native session task: {error}")))?
 }
 
 async fn run_bridge_action<F, T>(state: AppState, action: F) -> Result<T, AppError>

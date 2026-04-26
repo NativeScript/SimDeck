@@ -91,19 +91,18 @@ The transport hub forces a keyframe whenever a client falls behind. If `frames_d
 - Switch to `h264` instead of `hevc` if the client decoder is slow.
 - Check `client_streams` in `/api/metrics`. If `decodedFps` is much lower than `packetFps`, the client decoder is the bottleneck.
 
-## Inspector returns AXe instead of NativeScript / UIKit
+## Inspector returns AX instead of NativeScript / UIKit
 
-The accessibility tree endpoint blends three inspector sources and falls back to AXe when none of the others are reachable. The response includes both a `source` field and a `fallbackReason` field that explains what happened.
+The accessibility tree endpoint blends three inspector sources and falls back to AX snapshot when none of the others are reachable. The response includes both a `source` field and a `fallbackReason` field that explains what happened.
 
 Common reasons:
 
-| `fallbackReason`                                                    | Fix                                                                                      |
-| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `The in-app inspector process is not the foreground app.`           | Bring the inspector-enabled app to the foreground.                                       |
-| `NativeScript hierarchy is not published by the app.`               | Make sure the app calls `startSimDeckInspector(...)` before bootstrapping.               |
-| `No connected NativeScript inspector ...`                           | The NativeScript inspector hasn't completed its WebSocket handshake yet. Reload the app. |
-| `No in-app inspector found ... on ports 47370-47402`                | The Swift agent isn't listening; confirm the app links and starts the agent in DEBUG.    |
-| `Unable to run \`axe describe-ui\`. Install AXe or ensure on PATH.` | Install AXe; the fallback can't run without it.                                          |
+| `fallbackReason`                                          | Fix                                                                                      |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `The in-app inspector process is not the foreground app.` | Bring the inspector-enabled app to the foreground.                                       |
+| `NativeScript hierarchy is not published by the app.`     | Make sure the app calls `startSimDeckInspector(...)` before bootstrapping.               |
+| `No connected NativeScript inspector ...`                 | The NativeScript inspector hasn't completed its WebSocket handshake yet. Reload the app. |
+| `No in-app inspector found ... on ports 47370-47402`      | The Swift agent isn't listening; confirm the app links and starts the agent in DEBUG.    |
 
 For more on the inspector matrix, see the [Inspector Overview](/inspector/).
 

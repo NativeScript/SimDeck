@@ -132,7 +132,7 @@ export default defineConfig({
           text: "Inspector",
           items: [
             { text: "Overview", link: "/inspector/" },
-            { text: "Accessibility (AXe)", link: "/inspector/accessibility" },
+            { text: "Accessibility", link: "/inspector/accessibility" },
             {
               text: "Swift In-App Agent",
               link: "/inspector/swift",
