@@ -1406,7 +1406,7 @@ fn describe_ui_snapshot(
     direct: bool,
     server_url: &str,
 ) -> anyhow::Result<Value> {
-    if point.is_none() && !direct && source != DescribeUiSource::NativeAx {
+    if point.is_none() && !direct {
         match fetch_service_accessibility_tree(udid, source, max_depth, include_hidden, server_url)
         {
             Ok(snapshot) => return Ok(snapshot),

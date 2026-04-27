@@ -28,6 +28,9 @@ const describeUiBudgetMs = Number(
 const httpActionBudgetMs = Number(
   process.env.SIMDECK_INTEGRATION_HTTP_BUDGET_MS ?? "10000",
 );
+const phaseSetup = "setup";
+const phaseTest = "test";
+const phaseSimulatorLifecycle = "simulator-lifecycle";
 
 let simulatorUDID = "";
 let serverProcess = null;
@@ -68,27 +71,43 @@ async function main() {
   const runtime = latestAvailableIosRuntime();
   const deviceType = preferredIphoneDeviceType(runtime);
   const simulatorName = `SimDeck CLI Integration ${Date.now()}`;
-  simulatorUDID = runText("xcrun", [
-    "simctl",
-    "create",
-    simulatorName,
-    deviceType.identifier,
-    runtime.identifier,
-  ]).trim();
+  simulatorUDID = await measuredStep(
+    "simctl create simulator",
+    () =>
+      runText("xcrun", [
+        "simctl",
+        "create",
+        simulatorName,
+        deviceType.identifier,
+        runtime.identifier,
+      ]).trim(),
+    { phase: phaseSetup },
+  );
 
   console.log(
     `created ${simulatorUDID} (${deviceType.name}, ${runtime.version})`,
   );
-  simdeckJson(["boot", simulatorUDID]);
-  runText("xcrun", ["simctl", "bootstatus", simulatorUDID, "-b"], {
-    timeoutMs: 600_000,
-  });
+  await measuredStep(
+    "CLI boot simulator",
+    () => simdeckJson(["boot", simulatorUDID]),
+    { phase: phaseSetup },
+  );
+  await measuredStep(
+    "simctl bootstatus initial",
+    () =>
+      runText("xcrun", ["simctl", "bootstatus", simulatorUDID, "-b"], {
+        timeoutMs: 600_000,
+      }),
+    { phase: phaseSetup },
+  );
   if (showSimulator) {
     openSimulatorApp(simulatorUDID);
   }
 
-  const fixture = await measuredStep("build SwiftUI fixture", () =>
-    buildFixtureApp(),
+  const fixture = await measuredStep(
+    "build SwiftUI fixture",
+    () => buildFixtureApp(),
+    { phase: phaseSetup },
   );
 
   await measuredStep("CLI list", () => assertSimulatorListed(simulatorUDID));
@@ -105,14 +124,20 @@ async function main() {
     ),
   );
 
-  await measuredStep("CLI install fixture", async () => {
-    simdeckJson(["install", simulatorUDID, fixture.appPath]);
-    preapproveFixtureUrlScheme();
-    await verifyUi("after install");
-  });
+  await measuredStep(
+    "CLI install fixture",
+    async () => {
+      simdeckJson(["install", simulatorUDID, fixture.appPath]);
+      preapproveFixtureUrlScheme();
+      await verifyUi("after install");
+    },
+    { phase: phaseSetup },
+  );
 
   startServer();
-  await measuredStep("server health", () => waitForHealth());
+  await measuredStep("server health", () => waitForHealth(), {
+    phase: phaseSetup,
+  });
   logStep(`server ready at ${serverUrl}`);
 
   const fullTree = await measuredStep("direct describe-ui json", () =>
@@ -247,35 +272,48 @@ async function main() {
   await measuredStep("CLI uninstall fixture", () =>
     simdeckJson(["uninstall", simulatorUDID, fixtureBundleId]),
   );
-  await measuredStep("CLI shutdown", () =>
-    simdeckJson(["shutdown", simulatorUDID]),
+  await measuredStep(
+    "CLI shutdown",
+    () => simdeckJson(["shutdown", simulatorUDID]),
+    { phase: phaseSimulatorLifecycle },
   );
-  await measuredStep("CLI erase", () => simdeckJson(["erase", simulatorUDID]));
-  await measuredStep("CLI boot after erase", () =>
-    simdeckJson(["boot", simulatorUDID]),
-  );
-  await measuredStep("simctl bootstatus after erase", () =>
-    runText("xcrun", ["simctl", "bootstatus", simulatorUDID, "-b"], {
-      timeoutMs: 600_000,
-    }),
-  );
-  await measuredStep("post-erase describe-ui", async () => {
-    assertRoots(
-      await retrySimdeckJson(
-        [
-          "describe-ui",
-          simulatorUDID,
-          "--direct",
-          "--format",
-          "compact-json",
-          "--max-depth",
-          "1",
-        ],
-        "post-erase describe-ui",
-      ),
-      "post-erase describe-ui",
-    );
+  await measuredStep("CLI erase", () => simdeckJson(["erase", simulatorUDID]), {
+    phase: phaseSimulatorLifecycle,
   });
+  await measuredStep(
+    "CLI boot after erase",
+    () => simdeckJson(["boot", simulatorUDID]),
+    { phase: phaseSimulatorLifecycle },
+  );
+  await measuredStep(
+    "simctl bootstatus after erase",
+    () =>
+      runText("xcrun", ["simctl", "bootstatus", simulatorUDID, "-b"], {
+        timeoutMs: 600_000,
+      }),
+    { phase: phaseSimulatorLifecycle },
+  );
+  await measuredStep(
+    "post-erase describe-ui",
+    async () => {
+      assertRoots(
+        await retrySimdeckJson(
+          [
+            "describe-ui",
+            simulatorUDID,
+            "--direct",
+            "--format",
+            "compact-json",
+            "--max-depth",
+            "1",
+          ],
+          "post-erase describe-ui",
+        ),
+        "post-erase describe-ui",
+      );
+    },
+    { phase: phaseSimulatorLifecycle },
+  );
 
   console.log("SimDeck CLI integration suite passed");
 }
@@ -1389,6 +1427,7 @@ function runText(command, args, options = {}) {
     );
   }
   const elapsedMs = Date.now() - startedAt;
+  recordCommandTiming(command, args, elapsedMs);
   if (options.maxElapsedMs && elapsedMs > options.maxElapsedMs) {
     throw new Error(
       `${command} ${args.join(" ")} took ${elapsedMs}ms, above ${options.maxElapsedMs}ms budget`,
@@ -1413,6 +1452,7 @@ function runBuffer(command, args, options = {}) {
     );
   }
   const elapsedMs = Date.now() - startedAt;
+  recordCommandTiming(command, args, elapsedMs);
   if (options.maxElapsedMs && elapsedMs > options.maxElapsedMs) {
     throw new Error(
       `${command} ${args.join(" ")} took ${elapsedMs}ms, above ${options.maxElapsedMs}ms budget`,
@@ -1420,6 +1460,16 @@ function runBuffer(command, args, options = {}) {
   }
   logCommandResult(command, args, elapsedMs, `<${result.stdout.length} bytes>`);
   return result.stdout;
+}
+
+function recordCommandTiming(command, args, elapsedMs) {
+  if (!activeTiming) {
+    return;
+  }
+  activeTiming.commandMs += elapsedMs;
+  if (command === simdeck && args.includes("describe-ui")) {
+    activeTiming.describeUiMs += elapsedMs;
+  }
 }
 
 async function httpJson(method, requestPath, body, options = {}) {
@@ -1659,13 +1709,16 @@ function hasUsableFrame(node) {
   );
 }
 
-async function measuredStep(label, fn) {
+async function measuredStep(label, fn, options = {}) {
   const parentTiming = activeTiming;
   const timing = {
     label,
+    phase: options.phase ?? phaseTest,
     startedAt: Date.now(),
     elapsedMs: 0,
     sleepMs: 0,
+    describeUiMs: 0,
+    commandMs: 0,
     ok: false,
   };
   activeTiming = timing;
@@ -1696,28 +1749,64 @@ function printTimingSummary() {
   }
   const rows = stepTimings.map((timing) => ({
     label: timing.label,
+    phase: timing.phase,
     activeMs: Math.max(0, timing.elapsedMs - timing.sleepMs),
     elapsedMs: timing.elapsedMs,
     sleepMs: timing.sleepMs,
+    describeUiMs: timing.describeUiMs,
+    commandMs: timing.commandMs,
     ok: timing.ok,
   }));
   const totalActiveMs = rows.reduce((sum, row) => sum + row.activeMs, 0);
   const totalElapsedMs = rows.reduce((sum, row) => sum + row.elapsedMs, 0);
   const totalSleepMs = rows.reduce((sum, row) => sum + row.sleepMs, 0);
+  const totalDescribeUiMs = rows.reduce(
+    (sum, row) => sum + row.describeUiMs,
+    0,
+  );
+  const phaseTotals = new Map();
+  for (const row of rows) {
+    const totals = phaseTotals.get(row.phase) ?? {
+      activeMs: 0,
+      elapsedMs: 0,
+      sleepMs: 0,
+      describeUiMs: 0,
+    };
+    totals.activeMs += row.activeMs;
+    totals.elapsedMs += row.elapsedMs;
+    totals.sleepMs += row.sleepMs;
+    totals.describeUiMs += row.describeUiMs;
+    phaseTotals.set(row.phase, totals);
+  }
 
   console.log(
     "\nIntegration timing summary (artificial delays excluded from active):",
   );
-  console.log("active\twall\tdelay\tstatus\tstep");
+  console.log("active\twall\tdelay\tdescribe-ui\tphase\tstatus\tstep");
   for (const row of rows.toSorted(
     (left, right) => right.activeMs - left.activeMs,
   )) {
     console.log(
-      `${formatDuration(row.activeMs)}\t${formatDuration(row.elapsedMs)}\t${formatDuration(row.sleepMs)}\t${row.ok ? "ok" : "fail"}\t${row.label}`,
+      `${formatDuration(row.activeMs)}\t${formatDuration(row.elapsedMs)}\t${formatDuration(row.sleepMs)}\t${formatDuration(row.describeUiMs)}\t${row.phase}\t${row.ok ? "ok" : "fail"}\t${row.label}`,
     );
   }
+  console.log("\nPhase totals:");
+  for (const [phase, totals] of [...phaseTotals.entries()].sort()) {
+    console.log(
+      `${phase}: active ${formatDuration(totals.activeMs)} / wall ${formatDuration(totals.elapsedMs)} / artificial delay ${formatDuration(totals.sleepMs)} / describe-ui ${formatDuration(totals.describeUiMs)}`,
+    );
+  }
+  const testTotals = phaseTotals.get(phaseTest) ?? {
+    activeMs: 0,
+    elapsedMs: 0,
+    sleepMs: 0,
+    describeUiMs: 0,
+  };
   console.log(
-    `total active ${formatDuration(totalActiveMs)} / wall ${formatDuration(totalElapsedMs)} / artificial delay ${formatDuration(totalSleepMs)}`,
+    `test body active ${formatDuration(testTotals.activeMs)} / wall ${formatDuration(testTotals.elapsedMs)} / artificial delay ${formatDuration(testTotals.sleepMs)} / describe-ui ${formatDuration(testTotals.describeUiMs)}`,
+  );
+  console.log(
+    `total active ${formatDuration(totalActiveMs)} / wall ${formatDuration(totalElapsedMs)} / artificial delay ${formatDuration(totalSleepMs)} / describe-ui ${formatDuration(totalDescribeUiMs)}`,
   );
 }
 
