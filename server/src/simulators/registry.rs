@@ -44,6 +44,12 @@ impl<T: Clone> SessionStore<T> {
     fn remove(&self, key: &str) {
         self.sessions.lock().unwrap().remove(key);
     }
+
+    fn forget(&self, key: &str) {
+        if let Some(value) = self.sessions.lock().unwrap().remove(key) {
+            std::mem::forget(value);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -105,6 +111,10 @@ impl<T: Clone + Send + 'static> SessionRegistry<T> {
 
     pub fn remove(&self, udid: &str) {
         self.store.remove(udid);
+    }
+
+    pub fn forget(&self, udid: &str) {
+        self.store.forget(udid);
     }
 }
 

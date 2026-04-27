@@ -546,7 +546,7 @@ async fn boot_simulator(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    state.registry.remove(&udid);
+    forget_lifecycle_session(&state, &udid);
     let action_udid = udid.clone();
     run_bridge_action(state.clone(), move |bridge| {
         bridge.boot_simulator(&action_udid)
@@ -559,12 +559,12 @@ async fn shutdown_simulator(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    forget_lifecycle_session(&state, &udid);
     let action_udid = udid.clone();
     run_bridge_action(state.clone(), move |bridge| {
         bridge.shutdown_simulator(&action_udid)
     })
     .await?;
-    state.registry.remove(&udid);
     simulator_payload(state, udid).await
 }
 
@@ -572,10 +572,18 @@ async fn erase_simulator(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    state.registry.remove(&udid);
+    forget_lifecycle_session(&state, &udid);
     let action_udid = udid.clone();
     run_bridge_action(state, move |bridge| bridge.erase_simulator(&action_udid)).await?;
     Ok(json(json_value!({ "ok": true })))
+}
+
+fn forget_lifecycle_session(state: &AppState, udid: &str) {
+    // SimulatorKit can reset the server-side connection if a cached private
+    // display session is destructed while CoreSimulator is booting, shutting
+    // down, or erasing the same device. Detach it from the registry without
+    // running Objective-C teardown on the lifecycle response path.
+    state.registry.forget(udid);
 }
 
 async fn install_app(
