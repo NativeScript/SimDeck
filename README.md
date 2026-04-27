@@ -45,7 +45,7 @@ After a global install, use the `simdeck` command directly. From a local checkou
 
 ## Documentation
 
-Full documentation lives at [djdeveloperr.github.io/SimDeck](https://djdeveloperr.github.io/SimDeck/), with guides, the CLI reference, the REST API, the WebTransport video pipeline, and the inspector protocols. The source for the site lives in [`docs/`](docs/) — preview it locally with `npm run docs:dev`.
+Full documentation lives at [simdeck.nativescript.org](https://simdeck.nativescript.org/), with guides, the CLI reference, the REST API, the WebTransport video pipeline, and the inspector protocols. The source for the site lives in [`docs/`](docs/) — preview it locally with `npm run docs:dev`.
 
 ## Run
 
