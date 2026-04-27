@@ -455,10 +455,30 @@ async function runCliControls() {
     { expectFixture: true, expectText: "Message Focused" },
   );
   await cliStep(
+    "CLI tap fixture text field",
+    [
+      "tap",
+      simulatorUDID,
+      "--id",
+      "fixture.message",
+      "--wait-timeout-ms",
+      "15000",
+      "--duration-ms",
+      "30",
+    ],
+    { timeoutMs: 180_000, maxElapsedMs: 60_000 },
+    {
+      expectFixture: true,
+      expectText: "Message Focused",
+      attempts: 6,
+      delayMs: 1_500,
+    },
+  );
+  await cliStep(
     "CLI type fixture text",
     ["type", simulatorUDID, "agent-ready"],
-    {},
-    { expectFixture: true, expectText: "agent-ready" },
+    { attempts: 1, timeoutMs: 180_000, maxElapsedMs: 60_000 },
+    { expectFixture: true, expectText: "agent-ready", attempts: 12 },
   );
   await measuredStep(
     "CLI smoke control batch",
