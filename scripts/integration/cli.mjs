@@ -943,13 +943,17 @@ async function retrySimdeckText(args, label, options = {}) {
 
 async function cliStep(label, args, commandOptions = {}, verifyOptions = {}) {
   return measuredStep(label, async () => {
-    const result = await retrySimdeckJson(args, label, {
+    const result = await retrySimdeckJson(cliArgs(args), label, {
       maxElapsedMs: cliCommandBudgetMs,
       ...commandOptions,
     });
     await verifyUi(label, verifyOptions);
     return result;
   });
+}
+
+function cliArgs(args) {
+  return serverProcess ? ["--server-url", serverUrl, ...args] : args;
 }
 
 async function httpStep(

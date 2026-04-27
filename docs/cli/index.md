@@ -5,8 +5,10 @@ The `simdeck` binary is the only entrypoint SimDeck ships. It hosts the HTTP ser
 ## Synopsis
 
 ```sh
-simdeck <COMMAND> [OPTIONS]
+simdeck [--server-url <url>] <COMMAND> [OPTIONS]
 ```
+
+Set `SIMDECK_SERVER_URL=http://127.0.0.1:4310` or pass `--server-url` to route supported hot controls through an already-running local service. That avoids repeated native setup for agent loops while preserving the same JSON command output.
 
 ## Top-level commands
 

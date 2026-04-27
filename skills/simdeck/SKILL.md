@@ -22,6 +22,14 @@ Viewer: `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
 
 The viewer gets the API token automatically. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
 
+For fastest agent loops, keep the service warm and export:
+
+```bash
+export SIMDECK_SERVER_URL=http://127.0.0.1:4310
+```
+
+Hot controls then delegate through the local service instead of cold-starting native control each time. This is supported for launch/open-url, normalized touch/tap/swipe/gesture, key/key-sequence/key-combo, hardware buttons, dismiss-keyboard, home/app-switcher, rotate, and appearance toggles. Use direct commands when you need screen-coordinate selector resolution, install/uninstall, screenshots, pasteboard, or batch.
+
 ## Device And App
 
 Device commands take `<UDID>` immediately after the command.
@@ -139,7 +147,7 @@ simdeck logs <UDID> --seconds 30 --limit 200
 simdeck chrome-profile <UDID>
 ```
 
-se screenshots for still evidence.
+Use screenshots for still evidence.
 
 ## Default Loop
 
@@ -149,4 +157,4 @@ se screenshots for still evidence.
 4. Interact with selectors first; use coordinates only when needed.
 5. Batch known flows; verify outcomes separately.
 
-Final check: UDID explicit, selectors/coordinates inspected, timing intentional, complex text uses `--stdin`/`--file`, results verified, CLI/API/packet/inspector changes reflected here and in docs.
+Final check: UDID explicit, warm service URL set for fast loops when available, selectors/coordinates inspected, timing intentional, complex text uses `--stdin`/`--file`, results verified, CLI/API/packet/inspector changes reflected here and in docs.

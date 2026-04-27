@@ -118,6 +118,24 @@ Use `--format agent` for compact hierarchy text intended for LLM planning, and
 `--point` returns the native element at a screen point and uses the native point
 query directly.
 
+## Warm service fast path
+
+Most agent loops should keep `simdeck serve` or `simdeck service on` running and
+set:
+
+```sh
+export SIMDECK_SERVER_URL=http://127.0.0.1:4310
+```
+
+Supported hot controls then use the local HTTP service and avoid repeated native
+setup in short-lived CLI processes. This fast path covers `launch`, `open-url`,
+normalized `touch`, normalized coordinate `tap`, normalized `swipe`, normalized
+`gesture`, `key`, `key-sequence`, `key-combo`, `dismiss-keyboard`, `home`,
+`app-switcher`, `button`, `rotate-left`, `rotate-right`, and
+`toggle-appearance`. Commands that need local files, selector-to-point
+resolution, screenshots, pasteboard, or batch execution stay on the direct
+native path.
+
 ## `boot`
 
 Boot a simulator by UDID:

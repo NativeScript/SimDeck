@@ -58,10 +58,39 @@ struct TouchPayload {
 }
 
 #[derive(Deserialize)]
+struct TouchSequencePayload {
+    events: Vec<TouchSequenceEvent>,
+}
+
+#[derive(Deserialize)]
+struct TouchSequenceEvent {
+    x: f64,
+    y: f64,
+    phase: String,
+    #[serde(rename = "delayMsAfter")]
+    delay_ms_after: Option<u64>,
+}
+
+#[derive(Deserialize)]
 struct KeyPayload {
     #[serde(rename = "keyCode")]
     key_code: u16,
     modifiers: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct KeySequencePayload {
+    #[serde(rename = "keyCodes")]
+    key_codes: Vec<u16>,
+    #[serde(rename = "delayMs")]
+    delay_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct ButtonPayload {
+    button: String,
+    #[serde(rename = "durationMs")]
+    duration_ms: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -142,11 +171,20 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/open-url", post(open_url))
         .route("/api/simulators/{udid}/launch", post(launch_bundle))
         .route("/api/simulators/{udid}/touch", post(send_touch))
+        .route(
+            "/api/simulators/{udid}/touch-sequence",
+            post(send_touch_sequence),
+        )
         .route("/api/simulators/{udid}/key", post(send_key))
+        .route(
+            "/api/simulators/{udid}/key-sequence",
+            post(send_key_sequence),
+        )
         .route(
             "/api/simulators/{udid}/dismiss-keyboard",
             post(dismiss_keyboard),
         )
+        .route("/api/simulators/{udid}/button", post(press_button))
         .route("/api/simulators/{udid}/home", post(press_home))
         .route(
             "/api/simulators/{udid}/app-switcher",
@@ -420,6 +458,46 @@ async fn send_touch(
     Ok(json(json_value!({ "ok": true })))
 }
 
+async fn send_touch_sequence(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<TouchSequencePayload>,
+) -> Result<Json<Value>, AppError> {
+    if payload.events.is_empty() {
+        return Err(AppError::bad_request(
+            "Request body must include at least one touch event.",
+        ));
+    }
+    if payload.events.len() > 64 {
+        return Err(AppError::bad_request(
+            "Touch sequence cannot contain more than 64 events.",
+        ));
+    }
+    for event in &payload.events {
+        if !event.x.is_finite() || !event.y.is_finite() {
+            return Err(AppError::bad_request(
+                "`x` and `y` must be finite normalized numbers.",
+            ));
+        }
+    }
+    run_bridge_action(state, move |bridge| {
+        let input = bridge.create_input_session(&udid)?;
+        for event in payload.events {
+            input.send_touch(
+                event.x.clamp(0.0, 1.0),
+                event.y.clamp(0.0, 1.0),
+                &event.phase,
+            )?;
+            if let Some(delay_ms) = event.delay_ms_after.filter(|delay_ms| *delay_ms > 0) {
+                std::thread::sleep(Duration::from_millis(delay_ms));
+            }
+        }
+        Ok(())
+    })
+    .await?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
 async fn send_key(
     State(state): State<AppState>,
     Path(udid): Path<String>,
@@ -432,11 +510,57 @@ async fn send_key(
     Ok(json(json_value!({ "ok": true })))
 }
 
+async fn send_key_sequence(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<KeySequencePayload>,
+) -> Result<Json<Value>, AppError> {
+    if payload.key_codes.is_empty() {
+        return Err(AppError::bad_request(
+            "Request body must include at least one key code.",
+        ));
+    }
+    if payload.key_codes.len() > 512 {
+        return Err(AppError::bad_request(
+            "Key sequence cannot contain more than 512 key codes.",
+        ));
+    }
+    run_bridge_action(state, move |bridge| {
+        let input = bridge.create_input_session(&udid)?;
+        let delay_ms = payload.delay_ms.unwrap_or(0);
+        let key_count = payload.key_codes.len();
+        for (index, key_code) in payload.key_codes.into_iter().enumerate() {
+            input.send_key(key_code, 0)?;
+            if delay_ms > 0 && index + 1 < key_count {
+                std::thread::sleep(Duration::from_millis(delay_ms));
+            }
+        }
+        Ok(())
+    })
+    .await?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
 async fn dismiss_keyboard(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     run_bridge_action(state, move |bridge| bridge.send_key(&udid, 41, 0)).await?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
+async fn press_button(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<ButtonPayload>,
+) -> Result<Json<Value>, AppError> {
+    if payload.button.trim().is_empty() {
+        return Err(AppError::bad_request("Request body must include `button`."));
+    }
+    run_bridge_action(state, move |bridge| {
+        bridge.press_button(&udid, &payload.button, payload.duration_ms.unwrap_or(0))
+    })
+    .await?;
     Ok(json(json_value!({ "ok": true })))
 }
 

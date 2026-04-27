@@ -48,6 +48,8 @@ const SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD: usize = 3;
 #[command(bin_name = "simdeck")]
 #[command(about = "Local simulator control plane and browser transport server")]
 struct Cli {
+    #[arg(long, global = true)]
+    server_url: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -138,8 +140,6 @@ enum Command {
         include_hidden: bool,
         #[arg(long)]
         direct: bool,
-        #[arg(long, default_value = "http://127.0.0.1:4310")]
-        server_url: String,
     },
     Touch {
         udid: String,
@@ -411,6 +411,10 @@ impl VideoCodecMode {
 fn main() -> anyhow::Result<()> {
     logging::init();
     let cli = Cli::parse();
+    let service_url = cli
+        .server_url
+        .or_else(|| std::env::var("SIMDECK_SERVER_URL").ok())
+        .filter(|value| !value.trim().is_empty());
     let bridge = NativeBridge;
 
     match cli.command {
@@ -496,7 +500,11 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::OpenUrl { udid, url } => {
-            bridge.open_url(&udid, &url)?;
+            if let Some(server_url) = service_url.as_deref() {
+                service_open_url(server_url, &udid, &url)?;
+            } else {
+                bridge.open_url(&udid, &url)?;
+            }
             println!(
                 "{}",
                 serde_json::to_string_pretty(
@@ -506,7 +514,11 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Launch { udid, bundle_id } => {
-            bridge.launch_bundle(&udid, &bundle_id)?;
+            if let Some(server_url) = service_url.as_deref() {
+                service_launch(server_url, &udid, &bundle_id)?;
+            } else {
+                bridge.launch_bundle(&udid, &bundle_id)?;
+            }
             println!(
                 "{}",
                 serde_json::to_string_pretty(
@@ -516,7 +528,11 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::ToggleAppearance { udid } => {
-            bridge.toggle_appearance(&udid)?;
+            if let Some(server_url) = service_url.as_deref() {
+                service_post_ok(server_url, &udid, "toggle-appearance", &Value::Null)?;
+            } else {
+                bridge.toggle_appearance(&udid)?;
+            }
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "toggle-appearance" }),
             )?;
@@ -602,7 +618,6 @@ fn main() -> anyhow::Result<()> {
             max_depth,
             include_hidden,
             direct,
-            server_url,
         } => {
             let snapshot = describe_ui_snapshot(
                 &bridge,
@@ -612,7 +627,7 @@ fn main() -> anyhow::Result<()> {
                 max_depth,
                 include_hidden,
                 direct,
-                &server_url,
+                service_url.as_deref().unwrap_or("http://127.0.0.1:4310"),
             )?;
             print_describe_ui(&snapshot, format)?;
             Ok(())
@@ -627,20 +642,42 @@ fn main() -> anyhow::Result<()> {
             up,
             delay_ms,
         } => {
-            let (x, y) = resolve_touch_point(&bridge, &udid, x, y, normalized)?;
-            if down || up {
-                let input = bridge.create_input_session(&udid)?;
-                if down {
-                    input.send_touch(x, y, "began")?;
-                }
-                if down && up {
-                    std::thread::sleep(Duration::from_millis(delay_ms));
-                }
-                if up {
-                    input.send_touch(x, y, "ended")?;
+            if let Some(server_url) = service_url.as_deref().filter(|_| normalized) {
+                if down || up {
+                    let mut events = Vec::new();
+                    if down {
+                        events.push(service_touch_event(
+                            x,
+                            y,
+                            "began",
+                            if up { delay_ms } else { 0 },
+                        ));
+                    }
+                    if up {
+                        events.push(service_touch_event(x, y, "ended", 0));
+                    }
+                    if !events.is_empty() {
+                        service_touch_sequence(server_url, &udid, events)?;
+                    }
+                } else {
+                    service_touch(server_url, &udid, x, y, &phase)?;
                 }
             } else {
-                bridge.send_touch(&udid, x, y, &phase)?;
+                let (x, y) = resolve_touch_point(&bridge, &udid, x, y, normalized)?;
+                if down || up {
+                    let input = bridge.create_input_session(&udid)?;
+                    if down {
+                        input.send_touch(x, y, "began")?;
+                    }
+                    if down && up {
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                    }
+                    if up {
+                        input.send_touch(x, y, "ended")?;
+                    }
+                } else {
+                    bridge.send_touch(&udid, x, y, &phase)?;
+                }
             }
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "touch" }))?;
             Ok(())
@@ -660,30 +697,45 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
-            let target = resolve_tap_target(
-                &bridge,
-                &udid,
-                TapTargetRequest {
-                    x,
-                    y,
-                    normalized,
-                    selector: ElementSelector {
-                        id,
-                        label,
-                        value,
-                        element_type,
-                    },
-                    wait_timeout_ms,
-                    poll_interval_ms,
-                },
-            )?;
-            sleep_ms(pre_delay_ms);
-            if let Some(input) = target.input.as_ref() {
-                perform_tap_with_input(input, target.x, target.y, duration_ms)?;
+            if let (Some(server_url), Some(x), Some(y), true, None, None, None, None) = (
+                service_url.as_deref(),
+                x,
+                y,
+                normalized,
+                id.as_ref(),
+                label.as_ref(),
+                value.as_ref(),
+                element_type.as_ref(),
+            ) {
+                sleep_ms(pre_delay_ms);
+                service_tap(server_url, &udid, x, y, duration_ms)?;
+                sleep_ms(post_delay_ms);
             } else {
-                perform_tap(&bridge, &udid, target.x, target.y, duration_ms)?;
+                let target = resolve_tap_target(
+                    &bridge,
+                    &udid,
+                    TapTargetRequest {
+                        x,
+                        y,
+                        normalized,
+                        selector: ElementSelector {
+                            id,
+                            label,
+                            value,
+                            element_type,
+                        },
+                        wait_timeout_ms,
+                        poll_interval_ms,
+                    },
+                )?;
+                sleep_ms(pre_delay_ms);
+                if let Some(input) = target.input.as_ref() {
+                    perform_tap_with_input(input, target.x, target.y, duration_ms)?;
+                } else {
+                    perform_tap(&bridge, &udid, target.x, target.y, duration_ms)?;
+                }
+                sleep_ms(post_delay_ms);
             }
-            sleep_ms(post_delay_ms);
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "tap" }))?;
             Ok(())
         }
@@ -699,23 +751,38 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
-            let (start_x, start_y) =
-                resolve_touch_point(&bridge, &udid, start_x, start_y, normalized)?;
-            let (end_x, end_y) = resolve_touch_point(&bridge, &udid, end_x, end_y, normalized)?;
-            sleep_ms(pre_delay_ms);
-            perform_swipe(
-                &bridge,
-                &udid,
-                GestureCoordinates {
+            if let Some(server_url) = service_url.as_deref().filter(|_| normalized) {
+                sleep_ms(pre_delay_ms);
+                service_swipe(
+                    server_url,
+                    &udid,
                     start_x,
                     start_y,
                     end_x,
                     end_y,
                     duration_ms,
-                },
-                steps,
-            )?;
-            sleep_ms(post_delay_ms);
+                    steps,
+                )?;
+                sleep_ms(post_delay_ms);
+            } else {
+                let (start_x, start_y) =
+                    resolve_touch_point(&bridge, &udid, start_x, start_y, normalized)?;
+                let (end_x, end_y) = resolve_touch_point(&bridge, &udid, end_x, end_y, normalized)?;
+                sleep_ms(pre_delay_ms);
+                perform_swipe(
+                    &bridge,
+                    &udid,
+                    GestureCoordinates {
+                        start_x,
+                        start_y,
+                        end_x,
+                        end_y,
+                        duration_ms,
+                    },
+                    steps,
+                )?;
+                sleep_ms(post_delay_ms);
+            }
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "swipe" }))?;
             Ok(())
         }
@@ -730,6 +797,33 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
+            if let Some(server_url) = service_url.as_deref().filter(|_| normalized) {
+                let gesture = gesture_coordinates(
+                    &bridge,
+                    &udid,
+                    &preset,
+                    screen_width,
+                    screen_height,
+                    normalized,
+                    delta,
+                )?;
+                sleep_ms(pre_delay_ms);
+                service_swipe(
+                    server_url,
+                    &udid,
+                    gesture.start_x,
+                    gesture.start_y,
+                    gesture.end_x,
+                    gesture.end_y,
+                    duration_ms.unwrap_or(gesture.duration_ms),
+                    4,
+                )?;
+                sleep_ms(post_delay_ms);
+                println_json(
+                    &serde_json::json!({ "ok": true, "udid": udid, "action": "gesture", "preset": preset }),
+                )?;
+                return Ok(());
+            }
             let gesture = gesture_coordinates(
                 &bridge,
                 &udid,
@@ -819,7 +913,9 @@ fn main() -> anyhow::Result<()> {
         } => {
             let key_code = parse_hid_key(&key)?;
             sleep_ms(pre_delay_ms);
-            if duration_ms > 0 && modifiers == 0 {
+            if let Some(server_url) = service_url.as_deref().filter(|_| duration_ms == 0) {
+                service_key(server_url, &udid, key_code, modifiers)?;
+            } else if duration_ms > 0 && modifiers == 0 {
                 let input = bridge.create_input_session(&udid)?;
                 input.send_key_event(key_code, true)?;
                 sleep_ms(duration_ms);
@@ -837,11 +933,15 @@ fn main() -> anyhow::Result<()> {
             delay_ms,
         } => {
             let keys = parse_key_list(&keycodes)?;
-            let input = bridge.create_input_session(&udid)?;
-            for (index, key) in keys.iter().enumerate() {
-                input.send_key(*key, 0)?;
-                if index + 1 < keys.len() {
-                    sleep_ms(delay_ms);
+            if let Some(server_url) = service_url.as_deref() {
+                service_key_sequence(server_url, &udid, &keys, delay_ms)?;
+            } else {
+                let input = bridge.create_input_session(&udid)?;
+                for (index, key) in keys.iter().enumerate() {
+                    input.send_key(*key, 0)?;
+                    if index + 1 < keys.len() {
+                        sleep_ms(delay_ms);
+                    }
                 }
             }
             println_json(
@@ -856,7 +956,11 @@ fn main() -> anyhow::Result<()> {
         } => {
             let modifier_mask = parse_modifier_mask(&modifiers)?;
             let key_code = parse_hid_key(&key)?;
-            bridge.send_key(&udid, key_code, modifier_mask)?;
+            if let Some(server_url) = service_url.as_deref() {
+                service_key(server_url, &udid, key_code, modifier_mask)?;
+            } else {
+                bridge.send_key(&udid, key_code, modifier_mask)?;
+            }
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "key-combo" }))?;
             Ok(())
         }
@@ -877,7 +981,11 @@ fn main() -> anyhow::Result<()> {
             button,
             duration_ms,
         } => {
-            bridge.press_button(&udid, &button, duration_ms)?;
+            if let Some(server_url) = service_url.as_deref() {
+                service_button(server_url, &udid, &button, duration_ms)?;
+            } else {
+                bridge.press_button(&udid, &button, duration_ms)?;
+            }
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "button", "button": button }),
             )?;
@@ -895,7 +1003,11 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::DismissKeyboard { udid } => {
-            bridge.send_key(&udid, 41, 0)?;
+            if let Some(server_url) = service_url.as_deref() {
+                service_post_ok(server_url, &udid, "dismiss-keyboard", &Value::Null)?;
+            } else {
+                bridge.send_key(&udid, 41, 0)?;
+            }
             println!(
                 "{}",
                 serde_json::to_string_pretty(
@@ -905,28 +1017,44 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Home { udid } => {
-            bridge.press_home(&udid)?;
+            if let Some(server_url) = service_url.as_deref() {
+                service_post_ok(server_url, &udid, "home", &Value::Null)?;
+            } else {
+                bridge.press_home(&udid)?;
+            }
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "home" }))?;
             Ok(())
         }
         Command::AppSwitcher { udid } => {
-            bridge.press_home(&udid)?;
-            std::thread::sleep(Duration::from_millis(140));
-            bridge.press_home(&udid)?;
+            if let Some(server_url) = service_url.as_deref() {
+                service_post_ok(server_url, &udid, "app-switcher", &Value::Null)?;
+            } else {
+                bridge.press_home(&udid)?;
+                std::thread::sleep(Duration::from_millis(140));
+                bridge.press_home(&udid)?;
+            }
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "app-switcher" }),
             )?;
             Ok(())
         }
         Command::RotateLeft { udid } => {
-            bridge.rotate_left(&udid)?;
+            if let Some(server_url) = service_url.as_deref() {
+                service_post_ok(server_url, &udid, "rotate-left", &Value::Null)?;
+            } else {
+                bridge.rotate_left(&udid)?;
+            }
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "rotate-left" }),
             )?;
             Ok(())
         }
         Command::RotateRight { udid } => {
-            bridge.rotate_right(&udid)?;
+            if let Some(server_url) = service_url.as_deref() {
+                service_post_ok(server_url, &udid, "rotate-right", &Value::Null)?;
+            } else {
+                bridge.rotate_right(&udid)?;
+            }
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "rotate-right" }),
             )?;
@@ -1320,16 +1448,168 @@ fn fetch_service_accessibility_tree(
 }
 
 fn http_get_json(server_url: &str, path: &str) -> anyhow::Result<Value> {
+    http_request_json(server_url, "GET", path, None)
+}
+
+fn service_open_url(server_url: &str, udid: &str, url: &str) -> anyhow::Result<()> {
+    service_post_ok(
+        server_url,
+        udid,
+        "open-url",
+        &serde_json::json!({ "url": url }),
+    )
+}
+
+fn service_launch(server_url: &str, udid: &str, bundle_id: &str) -> anyhow::Result<()> {
+    service_post_ok(
+        server_url,
+        udid,
+        "launch",
+        &serde_json::json!({ "bundleId": bundle_id }),
+    )
+}
+
+fn service_touch(server_url: &str, udid: &str, x: f64, y: f64, phase: &str) -> anyhow::Result<()> {
+    service_post_ok(
+        server_url,
+        udid,
+        "touch",
+        &serde_json::json!({ "x": x, "y": y, "phase": phase }),
+    )
+}
+
+fn service_tap(
+    server_url: &str,
+    udid: &str,
+    x: f64,
+    y: f64,
+    duration_ms: u64,
+) -> anyhow::Result<()> {
+    service_touch_sequence(
+        server_url,
+        udid,
+        vec![
+            service_touch_event(x, y, "began", duration_ms),
+            service_touch_event(x, y, "ended", 0),
+        ],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn service_swipe(
+    server_url: &str,
+    udid: &str,
+    start_x: f64,
+    start_y: f64,
+    end_x: f64,
+    end_y: f64,
+    duration_ms: u64,
+    steps: u32,
+) -> anyhow::Result<()> {
+    let step_count = steps.max(2);
+    let delay_ms = duration_ms / u64::from(step_count);
+    let mut events = vec![service_touch_event(start_x, start_y, "began", 0)];
+    for index in 1..step_count {
+        let progress = f64::from(index) / f64::from(step_count);
+        let x = start_x + (end_x - start_x) * progress;
+        let y = start_y + (end_y - start_y) * progress;
+        events.push(service_touch_event(x, y, "moved", delay_ms));
+    }
+    events.push(service_touch_event(end_x, end_y, "ended", 0));
+    service_touch_sequence(server_url, udid, events)
+}
+
+fn service_touch_event(x: f64, y: f64, phase: &str, delay_ms_after: u64) -> Value {
+    serde_json::json!({
+        "x": x,
+        "y": y,
+        "phase": phase,
+        "delayMsAfter": delay_ms_after,
+    })
+}
+
+fn service_touch_sequence(server_url: &str, udid: &str, events: Vec<Value>) -> anyhow::Result<()> {
+    service_post_ok(
+        server_url,
+        udid,
+        "touch-sequence",
+        &serde_json::json!({ "events": events }),
+    )
+}
+
+fn service_key(server_url: &str, udid: &str, key_code: u16, modifiers: u32) -> anyhow::Result<()> {
+    service_post_ok(
+        server_url,
+        udid,
+        "key",
+        &serde_json::json!({ "keyCode": key_code, "modifiers": modifiers }),
+    )
+}
+
+fn service_key_sequence(
+    server_url: &str,
+    udid: &str,
+    keys: &[u16],
+    delay_ms: u64,
+) -> anyhow::Result<()> {
+    service_post_ok(
+        server_url,
+        udid,
+        "key-sequence",
+        &serde_json::json!({ "keyCodes": keys, "delayMs": delay_ms }),
+    )
+}
+
+fn service_button(
+    server_url: &str,
+    udid: &str,
+    button: &str,
+    duration_ms: u32,
+) -> anyhow::Result<()> {
+    service_post_ok(
+        server_url,
+        udid,
+        "button",
+        &serde_json::json!({ "button": button, "durationMs": duration_ms }),
+    )
+}
+
+fn service_post_ok(server_url: &str, udid: &str, action: &str, body: &Value) -> anyhow::Result<()> {
+    let path = format!("/api/simulators/{}/{}", url_path_component(udid), action);
+    let _ = http_request_json(server_url, "POST", &path, Some(body))?;
+    Ok(())
+}
+
+fn http_request_json(
+    server_url: &str,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+) -> anyhow::Result<Value> {
     let endpoint = HttpEndpoint::parse(server_url)?;
     let mut stream = std::net::TcpStream::connect((endpoint.host.as_str(), endpoint.port))
         .with_context(|| format!("connect to SimDeck service at {server_url}"))?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
-        endpoint.host_header()
-    );
+    let body = body.map(serde_json::to_vec).transpose()?;
+    let request = if let Some(body) = body.as_ref() {
+        format!(
+            "{method} {path} HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            endpoint.host_header(),
+            endpoint.origin(),
+            body.len(),
+        )
+    } else {
+        format!(
+            "{method} {path} HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+            endpoint.host_header(),
+            endpoint.origin(),
+        )
+    };
     stream.write_all(request.as_bytes())?;
+    if let Some(body) = body.as_ref() {
+        stream.write_all(body)?;
+    }
 
     let mut response = Vec::new();
     stream.read_to_end(&mut response)?;
@@ -1395,6 +1675,10 @@ impl HttpEndpoint {
         } else {
             format!("{}:{}", self.host, self.port)
         }
+    }
+
+    fn origin(&self) -> String {
+        format!("http://{}", self.host_header())
     }
 }
 

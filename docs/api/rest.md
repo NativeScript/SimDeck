@@ -175,6 +175,26 @@ Content-Type: application/json
 
 Allowed `phase` values: `began`, `moved`, `ended`, `cancelled`.
 
+### `POST /api/simulators/{udid}/touch-sequence`
+
+Replays multiple normalized touch events through one native input session:
+
+```http
+POST /api/simulators/{udid}/touch-sequence
+Content-Type: application/json
+
+{
+  "events": [
+    { "x": 0.5, "y": 0.7, "phase": "began", "delayMsAfter": 25 },
+    { "x": 0.5, "y": 0.4, "phase": "moved", "delayMsAfter": 25 },
+    { "x": 0.5, "y": 0.2, "phase": "ended" }
+  ]
+}
+```
+
+This is the preferred API for agent gestures because it avoids one HTTP request
+per touch phase.
+
 ### `POST /api/simulators/{udid}/key`
 
 Replays a single keyboard event by HID key code:
@@ -187,6 +207,33 @@ Content-Type: application/json
 ```
 
 `keyCode` is the HID usage value. `modifiers` is a bitmask defined by the HID input subsystem (defaults to `0`).
+
+### `POST /api/simulators/{udid}/key-sequence`
+
+Replays multiple HID key codes through one native input session:
+
+```http
+POST /api/simulators/{udid}/key-sequence
+Content-Type: application/json
+
+{ "keyCodes": [11, 8, 15, 15, 18], "delayMs": 5 }
+```
+
+`delayMs` defaults to `0`.
+
+### `POST /api/simulators/{udid}/button`
+
+Presses a hardware button:
+
+```http
+POST /api/simulators/{udid}/button
+Content-Type: application/json
+
+{ "button": "lock", "durationMs": 50 }
+```
+
+Supported button names match the CLI: `home`, `lock`, `side-button`, `siri`,
+and `apple-pay`. `durationMs` defaults to `0`.
 
 ### `POST /api/simulators/{udid}/home`
 

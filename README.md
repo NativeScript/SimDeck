@@ -58,6 +58,16 @@ The browser bootstrap comes from `GET /api/health`, which returns the WebTranspo
 certificate hash, and packet version needed by the client.
 The served browser UI receives the generated API access token automatically; direct HTTP callers can use the startup token with `X-SimDeck-Token` or `Authorization: Bearer`.
 
+For fastest agent control, keep `simdeck serve` or `simdeck service on` running and route hot CLI controls through the warm local service:
+
+```sh
+export SIMDECK_SERVER_URL=http://127.0.0.1:4310
+simdeck tap <udid> 0.5 0.5 --normalized
+simdeck describe-ui <udid> --format agent --max-depth 2
+```
+
+You can also pass `--server-url http://127.0.0.1:4310` on individual commands. Supported fast-path controls include launch/open-url, normalized touch/tap/swipe/gesture input, key/key-sequence/key-combo, hardware buttons, dismiss-keyboard, home/app-switcher, rotate, and appearance toggles.
+
 ## Service
 
 Enable the per-user background service with `launchd`:
@@ -139,7 +149,8 @@ UIKit in-app inspectors, then falls back to the built-in private CoreSimulator
 accessibility bridge. Use `--format agent` or `--format compact-json` for
 lower-token hierarchy dumps. Coordinate commands accept screen coordinates from
 the accessibility tree by default; pass `--normalized` to send `0.0..1.0`
-coordinates directly.
+coordinates directly. With `--server-url` or `SIMDECK_SERVER_URL`, normalized
+input commands use the warm service path to avoid repeated native setup.
 
 ## NativeScript Inspector
 

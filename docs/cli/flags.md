@@ -75,6 +75,17 @@ Encoder used by the native bridge. See [Video Pipeline](/guide/video) for when t
 
 HTTP API and WebTransport access token. The served browser UI receives it automatically through a strict same-site cookie, so normal local use does not require copying the token. Direct API callers should send either `X-SimDeck-Token: <token>` or `Authorization: Bearer <token>`.
 
+## Global CLI flags
+
+### `--server-url <url>`
+
+| Default | unset                          |
+| ------- | ------------------------------ |
+| Env     | `SIMDECK_SERVER_URL`           |
+| Type    | `http://` URL for local server |
+
+When set, supported hot controls delegate to the warm local SimDeck service instead of starting a fresh native control path in the CLI process. This is fastest for agent-driven loops. Supported delegated controls include `launch`, `open-url`, normalized `touch`, normalized coordinate `tap`, normalized `swipe`, normalized `gesture`, `key`, `key-sequence`, `key-combo`, `button`, `dismiss-keyboard`, `home`, `app-switcher`, `rotate-left`, `rotate-right`, and `toggle-appearance`.
+
 ## Positional arguments
 
 Subcommands that take positionals expect them in the order shown:
@@ -88,15 +99,15 @@ Subcommands that take positionals expect them in the order shown:
 
 ## `describe-ui` flags
 
-| Flag                 | Default                         | Description                                                                      |
-| -------------------- | ------------------------------- | -------------------------------------------------------------------------------- |
-| `--format`           | `json`                          | Output format: `json`, `compact-json`, or `agent`.                               |
-| `--source`           | `auto`                          | Hierarchy source: `auto`, `nativescript`, `uikit`, or `native-ax`.               |
-| `--max-depth`        | unlimited native / `80` service | Trim descendants after the requested depth.                                      |
-| `--include-hidden`   | `false`                         | Include hidden in-app inspector views when supported.                            |
-| `--direct`           | `false`                         | Skip the local service and use the private native accessibility bridge directly. |
-| `--point <x>,<y>`    | unset                           | Return the native element at a screen point.                                     |
-| `--server-url <url>` | `http://127.0.0.1:4310`         | Local service URL used for source-aware hierarchy requests.                      |
+| Flag                 | Default                                | Description                                                                      |
+| -------------------- | -------------------------------------- | -------------------------------------------------------------------------------- |
+| `--format`           | `json`                                 | Output format: `json`, `compact-json`, or `agent`.                               |
+| `--source`           | `auto`                                 | Hierarchy source: `auto`, `nativescript`, `uikit`, or `native-ax`.               |
+| `--max-depth`        | unlimited native / `80` service        | Trim descendants after the requested depth.                                      |
+| `--include-hidden`   | `false`                                | Include hidden in-app inspector views when supported.                            |
+| `--direct`           | `false`                                | Skip the local service and use the private native accessibility bridge directly. |
+| `--point <x>,<y>`    | unset                                  | Return the native element at a screen point.                                     |
+| `--server-url <url>` | global flag or `http://127.0.0.1:4310` | Local service URL used for source-aware hierarchy requests.                      |
 
 ## Exit codes
 
