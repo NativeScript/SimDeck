@@ -2,6 +2,7 @@ import { defineConfig } from "vitepress";
 
 const repoName = "SimDeck";
 const githubUrl = `https://github.com/DjDeveloperr/${repoName}`;
+const siteUrl = "https://simdeck.nativescript.org";
 
 export default defineConfig({
   title: "SimDeck",
@@ -10,7 +11,6 @@ export default defineConfig({
   lang: "en-US",
   cleanUrls: true,
   lastUpdated: true,
-  base: `/${repoName}/`,
 
   head: [
     ["meta", { name: "theme-color", content: "#0a84ff" }],
@@ -24,13 +24,8 @@ export default defineConfig({
           "A local iOS Simulator control plane with a browser UI, REST API, and WebTransport video.",
       },
     ],
-    [
-      "meta",
-      {
-        property: "og:url",
-        content: `https://djdeveloperr.github.io/${repoName}/`,
-      },
-    ],
+    ["meta", { property: "og:url", content: `${siteUrl}/` }],
+    ["link", { rel: "canonical", href: `${siteUrl}/` }],
   ],
 
   themeConfig: {
