@@ -44,6 +44,10 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
   NativeScript in-app inspector runtime that connects to the Rust server over
   WebSocket, publishes NativeScript/UIKit hierarchies, and performs debug UIKit
   property edits from JavaScript.
+- `packages/react-native-inspector/src/index.ts`
+  React Native in-app inspector runtime that connects to the Rust server over
+  WebSocket, publishes React Fiber component hierarchies with Metro source
+  locations, and performs best-effort debug JS/native prop edits.
 
 ## Working Rules
 
@@ -51,6 +55,7 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
 - Keep Rust server logic under `server/`.
 - Keep browser-only presentation logic in `client/`.
 - Keep NativeScript app runtime inspection logic in `packages/nativescript-inspector/`.
+- Keep React Native app runtime inspection logic in `packages/react-native-inspector/`.
 - Prefer adding a native API endpoint before adding client-only assumptions.
 - Do not add a Node or Swift dependency to solve work that already fits in Foundation/AppKit.
 - When touching private API usage, keep the adaptation small and explicit and document any simulator/runtime assumptions here.
@@ -82,22 +87,22 @@ Build the native CLI:
 
 This now builds the Rust server in `server/` and copies the resulting binary to `build/simdeck`.
 
-Run the local server:
+Run the local daemon:
 
 ```sh
-./build/simdeck serve --port 4310
+./build/simdeck daemon start --port 4310
 ```
 
 Use software H.264 when macOS screen recording starves the hardware encoder:
 
 ```sh
-./build/simdeck serve --port 4310 --video-codec h264-software
+./build/simdeck daemon start --port 4310 --video-codec h264-software
 ```
 
 For LAN access:
 
 ```sh
-./build/simdeck serve --port 4310 --bind 0.0.0.0 --advertise-host 192.168.1.50
+./build/simdeck daemon start --port 4310 --bind 0.0.0.0 --advertise-host 192.168.1.50
 ```
 
 Useful direct commands:
@@ -114,7 +119,7 @@ Useful direct commands:
 ./build/simdeck pasteboard set <udid> "hello"
 ./build/simdeck pasteboard get <udid>
 ./build/simdeck screenshot <udid> --output screen.png
-./build/simdeck describe-ui <udid>
+./build/simdeck describe <udid>
 ./build/simdeck tap <udid> 120 240
 ./build/simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
 ./build/simdeck swipe <udid> 200 700 200 200

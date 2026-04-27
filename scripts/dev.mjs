@@ -43,7 +43,7 @@ function isManagedCliProcess(pid) {
   const command = commandForPid(pid);
   return (
     command.includes(SERVER_BIN) ||
-    command.includes("simdeck serve") ||
+    command.includes("simdeck daemon run") ||
     command.includes("simdeck-bin")
   );
 }
@@ -71,10 +71,25 @@ writeFileSync(LOG_PATH, "");
 const logStream = createWriteStream(LOG_PATH);
 console.log(`[server] serving on :${SERVER_PORT} — logs: build/cli.log`);
 
-const cli = spawn(SERVER_BIN, ["serve", "--port", SERVER_PORT], {
-  stdio: ["ignore", "pipe", "pipe"],
-  cwd: ROOT,
-});
+const cli = spawn(
+  SERVER_BIN,
+  [
+    "daemon",
+    "run",
+    "--project-root",
+    ROOT,
+    "--metadata-path",
+    resolve(ROOT, "build/dev-daemon.json"),
+    "--port",
+    SERVER_PORT,
+    "--access-token",
+    "dev",
+  ],
+  {
+    stdio: ["ignore", "pipe", "pipe"],
+    cwd: ROOT,
+  },
+);
 
 cli.stdout.pipe(logStream);
 cli.stderr.pipe(logStream);

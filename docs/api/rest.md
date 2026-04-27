@@ -8,8 +8,8 @@ The served browser UI receives the generated access token automatically through 
 
 - Method casing follows REST conventions. `GET` for queries, `POST` for state changes.
 - Path parameters use `{name}` notation in this reference. UDIDs come from `GET /api/simulators` (or `simdeck list`).
-- All control endpoints that mutate a simulator return the refreshed simulator metadata in `{ "simulator": ... }`.
-- Times are reported as ISO-8601 strings unless explicitly numeric.
+- Most mutation endpoints return `{ "ok": true }`; boot and shutdown return refreshed simulator metadata.
+- Timestamps are numeric unless a route documents otherwise.
 
 ## Health and metrics
 
@@ -285,12 +285,13 @@ Returns the rendered bezel as a PNG. Cache headers are set to `no-cache, no-stor
 
 Returns the current accessibility tree. The server merges three sources: NativeScript, Swift in-app agent (UIKit), and accessibility tree. Query parameters:
 
-| `source`                     | Behaviour                                                                                            |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `auto` _(default)_ / unset   | Use the most accurate source available, falling back to AX.                                          |
-| `nativescript` / `ns`        | Force the NativeScript logical tree if a NativeScript inspector is connected for the foreground app. |
-| `uikit` / `in-app-inspector` | Force the raw UIKit hierarchy from the in-app inspector agent (NativeScript or Swift).               |
-| `ax`                         | Always use the AX snapshot.                                                                          |
+| `source`                     | Behaviour                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `auto` _(default)_ / unset   | Use the most accurate source available, falling back to AX.                                            |
+| `nativescript` / `ns`        | Force the NativeScript logical tree if a NativeScript inspector is connected for the foreground app.   |
+| `react-native` / `rn`        | Force the React Native component tree if a React Native inspector is connected for the foreground app. |
+| `uikit` / `in-app-inspector` | Force the raw UIKit hierarchy from the in-app inspector agent (NativeScript or Swift).                 |
+| `native-ax` / `ax`           | Always use the native accessibility snapshot.                                                          |
 
 | Parameter       | Default | Description                                                                                     |
 | --------------- | ------- | ----------------------------------------------------------------------------------------------- |
@@ -302,8 +303,8 @@ The response always includes:
 ```json
 {
   "roots": [...],
-  "source": "nativescript|in-app-inspector|ax",
-  "availableSources": ["nativescript", "in-app-inspector", "ax"],
+  "source": "nativescript|react-native|in-app-inspector|native-ax",
+  "availableSources": ["nativescript", "react-native", "in-app-inspector", "native-ax"],
   "fallbackReason": "...",
   "inspector": { ... }
 }

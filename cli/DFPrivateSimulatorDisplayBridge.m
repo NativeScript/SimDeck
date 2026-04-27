@@ -513,6 +513,34 @@ static id DFCallSwiftSelfGetterByPattern(id selfObject, const char *prefix, cons
     return DFCallSwiftSelfGetterByFunction(selfObject, function);
 }
 
+static id DFInitSimDeviceScreen(Class screenClass, id device, uint32_t screenID, NSError **error) {
+    SEL selector = sel_registerName("initWithDevice:screenID:");
+    Method method = class_getInstanceMethod(screenClass, selector);
+    if (method == NULL) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeDisplayAttachFailed,
+                @"SimulatorKit SimDeviceScreen does not expose initWithDevice:screenID: on this runtime."
+            );
+        }
+        return nil;
+    }
+
+    @try {
+        id screen = ((id(*)(id, SEL))objc_msgSend)(screenClass, sel_registerName("alloc"));
+        return ((id(*)(id, SEL, id, uint32_t))objc_msgSend)(screen, selector, device, screenID);
+    } @catch (NSException *exception) {
+        if (error != NULL) {
+            NSString *reason = exception.reason ?: exception.name ?: @"unknown Objective-C exception";
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeDisplayAttachFailed,
+                [NSString stringWithFormat:@"SimulatorKit failed to initialize SimDeviceScreen %@: %@", @(screenID), reason]
+            );
+        }
+        return nil;
+    }
+}
+
 static NSDictionary<NSNumber *, id> * DFReadAdapterScreens(id adapter) {
     // The full mangled tail of `SimDeviceScreenAdapter.screens.getter` drifts
     // across Xcode releases (Xcode 26.4 retyped it from
@@ -2164,6 +2192,7 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
         "SimDevice.screenAdapter.getter (SimulatorKit extension)"
     );
     if (_screenAdapterHost == nil) {
+        DFLog(@"Failed to resolve SimulatorKit screen adapter host for %@", udid);
         if (error != NULL) {
             *error = DFMakeError(
                 DFPrivateSimulatorErrorCodeDisplayAttachFailed,
@@ -2184,23 +2213,21 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
         return nil;
     }
 
-    _bootstrapScreen = ((id(*)(id, SEL))objc_msgSend)(screenClass, sel_registerName("alloc"));
-    SEL screenInitSelector = sel_registerName("initWithDevice:screenID:");
-    if (![_bootstrapScreen respondsToSelector:screenInitSelector]) {
+    _bootstrapScreen = DFInitSimDeviceScreen(screenClass, _device, 0, error);
+    if (_bootstrapScreen == nil) {
+        DFLog(@"Failed to initialize bootstrap SimDeviceScreen for %@: %@", udid, error != NULL && *error != nil ? (*error).localizedDescription : @"unknown error");
         if (error != NULL) {
-            *error = DFMakeError(
-                DFPrivateSimulatorErrorCodeDisplayAttachFailed,
-                @"SimulatorKit SimDeviceScreen does not support initWithDevice:screenID: on this runtime."
-            );
+            *error = nil;
         }
-        return nil;
+    } else {
+        DFLog(@"Initialized bootstrap SimDeviceScreen for %@", udid);
     }
-    _bootstrapScreen = ((id(*)(id, SEL, id, uint32_t))objc_msgSend)(_bootstrapScreen, screenInitSelector, _device, 0);
     [self updateStatus:@"Waiting for CoreSimulator screen adapter"];
     DFSpinRunLoop(0.5);
 
     _screenAdapter = object_getIvar(_screenAdapterHost, class_getInstanceVariable([_screenAdapterHost class], "_screenAdapter"));
     if (_screenAdapter == nil) {
+        DFLog(@"SimulatorKit screen adapter host did not expose _screenAdapter for %@; host class=%@", udid, NSStringFromClass([_screenAdapterHost class]));
         if (error != NULL) {
             *error = DFMakeError(
                 DFPrivateSimulatorErrorCodeDisplayAttachFailed,
@@ -2248,6 +2275,7 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
         screens = DFReadAdapterScreens(_screenAdapterHost);
     }
     if (screens.count == 0) {
+        DFLog(@"SimulatorKit screen adapter exposed no live screens for %@", udid);
         if (error != NULL) {
             *error = DFMakeError(
                 DFPrivateSimulatorErrorCodeDisplayAttachFailed,
@@ -2271,18 +2299,15 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     _activeScreenID = selectedScreenID.unsignedIntValue;
     DFLog(@"Discovered headless screens %@; selecting %@", sortedScreenIDs, selectedScreenID);
 
-    _activeScreen = ((id(*)(id, SEL))objc_msgSend)(screenClass, sel_registerName("alloc"));
-    if (![_activeScreen respondsToSelector:screenInitSelector]) {
-        if (error != NULL) {
-            *error = DFMakeError(
-                DFPrivateSimulatorErrorCodeDisplayAttachFailed,
-                @"SimulatorKit SimDeviceScreen does not support initWithDevice:screenID: on this runtime."
-            );
-        }
-        return nil;
-    }
-    _activeScreen = ((id(*)(id, SEL, id, uint32_t))objc_msgSend)(_activeScreen, screenInitSelector, _device, _activeScreenID);
     _rawScreen = screens[selectedScreenID];
+    _activeScreen = DFInitSimDeviceScreen(screenClass, _device, _activeScreenID, error);
+    if (_activeScreen == nil) {
+        DFLog(@"Failed to initialize active SimDeviceScreen %@ for %@: %@", selectedScreenID, udid, error != NULL && *error != nil ? (*error).localizedDescription : @"unknown error");
+        if (error != NULL) {
+            *error = nil;
+        }
+        _activeScreen = _rawScreen;
+    }
     DFLogRuntimeShape(_activeScreen, @"activeScreen");
     DFLogRuntimeShape(_rawScreen, @"rawScreen");
     DFLogRuntimeShape(_device, @"device");
@@ -2318,6 +2343,7 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
 
     id rawScreen = _rawScreen;
     if (rawScreen == nil || ![rawScreen respondsToSelector:sel_registerName("registerScreenCallbacksWithUUID:callbackQueue:frameCallback:surfacesChangedCallback:propertiesChangedCallback:")]) {
+        DFLog(@"Selected CoreSimulator screen did not expose callbacks for %@; rawScreen=%@ class=%@", udid, rawScreen, rawScreen != nil ? NSStringFromClass([rawScreen class]) : @"(nil)");
         if (error != NULL) {
             *error = DFMakeError(
                 DFPrivateSimulatorErrorCodeDisplayAttachFailed,

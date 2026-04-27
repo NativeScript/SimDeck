@@ -6,7 +6,6 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 
 let outputChannel;
-let serverProcess;
 let simulatorPanel;
 
 function activate(context) {
@@ -16,8 +15,7 @@ function activate(context) {
     outputChannel,
     vscode.commands.registerCommand("simdeck.openSimulatorView", async () => {
       try {
-        const serverUrl = getServerUrl();
-        await ensureServerRunning(context, serverUrl);
+        const serverUrl = await resolveSimulatorUrl(context);
         openSimulatorPanel(serverUrl);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -27,94 +25,137 @@ function activate(context) {
       }
     }),
     vscode.commands.registerCommand("simdeck.stopServer", async () => {
-      stopManagedServer();
+      await stopProjectDaemon(context);
       await vscode.window.showInformationMessage(
-        "Stopped the managed SimDeck server.",
+        "Stopped the SimDeck project daemon.",
       );
     }),
     vscode.commands.registerCommand("simdeck.showOutput", () => {
       outputChannel.show(true);
     }),
-    {
-      dispose: () => {
-        stopManagedServer();
-      },
-    },
   );
 }
 
-function deactivate() {
-  stopManagedServer();
-}
+function deactivate() {}
 
 function getServerUrl() {
   const config = vscode.workspace.getConfiguration("simdeck");
   return config.get("serverUrl", "http://127.0.0.1:4310");
 }
 
-async function ensureServerRunning(context, serverUrl) {
+async function resolveSimulatorUrl(context) {
+  const serverUrl = getServerUrl();
   if (await isServerHealthy(serverUrl)) {
-    return;
+    return serverUrl;
   }
 
   const config = vscode.workspace.getConfiguration("simdeck");
-  const autoStart = config.get("autoStartServer", true);
+  const autoStart = getAutoStartDaemon(config);
   if (!autoStart) {
     throw new Error(
-      `SimDeck is not reachable at ${serverUrl}. Enable auto-start or launch the server manually.`,
+      `SimDeck is not reachable at ${serverUrl}. Enable auto-start or launch the daemon manually.`,
     );
   }
 
-  if (!serverProcess || serverProcess.exitCode !== null) {
-    await startServer(context);
-  }
-
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    if (await isServerHealthy(serverUrl)) {
-      return;
-    }
-    await delay(250);
-  }
-
-  throw new Error(`Timed out waiting for SimDeck at ${serverUrl}.`);
+  return await startProjectDaemon(context);
 }
 
-async function startServer(context) {
+function getAutoStartDaemon(config) {
+  const daemonSetting = config.inspect("autoStartDaemon");
+  if (
+    daemonSetting?.workspaceValue !== undefined ||
+    daemonSetting?.workspaceFolderValue !== undefined ||
+    daemonSetting?.globalValue !== undefined
+  ) {
+    return config.get("autoStartDaemon", true);
+  }
+  return config.get("autoStartServer", true);
+}
+
+async function startProjectDaemon(context) {
   const config = vscode.workspace.getConfiguration("simdeck");
   const cliPath = resolveCliPath(context, config.get("cliPath", ""));
   const port = String(config.get("port", 4310));
   const bindAddress = config.get("bindAddress", "127.0.0.1");
+  const args = ["ui", "--port", port, "--bind", bindAddress];
 
-  outputChannel.appendLine(`Starting SimDeck using ${cliPath}`);
+  outputChannel.appendLine(`Starting SimDeck project daemon using ${cliPath}`);
+  const result = await runCli(context, cliPath, args);
+  outputChannel.append(result.stderr);
 
-  serverProcess = spawn(
-    cliPath,
-    ["serve", "--port", port, "--bind", bindAddress],
-    {
+  const deadline = Date.now() + 15000;
+  const metadata = parseJsonOutput(result.stdout, "simdeck ui");
+  const daemonUrl = metadata.url;
+  if (typeof daemonUrl !== "string" || daemonUrl.length === 0) {
+    throw new Error("simdeck ui did not return a daemon URL.");
+  }
+
+  while (Date.now() < deadline) {
+    if (await isServerHealthy(daemonUrl)) {
+      outputChannel.appendLine(`SimDeck daemon ready at ${daemonUrl}`);
+      return daemonUrl;
+    }
+    await delay(250);
+  }
+
+  throw new Error(`Timed out waiting for SimDeck at ${daemonUrl}.`);
+}
+
+async function stopProjectDaemon(context) {
+  const config = vscode.workspace.getConfiguration("simdeck");
+  const cliPath = resolveCliPath(context, config.get("cliPath", ""));
+  outputChannel.appendLine(`Stopping SimDeck project daemon using ${cliPath}`);
+  const result = await runCli(context, cliPath, ["daemon", "stop"]);
+  outputChannel.append(result.stderr);
+}
+
+function runCli(context, cliPath, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cliPath, args, {
       cwd: resolveWorkingDirectory(context),
       stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+    });
+    let stdout = "";
+    let stderr = "";
 
-  serverProcess.stdout.on("data", (chunk) => {
-    outputChannel.append(chunk.toString());
-  });
+    child.stdout.on("data", (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      outputChannel.append(text);
+    });
 
-  serverProcess.stderr.on("data", (chunk) => {
-    outputChannel.append(chunk.toString());
-  });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
 
-  serverProcess.on("exit", (code, signal) => {
-    outputChannel.appendLine(
-      `SimDeck server exited with ${signal ? `signal ${signal}` : `code ${code}`}.`,
-    );
-    serverProcess = undefined;
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const reason = signal ? `signal ${signal}` : `code ${code}`;
+      reject(
+        new Error(
+          `simdeck ${args.join(" ")} exited with ${reason}.${stderr ? `\n${stderr}` : ""}`,
+        ),
+      );
+    });
   });
+}
 
-  serverProcess.on("error", (error) => {
-    outputChannel.appendLine(error.message);
-  });
+function parseJsonOutput(stdout, commandName) {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    throw new Error(`${commandName} did not print JSON output.`);
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to parse ${commandName} JSON output: ${message}`);
+  }
 }
 
 function openSimulatorPanel(serverUrl) {
@@ -213,16 +254,6 @@ function resolveWorkingDirectory(context) {
     return workspaceFolders[0].uri.fsPath;
   }
   return context.extensionPath;
-}
-
-function stopManagedServer() {
-  if (!serverProcess || serverProcess.exitCode !== null) {
-    serverProcess = undefined;
-    return;
-  }
-
-  serverProcess.kill("SIGTERM");
-  serverProcess = undefined;
 }
 
 function isServerHealthy(serverUrl) {

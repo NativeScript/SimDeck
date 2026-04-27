@@ -66,7 +66,7 @@ export function AccessibilityInspector({
     readStoredTab(),
   );
   const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const expandedInitializedUDIDRef = useRef("");
+  const expandedInitializedKeyRef = useRef("");
   const resizeStateRef = useRef<ResizeState | null>(null);
   const panelWidthRef = useRef(panelWidth);
   const detailsHeightRef = useRef(detailsHeight);
@@ -133,29 +133,33 @@ export function AccessibilityInspector({
 
   useEffect(() => {
     const udid = selectedSimulator?.udid ?? "";
+    const expansionKey = `${udid}:${source || "unknown"}`;
     if (!udid || roots.length === 0) {
-      expandedInitializedUDIDRef.current = "";
+      expandedInitializedKeyRef.current = "";
       setExpandedIds(new Set());
       return;
     }
 
-    if (expandedInitializedUDIDRef.current === udid) {
+    if (expandedInitializedKeyRef.current === expansionKey) {
       return;
     }
 
     const tree = buildAccessibilityTree(roots);
-    const storedExpandedIds = readStoredStringArray(expandedStorageKey(udid));
+    const storedExpandedIds =
+      source === "react-native"
+        ? []
+        : readStoredStringArray(expandedStorageKey(udid));
     setExpandedIds(
       storedExpandedIds.length > 0
         ? new Set(storedExpandedIds)
         : defaultExpandedAccessibilityIds(tree),
     );
-    expandedInitializedUDIDRef.current = udid;
-  }, [roots, selectedSimulator?.udid]);
+    expandedInitializedKeyRef.current = expansionKey;
+  }, [roots, selectedSimulator?.udid, source]);
 
   useEffect(() => {
     const udid = selectedSimulator?.udid ?? "";
-    if (!udid || expandedInitializedUDIDRef.current !== udid) {
+    if (!udid || !expandedInitializedKeyRef.current.startsWith(`${udid}:`)) {
       return;
     }
 
@@ -436,8 +440,9 @@ function NodeDetails({
     ["Inspector ID", node.inspectorId ?? ""],
     ["Module", node.moduleName ?? ""],
     ["NativeScript", nativeScriptDescription(node.nativeScript)],
+    ["React Native", reactNativeDescription(node.reactNative)],
     ["UIKit Class", node.className ?? ""],
-    ["Last UIKit JS", lastUIKitScriptText(node)],
+    ["Last JS", lastUIKitScriptText(node)],
     ["Value", node.AXValue ?? ""],
     ["Role", node.role ?? ""],
     ["Role Description", node.role_description ?? ""],
@@ -473,8 +478,10 @@ function UIKitScriptEditor({
   node: AccessibilityNode;
   selectedSimulator: SimulatorMetadata | null;
 }) {
-  const targetId = dynamicUIKitTargetId(node);
+  const targetId = dynamicInspectorTargetId(node);
   const lastScript = lastUIKitScriptText(node);
+  const isReactNativeTarget = targetId.startsWith("rn:");
+  const scriptTitle = isReactNativeTarget ? "React Native JS" : "UIKit JS";
   const udid = selectedSimulator?.udid ?? "";
   const [script, setScript] = useState("");
   const [result, setResult] = useState("");
@@ -482,10 +489,10 @@ function UIKitScriptEditor({
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    setScript(lastScript);
+    setScript(lastScript || (isReactNativeTarget ? "props" : ""));
     setResult("");
     setError("");
-  }, [lastScript, targetId, udid]);
+  }, [isReactNativeTarget, lastScript, targetId, udid]);
 
   if (!targetId) {
     return null;
@@ -497,7 +504,7 @@ function UIKitScriptEditor({
       return;
     }
     if (!script.trim()) {
-      setError("Enter JavaScript to run against the selected UIKit view.");
+      setError("Enter JavaScript to run against the selected view.");
       return;
     }
 
@@ -525,7 +532,7 @@ function UIKitScriptEditor({
     <section className="uikit-script">
       <div className="uikit-script-header">
         <div>
-          <div className="uikit-script-title">UIKit JS</div>
+          <div className="uikit-script-title">{scriptTitle}</div>
           <div className="uikit-script-target">{targetId}</div>
         </div>
       </div>
@@ -533,7 +540,9 @@ function UIKitScriptEditor({
         <textarea
           className="uikit-script-input"
           onChange={(event) => setScript(event.target.value)}
-          placeholder="view.textColor = UIColor.redColor"
+          placeholder={
+            isReactNativeTarget ? "props" : "view.textColor = UIColor.redColor"
+          }
           spellCheck={false}
           value={script}
         />
@@ -601,13 +610,17 @@ function primarySourceLocation(
   return null;
 }
 
-function dynamicUIKitTargetId(node: AccessibilityNode): string {
+function dynamicInspectorTargetId(node: AccessibilityNode): string {
+  const inspectorId = cleanString(node.inspectorId);
+  if (inspectorId.startsWith("rn:")) {
+    return inspectorId;
+  }
+
   const linkedUIKitId = cleanString(node.uikitId);
   if (linkedUIKitId) {
     return linkedUIKitId;
   }
 
-  const inspectorId = cleanString(node.inspectorId);
   if (isUIKitInspectorId(inspectorId)) {
     return inspectorId;
   }
@@ -639,6 +652,7 @@ function errorMessage(error: unknown): string {
 
 const HIERARCHY_SOURCE_ORDER: AccessibilitySource[] = [
   "nativescript",
+  "react-native",
   "in-app-inspector",
   "native-ax",
 ];
@@ -664,6 +678,9 @@ function sourceLabel(source: AccessibilitySource): string {
   if (source === "nativescript") {
     return "NativeScript";
   }
+  if (source === "react-native") {
+    return "React Native";
+  }
   return source === "in-app-inspector" ? "UIKit" : "Native AX";
 }
 
@@ -685,6 +702,19 @@ function nativeScriptDescription(
     "",
   );
   return type ? `${type}${suffix}` : suffix;
+}
+
+function reactNativeDescription(
+  value: Record<string, unknown> | null | undefined,
+) {
+  if (!value) {
+    return "";
+  }
+  const tag = typeof value.tag === "number" ? `tag ${value.tag}` : "";
+  const testID = typeof value.testID === "string" ? `#${value.testID}` : "";
+  const nativeID =
+    typeof value.nativeID === "string" ? `nativeID ${value.nativeID}` : "";
+  return [tag, testID, nativeID].filter(Boolean).join(" / ");
 }
 
 function lastUIKitScriptText(node: AccessibilityNode): string {

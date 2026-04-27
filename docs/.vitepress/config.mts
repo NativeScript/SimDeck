@@ -81,7 +81,8 @@ export default defineConfig({
             { text: "Architecture", link: "/guide/architecture" },
             { text: "Video Pipeline", link: "/guide/video" },
             { text: "LAN Access", link: "/guide/lan-access" },
-            { text: "Background Service", link: "/guide/service" },
+            { text: "Project Daemon", link: "/guide/daemon" },
+            { text: "Testing", link: "/guide/testing" },
           ],
         },
         {
@@ -140,6 +141,10 @@ export default defineConfig({
             {
               text: "NativeScript Runtime",
               link: "/inspector/nativescript",
+            },
+            {
+              text: "React Native Runtime",
+              link: "/inspector/react-native",
             },
           ],
         },

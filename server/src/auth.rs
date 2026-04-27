@@ -61,7 +61,7 @@ pub fn api_request_authorized(
 
     if peer_is_loopback {
         return if method == Method::GET || method == Method::HEAD {
-            origin_allowed_or_absent(config, headers)
+            true
         } else {
             origin_allowed(config, headers)
         };
@@ -109,7 +109,7 @@ pub fn append_cors_headers(
         return;
     };
 
-    if !origin_is_allowed(config, origin) {
+    if !origin_is_cors_allowed(config, origin) {
         return;
     }
 
@@ -193,6 +193,10 @@ fn origin_is_allowed(config: &Config, origin: &str) -> bool {
         format!("http://[::1]:{}", config.http_port),
     ];
     allowed.iter().any(|value| value == origin)
+}
+
+fn origin_is_cors_allowed(config: &Config, origin: &str) -> bool {
+    origin == "null" || origin_is_allowed(config, origin)
 }
 
 fn chrono_free_now_nanos() -> u128 {
@@ -314,6 +318,34 @@ mod tests {
             header::ORIGIN,
             HeaderValue::from_static("https://example.invalid"),
         );
+
+        assert!(!api_request_authorized(
+            &config,
+            &Method::POST,
+            &headers,
+            true
+        ));
+    }
+
+    #[test]
+    fn accepts_loopback_null_origin_read_without_existing_token() {
+        let config = config();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ORIGIN, HeaderValue::from_static("null"));
+
+        assert!(api_request_authorized(
+            &config,
+            &Method::GET,
+            &headers,
+            true
+        ));
+    }
+
+    #[test]
+    fn rejects_loopback_null_origin_write_without_existing_token() {
+        let config = config();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ORIGIN, HeaderValue::from_static("null"));
 
         assert!(!api_request_authorized(
             &config,

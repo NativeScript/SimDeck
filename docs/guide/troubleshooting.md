@@ -9,7 +9,7 @@ Most SimDeck issues fall into one of three buckets: simulator boot, video stream
 Another process already owns the HTTP port. Pick a different one:
 
 ```sh
-simdeck serve --port 4320
+simdeck daemon start --port 4320
 ```
 
 Or find what's holding it:
@@ -18,11 +18,15 @@ Or find what's holding it:
 lsof -nP -iTCP:4310 -sTCP:LISTEN
 ```
 
-If the holder is an old SimDeck instance, the bundled `npm run dev` script auto-kills stale listeners on `4310` and `4311` for you.
+If the holder is an old SimDeck daemon for the current project, stop it:
 
-### `simdeck is not built yet`
+```sh
+simdeck daemon stop
+```
 
-The launcher script could not find the compiled binary. Reinstall the package or run the local build:
+### `simdeck native binary is missing`
+
+The launcher script could not find the native binary. Reinstall the package or run the local build:
 
 ```sh
 npm install -g simdeck
@@ -30,13 +34,13 @@ npm install -g simdeck
 ./scripts/build-cli.sh
 ```
 
-### Native build fails on install
+### Native build fails from source
 
-The postinstall hook runs `cargo build --release` and Apple's Clang against the Objective-C bridge. The most common failures are:
+`npm run build:cli` runs `cargo build --release` and Apple's Clang against the Objective-C bridge. The most common failures are:
 
 - **Rust missing.** Install via [rustup](https://rustup.rs/), then reinstall.
 - **Xcode command-line tools missing.** Run `xcode-select --install`.
-- **Sandboxed CI without macOS frameworks.** Postinstall warns and exits cleanly on non-Darwin platforms; the binary just isn't installed.
+- **Sandboxed CI without macOS frameworks.** Build the npm package on macOS so the published tarball contains the native binary.
 
 ## Simulator never boots
 
@@ -55,10 +59,10 @@ If `simctl` succeeds but SimDeck still fails, capture the server log and file an
 If `simctl list` itself hangs or returns garbage, the macOS `com.apple.CoreSimulator.CoreSimulatorService` is wedged. Restart it:
 
 ```sh
-killall -9 com.apple.CoreSimulator.CoreSimulatorService
+simdeck core-simulator restart
 ```
 
-CoreSimulator restarts on demand. Re-run `simctl list` to confirm before retrying.
+Re-run `simdeck list` to confirm before retrying.
 
 ### Multiple Xcode installs
 
@@ -77,7 +81,8 @@ The encoder did not produce a keyframe within 3 seconds. The most common causes:
 - **VideoToolbox is busy.** macOS screen recording can starve the HEVC encoder. Switch to software H.264:
 
   ```sh
-  simdeck serve --port 4310 --video-codec h264-software
+  simdeck daemon stop
+  simdeck daemon start --video-codec h264-software
   ```
 
 - **The Simulator window is minimised or off-screen.** The private display bridge captures from a headless context, so this is rare, but if you see it after waking from sleep, shut the simulator down and boot it again.
@@ -117,7 +122,7 @@ For more on the inspector matrix, see the [Inspector Overview](/inspector/).
 
 When all else fails, capture the server log:
 
-- Foreground server: redirect output to a file.
-- Background service: read `~/Library/Logs/simdeck.log` and `~/Library/Logs/simdeck.err.log`.
+- Dev server: read `build/cli.log` when using `npm run dev`.
+- Project daemon: stop and restart it from a terminal when you need foreground logs for a reproduction.
 
-Include both files when filing an issue, along with `simdeck --version` (when implemented), the macOS version, and the Xcode version.
+Include both files when filing an issue, along with `simdeck --version`, the macOS version, and the Xcode version.

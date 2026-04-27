@@ -1,16 +1,21 @@
 # SimDeck
 
-`simdeck` is a local simulator control panel & agent-first CLI for driving the simulator
+SimDeck is a developer tool built for streamlining mobile app development for coding agents.
+Drive iOS Simulator apps from the CLI, browser, and automated tests on macOS.
 
 ```sh
 npm i -g simdeck@latest
 ```
 
-- `simctl`-backed simulator discovery and lifecycle commands
-- private CoreSimulator boot fallback
+## Features
+
+- WebTransport based streaming server in Rust, hardware encoded HVEC/H264 video stream
+- Simulator control & inspection using private accessibility APIs
 - CoreSimulator chrome asset rendering for device bezels
-- NativeScript runtime inspector in `packages/nativescript-inspector/` for JS-driven UIKit querying and property edits
-- WebTransport video delivery over a self-signed local or LAN endpoint
+- NativeScript and React Native runtime inspector plugins, plus a native UIKit inspector framework for other apps
+- Project daemon reuse: normal CLI commands automatically start and reuse one warm native host per project.
+- `simdeck/test` for fast JS/TS app tests that can query accessibility state and drive simulator controls.
+- Agent [`SKILL.md`](./skills/simdeck/SKILL.md) reference
 
 ## Build
 
@@ -19,21 +24,20 @@ npm i -g simdeck@latest
 ./scripts/build-cli.sh
 ```
 
-## Install
-
 Requirements:
 
 - macOS
 - Xcode or Command Line Tools
-- Rust toolchain (`cargo`)
 - Node.js 18+
+- Rust toolchain (`cargo`) when building from source
 
-The npm package builds the native Rust/Objective-C CLI during `postinstall`; it
-is not a prebuilt cross-platform binary.
+The npm package includes the native SimDeck binary and does not compile during
+install. Rust is only required when building from a source checkout.
 
 Install the current local checkout globally from source:
 
 ```sh
+npm run build
 npm install -g .
 ```
 
@@ -46,46 +50,45 @@ Full documentation lives at [djdeveloperr.github.io/SimDeck](https://djdeveloper
 ## Run
 
 ```sh
-simdeck serve --port 4310
+simdeck ui --open
 ```
 
-Then open [http://127.0.0.1:4310](http://127.0.0.1:4310).
-To focus a specific simulator, open
-[http://127.0.0.1:4310?device=UDID](http://127.0.0.1:4310?device=UDID).
+This starts or reuses the project daemon, enables the browser UI, and opens the authenticated local URL.
+To focus a specific simulator, add `?device=UDID` to the opened URL.
 
-The Rust server exposes HTTP on the requested port and WebTransport on `port + 1`.
+The daemon exposes HTTP on the requested port and WebTransport on `port + 1`.
 The browser bootstrap comes from `GET /api/health`, which returns the WebTransport URL template,
 certificate hash, and packet version needed by the client.
-The served browser UI receives the generated API access token automatically; direct HTTP callers can use the startup token with `X-SimDeck-Token` or `Authorization: Bearer`.
+The served browser UI receives the generated API access token automatically.
 
-For fastest agent control, keep `simdeck serve` or `simdeck service on` running and route hot CLI controls through the warm local service:
+CLI commands automatically use the same warm daemon:
 
 ```sh
-export SIMDECK_SERVER_URL=http://127.0.0.1:4310
+simdeck list
 simdeck tap <udid> 0.5 0.5 --normalized
-simdeck describe-ui <udid> --format agent --max-depth 2
+simdeck describe <udid> --format agent --max-depth 2
 ```
 
-You can also pass `--server-url http://127.0.0.1:4310` on individual commands. Supported fast-path controls include launch/open-url, normalized touch/tap/swipe/gesture input, key/key-sequence/key-combo, hardware buttons, dismiss-keyboard, home/app-switcher, rotate, and appearance toggles.
+## Daemon
 
-## Service
-
-Enable the per-user background service with `launchd`:
+Manage the project daemon explicitly when needed:
 
 ```sh
-simdeck service on --port 4310
+simdeck daemon start
+simdeck daemon status
+simdeck daemon stop
 ```
 
-Restart it:
+Use software H.264 when macOS screen recording starves the hardware encoder:
 
 ```sh
-simdeck service restart
+simdeck daemon start --video-codec h264-software
 ```
 
-Disable it:
+For LAN browser access:
 
 ```sh
-simdeck service off
+simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 ```
 
 Restart the CoreSimulator service layer when `simctl` reports a stale service
@@ -117,9 +120,9 @@ simdeck toggle-appearance <udid>
 simdeck pasteboard set <udid> "hello"
 simdeck pasteboard get <udid>
 simdeck screenshot <udid> --output screen.png
-simdeck describe-ui <udid>
-simdeck describe-ui <udid> --format agent --max-depth 4
-simdeck describe-ui <udid> --point 120,240
+simdeck describe <udid>
+simdeck describe <udid> --format agent --max-depth 4
+simdeck describe <udid> --point 120,240
 simdeck tap <udid> 120 240
 simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
 simdeck swipe <udid> 200 700 200 200
@@ -144,13 +147,30 @@ simdeck chrome-profile <udid>
 simdeck logs <udid> --seconds 30 --limit 200
 ```
 
-`describe-ui` can use the running local SimDeck service to prefer NativeScript or
+`describe` uses the project daemon to prefer React Native, NativeScript, or
 UIKit in-app inspectors, then falls back to the built-in private CoreSimulator
 accessibility bridge. Use `--format agent` or `--format compact-json` for
 lower-token hierarchy dumps. Coordinate commands accept screen coordinates from
 the accessibility tree by default; pass `--normalized` to send `0.0..1.0`
-coordinates directly. With `--server-url` or `SIMDECK_SERVER_URL`, normalized
-input commands use the warm service path to avoid repeated native setup.
+coordinates directly.
+
+## JS/TS Tests
+
+```ts
+import { connect } from "simdeck/test";
+
+const sim = await connect();
+try {
+  await sim.tap("<udid>", 0.5, 0.5);
+  await sim.waitFor("<udid>", { label: "Continue" });
+  await sim.screenshot("<udid>");
+} finally {
+  sim.close();
+}
+```
+
+`connect()` starts the project daemon when needed, reuses it when it is already
+healthy, and only stops daemons it started itself.
 
 ## NativeScript Inspector
 
@@ -170,6 +190,26 @@ The runtime connects to `GET /api/inspector/connect` as a WebSocket. The Rust
 server prefers connected NativeScript inspectors for hierarchy requests and
 falls back to the Swift TCP inspector or the built-in native accessibility
 bridge when no matching app inspector is available.
+
+## React Native Inspector
+
+React Native apps can expose their component tree and Metro dev-mode source
+locations with the React Native inspector package:
+
+```ts
+import { AppRegistry } from "react-native";
+import { startSimDeckReactNativeInspector } from "@simdeck/react-native-inspector";
+import App from "./App";
+
+if (__DEV__) {
+  startSimDeckReactNativeInspector({ port: 4310 });
+}
+
+AppRegistry.registerComponent("Example", () => App);
+```
+
+Call it before `AppRegistry.registerComponent(...)` so the package can capture
+React Fiber commits.
 
 ## VS Code
 

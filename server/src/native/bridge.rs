@@ -613,6 +613,27 @@ impl NativeSession {
     ) {
         ffi::xcw_native_session_set_frame_callback(self.handle, callback, user_data);
     }
+
+    pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
+        let phase = CString::new(phase).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_send_touch(self.handle, x, y, phase.as_ptr(), &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn send_key(&self, key_code: u16, modifiers: u32) -> Result<(), AppError> {
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_send_key(self.handle, key_code, modifiers, &mut error),
+                error,
+            )
+        }
+    }
 }
 
 impl Drop for NativeSession {

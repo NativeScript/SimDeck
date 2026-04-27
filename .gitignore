@@ -8,13 +8,17 @@ client/dist/
 packages/inspector-agent/.build/
 packages/inspector-agent/.swiftpm/
 packages/nativescript-inspector/dist/
+packages/react-native-inspector/dist/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+.playwright-mcp/
+simdeck-snapshot.md
 
 # Package manager installs and caches
 node_modules/
 client/node_modules/
 packages/nativescript-inspector/node_modules/
+packages/react-native-inspector/node_modules/
 
 # Local editor state
 .vscode/

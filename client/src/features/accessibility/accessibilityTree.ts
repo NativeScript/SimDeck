@@ -68,7 +68,7 @@ export function findAccessibilityItemAtPoint(
 
 export function defaultExpandedAccessibilityIds(
   items: AccessibilityTreeItem[],
-  maxOpenDepth = 3,
+  maxOpenDepth = 10,
 ): Set<string> {
   const ids = new Set<string>();
   for (const item of flattenAccessibilityTree(items)) {

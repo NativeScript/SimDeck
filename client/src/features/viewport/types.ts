@@ -10,6 +10,13 @@ export interface Point {
   y: number;
 }
 
+export interface TouchIndicator {
+  id: number;
+  phase: "began" | "moved" | "ended" | "cancelled";
+  x: number;
+  y: number;
+}
+
 export type ViewMode = "fit" | "center" | "manual";
 
 export interface ScreenRect {

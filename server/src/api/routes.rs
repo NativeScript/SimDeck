@@ -7,21 +7,23 @@ use crate::logs::LogRegistry;
 use crate::metrics::counters::{ClientStreamStats, Metrics};
 use crate::native::bridge::{LogFilters, NativeBridge};
 use crate::simulators::registry::SessionRegistry;
+use crate::simulators::session::SimulatorSession;
 use crate::transport::packet::PACKET_VERSION;
 use axum::body::Body;
-use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Map;
 use serde_json::{json as json_value, Value};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::Command;
@@ -51,6 +53,23 @@ struct LaunchPayload {
 }
 
 #[derive(Deserialize)]
+struct InstallPayload {
+    #[serde(rename = "appPath")]
+    app_path: String,
+}
+
+#[derive(Deserialize)]
+struct UninstallPayload {
+    #[serde(rename = "bundleId")]
+    bundle_id: String,
+}
+
+#[derive(Deserialize)]
+struct PasteboardPayload {
+    text: String,
+}
+
+#[derive(Deserialize)]
 struct TouchPayload {
     x: f64,
     y: f64,
@@ -62,7 +81,7 @@ struct TouchSequencePayload {
     events: Vec<TouchSequenceEvent>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct TouchSequenceEvent {
     x: f64,
     y: f64,
@@ -79,6 +98,24 @@ struct KeyPayload {
 }
 
 #[derive(Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum ControlMessage {
+    Touch {
+        x: f64,
+        y: f64,
+        phase: String,
+    },
+    Key {
+        key_code: u16,
+        modifiers: Option<u32>,
+    },
+}
+
+#[derive(Deserialize)]
 struct KeySequencePayload {
     #[serde(rename = "keyCodes")]
     key_codes: Vec<u16>,
@@ -91,6 +128,136 @@ struct ButtonPayload {
     button: String,
     #[serde(rename = "durationMs")]
     duration_ms: Option<u32>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct ElementSelectorPayload {
+    id: Option<String>,
+    label: Option<String>,
+    value: Option<String>,
+    #[serde(alias = "type")]
+    element_type: Option<String>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AccessibilityQueryPayload {
+    #[serde(default)]
+    selector: ElementSelectorPayload,
+    source: Option<String>,
+    max_depth: Option<usize>,
+    include_hidden: Option<bool>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct WaitForPayload {
+    #[serde(default)]
+    selector: ElementSelectorPayload,
+    source: Option<String>,
+    max_depth: Option<usize>,
+    include_hidden: Option<bool>,
+    timeout_ms: Option<u64>,
+    poll_ms: Option<u64>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TapElementPayload {
+    x: Option<f64>,
+    y: Option<f64>,
+    normalized: Option<bool>,
+    #[serde(default)]
+    selector: ElementSelectorPayload,
+    source: Option<String>,
+    max_depth: Option<usize>,
+    include_hidden: Option<bool>,
+    wait_timeout_ms: Option<u64>,
+    poll_ms: Option<u64>,
+    duration_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchPayload {
+    steps: Vec<BatchStep>,
+    continue_on_error: Option<bool>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(
+    tag = "action",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum BatchStep {
+    Sleep {
+        ms: Option<u64>,
+        seconds: Option<f64>,
+    },
+    Tap(TapElementPayload),
+    WaitFor(WaitForPayload),
+    Assert(WaitForPayload),
+    Key {
+        key_code: u16,
+        modifiers: Option<u32>,
+    },
+    KeySequence {
+        key_codes: Vec<u16>,
+        delay_ms: Option<u64>,
+    },
+    Touch {
+        x: f64,
+        y: f64,
+        phase: Option<String>,
+        down: Option<bool>,
+        up: Option<bool>,
+        delay_ms: Option<u64>,
+    },
+    TouchSequence {
+        events: Vec<TouchSequenceEvent>,
+    },
+    Swipe {
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        duration_ms: Option<u64>,
+        steps: Option<u32>,
+    },
+    Gesture {
+        preset: String,
+        duration_ms: Option<u64>,
+        delta: Option<f64>,
+        steps: Option<u32>,
+    },
+    Type {
+        text: String,
+        delay_ms: Option<u64>,
+    },
+    Button {
+        button: String,
+        duration_ms: Option<u32>,
+    },
+    Launch {
+        bundle_id: String,
+    },
+    OpenUrl {
+        url: String,
+    },
+    Home,
+    DismissKeyboard,
+    AppSwitcher,
+    RotateLeft,
+    RotateRight,
+    ToggleAppearance,
+    Describe {
+        source: Option<String>,
+        max_depth: Option<usize>,
+        include_hidden: Option<bool>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -145,8 +312,10 @@ const INSPECTOR_AGENT_HOST: &str = "127.0.0.1";
 const INSPECTOR_AGENT_DEFAULT_PORT: u16 = 47370;
 const INSPECTOR_AGENT_PORT_SCAN_LIMIT: u16 = 32;
 const INSPECTOR_AGENT_TIMEOUT: Duration = Duration::from_millis(900);
+const CONNECTED_INSPECTOR_HIERARCHY_TIMEOUT: Duration = Duration::from_secs(8);
 const SOURCE_NATIVE_AX: &str = "native-ax";
 const SOURCE_NATIVE_SCRIPT: &str = "nativescript";
+const SOURCE_REACT_NATIVE: &str = "react-native";
 const SOURCE_UIKIT: &str = "in-app-inspector";
 
 pub fn router(state: AppState) -> Router {
@@ -163,6 +332,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators", get(list_simulators))
         .route("/api/simulators/{udid}/boot", post(boot_simulator))
         .route("/api/simulators/{udid}/shutdown", post(shutdown_simulator))
+        .route("/api/simulators/{udid}/erase", post(erase_simulator))
+        .route("/api/simulators/{udid}/install", post(install_app))
+        .route("/api/simulators/{udid}/uninstall", post(uninstall_app))
+        .route(
+            "/api/simulators/{udid}/pasteboard",
+            get(get_pasteboard).post(set_pasteboard),
+        )
+        .route("/api/simulators/{udid}/screenshot.png", get(screenshot_png))
         .route(
             "/api/simulators/{udid}/toggle-appearance",
             post(toggle_appearance),
@@ -170,7 +347,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/refresh", post(refresh_stream))
         .route("/api/simulators/{udid}/open-url", post(open_url))
         .route("/api/simulators/{udid}/launch", post(launch_bundle))
+        .route("/api/simulators/{udid}/tap", post(tap_element))
+        .route("/api/simulators/{udid}/query", post(accessibility_query))
+        .route("/api/simulators/{udid}/wait-for", post(wait_for_element))
+        .route("/api/simulators/{udid}/assert", post(assert_element))
+        .route("/api/simulators/{udid}/batch", post(run_batch))
         .route("/api/simulators/{udid}/touch", post(send_touch))
+        .route("/api/simulators/{udid}/control", get(control_socket))
         .route(
             "/api/simulators/{udid}/touch-sequence",
             post(send_touch_sequence),
@@ -376,13 +559,93 @@ async fn shutdown_simulator(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    state.registry.remove(&udid);
     let action_udid = udid.clone();
     run_bridge_action(state.clone(), move |bridge| {
         bridge.shutdown_simulator(&action_udid)
     })
     .await?;
+    state.registry.remove(&udid);
     simulator_payload(state, udid).await
+}
+
+async fn erase_simulator(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    state.registry.remove(&udid);
+    let action_udid = udid.clone();
+    run_bridge_action(state, move |bridge| bridge.erase_simulator(&action_udid)).await?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
+async fn install_app(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<InstallPayload>,
+) -> Result<Json<Value>, AppError> {
+    if payload.app_path.trim().is_empty() {
+        return Err(AppError::bad_request(
+            "Request body must include `appPath`.",
+        ));
+    }
+    let action_udid = udid.clone();
+    run_bridge_action(state, move |bridge| {
+        bridge.install_app(&action_udid, &payload.app_path)
+    })
+    .await?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
+async fn uninstall_app(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<UninstallPayload>,
+) -> Result<Json<Value>, AppError> {
+    if payload.bundle_id.trim().is_empty() {
+        return Err(AppError::bad_request(
+            "Request body must include `bundleId`.",
+        ));
+    }
+    let action_udid = udid.clone();
+    run_bridge_action(state, move |bridge| {
+        bridge.uninstall_app(&action_udid, &payload.bundle_id)
+    })
+    .await?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
+async fn get_pasteboard(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let text = run_bridge_action(state, move |bridge| bridge.pasteboard_text(&udid)).await?;
+    Ok(json(json_value!({ "text": text })))
+}
+
+async fn set_pasteboard(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<PasteboardPayload>,
+) -> Result<Json<Value>, AppError> {
+    run_bridge_action(state, move |bridge| {
+        bridge.set_pasteboard_text(&udid, &payload.text)
+    })
+    .await?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
+async fn screenshot_png(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+) -> Result<(StatusCode, HeaderMap, Vec<u8>), AppError> {
+    let png = run_bridge_action(state, move |bridge| bridge.screenshot_png(&udid)).await?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
+    headers.insert(
+        header::CACHE_CONTROL,
+        "no-cache, no-store, must-revalidate".parse().unwrap(),
+    );
+    Ok((StatusCode::OK, headers, png))
 }
 
 async fn toggle_appearance(
@@ -441,6 +704,115 @@ async fn launch_bundle(
     Ok(json(json_value!({ "ok": true })))
 }
 
+async fn tap_element(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<TapElementPayload>,
+) -> Result<Json<Value>, AppError> {
+    perform_tap_payload(state, udid, payload).await?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
+async fn accessibility_query(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<AccessibilityQueryPayload>,
+) -> Result<Json<Value>, AppError> {
+    let snapshot = accessibility_tree_value(
+        state,
+        udid,
+        payload.source.as_deref(),
+        payload.max_depth,
+        payload.include_hidden.unwrap_or(false),
+    )
+    .await?;
+    let matches = query_compact_elements(
+        &snapshot,
+        &payload.selector,
+        payload.limit.unwrap_or(64).clamp(1, 512),
+    );
+    Ok(json(json_value!({
+        "ok": true,
+        "source": snapshot.get("source").cloned().unwrap_or(Value::Null),
+        "count": matches.len(),
+        "matches": matches,
+    })))
+}
+
+async fn wait_for_element(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<WaitForPayload>,
+) -> Result<Json<Value>, AppError> {
+    wait_for_element_payload(state, udid, payload).await
+}
+
+async fn assert_element(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<WaitForPayload>,
+) -> Result<Json<Value>, AppError> {
+    wait_for_element_payload(state, udid, payload).await
+}
+
+async fn run_batch(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<BatchPayload>,
+) -> Result<Json<Value>, AppError> {
+    if payload.steps.is_empty() {
+        return Err(AppError::bad_request(
+            "Request body must include at least one batch step.",
+        ));
+    }
+    if payload.steps.len() > 256 {
+        return Err(AppError::bad_request(
+            "Batch cannot contain more than 256 steps.",
+        ));
+    }
+
+    let continue_on_error = payload.continue_on_error.unwrap_or(false);
+    let mut results = Vec::new();
+    let mut failure_count = 0usize;
+    for (index, step) in payload.steps.into_iter().enumerate() {
+        let started = Instant::now();
+        let result = run_batch_step(state.clone(), udid.clone(), step).await;
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        match result {
+            Ok(value) => {
+                results.push(json_value!({
+                    "index": index,
+                    "ok": true,
+                    "elapsedMs": elapsed_ms,
+                    "result": value,
+                }));
+            }
+            Err(error) => {
+                failure_count += 1;
+                let message = error.to_string();
+                results.push(json_value!({
+                    "index": index,
+                    "ok": false,
+                    "elapsedMs": elapsed_ms,
+                    "error": message,
+                }));
+                if !continue_on_error {
+                    return Err(AppError::bad_request(format!(
+                        "Batch step {} failed: {}",
+                        index + 1,
+                        message
+                    )));
+                }
+            }
+        }
+    }
+    Ok(json(json_value!({
+        "ok": failure_count == 0,
+        "failureCount": failure_count,
+        "steps": results,
+    })))
+}
+
 async fn send_touch(
     State(state): State<AppState>,
     Path(udid): Path<String>,
@@ -454,7 +826,11 @@ async fn send_touch(
     let x = payload.x.clamp(0.0, 1.0);
     let y = payload.y.clamp(0.0, 1.0);
     let phase = payload.phase;
-    run_bridge_action(state, move |bridge| bridge.send_touch(&udid, x, y, &phase)).await?;
+    run_bridge_action(state, move |bridge| {
+        let input = bridge.create_input_session(&udid)?;
+        input.send_touch(x, y, &phase)
+    })
+    .await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -496,6 +872,86 @@ async fn send_touch_sequence(
     })
     .await?;
     Ok(json(json_value!({ "ok": true })))
+}
+
+async fn control_socket(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    websocket: WebSocketUpgrade,
+) -> impl IntoResponse {
+    websocket.on_upgrade(move |socket| handle_control_socket(state, udid, socket))
+}
+
+async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket) {
+    let session = match state.registry.get_or_create_async(&udid).await {
+        Ok(session) => session,
+        Err(error) => {
+            tracing::debug!("Failed to create control session for {udid}: {error}");
+            return;
+        }
+    };
+    if let Err(error) = session.ensure_started_async().await {
+        tracing::debug!("Failed to start control session for {udid}: {error}");
+        return;
+    }
+
+    let (mut sender, mut receiver) = socket.split();
+    let _ = sender
+        .send(Message::Text(
+            json_value!({ "type": "ready", "udid": udid })
+                .to_string()
+                .into(),
+        ))
+        .await;
+
+    while let Some(message) = receiver.next().await {
+        let text = match message {
+            Ok(Message::Text(text)) => text,
+            Ok(Message::Binary(bytes)) => match String::from_utf8(bytes.to_vec()) {
+                Ok(text) => text.into(),
+                Err(_) => continue,
+            },
+            Ok(Message::Close(_)) => break,
+            Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => continue,
+            Err(error) => {
+                tracing::debug!("Control WebSocket closed for {udid}: {error}");
+                break;
+            }
+        };
+
+        let control_message = match serde_json::from_str::<ControlMessage>(&text) {
+            Ok(message) => message,
+            Err(error) => {
+                tracing::debug!("Invalid control message for {udid}: {error}");
+                continue;
+            }
+        };
+        if let Err(error) = run_control_message(session.clone(), control_message).await {
+            tracing::debug!("Control message failed for {udid}: {error}");
+        }
+    }
+}
+
+async fn run_control_message(
+    session: SimulatorSession,
+    message: ControlMessage,
+) -> Result<(), AppError> {
+    task::spawn_blocking(move || match message {
+        ControlMessage::Touch { x, y, phase } => {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(AppError::bad_request(
+                    "`x` and `y` must be finite normalized numbers.",
+                ));
+            }
+            session.send_touch(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), &phase)
+        }
+        ControlMessage::Key {
+            key_code,
+            modifiers,
+        } => session.send_key(key_code, modifiers.unwrap_or(0)),
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("Failed to join control task: {error}")))?
 }
 
 async fn send_key(
@@ -628,25 +1084,44 @@ async fn accessibility_tree(
     Path(udid): Path<String>,
     Query(query): Query<AccessibilityTreeQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let requested_source = AccessibilityHierarchySource::parse(query.source.as_deref())?;
-    let max_depth = query.max_depth.map(|depth| depth.min(80));
-    let include_hidden = query.include_hidden.unwrap_or(false);
+    Ok(json(
+        accessibility_tree_value(
+            state,
+            udid,
+            query.source.as_deref(),
+            query.max_depth,
+            query.include_hidden.unwrap_or(false),
+        )
+        .await?,
+    ))
+}
+
+async fn accessibility_tree_value(
+    state: AppState,
+    udid: String,
+    source: Option<&str>,
+    max_depth: Option<usize>,
+    include_hidden: bool,
+) -> Result<Value, AppError> {
+    let requested_source = AccessibilityHierarchySource::parse(source)?;
+    let max_depth = max_depth.map(|depth| depth.min(80));
 
     if requested_source == AccessibilityHierarchySource::NativeAX {
+        let inspector_session = inspector_session_for_state(&state, &udid).await.ok();
+        let available_sources = available_sources_with_native_ax(inspector_session.as_ref());
         let native_snapshot =
             match accessibility_snapshot(state.clone(), udid.clone(), None, max_depth).await {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
-                    return Ok(json(empty_accessibility_tree(
+                    return Ok(empty_accessibility_tree(
                         SOURCE_NATIVE_AX,
-                        &available_sources_with_native_ax(None),
+                        &available_sources,
                         suppress_native_ax_translation_error(&error.to_string()),
-                    )));
+                    ));
                 }
             };
-        let snapshot =
-            attach_available_sources(native_snapshot, &available_sources_with_native_ax(None));
-        return Ok(json(snapshot));
+        let snapshot = attach_available_sources(native_snapshot, &available_sources);
+        return Ok(snapshot);
     }
 
     match inspector_session_for_state(&state, &udid).await {
@@ -654,6 +1129,7 @@ async fn accessibility_tree(
             let hierarchy_source = match requested_source {
                 AccessibilityHierarchySource::Auto => InAppHierarchySource::Automatic,
                 AccessibilityHierarchySource::NativeScript => InAppHierarchySource::Automatic,
+                AccessibilityHierarchySource::ReactNative => InAppHierarchySource::Automatic,
                 AccessibilityHierarchySource::UIKit => InAppHierarchySource::UIKit,
                 AccessibilityHierarchySource::NativeAX => unreachable!(),
             };
@@ -670,34 +1146,57 @@ async fn accessibility_tree(
                     let base_sources = available_sources_with_native_ax(Some(&session));
                     let available_sources =
                         available_sources_for_snapshot(&base_sources, &snapshot);
+                    let snapshot_source = snapshot.get("source").and_then(Value::as_str);
                     let fallback_reason = if requested_source
                         == AccessibilityHierarchySource::NativeScript
-                        && snapshot.get("source").and_then(Value::as_str)
-                            != Some(SOURCE_NATIVE_SCRIPT)
+                        && snapshot_source != Some(SOURCE_NATIVE_SCRIPT)
                     {
                         Some("NativeScript hierarchy is not published by the app.".to_owned())
+                    } else if requested_source == AccessibilityHierarchySource::ReactNative
+                        && snapshot_source != Some(SOURCE_REACT_NATIVE)
+                    {
+                        Some("React Native hierarchy is not published by the app.".to_owned())
                     } else {
                         None
                     };
-                    Ok(json(attach_tree_metadata(
+                    Ok(attach_tree_metadata(
                         snapshot,
                         &available_sources,
                         fallback_reason,
-                    )))
+                    ))
                 }
                 Err(_inspector_error) => {
-                    let available_sources = available_sources_with_native_ax(Some(&session));
+                    let mut available_sources = available_sources_with_native_ax(Some(&session));
+                    if requested_source == AccessibilityHierarchySource::NativeScript {
+                        push_unique_source(&mut available_sources, SOURCE_NATIVE_SCRIPT);
+                    } else if requested_source == AccessibilityHierarchySource::ReactNative {
+                        push_unique_source(&mut available_sources, SOURCE_REACT_NATIVE);
+                    }
+                    if requested_source == AccessibilityHierarchySource::UIKit {
+                        if let Ok(snapshot) = run_in_app_inspector_hierarchy(
+                            &state,
+                            &session,
+                            InAppHierarchySource::Automatic,
+                            Some(0),
+                            include_hidden,
+                        )
+                        .await
+                        {
+                            available_sources =
+                                available_sources_for_snapshot(&available_sources, &snapshot);
+                        }
+                    }
                     match accessibility_snapshot(state.clone(), udid.clone(), None, max_depth).await
                     {
-                        Ok(native_snapshot) => Ok(json(attach_available_sources(
+                        Ok(native_snapshot) => Ok(attach_available_sources(
                             trim_tree_depth(native_snapshot, max_depth),
                             &available_sources,
-                        ))),
-                        Err(native_ax_error) => Ok(json(empty_accessibility_tree(
+                        )),
+                        Err(native_ax_error) => Ok(empty_accessibility_tree(
                             SOURCE_NATIVE_AX,
                             &available_sources,
                             suppress_native_ax_translation_error(&native_ax_error.to_string()),
-                        ))),
+                        )),
                     }
                 }
             }
@@ -705,15 +1204,15 @@ async fn accessibility_tree(
         Err(_inspector_error) => {
             let available_sources = available_sources_with_native_ax(None);
             match accessibility_snapshot(state.clone(), udid.clone(), None, max_depth).await {
-                Ok(native_snapshot) => Ok(json(attach_available_sources(
+                Ok(native_snapshot) => Ok(attach_available_sources(
                     trim_tree_depth(native_snapshot, max_depth),
                     &available_sources,
-                ))),
-                Err(native_ax_error) => Ok(json(empty_accessibility_tree(
+                )),
+                Err(native_ax_error) => Ok(empty_accessibility_tree(
                     SOURCE_NATIVE_AX,
                     &available_sources,
                     suppress_native_ax_translation_error(&native_ax_error.to_string()),
-                ))),
+                )),
             }
         }
     }
@@ -732,6 +1231,741 @@ async fn accessibility_point(
 
     let snapshot = accessibility_snapshot(state, udid, Some((query.x, query.y)), None).await?;
     Ok(json(snapshot))
+}
+
+async fn perform_tap_payload(
+    state: AppState,
+    udid: String,
+    payload: TapElementPayload,
+) -> Result<(), AppError> {
+    let duration_ms = payload.duration_ms.unwrap_or(60);
+    let (x, y) = if selector_is_empty(&payload.selector) {
+        let x = payload
+            .x
+            .ok_or_else(|| AppError::bad_request("Tap requires `x` and `y` or a selector."))?;
+        let y = payload
+            .y
+            .ok_or_else(|| AppError::bad_request("Tap requires `x` and `y` or a selector."))?;
+        if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
+            return Err(AppError::bad_request(
+                "Tap coordinates must be finite non-negative numbers.",
+            ));
+        }
+        if payload.normalized.unwrap_or(true) {
+            (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0))
+        } else {
+            let snapshot = accessibility_tree_value(
+                state.clone(),
+                udid.clone(),
+                payload.source.as_deref(),
+                payload.max_depth,
+                payload.include_hidden.unwrap_or(false),
+            )
+            .await?;
+            normalize_screen_point_from_snapshot(&snapshot, x, y)?
+        }
+    } else {
+        let wait_payload = WaitForPayload {
+            selector: payload.selector.clone(),
+            source: payload.source.clone(),
+            max_depth: payload.max_depth,
+            include_hidden: payload.include_hidden,
+            timeout_ms: payload.wait_timeout_ms,
+            poll_ms: payload.poll_ms,
+        };
+        let snapshot = wait_for_snapshot_match(state.clone(), udid.clone(), wait_payload).await?;
+        tap_point_from_snapshot(&snapshot, &payload.selector)?
+    };
+
+    run_bridge_action(state, move |bridge| {
+        let input = bridge.create_input_session(&udid)?;
+        input.send_touch(x, y, "began")?;
+        if duration_ms > 0 {
+            std::thread::sleep(Duration::from_millis(duration_ms));
+        }
+        input.send_touch(x, y, "ended")
+    })
+    .await
+}
+
+async fn wait_for_element_payload(
+    state: AppState,
+    udid: String,
+    payload: WaitForPayload,
+) -> Result<Json<Value>, AppError> {
+    let started = Instant::now();
+    let snapshot = wait_for_snapshot_match(state, udid, payload.clone()).await?;
+    let found = first_matching_element(&snapshot, &payload.selector)
+        .ok_or_else(|| AppError::not_found("No accessibility element matched."))?;
+    Ok(json(json_value!({
+        "ok": true,
+        "elapsedMs": started.elapsed().as_millis() as u64,
+        "match": compact_accessibility_node(&found),
+    })))
+}
+
+async fn wait_for_snapshot_match(
+    state: AppState,
+    udid: String,
+    payload: WaitForPayload,
+) -> Result<Value, AppError> {
+    let timeout_ms = payload.timeout_ms.unwrap_or(5_000);
+    let poll_ms = payload.poll_ms.unwrap_or(100).max(10);
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let snapshot = accessibility_tree_value(
+            state.clone(),
+            udid.clone(),
+            payload.source.as_deref(),
+            payload.max_depth,
+            payload.include_hidden.unwrap_or(false),
+        )
+        .await?;
+        if first_matching_element(&snapshot, &payload.selector).is_some() {
+            return Ok(snapshot);
+        }
+        if timeout_ms == 0 || Instant::now() >= deadline {
+            return Err(AppError::not_found("No accessibility element matched."));
+        }
+        tokio::time::sleep(Duration::from_millis(poll_ms)).await;
+    }
+}
+
+async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Result<Value, AppError> {
+    match step {
+        BatchStep::Sleep { ms, seconds } => {
+            let duration =
+                ms.unwrap_or_else(|| ((seconds.unwrap_or(0.0) * 1000.0).max(0.0)) as u64);
+            tokio::time::sleep(Duration::from_millis(duration)).await;
+            Ok(json_value!({ "action": "sleep", "durationMs": duration }))
+        }
+        BatchStep::Tap(payload) => {
+            perform_tap_payload(state, udid, payload).await?;
+            Ok(json_value!({ "action": "tap" }))
+        }
+        BatchStep::WaitFor(payload) => {
+            let snapshot = wait_for_snapshot_match(state, udid, payload.clone()).await?;
+            let found = first_matching_element(&snapshot, &payload.selector)
+                .ok_or_else(|| AppError::not_found("No accessibility element matched."))?;
+            Ok(json_value!({ "action": "waitFor", "match": compact_accessibility_node(&found) }))
+        }
+        BatchStep::Assert(payload) => {
+            let snapshot = wait_for_snapshot_match(state, udid, payload.clone()).await?;
+            let found = first_matching_element(&snapshot, &payload.selector)
+                .ok_or_else(|| AppError::not_found("No accessibility element matched."))?;
+            Ok(json_value!({ "action": "assert", "match": compact_accessibility_node(&found) }))
+        }
+        BatchStep::Key {
+            key_code,
+            modifiers,
+        } => {
+            run_bridge_action(state, move |bridge| {
+                bridge.send_key(&udid, key_code, modifiers.unwrap_or(0))
+            })
+            .await?;
+            Ok(json_value!({ "action": "key" }))
+        }
+        BatchStep::KeySequence {
+            key_codes,
+            delay_ms,
+        } => {
+            if key_codes.is_empty() {
+                return Err(AppError::bad_request("keySequence requires keyCodes."));
+            }
+            if key_codes.len() > 512 {
+                return Err(AppError::bad_request(
+                    "keySequence cannot contain more than 512 key codes.",
+                ));
+            }
+            run_bridge_action(state, move |bridge| {
+                let input = bridge.create_input_session(&udid)?;
+                let delay_ms = delay_ms.unwrap_or(0);
+                let key_count = key_codes.len();
+                for (index, key_code) in key_codes.into_iter().enumerate() {
+                    input.send_key(key_code, 0)?;
+                    if delay_ms > 0 && index + 1 < key_count {
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                    }
+                }
+                Ok(())
+            })
+            .await?;
+            Ok(json_value!({ "action": "keySequence" }))
+        }
+        BatchStep::Touch {
+            x,
+            y,
+            phase,
+            down,
+            up,
+            delay_ms,
+        } => {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(AppError::bad_request(
+                    "touch requires finite normalized x and y.",
+                ));
+            }
+            run_bridge_action(state, move |bridge| {
+                let input = bridge.create_input_session(&udid)?;
+                let x = x.clamp(0.0, 1.0);
+                let y = y.clamp(0.0, 1.0);
+                if down.unwrap_or(false) || up.unwrap_or(false) {
+                    if down.unwrap_or(false) {
+                        input.send_touch(x, y, "began")?;
+                    }
+                    if down.unwrap_or(false) && up.unwrap_or(false) {
+                        std::thread::sleep(Duration::from_millis(delay_ms.unwrap_or(100)));
+                    }
+                    if up.unwrap_or(false) {
+                        input.send_touch(x, y, "ended")?;
+                    }
+                } else {
+                    input.send_touch(x, y, phase.as_deref().unwrap_or("began"))?;
+                }
+                Ok(())
+            })
+            .await?;
+            Ok(json_value!({ "action": "touch" }))
+        }
+        BatchStep::TouchSequence { events } => {
+            if events.is_empty() {
+                return Err(AppError::bad_request("touchSequence requires events."));
+            }
+            if events.len() > 64 {
+                return Err(AppError::bad_request(
+                    "touchSequence cannot contain more than 64 events.",
+                ));
+            }
+            run_bridge_action(state, move |bridge| {
+                let input = bridge.create_input_session(&udid)?;
+                for event in events {
+                    if !event.x.is_finite() || !event.y.is_finite() {
+                        return Err(AppError::bad_request(
+                            "touchSequence requires finite normalized x and y.",
+                        ));
+                    }
+                    input.send_touch(
+                        event.x.clamp(0.0, 1.0),
+                        event.y.clamp(0.0, 1.0),
+                        &event.phase,
+                    )?;
+                    if let Some(delay_ms) = event.delay_ms_after.filter(|delay_ms| *delay_ms > 0) {
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                    }
+                }
+                Ok(())
+            })
+            .await?;
+            Ok(json_value!({ "action": "touchSequence" }))
+        }
+        BatchStep::Swipe {
+            start_x,
+            start_y,
+            end_x,
+            end_y,
+            duration_ms,
+            steps,
+        } => {
+            if !start_x.is_finite()
+                || !start_y.is_finite()
+                || !end_x.is_finite()
+                || !end_y.is_finite()
+            {
+                return Err(AppError::bad_request(
+                    "swipe requires finite normalized coordinates.",
+                ));
+            }
+            run_bridge_action(state, move |bridge| {
+                let step_count = steps.unwrap_or(12).max(1);
+                let delay =
+                    Duration::from_millis(duration_ms.unwrap_or(350) / u64::from(step_count));
+                let input = bridge.create_input_session(&udid)?;
+                let start_x = start_x.clamp(0.0, 1.0);
+                let start_y = start_y.clamp(0.0, 1.0);
+                let end_x = end_x.clamp(0.0, 1.0);
+                let end_y = end_y.clamp(0.0, 1.0);
+                input.send_touch(start_x, start_y, "began")?;
+                for step in 1..step_count {
+                    let t = f64::from(step) / f64::from(step_count);
+                    input.send_touch(
+                        start_x + (end_x - start_x) * t,
+                        start_y + (end_y - start_y) * t,
+                        "moved",
+                    )?;
+                    std::thread::sleep(delay);
+                }
+                input.send_touch(end_x, end_y, "ended")
+            })
+            .await?;
+            Ok(json_value!({ "action": "swipe" }))
+        }
+        BatchStep::Gesture {
+            preset,
+            duration_ms,
+            delta,
+            steps,
+        } => {
+            let (start_x, start_y, end_x, end_y, default_duration_ms) =
+                normalized_gesture_coordinates(&preset, delta)?;
+            run_bridge_action(state, move |bridge| {
+                let step_count = steps.unwrap_or(12).max(1);
+                let delay = Duration::from_millis(
+                    duration_ms.unwrap_or(default_duration_ms) / u64::from(step_count),
+                );
+                let input = bridge.create_input_session(&udid)?;
+                input.send_touch(start_x, start_y, "began")?;
+                for step in 1..step_count {
+                    let t = f64::from(step) / f64::from(step_count);
+                    input.send_touch(
+                        start_x + (end_x - start_x) * t,
+                        start_y + (end_y - start_y) * t,
+                        "moved",
+                    )?;
+                    std::thread::sleep(delay);
+                }
+                input.send_touch(end_x, end_y, "ended")
+            })
+            .await?;
+            Ok(json_value!({ "action": "gesture", "preset": preset }))
+        }
+        BatchStep::Type { text, delay_ms } => {
+            run_bridge_action(state, move |bridge| {
+                let input = bridge.create_input_session(&udid)?;
+                for character in text.chars() {
+                    let Some((key_code, modifiers)) = hid_for_character(character) else {
+                        return Err(AppError::bad_request(format!(
+                            "Unsupported character for HID typing: {character:?}"
+                        )));
+                    };
+                    input.send_key(key_code, modifiers)?;
+                    if let Some(delay_ms) = delay_ms.filter(|delay_ms| *delay_ms > 0) {
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                    }
+                }
+                Ok(())
+            })
+            .await?;
+            Ok(json_value!({ "action": "type" }))
+        }
+        BatchStep::Button {
+            button,
+            duration_ms,
+        } => {
+            run_bridge_action(state, move |bridge| {
+                bridge.press_button(&udid, &button, duration_ms.unwrap_or(0))
+            })
+            .await?;
+            Ok(json_value!({ "action": "button" }))
+        }
+        BatchStep::Launch { bundle_id } => {
+            run_bridge_action(state, move |bridge| bridge.launch_bundle(&udid, &bundle_id)).await?;
+            Ok(json_value!({ "action": "launch" }))
+        }
+        BatchStep::OpenUrl { url } => {
+            run_bridge_action(state, move |bridge| bridge.open_url(&udid, &url)).await?;
+            Ok(json_value!({ "action": "openUrl" }))
+        }
+        BatchStep::Home => {
+            run_bridge_action(state, move |bridge| bridge.press_home(&udid)).await?;
+            Ok(json_value!({ "action": "home" }))
+        }
+        BatchStep::DismissKeyboard => {
+            run_bridge_action(state, move |bridge| bridge.send_key(&udid, 41, 0)).await?;
+            Ok(json_value!({ "action": "dismissKeyboard" }))
+        }
+        BatchStep::AppSwitcher => {
+            run_bridge_action(state, move |bridge| {
+                bridge.press_home(&udid)?;
+                std::thread::sleep(Duration::from_millis(140));
+                bridge.press_home(&udid)
+            })
+            .await?;
+            Ok(json_value!({ "action": "appSwitcher" }))
+        }
+        BatchStep::RotateLeft => {
+            run_bridge_action(state, move |bridge| bridge.rotate_left(&udid)).await?;
+            Ok(json_value!({ "action": "rotateLeft" }))
+        }
+        BatchStep::RotateRight => {
+            run_bridge_action(state, move |bridge| bridge.rotate_right(&udid)).await?;
+            Ok(json_value!({ "action": "rotateRight" }))
+        }
+        BatchStep::ToggleAppearance => {
+            run_bridge_action(state, move |bridge| bridge.toggle_appearance(&udid)).await?;
+            Ok(json_value!({ "action": "toggleAppearance" }))
+        }
+        BatchStep::Describe {
+            source,
+            max_depth,
+            include_hidden,
+        } => {
+            let snapshot = accessibility_tree_value(
+                state,
+                udid,
+                source.as_deref(),
+                max_depth,
+                include_hidden.unwrap_or(false),
+            )
+            .await?;
+            Ok(json_value!({
+                "action": "describe",
+                "snapshot": compact_accessibility_snapshot(&snapshot),
+            }))
+        }
+    }
+}
+
+fn query_compact_elements(
+    snapshot: &Value,
+    selector: &ElementSelectorPayload,
+    limit: usize,
+) -> Vec<Value> {
+    let mut matches = Vec::new();
+    if let Some(roots) = snapshot.get("roots").and_then(Value::as_array) {
+        for root in roots {
+            collect_query_matches(root, selector, limit, &mut matches);
+            if matches.len() >= limit {
+                break;
+            }
+        }
+    }
+    matches
+}
+
+fn collect_query_matches(
+    node: &Value,
+    selector: &ElementSelectorPayload,
+    limit: usize,
+    matches: &mut Vec<Value>,
+) {
+    if matches.len() >= limit {
+        return;
+    }
+    if element_matches_selector(node, selector) {
+        matches.push(compact_accessibility_node(node));
+    }
+    if let Some(children) = node.get("children").and_then(Value::as_array) {
+        for child in children {
+            collect_query_matches(child, selector, limit, matches);
+            if matches.len() >= limit {
+                return;
+            }
+        }
+    }
+}
+
+fn first_matching_element(snapshot: &Value, selector: &ElementSelectorPayload) -> Option<Value> {
+    let roots = snapshot.get("roots")?.as_array()?;
+    for root in roots {
+        if let Some(found) = first_matching_node(root, selector) {
+            return Some(found.clone());
+        }
+    }
+    None
+}
+
+fn first_matching_node<'a>(
+    node: &'a Value,
+    selector: &ElementSelectorPayload,
+) -> Option<&'a Value> {
+    if element_matches_selector(node, selector) {
+        return Some(node);
+    }
+    for child in node
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(found) = first_matching_node(child, selector) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn element_matches_selector(node: &Value, selector: &ElementSelectorPayload) -> bool {
+    if selector_is_empty(selector) {
+        return true;
+    }
+    selector
+        .element_type
+        .as_ref()
+        .is_none_or(|expected| string_fields_match(node, expected, &["type", "role", "className"]))
+        && selector.id.as_ref().is_none_or(|expected| {
+            string_fields_match(
+                node,
+                expected,
+                &[
+                    "AXIdentifier",
+                    "AXUniqueId",
+                    "inspectorId",
+                    "id",
+                    "identifier",
+                ],
+            )
+        })
+        && selector.label.as_ref().is_none_or(|expected| {
+            string_fields_match(
+                node,
+                expected,
+                &["AXLabel", "label", "title", "text", "name"],
+            )
+        })
+        && selector
+            .value
+            .as_ref()
+            .is_none_or(|expected| string_fields_match(node, expected, &["AXValue", "value"]))
+}
+
+fn selector_is_empty(selector: &ElementSelectorPayload) -> bool {
+    selector.id.is_none()
+        && selector.label.is_none()
+        && selector.value.is_none()
+        && selector.element_type.is_none()
+}
+
+fn string_fields_match(node: &Value, expected: &str, fields: &[&str]) -> bool {
+    fields
+        .iter()
+        .filter_map(|field| node.get(*field).and_then(Value::as_str))
+        .any(|value| value == expected)
+}
+
+fn tap_point_from_snapshot(
+    snapshot: &Value,
+    selector: &ElementSelectorPayload,
+) -> Result<(f64, f64), AppError> {
+    let roots = snapshot
+        .get("roots")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AppError::not_found("Accessibility snapshot does not contain roots."))?;
+    for root in roots {
+        let root_frame = root
+            .get("frame")
+            .or_else(|| root.get("frameInScreen"))
+            .ok_or_else(|| AppError::not_found("Accessibility root does not expose a frame."))?;
+        let root_width = number_field(root_frame, "width")?;
+        let root_height = number_field(root_frame, "height")?;
+        if let Some(node) = first_matching_node(root, selector) {
+            let frame = node
+                .get("frame")
+                .or_else(|| node.get("frameInScreen"))
+                .ok_or_else(|| AppError::not_found("Matched element does not expose a frame."))?;
+            let x = number_field(frame, "x")? + number_field(frame, "width")? / 2.0;
+            let y = number_field(frame, "y")? + number_field(frame, "height")? / 2.0;
+            return Ok((
+                (x / root_width).clamp(0.0, 1.0),
+                (y / root_height).clamp(0.0, 1.0),
+            ));
+        }
+    }
+    Err(AppError::not_found("No accessibility element matched."))
+}
+
+fn normalize_screen_point_from_snapshot(
+    snapshot: &Value,
+    x: f64,
+    y: f64,
+) -> Result<(f64, f64), AppError> {
+    let root = snapshot
+        .get("roots")
+        .and_then(Value::as_array)
+        .and_then(|roots| roots.first())
+        .ok_or_else(|| AppError::not_found("Accessibility snapshot does not contain a root."))?;
+    let frame = root
+        .get("frame")
+        .or_else(|| root.get("frameInScreen"))
+        .ok_or_else(|| AppError::not_found("Accessibility root does not expose a frame."))?;
+    let width = number_field(frame, "width")?;
+    let height = number_field(frame, "height")?;
+    if width <= 0.0 || height <= 0.0 {
+        return Err(AppError::not_found("Accessibility root frame is empty."));
+    }
+    Ok(((x / width).clamp(0.0, 1.0), (y / height).clamp(0.0, 1.0)))
+}
+
+fn number_field(value: &Value, field: &str) -> Result<f64, AppError> {
+    value
+        .get(field)
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| AppError::not_found(format!("Missing numeric frame field `{field}`.")))
+}
+
+fn hid_for_character(character: char) -> Option<(u16, u32)> {
+    let shift: u32 = 1;
+    let mapping = match character {
+        'a'..='z' => (character as u16 - b'a' as u16 + 4, 0),
+        'A'..='Z' => (character as u16 - b'A' as u16 + 4, shift),
+        '1' => (30, 0),
+        '!' => (30, shift),
+        '2' => (31, 0),
+        '@' => (31, shift),
+        '3' => (32, 0),
+        '#' => (32, shift),
+        '4' => (33, 0),
+        '$' => (33, shift),
+        '5' => (34, 0),
+        '%' => (34, shift),
+        '6' => (35, 0),
+        '^' => (35, shift),
+        '7' => (36, 0),
+        '&' => (36, shift),
+        '8' => (37, 0),
+        '*' => (37, shift),
+        '9' => (38, 0),
+        '(' => (38, shift),
+        '0' => (39, 0),
+        ')' => (39, shift),
+        '\n' | '\r' => (40, 0),
+        '\t' => (43, 0),
+        ' ' => (44, 0),
+        '-' => (45, 0),
+        '_' => (45, shift),
+        '=' => (46, 0),
+        '+' => (46, shift),
+        '[' => (47, 0),
+        '{' => (47, shift),
+        ']' => (48, 0),
+        '}' => (48, shift),
+        '\\' => (49, 0),
+        '|' => (49, shift),
+        ';' => (51, 0),
+        ':' => (51, shift),
+        '\'' => (52, 0),
+        '"' => (52, shift),
+        '`' => (53, 0),
+        '~' => (53, shift),
+        ',' => (54, 0),
+        '<' => (54, shift),
+        '.' => (55, 0),
+        '>' => (55, shift),
+        '/' => (56, 0),
+        '?' => (56, shift),
+        _ => return None,
+    };
+    Some(mapping)
+}
+
+fn normalized_gesture_coordinates(
+    preset: &str,
+    delta: Option<f64>,
+) -> Result<(f64, f64, f64, f64, u64), AppError> {
+    let center_x = 0.5;
+    let center_y = 0.5;
+    let distance = delta.unwrap_or(0.45).clamp(0.05, 0.95);
+    let edge = 0.02;
+    let coordinates = match preset {
+        "scroll-up" => (
+            center_x,
+            center_y - distance / 2.0,
+            center_x,
+            center_y + distance / 2.0,
+            500,
+        ),
+        "scroll-down" => (
+            center_x,
+            center_y + distance / 2.0,
+            center_x,
+            center_y - distance / 2.0,
+            500,
+        ),
+        "scroll-left" => (
+            center_x - distance / 2.0,
+            center_y,
+            center_x + distance / 2.0,
+            center_y,
+            500,
+        ),
+        "scroll-right" => (
+            center_x + distance / 2.0,
+            center_y,
+            center_x - distance / 2.0,
+            center_y,
+            500,
+        ),
+        "swipe-from-left-edge" => (edge, center_y, 1.0 - edge, center_y, 300),
+        "swipe-from-right-edge" => (1.0 - edge, center_y, edge, center_y, 300),
+        "swipe-from-top-edge" => (center_x, edge, center_x, 1.0 - edge, 300),
+        "swipe-from-bottom-edge" => (center_x, 1.0 - edge, center_x, edge, 300),
+        _ => {
+            return Err(AppError::bad_request(format!(
+                "Unsupported gesture preset `{preset}`."
+            )))
+        }
+    };
+    Ok(coordinates)
+}
+
+fn compact_accessibility_snapshot(snapshot: &Value) -> Value {
+    let roots = snapshot
+        .get("roots")
+        .and_then(Value::as_array)
+        .map(|roots| {
+            roots
+                .iter()
+                .map(compact_accessibility_node)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json_value!({
+        "source": snapshot.get("source").cloned().unwrap_or(Value::Null),
+        "roots": roots,
+    })
+}
+
+fn compact_accessibility_node(node: &Value) -> Value {
+    let mut object = Map::new();
+    copy_first_string(node, &mut object, "role", &["type", "role", "className"]);
+    copy_first_string(
+        node,
+        &mut object,
+        "id",
+        &[
+            "AXIdentifier",
+            "AXUniqueId",
+            "inspectorId",
+            "id",
+            "identifier",
+        ],
+    );
+    copy_first_string(
+        node,
+        &mut object,
+        "label",
+        &["AXLabel", "label", "title", "text", "name"],
+    );
+    copy_first_string(node, &mut object, "value", &["AXValue", "value"]);
+    if let Some(frame) = node.get("frame").or_else(|| node.get("frameInScreen")) {
+        object.insert("frame".to_owned(), frame.clone());
+    }
+    if let Some(children) = node.get("children").and_then(Value::as_array) {
+        let children = children
+            .iter()
+            .map(compact_accessibility_node)
+            .collect::<Vec<_>>();
+        if !children.is_empty() {
+            object.insert("children".to_owned(), Value::Array(children));
+        }
+    }
+    Value::Object(object)
+}
+
+fn copy_first_string(
+    source: &Value,
+    target: &mut Map<String, Value>,
+    output_key: &str,
+    input_keys: &[&str],
+) {
+    if let Some(value) = input_keys
+        .iter()
+        .filter_map(|key| source.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+    {
+        target.insert(output_key.to_owned(), Value::String(value.to_owned()));
+    }
 }
 
 async fn inspector_request(
@@ -770,6 +2004,7 @@ fn is_allowed_inspector_proxy_method(method: &str) -> bool {
         "Runtime.ping"
             | "View.get"
             | "View.evaluateScript"
+            | "View.getHierarchy"
             | "View.getProperties"
             | "View.setProperty"
             | "View.listActions"
@@ -807,6 +2042,7 @@ async fn simulator_logs(
 enum AccessibilityHierarchySource {
     Auto,
     NativeScript,
+    ReactNative,
     UIKit,
     NativeAX,
 }
@@ -816,6 +2052,7 @@ impl AccessibilityHierarchySource {
         match value.unwrap_or("auto").trim().to_lowercase().as_str() {
             "" | "auto" => Ok(Self::Auto),
             "nativescript" | "ns" => Ok(Self::NativeScript),
+            "react-native" | "reactnative" | "rn" => Ok(Self::ReactNative),
             "uikit" | "in-app-inspector" => Ok(Self::UIKit),
             "ax" | "native-ax" | "native-accessibility" => Ok(Self::NativeAX),
             source => Err(AppError::bad_request(format!(
@@ -879,11 +2116,11 @@ async fn connected_inspector_session(
 
     if probed_inspectors.is_empty() {
         Err(format!(
-            "No connected NativeScript inspector found for simulator {udid}."
+            "No connected WebSocket inspector found for simulator {udid}."
         ))
     } else {
         Err(format!(
-            "No connected NativeScript inspector matched simulator {udid}. Found inspectors for {}.",
+            "No connected WebSocket inspector matched simulator {udid}. Found inspectors for {}.",
             probed_inspectors.join(", ")
         ))
     }
@@ -1009,10 +2246,10 @@ async fn run_in_app_inspector_hierarchy(
         .get("source")
         .and_then(Value::as_str)
         .unwrap_or(SOURCE_UIKIT);
-    if source == SOURCE_NATIVE_SCRIPT {
+    if source == SOURCE_NATIVE_SCRIPT || source == SOURCE_REACT_NATIVE {
         return Ok(json_value!({
             "roots": hierarchy.get("roots").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
-            "source": SOURCE_NATIVE_SCRIPT,
+            "source": source,
             "inspector": inspector_metadata(&session.info, &hierarchy, session.process_identifier, &session.transport),
         }));
     }
@@ -1041,7 +2278,7 @@ async fn query_inspector_session(
     match session.transport {
         InspectorSessionTransport::Connected => {
             let wait = if method == "View.getHierarchy" {
-                INSPECTOR_AGENT_TIMEOUT
+                CONNECTED_INSPECTOR_HIERARCHY_TIMEOUT
             } else {
                 Duration::from_secs(10)
             };
@@ -1058,6 +2295,14 @@ async fn query_inspector_session(
 
 fn inspector_available_sources(info: &Value) -> Vec<String> {
     let mut sources = Vec::new();
+    let react_native_available = info
+        .get("reactNative")
+        .and_then(|value| value.get("available"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if react_native_available {
+        sources.push(SOURCE_REACT_NATIVE.to_owned());
+    }
     let app_hierarchy = info.get("appHierarchy");
     let app_hierarchy_available = app_hierarchy
         .and_then(|value| value.get("available"))
@@ -1067,10 +2312,21 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         .and_then(|value| value.get("source"))
         .and_then(Value::as_str)
         .unwrap_or("");
-    if app_hierarchy_available && app_hierarchy_source == SOURCE_NATIVE_SCRIPT {
-        sources.push(SOURCE_NATIVE_SCRIPT.to_owned());
+    if app_hierarchy_available {
+        match app_hierarchy_source {
+            SOURCE_NATIVE_SCRIPT => sources.push(SOURCE_NATIVE_SCRIPT.to_owned()),
+            SOURCE_REACT_NATIVE => push_unique_source(&mut sources, SOURCE_REACT_NATIVE),
+            _ => {}
+        }
     }
-    sources.push(SOURCE_UIKIT.to_owned());
+    let uikit_available = info
+        .get("uikit")
+        .and_then(|value| value.get("available"))
+        .and_then(Value::as_bool)
+        .unwrap_or(!react_native_available);
+    if uikit_available {
+        sources.push(SOURCE_UIKIT.to_owned());
+    }
     sources
 }
 
@@ -1082,13 +2338,19 @@ fn push_unique_source(sources: &mut Vec<String>, source: &str) {
 
 fn available_sources_for_session(session: &InspectorSession) -> Vec<String> {
     let mut sources = Vec::new();
-    if matches!(session.transport, InspectorSessionTransport::Connected)
-        || session
-            .available_sources
-            .iter()
-            .any(|source| source == SOURCE_NATIVE_SCRIPT)
+    if session
+        .available_sources
+        .iter()
+        .any(|source| source == SOURCE_NATIVE_SCRIPT)
     {
         push_unique_source(&mut sources, SOURCE_NATIVE_SCRIPT);
+    }
+    if session
+        .available_sources
+        .iter()
+        .any(|source| source == SOURCE_REACT_NATIVE)
+    {
+        push_unique_source(&mut sources, SOURCE_REACT_NATIVE);
     }
     if session
         .available_sources
@@ -1113,20 +2375,26 @@ fn available_sources_for_snapshot(base_sources: &[String], snapshot: &Value) -> 
     let Some(source) = snapshot.get("source").and_then(Value::as_str) else {
         return sources;
     };
-    if source == SOURCE_NATIVE_SCRIPT && !sources.iter().any(|value| value == SOURCE_NATIVE_SCRIPT)
-    {
-        sources.insert(0, SOURCE_NATIVE_SCRIPT.to_owned());
+    if source == SOURCE_REACT_NATIVE {
+        sources.retain(|candidate| candidate != SOURCE_UIKIT);
+    }
+    if framework_source(source) && !sources.iter().any(|value| value == source) {
+        sources.insert(0, source.to_owned());
     }
     if source == SOURCE_UIKIT && !sources.iter().any(|value| value == SOURCE_UIKIT) {
         let insert_at = usize::from(
             sources
                 .first()
-                .map(|value| value == SOURCE_NATIVE_SCRIPT)
+                .map(|value| framework_source(value))
                 .unwrap_or(false),
         );
         sources.insert(insert_at, SOURCE_UIKIT.to_owned());
     }
     sources
+}
+
+fn framework_source(source: &str) -> bool {
+    source == SOURCE_NATIVE_SCRIPT || source == SOURCE_REACT_NATIVE
 }
 
 fn attach_available_sources(snapshot: Value, available_sources: &[String]) -> Value {

@@ -21,10 +21,14 @@ export async function fetchChromeProfile(udid: string): Promise<ChromeProfile> {
 export async function fetchAccessibilityTree(
   udid: string,
   source: AccessibilitySourcePreference = "auto",
+  options: { maxDepth?: number } = {},
 ): Promise<AccessibilityTreeResponse> {
   const params = new URLSearchParams();
   if (source !== "auto") {
     params.set("source", source);
+  }
+  if (options.maxDepth != null) {
+    params.set("maxDepth", String(options.maxDepth));
   }
   const query = params.size > 0 ? `?${params}` : "";
   return apiRequest<AccessibilityTreeResponse>(

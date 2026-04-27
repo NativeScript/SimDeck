@@ -89,10 +89,10 @@ npm run --prefix client test
 
 ## Replacing the client
 
-The Rust server takes a `--client-root <path>` flag. You can ship a completely different UI by pointing it at a directory of static files:
+The daemon takes a `--client-root <path>` flag. You can ship a completely different UI by pointing it at a directory of static files:
 
 ```sh
-simdeck serve --port 4310 --client-root /path/to/your/dist
+simdeck ui --port 4310 --client-root /path/to/your/dist --open
 ```
 
 As long as your client speaks the documented [REST API](/api/rest), [WebTransport](/api/webtransport), and [Packet Format](/api/packet-format), it will work end to end.

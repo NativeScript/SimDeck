@@ -48,8 +48,8 @@ let lastTelemetryReceivedPackets = 0;
 let latestStatusState = "idle";
 let renderDurationTotalMs = 0;
 let stats = createEmptyStreamStats();
-let statsPostTimeout = 0;
-let reconnectTimeout = 0;
+let statsPostTimeout: ReturnType<typeof setTimeout> | 0 = 0;
+let reconnectTimeout: ReturnType<typeof setTimeout> | 0 = 0;
 let telemetryInFlight = false;
 
 function describeError(error: unknown): string {

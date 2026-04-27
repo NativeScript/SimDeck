@@ -1,18 +1,11 @@
 import type { RefObject } from "react";
 
 import type { SimulatorMetadata } from "../../api/types";
-import type {
-  StreamRuntimeInfo,
-  StreamStats,
-  StreamStatus,
-} from "../stream/streamTypes";
-import { DebugPanel } from "../toolbar/DebugPanel";
 import { SimulatorRow } from "./SimulatorRow";
 
 interface SimulatorMenuProps {
   debugVisible: boolean;
   filteredSimulators: SimulatorMetadata[];
-  fps: number;
   isLoading: boolean;
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
@@ -22,18 +15,14 @@ interface SimulatorMenuProps {
   onOpenUrlPrompt: () => void;
   onToggleDebug: () => void;
   onToggleMenu: () => void;
-  runtimeInfo: StreamRuntimeInfo;
   search: string;
   selectedSimulator: SimulatorMetadata | null;
   setSelectedUDID: (udid: string) => void;
-  stats: StreamStats;
-  status: StreamStatus;
 }
 
 export function SimulatorMenu({
   debugVisible,
   filteredSimulators,
-  fps,
   isLoading,
   menuOpen,
   menuRef,
@@ -43,12 +32,9 @@ export function SimulatorMenu({
   onOpenUrlPrompt,
   onToggleDebug,
   onToggleMenu,
-  runtimeInfo,
   search,
   selectedSimulator,
   setSelectedUDID,
-  stats,
-  status,
 }: SimulatorMenuProps) {
   return (
     <div className="menu-wrap" ref={menuRef}>
@@ -108,17 +94,6 @@ export function SimulatorMenu({
             <button className="menu-action" onClick={onToggleDebug}>
               {debugVisible ? "Hide Debug Info" : "Show Debug Info"}
             </button>
-            {debugVisible ? (
-              <div className="menu-debug-panel">
-                <DebugPanel
-                  fps={fps}
-                  inline
-                  runtimeInfo={runtimeInfo}
-                  stats={stats}
-                  status={status}
-                />
-              </div>
-            ) : null}
           </div>
         </div>
       ) : null}

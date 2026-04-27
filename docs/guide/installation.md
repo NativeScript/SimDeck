@@ -1,6 +1,6 @@
 # Installation
 
-SimDeck ships as a single npm package that contains the launcher, the client bundle, and a postinstall hook that compiles the native CLI on macOS.
+SimDeck ships as a single npm package that contains the launcher, the client bundle, and the native CLI binary.
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ SimDeck only runs on macOS. The native bridge links private `CoreSimulator` and 
 | **Node.js ≥ 18**                   | The launcher (`bin/simdeck.mjs`) and the bundled client tooling.                     |
 | **Rust (stable)**                  | Required only when building from source. Installed via [rustup](https://rustup.rs/). |
 
-The package is published as `darwin`-only via the `os` field, so `npm install` on Linux will succeed but skip the native build with a warning.
+The package contains a macOS native binary. Non-macOS installs are unsupported.
 
 ## Install from npm
 
@@ -23,7 +23,7 @@ The fastest path is the published CLI:
 npm install -g simdeck
 ```
 
-This installs the launcher to your global `node_modules` and runs the native build automatically. After it finishes:
+This installs the launcher and bundled native binary to your global `node_modules`. After it finishes:
 
 ```sh
 simdeck --help
@@ -39,7 +39,13 @@ cd simdeck
 npm install
 ```
 
-The root `npm install` triggers `scripts/npm-postinstall.mjs`, which compiles the native CLI in release mode via `scripts/build-cli.sh`. When it finishes, the binary lives at:
+Build the source checkout before running it directly or installing it globally:
+
+```sh
+npm run build
+```
+
+The native CLI build writes:
 
 ```text
 build/simdeck
@@ -49,7 +55,7 @@ build/simdeck-bin
 You can then run the local checkout directly:
 
 ```sh
-./build/simdeck serve --port 4310
+./build/simdeck ui --open
 ```
 
 Or install the local checkout globally:
@@ -83,6 +89,8 @@ This runs:
 - `npm run build:cli` — Rust server + Objective-C bridge → `build/simdeck`
 - `npm run build:client` — Vite production build → `client/dist`
 - `npm run build:nativescript-inspector` — TypeScript build of the NativeScript inspector
+- `npm run build:react-native-inspector` — TypeScript build of the React Native inspector
+- `npm run build:simdeck-test` — TypeScript build of `simdeck/test`
 
 You can also run any one of those scripts on its own.
 
@@ -100,8 +108,8 @@ To remove the global install:
 npm uninstall -g simdeck
 ```
 
-If you enabled the [background service](/guide/service), disable it first so launchd does not restart a deleted binary:
+If a project daemon is running, stop it before uninstalling so your shell does not keep talking to the old binary:
 
 ```sh
-simdeck service off
+simdeck daemon stop
 ```

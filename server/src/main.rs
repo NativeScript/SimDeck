@@ -22,16 +22,21 @@ use logs::LogRegistry;
 use metrics::counters::Metrics;
 use native::bridge::{NativeBridge, NativeInputSession};
 use native::ffi;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use simulators::registry::SessionRegistry;
+use std::collections::hash_map::DefaultHasher;
+use std::env;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
+use std::path::{Path, PathBuf};
+use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
@@ -46,9 +51,10 @@ const SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD: usize = 3;
 #[derive(Parser)]
 #[command(name = "simdeck")]
 #[command(bin_name = "simdeck")]
-#[command(about = "Local simulator control plane and browser transport server")]
+#[command(about = "Project-local iOS Simulator devtool")]
+#[command(version)]
 struct Cli {
-    #[arg(long, global = true)]
+    #[arg(long, global = true, hide = true)]
     server_url: Option<String>,
     #[command(subcommand)]
     command: Command,
@@ -56,6 +62,25 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    Ui {
+        #[arg(long, default_value_t = 4310)]
+        port: u16,
+        #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
+        bind: IpAddr,
+        #[arg(long)]
+        advertise_host: Option<String>,
+        #[arg(long)]
+        client_root: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
+        video_codec: VideoCodecMode,
+        #[arg(long)]
+        open: bool,
+    },
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommand,
+    },
+    #[command(hide = true)]
     Serve {
         #[arg(long, default_value_t = 4310)]
         port: u16,
@@ -70,6 +95,7 @@ enum Command {
         #[arg(long)]
         access_token: Option<String>,
     },
+    #[command(hide = true)]
     Service {
         #[command(subcommand)]
         command: ServiceCommand,
@@ -126,6 +152,7 @@ enum Command {
         #[arg(long)]
         stdout: bool,
     },
+    #[command(name = "describe")]
     DescribeUi {
         udid: String,
         #[arg(long, value_parser = parse_point)]
@@ -322,6 +349,43 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum DaemonCommand {
+    Start {
+        #[arg(long, default_value_t = 4310)]
+        port: u16,
+        #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
+        bind: IpAddr,
+        #[arg(long)]
+        advertise_host: Option<String>,
+        #[arg(long)]
+        client_root: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
+        video_codec: VideoCodecMode,
+    },
+    Stop,
+    Status,
+    #[command(hide = true)]
+    Run {
+        #[arg(long)]
+        project_root: PathBuf,
+        #[arg(long)]
+        metadata_path: PathBuf,
+        #[arg(long)]
+        port: u16,
+        #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
+        bind: IpAddr,
+        #[arg(long)]
+        advertise_host: Option<String>,
+        #[arg(long)]
+        client_root: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
+        video_codec: VideoCodecMode,
+        #[arg(long)]
+        access_token: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum ServiceCommand {
     On {
         #[arg(long, default_value_t = 4310)]
@@ -394,8 +458,29 @@ enum DescribeUiFormat {
 enum DescribeUiSource {
     Auto,
     Nativescript,
+    ReactNative,
     Uikit,
     NativeAx,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaemonMetadata {
+    project_root: PathBuf,
+    pid: u32,
+    http_url: String,
+    access_token: String,
+    binary_path: PathBuf,
+    started_at: u64,
+}
+
+#[derive(Clone, Debug)]
+struct DaemonLaunchOptions {
+    port: u16,
+    bind: IpAddr,
+    advertise_host: Option<String>,
+    client_root: Option<PathBuf>,
+    video_codec: VideoCodecMode,
 }
 
 impl VideoCodecMode {
@@ -408,16 +493,297 @@ impl VideoCodecMode {
     }
 }
 
+fn command_service_url(explicit: Option<String>) -> anyhow::Result<String> {
+    if let Some(url) = explicit
+        .or_else(|| env::var("SIMDECK_SERVER_URL").ok())
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Ok(url);
+    }
+    Ok(ensure_project_daemon(DaemonLaunchOptions::default())?.http_url)
+}
+
+impl Default for DaemonLaunchOptions {
+    fn default() -> Self {
+        Self {
+            port: 4310,
+            bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            advertise_host: None,
+            client_root: None,
+            video_codec: VideoCodecMode::Hevc,
+        }
+    }
+}
+
+fn ensure_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMetadata> {
+    Ok(ensure_project_daemon_with_status(options)?.0)
+}
+
+fn ensure_project_daemon_with_status(
+    options: DaemonLaunchOptions,
+) -> anyhow::Result<(DaemonMetadata, bool)> {
+    if let Some(metadata) = read_daemon_metadata().ok().flatten() {
+        if daemon_is_healthy(&metadata) {
+            return Ok((metadata, false));
+        }
+    }
+    Ok((start_project_daemon(options)?, true))
+}
+
+fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMetadata> {
+    let project_root = project_root()?;
+    let metadata_path = daemon_metadata_path_for_root(&project_root)?;
+    let port = choose_daemon_port(options.port)?;
+    let access_token = auth::generate_access_token();
+    let executable = env::current_exe().context("resolve simdeck executable")?;
+    let mut args = vec![
+        "daemon".to_owned(),
+        "run".to_owned(),
+        "--project-root".to_owned(),
+        project_root.to_string_lossy().into_owned(),
+        "--metadata-path".to_owned(),
+        metadata_path.to_string_lossy().into_owned(),
+        "--port".to_owned(),
+        port.to_string(),
+        "--bind".to_owned(),
+        options.bind.to_string(),
+        "--access-token".to_owned(),
+        access_token.clone(),
+        "--video-codec".to_owned(),
+        options.video_codec.as_env_value().to_owned(),
+    ];
+    if let Some(advertise_host) = options.advertise_host {
+        args.push("--advertise-host".to_owned());
+        args.push(advertise_host);
+    }
+    if let Some(client_root) = options.client_root {
+        args.push("--client-root".to_owned());
+        args.push(client_root.to_string_lossy().into_owned());
+    }
+
+    let child = ProcessCommand::new(&executable)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("start project SimDeck daemon")?;
+
+    let metadata = DaemonMetadata {
+        project_root,
+        pid: child.id(),
+        http_url: format!("http://127.0.0.1:{port}"),
+        access_token,
+        binary_path: executable,
+        started_at: now_secs(),
+    };
+    write_daemon_metadata(&metadata)?;
+    wait_for_daemon(&metadata, Duration::from_secs(15))?;
+    Ok(metadata)
+}
+
+fn stop_project_daemon() -> anyhow::Result<()> {
+    let Some(metadata) = read_daemon_metadata()? else {
+        println_json(&serde_json::json!({ "ok": true, "running": false }))?;
+        return Ok(());
+    };
+    let _ = ProcessCommand::new("kill")
+        .arg(metadata.pid.to_string())
+        .status();
+    let _ = fs::remove_file(daemon_metadata_path_for_root(&metadata.project_root)?);
+    println_json(&serde_json::json!({ "ok": true, "running": false, "pid": metadata.pid }))
+}
+
+fn daemon_status() -> anyhow::Result<()> {
+    let metadata = read_daemon_metadata()?;
+    let running = metadata.as_ref().is_some_and(daemon_is_healthy);
+    println_json(&serde_json::json!({ "running": running, "daemon": metadata }))
+}
+
+fn wait_for_daemon(metadata: &DaemonMetadata, timeout: Duration) -> anyhow::Result<()> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if daemon_is_healthy(metadata) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    anyhow::bail!(
+        "Timed out waiting for SimDeck daemon at {}",
+        metadata.http_url
+    )
+}
+
+fn daemon_is_healthy(metadata: &DaemonMetadata) -> bool {
+    http_get_json(&metadata.http_url, "/api/health").is_ok()
+}
+
+fn read_daemon_metadata() -> anyhow::Result<Option<DaemonMetadata>> {
+    let path = daemon_metadata_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    Ok(Some(serde_json::from_str(&data).with_context(|| {
+        format!("parse daemon metadata {}", path.display())
+    })?))
+}
+
+fn write_daemon_metadata(metadata: &DaemonMetadata) -> anyhow::Result<()> {
+    let path = daemon_metadata_path_for_root(&metadata.project_root)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, serde_json::to_vec_pretty(metadata)?)
+        .with_context(|| format!("write {}", path.display()))
+}
+
+fn daemon_metadata_path() -> anyhow::Result<PathBuf> {
+    daemon_metadata_path_for_root(&project_root()?)
+}
+
+fn daemon_metadata_path_for_root(root: &Path) -> anyhow::Result<PathBuf> {
+    let mut hasher = DefaultHasher::new();
+    root.to_string_lossy().hash(&mut hasher);
+    Ok(env::temp_dir()
+        .join("simdeck")
+        .join(format!("{:016x}.json", hasher.finish())))
+}
+
+fn project_root() -> anyhow::Result<PathBuf> {
+    let mut current = env::current_dir().context("resolve current directory")?;
+    loop {
+        if current.join(".simdeck").exists()
+            || current.join(".git").exists()
+            || current.join("package.json").exists()
+            || current.join("xcodeproj").exists()
+        {
+            return Ok(current);
+        }
+        if !current.pop() {
+            return env::current_dir().context("resolve current directory");
+        }
+    }
+}
+
+fn choose_daemon_port(preferred: u16) -> anyhow::Result<u16> {
+    let start = preferred.max(1024);
+    for port in start..start.saturating_add(200) {
+        if port_available(port) && port_available(port.saturating_add(1)) {
+            return Ok(port);
+        }
+    }
+    anyhow::bail!("No available SimDeck daemon port near {preferred}")
+}
+
+fn port_available(port: u16) -> bool {
+    TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
+}
+
+fn open_browser(url: &str) -> anyhow::Result<()> {
+    ProcessCommand::new("open")
+        .arg(url)
+        .status()
+        .context("open SimDeck UI")?;
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     logging::init();
     let cli = Cli::parse();
-    let service_url = cli
-        .server_url
-        .or_else(|| std::env::var("SIMDECK_SERVER_URL").ok())
+    let explicit_server_url = cli.server_url.clone();
+    let service_url = explicit_server_url
+        .clone()
+        .or_else(|| env::var("SIMDECK_SERVER_URL").ok())
         .filter(|value| !value.trim().is_empty());
     let bridge = NativeBridge;
 
     match cli.command {
+        Command::Ui {
+            port,
+            bind,
+            advertise_host,
+            client_root,
+            video_codec,
+            open,
+        } => {
+            let (metadata, started) = ensure_project_daemon_with_status(DaemonLaunchOptions {
+                port,
+                bind,
+                advertise_host,
+                client_root,
+                video_codec,
+            })?;
+            if open {
+                open_browser(&metadata.http_url)?;
+            }
+            println_json(&serde_json::json!({
+                "ok": true,
+                "projectRoot": metadata.project_root,
+                "pid": metadata.pid,
+                "url": metadata.http_url,
+                "started": started
+            }))?;
+            Ok(())
+        }
+        Command::Daemon { command } => match command {
+            DaemonCommand::Start {
+                port,
+                bind,
+                advertise_host,
+                client_root,
+                video_codec,
+            } => {
+                let (metadata, started) = ensure_project_daemon_with_status(DaemonLaunchOptions {
+                    port,
+                    bind,
+                    advertise_host,
+                    client_root,
+                    video_codec,
+                })?;
+                println_json(&serde_json::json!({
+                    "ok": true,
+                    "projectRoot": metadata.project_root,
+                    "pid": metadata.pid,
+                    "url": metadata.http_url,
+                    "started": started
+                }))
+            }
+            DaemonCommand::Stop => stop_project_daemon(),
+            DaemonCommand::Status => daemon_status(),
+            DaemonCommand::Run {
+                project_root,
+                metadata_path,
+                port,
+                bind,
+                advertise_host,
+                client_root,
+                video_codec,
+                access_token,
+            } => {
+                env::set_current_dir(&project_root).with_context(|| {
+                    format!("set daemon project root to {}", project_root.display())
+                })?;
+                write_daemon_metadata(&DaemonMetadata {
+                    project_root,
+                    pid: std::process::id(),
+                    http_url: format!("http://127.0.0.1:{port}"),
+                    access_token: access_token.clone(),
+                    binary_path: env::current_exe().context("resolve daemon executable")?,
+                    started_at: now_secs(),
+                })?;
+                let result = serve_with_appkit(
+                    port,
+                    bind,
+                    advertise_host,
+                    client_root,
+                    video_codec,
+                    Some(access_token),
+                );
+                let _ = fs::remove_file(metadata_path);
+                result
+            }
+        },
         Command::Serve {
             port,
             bind,
@@ -472,7 +838,11 @@ fn main() -> anyhow::Result<()> {
             CoreSimulatorCommand::Restart => core_simulator::restart(),
         },
         Command::List => {
-            let simulators = bridge.list_simulators()?;
+            let service_url = command_service_url(explicit_server_url.clone())?;
+            let simulators = service_get_json(&service_url, "/api/simulators")?
+                .get("simulators")
+                .cloned()
+                .unwrap_or(Value::Array(Vec::new()));
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({ "simulators": simulators }))?
@@ -480,7 +850,8 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Boot { udid } => {
-            bridge.boot_simulator(&udid)?;
+            let service_url = command_service_url(explicit_server_url.clone())?;
+            service_post_ok(&service_url, &udid, "boot", &Value::Null)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(
@@ -490,7 +861,8 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Shutdown { udid } => {
-            bridge.shutdown_simulator(&udid)?;
+            let service_url = command_service_url(explicit_server_url.clone())?;
+            service_post_ok(&service_url, &udid, "shutdown", &Value::Null)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(
@@ -500,11 +872,8 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::OpenUrl { udid, url } => {
-            if let Some(server_url) = service_url.as_deref() {
-                service_open_url(server_url, &udid, &url)?;
-            } else {
-                bridge.open_url(&udid, &url)?;
-            }
+            let service_url = command_service_url(explicit_server_url.clone())?;
+            service_open_url(&service_url, &udid, &url)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(
@@ -514,11 +883,8 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Launch { udid, bundle_id } => {
-            if let Some(server_url) = service_url.as_deref() {
-                service_launch(server_url, &udid, &bundle_id)?;
-            } else {
-                bridge.launch_bundle(&udid, &bundle_id)?;
-            }
+            let service_url = command_service_url(explicit_server_url.clone())?;
+            service_launch(&service_url, &udid, &bundle_id)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(
@@ -528,30 +894,40 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::ToggleAppearance { udid } => {
-            if let Some(server_url) = service_url.as_deref() {
-                service_post_ok(server_url, &udid, "toggle-appearance", &Value::Null)?;
-            } else {
-                bridge.toggle_appearance(&udid)?;
-            }
+            let service_url = command_service_url(explicit_server_url.clone())?;
+            service_post_ok(&service_url, &udid, "toggle-appearance", &Value::Null)?;
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "toggle-appearance" }),
             )?;
             Ok(())
         }
         Command::Erase { udid } => {
-            bridge.erase_simulator(&udid)?;
+            let service_url = command_service_url(explicit_server_url.clone())?;
+            service_post_ok(&service_url, &udid, "erase", &Value::Null)?;
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "erase" }))?;
             Ok(())
         }
         Command::Install { udid, app_path } => {
-            bridge.install_app(&udid, &app_path)?;
+            let service_url = command_service_url(explicit_server_url.clone())?;
+            service_post_ok(
+                &service_url,
+                &udid,
+                "install",
+                &serde_json::json!({ "appPath": app_path }),
+            )?;
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "install", "appPath": app_path }),
             )?;
             Ok(())
         }
         Command::Uninstall { udid, bundle_id } => {
-            bridge.uninstall_app(&udid, &bundle_id)?;
+            let service_url = command_service_url(explicit_server_url.clone())?;
+            service_post_ok(
+                &service_url,
+                &udid,
+                "uninstall",
+                &serde_json::json!({ "bundleId": bundle_id }),
+            )?;
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "uninstall", "bundleId": bundle_id }),
             )?;
@@ -559,7 +935,15 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Pasteboard { command } => match command {
             PasteboardCommand::Get { udid } => {
-                let text = bridge.pasteboard_text(&udid)?;
+                let service_url = command_service_url(explicit_server_url.clone())?;
+                let text = service_get_json(
+                    &service_url,
+                    &format!("/api/simulators/{}/pasteboard", url_path_component(&udid)),
+                )?
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
                 println_json(&serde_json::json!({ "udid": udid, "text": text }))?;
                 Ok(())
             }
@@ -569,8 +953,14 @@ fn main() -> anyhow::Result<()> {
                 stdin,
                 file,
             } => {
+                let service_url = command_service_url(explicit_server_url.clone())?;
                 let text = read_text_input(text, stdin, file)?;
-                bridge.set_pasteboard_text(&udid, &text)?;
+                service_post_ok(
+                    &service_url,
+                    &udid,
+                    "pasteboard",
+                    &serde_json::json!({ "text": text }),
+                )?;
                 println_json(
                     &serde_json::json!({ "ok": true, "udid": udid, "action": "pasteboard-set" }),
                 )?;
@@ -582,8 +972,19 @@ fn main() -> anyhow::Result<()> {
             seconds,
             limit,
         } => {
+            let service_url = command_service_url(explicit_server_url.clone())?;
             let filters = native::bridge::LogFilters::new(Vec::new(), Vec::new(), String::new());
-            let entries = bridge.recent_logs(&udid, seconds, limit, &filters)?;
+            let _ = filters;
+            let entries = service_get_json(
+                &service_url,
+                &format!(
+                    "/api/simulators/{}/logs?seconds={seconds}&limit={limit}",
+                    url_path_component(&udid)
+                ),
+            )?
+            .get("entries")
+            .cloned()
+            .unwrap_or(Value::Array(Vec::new()));
             println_json(&serde_json::json!({ "entries": entries }))?;
             Ok(())
         }
@@ -592,7 +993,14 @@ fn main() -> anyhow::Result<()> {
             output,
             stdout,
         } => {
-            let png = bridge.screenshot_png(&udid)?;
+            let service_url = command_service_url(explicit_server_url.clone())?;
+            let png = service_get_bytes(
+                &service_url,
+                &format!(
+                    "/api/simulators/{}/screenshot.png",
+                    url_path_component(&udid)
+                ),
+            )?;
             if stdout {
                 io::stdout().write_all(&png)?;
             } else {
@@ -619,6 +1027,7 @@ fn main() -> anyhow::Result<()> {
             include_hidden,
             direct,
         } => {
+            let service_url = command_service_url(explicit_server_url.clone())?;
             let snapshot = describe_ui_snapshot(
                 &bridge,
                 &udid,
@@ -627,7 +1036,7 @@ fn main() -> anyhow::Result<()> {
                 max_depth,
                 include_hidden,
                 direct,
-                service_url.as_deref().unwrap_or("http://127.0.0.1:4310"),
+                &service_url,
             )?;
             print_describe_ui(&snapshot, format)?;
             Ok(())
@@ -709,6 +1118,27 @@ fn main() -> anyhow::Result<()> {
             ) {
                 sleep_ms(pre_delay_ms);
                 service_tap(server_url, &udid, x, y, duration_ms)?;
+                sleep_ms(post_delay_ms);
+            } else if let Some(server_url) = service_url.as_deref() {
+                sleep_ms(pre_delay_ms);
+                service_tap_element(
+                    server_url,
+                    &udid,
+                    serde_json::json!({
+                        "x": x,
+                        "y": y,
+                        "normalized": normalized,
+                        "selector": {
+                            "id": id,
+                            "label": label,
+                            "value": value,
+                            "elementType": element_type,
+                        },
+                        "waitTimeoutMs": wait_timeout_ms,
+                        "pollMs": poll_interval_ms,
+                        "durationMs": duration_ms,
+                    }),
+                )?;
                 sleep_ms(post_delay_ms);
             } else {
                 let target = resolve_tap_target(
@@ -998,7 +1428,17 @@ fn main() -> anyhow::Result<()> {
             stdin,
             continue_on_error,
         } => {
-            let report = run_batch(&bridge, &udid, steps, file, stdin, continue_on_error)?;
+            let report = if let Some(server_url) = service_url.as_deref() {
+                let step_lines = read_batch_steps(steps, file, stdin)?;
+                service_batch(
+                    server_url,
+                    &udid,
+                    batch_lines_to_json_steps(&step_lines)?,
+                    continue_on_error,
+                )?
+            } else {
+                run_batch(&bridge, &udid, steps, file, stdin, continue_on_error)?
+            };
             println_json(&report)?;
             Ok(())
         }
@@ -1061,8 +1501,15 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::ChromeProfile { udid } => {
-            let profile = bridge.chrome_profile(&udid)?;
-            println_json(&serde_json::json!(profile))?;
+            let service_url = command_service_url(explicit_server_url.clone())?;
+            let profile = service_get_json(
+                &service_url,
+                &format!(
+                    "/api/simulators/{}/chrome-profile",
+                    url_path_component(&udid)
+                ),
+            )?;
+            println_json(&profile)?;
             Ok(())
         }
     }
@@ -1417,7 +1864,7 @@ fn describe_ui_snapshot(
 
     if source != DescribeUiSource::Auto && source != DescribeUiSource::NativeAx {
         anyhow::bail!(
-            "The `{}` hierarchy source requires a running SimDeck service. Start it with `simdeck serve --port 4310`, or use --source native-ax.",
+            "The `{}` hierarchy source requires a running SimDeck daemon. Start it with `simdeck daemon start --port 4310`, or use --source native-ax.",
             source.as_query_value()
         );
     }
@@ -1449,6 +1896,14 @@ fn fetch_service_accessibility_tree(
 
 fn http_get_json(server_url: &str, path: &str) -> anyhow::Result<Value> {
     http_request_json(server_url, "GET", path, None)
+}
+
+fn service_get_json(server_url: &str, path: &str) -> anyhow::Result<Value> {
+    http_request_json(server_url, "GET", path, None)
+}
+
+fn service_get_bytes(server_url: &str, path: &str) -> anyhow::Result<Vec<u8>> {
+    http_request(server_url, "GET", path, None)
 }
 
 fn service_open_url(server_url: &str, udid: &str, url: &str) -> anyhow::Result<()> {
@@ -1492,6 +1947,28 @@ fn service_tap(
             service_touch_event(x, y, "began", duration_ms),
             service_touch_event(x, y, "ended", 0),
         ],
+    )
+}
+
+fn service_tap_element(server_url: &str, udid: &str, body: Value) -> anyhow::Result<()> {
+    service_post_ok(server_url, udid, "tap", &body)
+}
+
+fn service_batch(
+    server_url: &str,
+    udid: &str,
+    steps: Vec<Value>,
+    continue_on_error: bool,
+) -> anyhow::Result<Value> {
+    let path = format!("/api/simulators/{}/batch", url_path_component(udid));
+    http_request_json(
+        server_url,
+        "POST",
+        &path,
+        Some(&serde_json::json!({
+            "steps": steps,
+            "continueOnError": continue_on_error,
+        })),
     )
 }
 
@@ -1576,8 +2053,21 @@ fn service_button(
 
 fn service_post_ok(server_url: &str, udid: &str, action: &str, body: &Value) -> anyhow::Result<()> {
     let path = format!("/api/simulators/{}/{}", url_path_component(udid), action);
-    let _ = http_request_json(server_url, "POST", &path, Some(body))?;
-    Ok(())
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        match http_request_json(server_url, "POST", &path, Some(body)) {
+            Ok(_) => return Ok(()),
+            Err(error)
+                if Instant::now() < deadline
+                    && error
+                        .to_string()
+                        .contains("Resource temporarily unavailable") =>
+            {
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn http_request_json(
@@ -1586,10 +2076,20 @@ fn http_request_json(
     path: &str,
     body: Option<&Value>,
 ) -> anyhow::Result<Value> {
+    let body = http_request(server_url, method, path, body)?;
+    serde_json::from_slice(&body).context("parse SimDeck service JSON response")
+}
+
+fn http_request(
+    server_url: &str,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+) -> anyhow::Result<Vec<u8>> {
     let endpoint = HttpEndpoint::parse(server_url)?;
     let mut stream = std::net::TcpStream::connect((endpoint.host.as_str(), endpoint.port))
         .with_context(|| format!("connect to SimDeck service at {server_url}"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(120)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let body = body.map(serde_json::to_vec).transpose()?;
     let request = if let Some(body) = body.as_ref() {
@@ -1630,7 +2130,7 @@ fn http_request_json(
             }
         );
     }
-    serde_json::from_slice(&body).context("parse SimDeck service JSON response")
+    Ok(body)
 }
 
 struct HttpEndpoint {
@@ -1767,6 +2267,7 @@ impl DescribeUiSource {
         match self {
             Self::Auto => "auto",
             Self::Nativescript => "nativescript",
+            Self::ReactNative => "react-native",
             Self::Uikit => "uikit",
             Self::NativeAx => "native-ax",
         }
@@ -2542,6 +3043,130 @@ fn read_batch_steps(
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .map(str::to_owned)
         .collect())
+}
+
+fn batch_lines_to_json_steps(step_lines: &[String]) -> anyhow::Result<Vec<Value>> {
+    step_lines
+        .iter()
+        .map(|line| batch_line_to_json_step(line))
+        .collect()
+}
+
+fn batch_line_to_json_step(line: &str) -> anyhow::Result<Value> {
+    let tokens = tokenize_step(line)?;
+    let Some(command) = tokens.first().map(String::as_str) else {
+        return Err(crate::error::AppError::bad_request("Empty batch step.").into());
+    };
+    let args = parse_step_options(&tokens[1..]);
+    let value = match command {
+        "sleep" => serde_json::json!({
+            "action": "sleep",
+            "seconds": tokens.get(1).and_then(|value| value.parse::<f64>().ok()).unwrap_or(0.0),
+        }),
+        "tap" => serde_json::json!({
+            "action": "tap",
+            "x": args.value("x").and_then(|value| value.parse::<f64>().ok()),
+            "y": args.value("y").and_then(|value| value.parse::<f64>().ok()),
+            "normalized": args.flag("normalized"),
+            "selector": {
+                "id": args.value("id"),
+                "label": args.value("label"),
+                "value": args.value("value"),
+                "elementType": args.value("element-type"),
+            },
+            "durationMs": args.value("duration-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(60),
+            "waitTimeoutMs": args.value("wait-timeout-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(0),
+            "pollMs": args.value("poll-interval-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(100),
+        }),
+        "key" => serde_json::json!({
+            "action": "key",
+            "keyCode": parse_hid_key(tokens.get(1).map(String::as_str).unwrap_or(""))?,
+            "modifiers": args.value("modifiers").and_then(|value| value.parse::<u32>().ok()).unwrap_or(0),
+        }),
+        "key-sequence" => serde_json::json!({
+            "action": "keySequence",
+            "keyCodes": parse_key_list(args.value("keycodes").or_else(|| args.value("keys")).unwrap_or(""))?,
+            "delayMs": args.value("delay-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(0),
+        }),
+        "key-combo" => serde_json::json!({
+            "action": "key",
+            "keyCode": parse_hid_key(args.value("key").unwrap_or(""))?,
+            "modifiers": parse_modifier_mask(args.value("modifiers").unwrap_or(""))?,
+        }),
+        "touch" => {
+            let x = args
+                .value("x")
+                .or_else(|| tokens.get(1).map(String::as_str))
+                .and_then(|value| value.parse::<f64>().ok());
+            let y = args
+                .value("y")
+                .or_else(|| tokens.get(2).map(String::as_str))
+                .and_then(|value| value.parse::<f64>().ok());
+            serde_json::json!({
+                "action": "touch",
+                "x": x.unwrap_or(0.0),
+                "y": y.unwrap_or(0.0),
+                "phase": args.value("phase").unwrap_or("began"),
+                "down": args.flag("down"),
+                "up": args.flag("up"),
+                "delayMs": args.value("delay-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(100),
+            })
+        }
+        "swipe" => {
+            let value = |name: &str, index: usize| {
+                args.value(name)
+                    .or_else(|| tokens.get(index).map(String::as_str))
+                    .and_then(|value| value.parse::<f64>().ok())
+            };
+            serde_json::json!({
+                "action": "swipe",
+                "startX": value("start-x", 1).unwrap_or(0.5),
+                "startY": value("start-y", 2).unwrap_or(0.75),
+                "endX": value("end-x", 3).unwrap_or(0.5),
+                "endY": value("end-y", 4).unwrap_or(0.25),
+                "durationMs": args.value("duration-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(350),
+                "steps": args.value("steps").and_then(|value| value.parse::<u32>().ok()).unwrap_or(12),
+            })
+        }
+        "gesture" => serde_json::json!({
+            "action": "gesture",
+            "preset": tokens.get(1).map(String::as_str).unwrap_or("scroll-down"),
+            "durationMs": args.value("duration-ms").and_then(|value| value.parse::<u64>().ok()),
+            "delta": args.value("delta").and_then(|value| value.parse::<f64>().ok()),
+            "steps": args.value("steps").and_then(|value| value.parse::<u32>().ok()).unwrap_or(12),
+        }),
+        "type" => serde_json::json!({
+            "action": "type",
+            "text": tokens.get(1).map(String::as_str).unwrap_or(""),
+            "delayMs": args.value("delay-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(12),
+        }),
+        "button" => serde_json::json!({
+            "action": "button",
+            "button": tokens.get(1).map(String::as_str).unwrap_or(""),
+            "durationMs": args.value("duration-ms").and_then(|value| value.parse::<u32>().ok()).unwrap_or(0),
+        }),
+        "home" => serde_json::json!({ "action": "home" }),
+        "dismiss-keyboard" => serde_json::json!({ "action": "dismissKeyboard" }),
+        "app-switcher" => serde_json::json!({ "action": "appSwitcher" }),
+        "rotate-left" => serde_json::json!({ "action": "rotateLeft" }),
+        "rotate-right" => serde_json::json!({ "action": "rotateRight" }),
+        "toggle-appearance" => serde_json::json!({ "action": "toggleAppearance" }),
+        "launch" => serde_json::json!({
+            "action": "launch",
+            "bundleId": tokens.get(1).map(String::as_str).unwrap_or(""),
+        }),
+        "open-url" => serde_json::json!({
+            "action": "openUrl",
+            "url": tokens.get(1).map(String::as_str).unwrap_or(""),
+        }),
+        other => {
+            return Err(crate::error::AppError::bad_request(format!(
+                "Unsupported daemon batch step `{other}`."
+            ))
+            .into())
+        }
+    };
+    Ok(value)
 }
 
 fn run_batch_step(

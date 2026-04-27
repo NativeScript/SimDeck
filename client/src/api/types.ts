@@ -77,6 +77,7 @@ export interface AccessibilityNode {
   nativeScript?: Record<string, unknown> | null;
   pid?: number | null;
   placeholder?: string | null;
+  reactNative?: Record<string, unknown> | null;
   role?: string | null;
   role_description?: string | null;
   scroll?: Record<string, unknown> | null;
@@ -100,7 +101,8 @@ export interface AccessibilityNode {
 export type AccessibilitySource =
   | "native-ax"
   | "in-app-inspector"
-  | "nativescript";
+  | "nativescript"
+  | "react-native";
 export type AccessibilitySourcePreference = AccessibilitySource | "auto";
 
 export interface AccessibilityTreeResponse {

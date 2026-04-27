@@ -1,18 +1,12 @@
 import type { RefObject } from "react";
 
 import type { SimulatorMetadata } from "../../api/types";
-import type {
-  StreamRuntimeInfo,
-  StreamStats,
-  StreamStatus,
-} from "../stream/streamTypes";
 import { SimulatorMenu } from "../simulators/SimulatorMenu";
 
 interface ToolbarProps {
   debugVisible: boolean;
   error: string;
   filteredSimulators: SimulatorMetadata[];
-  fps: number;
   hierarchyVisible: boolean;
   isLoading: boolean;
   onBoot: () => void;
@@ -29,16 +23,15 @@ interface ToolbarProps {
   onToggleDebug: () => void;
   onToggleHierarchy: () => void;
   onToggleMenu: () => void;
-  runtimeInfo: StreamRuntimeInfo;
+  onToggleTouchOverlay: () => void;
   search: string;
   selectedSimulator: SimulatorMetadata | null;
   selectedSimulatorIdentifier: string;
   setSelectedUDID: (udid: string) => void;
+  touchOverlayVisible: boolean;
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
   closeMenu: () => void;
-  stats: StreamStats;
-  status: StreamStatus;
 }
 
 export function Toolbar({
@@ -46,7 +39,6 @@ export function Toolbar({
   debugVisible,
   error,
   filteredSimulators,
-  fps,
   hierarchyVisible,
   isLoading,
   menuOpen,
@@ -65,13 +57,12 @@ export function Toolbar({
   onToggleDebug,
   onToggleHierarchy,
   onToggleMenu,
-  runtimeInfo,
+  onToggleTouchOverlay,
   search,
   selectedSimulator,
   selectedSimulatorIdentifier,
   setSelectedUDID,
-  stats,
-  status,
+  touchOverlayVisible,
 }: ToolbarProps) {
   return (
     <header className="toolbar">
@@ -88,7 +79,6 @@ export function Toolbar({
         <SimulatorMenu
           debugVisible={debugVisible}
           filteredSimulators={filteredSimulators}
-          fps={fps}
           isLoading={isLoading}
           menuOpen={menuOpen}
           menuRef={menuRef}
@@ -98,12 +88,9 @@ export function Toolbar({
           onOpenUrlPrompt={onOpenUrlPrompt}
           onToggleDebug={onToggleDebug}
           onToggleMenu={onToggleMenu}
-          runtimeInfo={runtimeInfo}
           search={search}
           selectedSimulator={selectedSimulator}
           setSelectedUDID={setSelectedUDID}
-          stats={stats}
-          status={status}
         />
         {selectedSimulator ? (
           <div className="toolbar-sim-info">
@@ -170,6 +157,14 @@ export function Toolbar({
               title="Dismiss Keyboard"
             >
               <KeyboardDismissIcon />
+            </button>
+            <button
+              aria-label="Toggle Touch Overlay"
+              className={`tbtn icon-btn ${touchOverlayVisible ? "active" : ""}`}
+              onClick={onToggleTouchOverlay}
+              title="Toggle Touch Overlay"
+            >
+              <TouchOverlayIcon />
             </button>
             <button
               aria-label="Toggle Appearance"
@@ -274,6 +269,15 @@ function KeyboardDismissIcon() {
         strokeLinejoin="round"
         strokeWidth="1.25"
       />
+    </svg>
+  );
+}
+
+function TouchOverlayIcon() {
+  return (
+    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
+      <circle cx="8" cy="8" r="2.1" fill="currentColor" />
+      <circle cx="8" cy="8" r="5.1" stroke="currentColor" strokeWidth="1.2" />
     </svg>
   );
 }

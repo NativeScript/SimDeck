@@ -4,6 +4,7 @@ import {
   buildShellRotationTransform,
   clampPan,
   clampZoom,
+  computeChromeScreenBorderRadius,
   computeChromeScreenRect,
   computeFitScale,
   mapDisplayedPointToNaturalOrientation,
@@ -12,7 +13,7 @@ import {
 
 describe("viewportMath", () => {
   it("clamps zoom between fit and max multiplier", () => {
-    expect(clampZoom(0.1, 0.5)).toBe(0.5);
+    expect(clampZoom(0.1, 0.5)).toBe(0.325);
     expect(clampZoom(10, 1)).toBe(4);
   });
 
@@ -45,6 +46,57 @@ describe("viewportMath", () => {
     expect(rect).not.toBeNull();
     expect(rect?.x).toBeGreaterThanOrEqual(50);
     expect(rect?.y).toBeGreaterThanOrEqual(25);
+  });
+
+  it("uses the full chrome screen when stream and profile aspect nearly match", () => {
+    const rect = computeChromeScreenRect(
+      {
+        cornerRadius: 62,
+        screenHeight: 954,
+        screenWidth: 438,
+        screenX: 18,
+        screenY: 18,
+        totalHeight: 990,
+        totalWidth: 474,
+      },
+      { width: 1320, height: 2868 },
+    );
+
+    expect(rect).toEqual({
+      height: 954,
+      width: 438,
+      x: 18,
+      y: 18,
+    });
+  });
+
+  it("only rounds stream corners that touch the physical screen corners", () => {
+    const profile = {
+      cornerRadius: 40,
+      screenHeight: 600,
+      screenWidth: 300,
+      screenX: 50,
+      screenY: 25,
+      totalHeight: 900,
+      totalWidth: 450,
+    };
+
+    expect(
+      computeChromeScreenBorderRadius(profile, {
+        height: 600,
+        width: 300,
+        x: 50,
+        y: 25,
+      }),
+    ).toBe("40px 40px 40px 40px");
+    expect(
+      computeChromeScreenBorderRadius(profile, {
+        height: 220,
+        width: 300,
+        x: 50,
+        y: 215,
+      }),
+    ).toBe("0px 0px 0px 0px");
   });
 
   it("reduces fit scale when bottom space is reserved for controls", () => {

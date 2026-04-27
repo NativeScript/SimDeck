@@ -9,10 +9,10 @@ import {
   pressHome,
   rotateLeft,
   rotateRight,
-  sendKey,
-  sendTouch,
+  simulatorControlSocketUrl,
   shutdownSimulator,
   toggleAppearance,
+  type ControlMessage,
 } from "../api/controls";
 import { fetchAccessibilityTree, fetchChromeProfile } from "../api/simulators";
 import type {
@@ -29,14 +29,20 @@ import { usePointerInput } from "../features/input/usePointerInput";
 import { simulatorRuntimeLabel } from "../features/simulators/simulatorDisplay";
 import { useSimulatorList } from "../features/simulators/useSimulatorList";
 import { useLiveStream } from "../features/stream/useLiveStream";
+import { DebugPanel } from "../features/toolbar/DebugPanel";
 import { Toolbar } from "../features/toolbar/Toolbar";
 import { SimulatorViewport } from "../features/viewport/SimulatorViewport";
-import type { Point, ViewMode } from "../features/viewport/types";
+import type {
+  Point,
+  TouchIndicator,
+  ViewMode,
+} from "../features/viewport/types";
 import { useViewportLayout } from "../features/viewport/useViewportLayout";
 import {
   buildShellRotationTransform,
   clampPan,
   clampZoom,
+  computeChromeScreenBorderRadius,
   computeChromeScreenRect,
   screenAspectRatio,
   shellSize,
@@ -49,7 +55,7 @@ import {
 import { useElementSize } from "../shared/hooks/useElementSize";
 import {
   ACCESSIBILITY_SOURCE_STORAGE_KEY,
-  DEBUG_VISIBLE_STORAGE_KEY,
+  clearLegacyVolatileUiState,
   DEFAULT_VIEWPORT_STATE,
   HIERARCHY_VISIBLE_STORAGE_KEY,
   readPersistedUiState,
@@ -62,9 +68,19 @@ import {
 } from "./uiState";
 
 const ACCESSIBILITY_REFRESH_MS = 1500;
+const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
+const REACT_NATIVE_ACCESSIBILITY_MAX_DEPTH = 30;
+
+clearLegacyVolatileUiState();
 
 function buildChromeUrl(udid: string, stamp: number): string {
   return `${STREAM_ORIGIN}/api/simulators/${udid}/chrome.png?stamp=${stamp}`;
+}
+
+function mergeAccessibilitySources(
+  ...sources: unknown[]
+): AccessibilitySource[] {
+  return sanitizeAccessibilitySources(sources.flat());
 }
 
 type SimulatorTransition = {
@@ -86,14 +102,12 @@ export function AppShell() {
     refresh,
     simulators,
   } = useSimulatorList();
-  const [debugVisible, setDebugVisible] = useState(() =>
-    readStoredFlag(DEBUG_VISIBLE_STORAGE_KEY),
-  );
+  const [debugVisible, setDebugVisible] = useState(false);
   const [hierarchyVisible, setHierarchyVisible] = useState(() =>
     readStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY),
   );
   const [selectedUDID, setSelectedUDID] = useState(initialSelectedUDID ?? "");
-  const [search, setSearch] = useState(initialUiState.search ?? "");
+  const [search, setSearch] = useState("");
   const [openURLValue, setOpenURLValue] = useState(
     initialUiState.openURLValue ?? "https://example.com",
   );
@@ -116,6 +130,7 @@ export function AppShell() {
   const [chromeProfile, setChromeProfile] = useState<ChromeProfile | null>(
     null,
   );
+  const [chromeLoaded, setChromeLoaded] = useState(false);
   const [accessibilityRoots, setAccessibilityRoots] = useState<
     AccessibilityNode[]
   >([]);
@@ -140,6 +155,8 @@ export function AppShell() {
   const [accessibilityPreferredSource, setAccessibilityPreferredSource] =
     useState<AccessibilitySourcePreference>(readStoredAccessibilitySource);
   const [zoomAnimating, setZoomAnimating] = useState(false);
+  const [touchOverlayVisible, setTouchOverlayVisible] = useState(false);
+  const [touchIndicators, setTouchIndicators] = useState<TouchIndicator[]>([]);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const outerCanvasRef = useRef<HTMLDivElement | null>(null);
@@ -152,8 +169,15 @@ export function AppShell() {
     null,
   );
   const zoomAnimationTimeoutRef = useRef<number>(0);
+  const touchIndicatorTimeoutRef = useRef<number>(0);
+  const gestureStartZoomRef = useRef(1);
   const accessibilityRequestIdRef = useRef(0);
   const accessibilityLoadingRef = useRef(false);
+  const controlSocketRef = useRef<{
+    udid: string;
+    socket: WebSocket;
+    pending: string[];
+  } | null>(null);
   const canvasSize = useElementSize(outerCanvasElement);
   const zoomDockSize = useElementSize(zoomDockElement);
 
@@ -198,6 +222,13 @@ export function AppShell() {
       : selectedSimulator != null
         ? simulatorRuntimeLabel(selectedSimulator)
         : "";
+  const simulatorStatusOverlayLabel =
+    selectedSimulator != null &&
+    simulatorTransition?.udid === selectedSimulator.udid
+      ? simulatorTransition.kind === "boot"
+        ? "Booting..."
+        : "Stopping..."
+      : "";
 
   const handleStreamCanvasRef = useCallback(
     (node: HTMLCanvasElement | null) => {
@@ -246,10 +277,8 @@ export function AppShell() {
   const chromeUrl = selectedSimulator
     ? buildChromeUrl(selectedSimulator.udid, streamStamp)
     : "";
-
-  useEffect(() => {
-    writeStoredFlag(DEBUG_VISIBLE_STORAGE_KEY, debugVisible);
-  }, [debugVisible]);
+  const chromeRequired = Boolean(chromeProfile && chromeUrl);
+  const viewportReady = hasFrame && (!chromeRequired || chromeLoaded);
 
   useEffect(() => {
     writeStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY, hierarchyVisible);
@@ -282,10 +311,15 @@ export function AppShell() {
       ...current,
       bundleIDValue,
       openURLValue,
-      search,
       selectedUDID,
     }));
-  }, [bundleIDValue, openURLValue, search, selectedUDID]);
+  }, [bundleIDValue, openURLValue, selectedUDID]);
+
+  useEffect(() => {
+    if (search && simulators.length > 0 && filteredSimulators.length === 0) {
+      setSearch("");
+    }
+  }, [filteredSimulators.length, search, simulators.length]);
 
   useEffect(() => {
     if (!selectedSimulator) {
@@ -381,13 +415,21 @@ export function AppShell() {
       const snapshot = await fetchAccessibilityTree(
         selectedSimulator.udid,
         accessibilityPreferredSource,
+        {
+          maxDepth:
+            accessibilityPreferredSource === "native-ax"
+              ? DEFAULT_ACCESSIBILITY_MAX_DEPTH
+              : REACT_NATIVE_ACCESSIBILITY_MAX_DEPTH,
+        },
       );
       if (accessibilityRequestIdRef.current !== requestId) {
         return;
       }
       const roots = snapshot.roots ?? [];
-      const availableSources = sanitizeAccessibilitySources(
-        snapshot.availableSources,
+      const availableSources = mergeAccessibilitySources(
+        accessibilityAvailableSources,
+        sanitizeAccessibilitySources(snapshot.availableSources),
+        snapshot.source,
       );
       setAccessibilityRoots(roots);
       setAccessibilityAvailableSources(availableSources);
@@ -424,7 +466,6 @@ export function AppShell() {
       setAccessibilitySelectedId("");
       setAccessibilityHoveredId(null);
       setAccessibilitySource("");
-      setAccessibilityAvailableSources([]);
       if (accessibilityPreferredSource !== "auto") {
         setAccessibilityPreferredSource("auto");
       }
@@ -434,7 +475,11 @@ export function AppShell() {
         setAccessibilityLoading(false);
       }
     }
-  }, [accessibilityPreferredSource, selectedSimulator]);
+  }, [
+    accessibilityAvailableSources,
+    accessibilityPreferredSource,
+    selectedSimulator,
+  ]);
 
   useEffect(() => {
     if (!hierarchyVisible) {
@@ -453,6 +498,10 @@ export function AppShell() {
       setAccessibilityPickerActive(false);
     }
   }, [isBooted]);
+
+  useEffect(() => {
+    setChromeLoaded(!chromeRequired);
+  }, [chromeRequired, chromeUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -534,8 +583,17 @@ export function AppShell() {
       if (zoomAnimationTimeoutRef.current) {
         clearTimeout(zoomAnimationTimeoutRef.current);
       }
+      if (touchIndicatorTimeoutRef.current) {
+        clearTimeout(touchIndicatorTimeoutRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (!touchOverlayVisible) {
+      setTouchIndicators([]);
+    }
+  }, [touchOverlayVisible]);
 
   useKeyboardInput({
     enabled: Boolean(selectedSimulator?.isBooted && selectedSimulator.udid),
@@ -543,10 +601,7 @@ export function AppShell() {
       if (!selectedSimulator) {
         return;
       }
-      void runAction(
-        () => sendKey(selectedSimulator.udid, { keyCode, modifiers }),
-        false,
-      );
+      sendControl(selectedSimulator.udid, { type: "key", keyCode, modifiers });
     },
   });
 
@@ -565,11 +620,9 @@ export function AppShell() {
         setAccessibilitySelectedId("");
         setAccessibilityHoveredId(null);
       }
-      void runAction(
-        () => sendTouch(selectedSimulator.udid, { ...coords, phase }),
-        false,
-      );
+      sendControl(selectedSimulator.udid, { type: "touch", ...coords, phase });
     },
+    onTouchPreview: showTouchIndicator,
     pan,
     rotationQuarterTurns,
     setPan,
@@ -581,6 +634,10 @@ export function AppShell() {
     chromeProfile,
     deviceNaturalSize,
   );
+  const chromeScreenBorderRadius = computeChromeScreenBorderRadius(
+    chromeProfile,
+    chromeScreenRect,
+  );
   const chromeScreenStyle =
     chromeProfile && chromeScreenRect
       ? {
@@ -588,7 +645,7 @@ export function AppShell() {
           top: `${(chromeScreenRect.y / chromeProfile.totalHeight) * 100}%`,
           width: `${(chromeScreenRect.width / chromeProfile.totalWidth) * 100}%`,
           height: `${(chromeScreenRect.height / chromeProfile.totalHeight) * 100}%`,
-          borderRadius: `${chromeProfile.cornerRadius}px`,
+          borderRadius: chromeScreenBorderRadius ?? "0",
         }
       : null;
   const shellStyle = chromeProfile
@@ -636,6 +693,70 @@ export function AppShell() {
     }
   }
 
+  const closeControlSocket = useCallback(() => {
+    const current = controlSocketRef.current;
+    controlSocketRef.current = null;
+    current?.socket.close();
+  }, []);
+
+  const ensureControlSocket = useCallback((udid: string) => {
+    const current = controlSocketRef.current;
+    if (
+      current?.udid === udid &&
+      current.socket.readyState !== WebSocket.CLOSING &&
+      current.socket.readyState !== WebSocket.CLOSED
+    ) {
+      return current;
+    }
+
+    current?.socket.close();
+    const socket = new WebSocket(simulatorControlSocketUrl(udid));
+    const state = { udid, socket, pending: [] as string[] };
+    controlSocketRef.current = state;
+
+    socket.addEventListener("open", () => {
+      for (const message of state.pending.splice(0)) {
+        socket.send(message);
+      }
+    });
+    socket.addEventListener("close", () => {
+      if (controlSocketRef.current === state) {
+        controlSocketRef.current = null;
+      }
+    });
+    socket.addEventListener("error", () => {
+      setLocalError("Simulator control stream disconnected.");
+    });
+
+    return state;
+  }, []);
+
+  function sendControl(udid: string, message: ControlMessage) {
+    setLocalError("");
+    const state = ensureControlSocket(udid);
+    const encoded = JSON.stringify(message);
+    if (state.socket.readyState === WebSocket.OPEN) {
+      state.socket.send(encoded);
+    } else {
+      state.pending.push(encoded);
+    }
+  }
+
+  useEffect(() => {
+    if (selectedSimulator?.isBooted) {
+      ensureControlSocket(selectedSimulator.udid);
+    } else {
+      closeControlSocket();
+    }
+  }, [
+    closeControlSocket,
+    ensureControlSocket,
+    selectedSimulator?.isBooted,
+    selectedSimulator?.udid,
+  ]);
+
+  useEffect(() => closeControlSocket, [closeControlSocket]);
+
   function beginZoomAnimation() {
     setZoomAnimating(true);
     if (zoomAnimationTimeoutRef.current) {
@@ -647,12 +768,11 @@ export function AppShell() {
     }, ZOOM_ANIMATION_MS);
   }
 
-  function applyZoom(
-    nextScale: number,
-    nextPan = { x: pan.x, y: pan.y + autoViewportOffsetY },
-  ) {
+  function applyZoom(nextScale: number, nextPan = pan, animate = true) {
     const clampedScale = clampZoom(nextScale, fitScale);
-    beginZoomAnimation();
+    if (animate) {
+      beginZoomAnimation();
+    }
     setViewMode("manual");
     setZoom(clampedScale);
     setPan(
@@ -666,6 +786,137 @@ export function AppShell() {
       ),
     );
   }
+
+  function applyZoomAtClientPoint(
+    nextScale: number,
+    clientX: number,
+    clientY: number,
+  ) {
+    const canvasRect = outerCanvasRef.current?.getBoundingClientRect();
+    if (!canvasRect) {
+      applyZoom(nextScale, pan, false);
+      return;
+    }
+
+    const clampedScale = clampZoom(nextScale, fitScale);
+    const ratio = clampedScale / Math.max(effectiveZoom, 0.001);
+    const cursor = {
+      x: clientX - (canvasRect.left + canvasRect.width / 2),
+      y: clientY - (canvasRect.top + canvasRect.height / 2),
+    };
+    const currentVisualPan = {
+      x: pan.x,
+      y: pan.y + autoViewportOffsetY,
+    };
+    const nextVisualPan = {
+      x: cursor.x - (cursor.x - currentVisualPan.x) * ratio,
+      y: cursor.y - (cursor.y - currentVisualPan.y) * ratio,
+    };
+    applyZoom(
+      clampedScale,
+      {
+        x: nextVisualPan.x,
+        y: nextVisualPan.y - autoViewportOffsetY,
+      },
+      false,
+    );
+  }
+
+  function handleViewportWheel(event: React.WheelEvent<HTMLElement>) {
+    if (!selectedSimulator) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const deltaScale =
+      event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? 240
+          : 1;
+    const deltaX = event.deltaX * deltaScale;
+    const deltaY = event.deltaY * deltaScale;
+
+    if (event.ctrlKey || event.metaKey) {
+      const nextScale = effectiveZoom * Math.exp(-deltaY * 0.002);
+      applyZoomAtClientPoint(nextScale, event.clientX, event.clientY);
+      return;
+    }
+
+    setViewMode("manual");
+    setPan((currentPan) =>
+      clampPan(
+        {
+          x: currentPan.x - deltaX,
+          y: currentPan.y - deltaY,
+        },
+        effectiveZoom,
+        canvasSize,
+        deviceNaturalSize,
+        chromeProfile,
+        rotationQuarterTurns,
+      ),
+    );
+  }
+
+  function showTouchIndicator(phase: TouchPhase, coords: Point) {
+    if (!touchOverlayVisible) {
+      return;
+    }
+
+    setTouchIndicators([{ id: 1, phase, x: coords.x, y: coords.y }]);
+    if (touchIndicatorTimeoutRef.current) {
+      clearTimeout(touchIndicatorTimeoutRef.current);
+      touchIndicatorTimeoutRef.current = 0;
+    }
+    if (phase === "ended" || phase === "cancelled") {
+      touchIndicatorTimeoutRef.current = window.setTimeout(() => {
+        setTouchIndicators([]);
+        touchIndicatorTimeoutRef.current = 0;
+      }, 240);
+    }
+  }
+
+  useEffect(() => {
+    if (!outerCanvasElement) {
+      return;
+    }
+    const canvasElement = outerCanvasElement;
+
+    type WebKitGestureEvent = Event & {
+      clientX?: number;
+      clientY?: number;
+      scale?: number;
+    };
+
+    function handleGestureStart(event: Event) {
+      event.preventDefault();
+      gestureStartZoomRef.current = effectiveZoom;
+    }
+
+    function handleGestureChange(event: Event) {
+      event.preventDefault();
+      const gestureEvent = event as WebKitGestureEvent;
+      const bounds = canvasElement.getBoundingClientRect();
+      applyZoomAtClientPoint(
+        gestureStartZoomRef.current * (gestureEvent.scale ?? 1),
+        gestureEvent.clientX ?? bounds.left + bounds.width / 2,
+        gestureEvent.clientY ?? bounds.top + bounds.height / 2,
+      );
+    }
+
+    canvasElement.addEventListener("gesturestart", handleGestureStart, {
+      passive: false,
+    });
+    canvasElement.addEventListener("gesturechange", handleGestureChange, {
+      passive: false,
+    });
+    return () => {
+      canvasElement.removeEventListener("gesturestart", handleGestureStart);
+      canvasElement.removeEventListener("gesturechange", handleGestureChange);
+    };
+  }, [applyZoomAtClientPoint, effectiveZoom, outerCanvasElement]);
 
   function promptForURL() {
     if (!selectedSimulator) {
@@ -718,7 +969,6 @@ export function AppShell() {
         debugVisible={debugVisible}
         error={error}
         filteredSimulators={filteredSimulators}
-        fps={fps}
         hierarchyVisible={hierarchyVisible}
         isLoading={isLoading}
         menuOpen={menuOpen}
@@ -813,13 +1063,14 @@ export function AppShell() {
           }
         }}
         onToggleMenu={() => setMenuOpen((current) => !current)}
-        runtimeInfo={runtimeInfo}
+        onToggleTouchOverlay={() =>
+          setTouchOverlayVisible((current) => !current)
+        }
         search={search}
         selectedSimulator={selectedSimulator}
         selectedSimulatorIdentifier={selectedSimulatorDetail}
         setSelectedUDID={setSelectedUDID}
-        stats={stats}
-        status={streamStatus}
+        touchOverlayVisible={touchOverlayVisible}
       />
       <SimulatorViewport
         accessibilityHoveredId={accessibilityHoveredId}
@@ -852,6 +1103,17 @@ export function AppShell() {
         chromeProfile={chromeProfile}
         chromeScreenStyle={chromeScreenStyle}
         chromeUrl={chromeUrl}
+        debugPanel={
+          debugVisible ? (
+            <DebugPanel
+              fps={fps}
+              inline
+              runtimeInfo={runtimeInfo}
+              stats={stats}
+              status={streamStatus}
+            />
+          ) : null
+        }
         deviceFrameStyle={deviceFrameStyle}
         devicePresentationStyle={devicePresentationStyle}
         deviceTransform={deviceTransform}
@@ -861,6 +1123,7 @@ export function AppShell() {
         isLoading={isLoading}
         isStreamError={streamStatus.state === "error"}
         isPanning={pointerInput.isPanning}
+        onChromeLoad={() => setChromeLoaded(true)}
         onPanPointerMove={pointerInput.handlePanPointerMove}
         onPanPointerUp={pointerInput.handlePanPointerUp}
         onPickerHover={setAccessibilityHoveredId}
@@ -874,6 +1137,7 @@ export function AppShell() {
         onScreenPointerMove={pointerInput.handleScreenPointerMove}
         onScreenPointerUp={pointerInput.handleScreenPointerUp}
         onStartPanning={pointerInput.startPanning}
+        onViewportWheel={handleViewportWheel}
         onZoomActual={() => applyZoom(1)}
         onZoomCenter={() => {
           beginZoomAnimation();
@@ -895,9 +1159,13 @@ export function AppShell() {
         selectedSimulator={selectedSimulator}
         shellStyle={shellStyle}
         streamCanvasRef={handleStreamCanvasRef}
+        statusOverlayLabel={simulatorStatusOverlayLabel}
+        touchIndicators={touchIndicators}
+        touchOverlayVisible={touchOverlayVisible}
         viewMode={viewMode}
         zoomDockRef={handleZoomDockRef}
         zoomAnimating={zoomAnimating}
+        viewportReady={viewportReady}
       />
     </div>
   );

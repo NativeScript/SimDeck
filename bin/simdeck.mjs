@@ -11,9 +11,14 @@ const packageRoot = path.resolve(
 );
 const binaryPath = path.join(packageRoot, "build", "simdeck-bin");
 
+if (process.platform !== "darwin") {
+  console.error("simdeck only supports macOS.");
+  process.exit(1);
+}
+
 if (!existsSync(binaryPath)) {
   console.error(
-    "simdeck is not built yet. Reinstall or rebuild the package so the native CLI is available.",
+    "simdeck native binary is missing. Reinstall the npm package or run `npm run build:cli` from a source checkout.",
   );
   process.exit(1);
 }

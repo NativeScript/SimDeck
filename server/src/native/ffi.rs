@@ -175,6 +175,19 @@ unsafe extern "C" {
         callback: Option<xcw_native_frame_callback>,
         user_data: *mut c_void,
     );
+    pub fn xcw_native_session_send_touch(
+        handle: *mut c_void,
+        x: f64,
+        y: f64,
+        phase: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_session_send_key(
+        handle: *mut c_void,
+        key_code: u16,
+        modifiers: u32,
+        error_message: *mut *mut c_char,
+    ) -> bool;
 
     pub fn xcw_native_free_string(value: *mut c_char);
     pub fn xcw_native_free_bytes(bytes: xcw_native_owned_bytes);

@@ -27,7 +27,7 @@ npm install
 npm run build
 ```
 
-`npm install` runs the postinstall hook that compiles the Rust + Objective-C CLI. `npm run build` rebuilds everything top-to-bottom (Rust binary, React bundle, NativeScript inspector).
+`npm install` installs JavaScript tooling only. `npm run build` rebuilds everything top-to-bottom: Rust binary, React bundle, NativeScript inspector, and test package.
 
 ## Running locally
 
@@ -40,22 +40,23 @@ This starts the Rust server in the background and runs the Vite dev server for t
 To run only the production server:
 
 ```sh
-./build/simdeck serve --port 4310
+./build/simdeck ui --open
 ```
 
 ## Layout
 
-| Folder                             | What lives here                                                                        |
-| ---------------------------------- | -------------------------------------------------------------------------------------- |
-| `server/`                          | Rust HTTP server, WebTransport hub, inspector hub, registry, metrics, launchd service. |
-| `cli/`                             | Objective-C native bridge for private CoreSimulator and SimulatorKit APIs.             |
-| `client/`                          | React UI served at `/`.                                                                |
-| `packages/nativescript-inspector/` | TypeScript runtime for the NativeScript inspector.                                     |
-| `packages/inspector-agent/`        | Swift Package for the Swift in-app inspector agent.                                    |
-| `packages/vscode-extension/`       | VS Code extension that opens the simulator inside an editor panel.                     |
-| `scripts/`                         | Repeatable build entrypoints used by both local dev and CI.                            |
-| `bin/`                             | Node launcher that locates and runs the compiled binary.                               |
-| `docs/`                            | This documentation site (VitePress).                                                   |
+| Folder                             | What lives here                                                                                           |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `server/`                          | CLI entrypoint, project daemon, Rust HTTP server, WebTransport hub, inspector hub, registry, and metrics. |
+| `cli/`                             | Objective-C native bridge for private CoreSimulator and SimulatorKit APIs.                                |
+| `client/`                          | React UI served at `/`.                                                                                   |
+| `packages/nativescript-inspector/` | TypeScript runtime for the NativeScript inspector.                                                        |
+| `packages/inspector-agent/`        | Swift Package for the Swift in-app inspector agent.                                                       |
+| `packages/simdeck-test/`           | JS/TS testing API for daemon-backed simulator automation.                                                 |
+| `packages/vscode-extension/`       | VS Code extension that opens the simulator inside an editor panel.                                        |
+| `scripts/`                         | Repeatable build entrypoints used by both local dev and CI.                                               |
+| `bin/`                             | Node launcher that locates and runs the compiled binary.                                                  |
+| `docs/`                            | This documentation site (VitePress).                                                                      |
 
 ## Working rules
 
@@ -107,6 +108,12 @@ npm run test
 
 This runs the Cargo test suite for the server and the Vitest suite for the client.
 
+Build the JS/TS testing package with:
+
+```sh
+npm run build:simdeck-test
+```
+
 The simulator-backed CLI integration suite is separate because it creates,
 boots, drives, erases, and deletes a temporary iOS simulator. The suite also
 builds and installs a tiny SwiftUI fixture app directly with `swiftc` so install,
@@ -125,7 +132,7 @@ step with timings:
 npm run test:integration:cli:verbose
 ```
 
-The integration runner captures `describe-ui` after each control step. If iOS
+The integration runner captures `describe` after each control step. If iOS
 shows a known system URL-opening confirmation, the runner handles it and then
 captures the UI again before continuing.
 
@@ -180,7 +187,7 @@ When you change something in the repo that the docs already cover — a CLI flag
 - Open an issue for anything that requires discussion before code.
 - For straightforward fixes, a PR is fine without a paired issue.
 - Include reproduction steps and the macOS / Xcode version when filing simulator-related bugs.
-- Include the server log (foreground or `~/Library/Logs/simdeck*.log`) when filing video-stream bugs.
+- Include the server log (`build/cli.log` from `npm run dev`, or foreground daemon output from a reproduction) when filing video-stream bugs.
 
 ## License
 

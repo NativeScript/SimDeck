@@ -4,9 +4,10 @@ SimDeck blends three different ways to inspect what an iOS app is rendering:
 
 | Source                   | Coverage                                                         | When to use it                                                              |
 | ------------------------ | ---------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| **AX**                   | Any simulator app via the system accessibility stack.            | Default fallback.                                                           |
+| **Native AX**            | Any simulator app via the Simulator accessibility stack.         | Default fallback.                                                           |
 | **Swift in-app agent**   | Apps that link `SimDeckInspectorAgent` in DEBUG.                 | Best for native iOS apps you control.                                       |
 | **NativeScript runtime** | NativeScript apps that import `@nativescript/simdeck-inspector`. | Best for NativeScript apps — exposes the logical view tree, not just UIKit. |
+| **React Native runtime** | React Native apps that import `@simdeck/react-native-inspector`. | Best for React Native apps — exposes components and Metro source locations. |
 
 The HTTP API picks the most specific source available, falls back to the next one when something goes wrong, and tells the client which sources were available so the UI can offer a switch.
 
@@ -14,12 +15,13 @@ The HTTP API picks the most specific source available, falls back to the next on
 
 `GET /api/simulators/{udid}/accessibility-tree` accepts a `source` query parameter:
 
-| `source`                     | Behaviour                                                                                            |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `auto` _(default)_ / unset   | Use the most accurate source available, falling back to AX.                                          |
-| `nativescript` / `ns`        | Force the NativeScript logical tree if a NativeScript inspector is connected for the foreground app. |
-| `uikit` / `in-app-inspector` | Force the raw UIKit hierarchy from any in-app inspector (NativeScript or Swift agent).               |
-| `ax`                         | Always use the AX accessibility snapshot.                                                            |
+| `source`                     | Behaviour                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `auto` _(default)_ / unset   | Use the most accurate source available, falling back to AX.                                            |
+| `nativescript` / `ns`        | Force the NativeScript logical tree if a NativeScript inspector is connected for the foreground app.   |
+| `react-native` / `rn`        | Force the React Native component tree if a React Native inspector is connected for the foreground app. |
+| `uikit` / `in-app-inspector` | Force the raw UIKit hierarchy from any in-app inspector (NativeScript or Swift agent).                 |
+| `native-ax` / `ax`           | Always use the native accessibility snapshot.                                                          |
 
 The server resolves which inspector belongs to the simulator by:
 
@@ -31,8 +33,13 @@ Every accessibility tree response includes:
 
 ```json
 {
-  "source": "nativescript|in-app-inspector|ax",
-  "availableSources": ["nativescript", "in-app-inspector", "ax"],
+  "source": "nativescript|react-native|in-app-inspector|native-ax",
+  "availableSources": [
+    "nativescript",
+    "react-native",
+    "in-app-inspector",
+    "native-ax"
+  ],
   "fallbackReason": "...",
   "inspector": { "bundleIdentifier": "...", "processIdentifier": 73214 }
 }
@@ -44,6 +51,7 @@ Every accessibility tree response includes:
 
 - **You own the iOS app and write Swift / Objective-C.** Link the [Swift in-app agent](/inspector/swift). It exposes the most semantic data — UIView properties, SwiftUI probes, custom actions — and lets the browser client edit values in place.
 - **You ship a NativeScript app.** Use the [NativeScript runtime inspector](/inspector/nativescript). It connects outbound to the SimDeck server and publishes both the NativeScript logical tree and the underlying UIKit hierarchy.
+- **You ship a React Native app.** Use the [React Native runtime inspector](/inspector/react-native). It connects outbound to the SimDeck server and publishes the React component tree with dev-mode source locations.
 - **You can't link anything into the app.** Stick with [AX snapshot](/inspector/accessibility). It only sees what the iOS accessibility stack exposes, but it works for every app.
 
 ## Editing properties

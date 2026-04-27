@@ -25,7 +25,7 @@
       },
       {
         "command": "simdeck.stopServer",
-        "title": "SimDeck: Stop Managed Server"
+        "title": "SimDeck: Stop Project Daemon"
       },
       {
         "command": "simdeck.showOutput",
@@ -38,7 +38,7 @@
         "simdeck.serverUrl": {
           "type": "string",
           "default": "http://127.0.0.1:4310",
-          "description": "URL loaded inside the simulator webview."
+          "description": "Preferred URL loaded inside the simulator webview. If auto-start launches a daemon on a different port, the extension uses the daemon URL returned by the CLI."
         },
         "simdeck.cliPath": {
           "type": "string",
@@ -50,17 +50,22 @@
           "default": 4310,
           "minimum": 1,
           "maximum": 65535,
-          "description": "Port used when the extension auto-starts the local server."
+          "description": "Preferred port used when the extension auto-starts the project daemon."
         },
         "simdeck.bindAddress": {
           "type": "string",
           "default": "127.0.0.1",
-          "description": "Bind address used when the extension auto-starts the local server."
+          "description": "Bind address used when the extension auto-starts the project daemon."
+        },
+        "simdeck.autoStartDaemon": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start or reuse the project daemon with `simdeck ui` when opening the simulator view if the preferred URL is not already reachable."
         },
         "simdeck.autoStartServer": {
           "type": "boolean",
           "default": true,
-          "description": "Start the local server automatically when opening the simulator view if the server is not already reachable."
+          "description": "Deprecated. Use `simdeck.autoStartDaemon`."
         }
       }
     }

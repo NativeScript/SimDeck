@@ -1,191 +1,172 @@
 # Command Reference
 
-Every subcommand exposed by `simdeck`. All of them assume the binary is on your `PATH` after `npm install -g simdeck`. Replace `simdeck` with `./build/simdeck` to run from a local checkout.
+Every public subcommand exposed by `simdeck`. Replace `simdeck` with `./build/simdeck` when running from a local checkout.
 
-## `serve`
+## UI And Daemon
 
-Start the HTTP and WebTransport servers in the foreground. This is the only command that holds the terminal open.
+### `ui`
 
-```sh
-simdeck serve [--port <u16>] [--bind <ip>] [--advertise-host <host>]
-                       [--client-root <path>] [--video-codec <codec>]
-                       [--access-token <token>]
-```
-
-| Flag               | Default               | Description                                                                            |
-| ------------------ | --------------------- | -------------------------------------------------------------------------------------- |
-| `--port`           | `4310`                | HTTP port. WebTransport listens on `port + 1`.                                         |
-| `--bind`           | `127.0.0.1`           | Bind address (`0.0.0.0` for [LAN access](/guide/lan-access), `::` for IPv6).           |
-| `--advertise-host` | matches `--bind`      | Hostname or IP advertised to remote clients in the WebTransport URL template and cert. |
-| `--client-root`    | bundled `client/dist` | Override the static client directory.                                                  |
-| `--video-codec`    | `hevc`                | One of `hevc`, `h264`, `h264-software`. See [Video Pipeline](/guide/video).            |
-| `--access-token`   | generated at startup  | Token accepted by `X-SimDeck-Token`, `Authorization: Bearer`, or the served UI cookie. |
-
-When the server is up it prints something like:
-
-```text
-HTTP listening on http://127.0.0.1:4310
-WebTransport listening on https://127.0.0.1:4311/wt/simulators/{udid}
-Serving client from /usr/local/lib/node_modules/simdeck/client/dist
-API access token: 9f...
-```
-
-`Ctrl-C` shuts both servers down cleanly.
-
-## `service on`
-
-Install SimDeck as a per-user `launchd` service. Same flags as `serve`:
+Start or reuse the project daemon and serve the browser UI.
 
 ```sh
-simdeck service on [--port <u16>] [--bind <ip>] [--advertise-host <host>]
-                            [--client-root <path>] [--video-codec <codec>]
-                            [--access-token <token>]
+simdeck ui [--port 4310] [--bind 127.0.0.1] [--advertise-host <host>]
+           [--client-root <path>] [--video-codec hevc|h264|h264-software]
+           [--open]
 ```
 
-The command writes `~/Library/LaunchAgents/dev.nativescript.simdeck.plist`, bootstraps it into `gui/<uid>`, and immediately kickstarts it. See [Background Service](/guide/service) for details.
+`--open` opens the authenticated local URL after the daemon is ready.
 
-Output (JSON):
+### `daemon start`
+
+Start or reuse the project daemon without opening the browser:
+
+```sh
+simdeck daemon start [--port 4310] [--bind 127.0.0.1]
+                     [--advertise-host <host>] [--client-root <path>]
+                     [--video-codec hevc|h264|h264-software]
+```
+
+Output:
 
 ```json
 {
   "ok": true,
-  "service": "dev.nativescript.simdeck",
-  "plist": "/Users/you/Library/LaunchAgents/dev.nativescript.simdeck.plist",
-  "stdoutLog": "/Users/you/Library/Logs/simdeck.log",
-  "stderrLog": "/Users/you/Library/Logs/simdeck.err.log"
+  "projectRoot": "/path/to/app",
+  "pid": 12345,
+  "url": "http://127.0.0.1:4310",
+  "started": true
 }
 ```
 
-## `service off`
+### `daemon status`
 
-Remove the launchd service:
+Print daemon metadata for the current project:
 
 ```sh
-simdeck service off
+simdeck daemon status
 ```
 
-Output (JSON):
+### `daemon stop`
 
-```json
-{
-  "ok": true,
-  "service": "dev.nativescript.simdeck",
-  "plist": "/Users/you/Library/LaunchAgents/dev.nativescript.simdeck.plist"
-}
+Stop the daemon for the current project:
+
+```sh
+simdeck daemon stop
 ```
 
-The plist is removed, but the log files under `~/Library/Logs` are kept.
+### `core-simulator`
 
-## `list`
+Manage Apple's CoreSimulator service layer:
 
-Print every simulator the native bridge can see, as JSON:
+```sh
+simdeck core-simulator restart
+simdeck core-simulator start
+simdeck core-simulator shutdown
+```
+
+Use this when `simctl` reports stale service state or simulator display attachment gets stuck before the first frame.
+
+## Simulator Lifecycle
 
 ```sh
 simdeck list
+simdeck boot <udid>
+simdeck shutdown <udid>
+simdeck erase <udid>
 ```
 
-```json
-{
-  "simulators": [
-    {
-      "udid": "9D7E5BB7-...",
-      "name": "iPhone 15 Pro",
-      "runtimeName": "iOS 18.0",
-      "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-15-Pro",
-      "isBooted": true
-    }
-  ]
-}
-```
+`list` returns the same simulator inventory the browser UI renders. Lifecycle commands return JSON and use the native bridge, preferring private CoreSimulator paths when available and falling back to `xcrun simctl`.
 
-This is roughly equivalent to `xcrun simctl list devices --json`, but the output is filtered down to the fields SimDeck exposes through `GET /api/simulators`.
-
-## `describe-ui`
-
-Print the current UI hierarchy. By default the command tries the running local
-SimDeck service first so it can use NativeScript or UIKit in-app inspectors, then
-falls back to the private native accessibility bridge.
+## Apps And URLs
 
 ```sh
-simdeck describe-ui <udid> [--format json|compact-json|agent]
-                         [--source auto|nativescript|uikit|native-ax]
-                         [--max-depth <n>] [--include-hidden] [--direct]
-                         [--point <x>,<y>] [--server-url <url>]
+simdeck install <udid> /path/to/App.app
+simdeck uninstall <udid> com.example.App
+simdeck launch <udid> com.example.App
+simdeck open-url <udid> https://example.com
+simdeck toggle-appearance <udid>
 ```
 
-Use `--format agent` for compact hierarchy text intended for LLM planning, and
-`--format compact-json` when a script needs parseable lower-token output.
-`--point` returns the native element at a screen point and uses the native point
-query directly.
+`launch` and `open-url` use the warm daemon fast path when available.
 
-## Warm service fast path
+## Inspect
 
-Most agent loops should keep `simdeck serve` or `simdeck service on` running and
-set:
+```sh
+simdeck describe <udid>
+simdeck describe <udid> --format agent --max-depth 4
+simdeck describe <udid> --format compact-json
+simdeck describe <udid> --source nativescript
+simdeck describe <udid> --source uikit
+simdeck describe <udid> --source native-ax
+simdeck describe <udid> --point 120,240
+simdeck describe <udid> --direct
+```
+
+By default, `describe` uses the project daemon so it can prefer connected NativeScript or UIKit in-app inspectors, then fall back to the private CoreSimulator accessibility bridge. `--direct` skips the daemon and uses the native accessibility bridge directly.
+
+Use `--format agent` for compact hierarchy text intended for agent planning, and `--format compact-json` when a script needs parseable lower-token output.
+
+## Input
+
+Coordinates are screen points unless `--normalized` is present.
+
+```sh
+simdeck tap <udid> 120 240
+simdeck tap <udid> 0.5 0.5 --normalized
+simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
+simdeck touch <udid> 0.5 0.5 --phase began --normalized
+simdeck touch <udid> 120 240 --down --up --delay-ms 800
+simdeck swipe <udid> 200 700 200 200
+simdeck gesture <udid> scroll-down
+simdeck pinch <udid> --start-distance 160 --end-distance 80
+simdeck rotate-gesture <udid> --radius 100 --degrees 90
+simdeck key <udid> enter
+simdeck key-sequence <udid> --keycodes h,e,l,l,o
+simdeck key-combo <udid> --modifiers cmd --key a
+simdeck type <udid> "hello"
+simdeck type <udid> --file message.txt
+simdeck button <udid> lock --duration-ms 1000
+simdeck dismiss-keyboard <udid>
+simdeck home <udid>
+simdeck app-switcher <udid>
+simdeck rotate-left <udid>
+simdeck rotate-right <udid>
+```
+
+Use selectors (`--id`, `--label`, `--value`, `--element-type`) when possible. Use `--stdin` or `--file` for text containing quotes, newlines, or shell-sensitive characters.
+
+## Batch
+
+Run a known sequence through one command:
+
+```sh
+simdeck batch <udid> \
+  --step "tap --label Continue --wait-timeout-ms 5000" \
+  --step "type 'hello world'" \
+  --step "gesture scroll-down"
+```
+
+Batch input can come from `--step`, `--file`, or `--stdin`. It fails fast by default; pass `--continue-on-error` for best-effort execution.
+
+## Evidence
+
+```sh
+simdeck screenshot <udid> --output screen.png
+simdeck screenshot <udid> --stdout > screen.png
+simdeck pasteboard set <udid> "hello"
+simdeck pasteboard get <udid>
+simdeck logs <udid> --seconds 30 --limit 200
+simdeck chrome-profile <udid>
+```
+
+`logs` fetches recent simulator logs. `chrome-profile` returns the CoreSimulator chrome layout used by the browser viewport.
+
+## HTTP Fast Path
+
+Supported hot controls use the daemon automatically. To target a specific daemon, set:
 
 ```sh
 export SIMDECK_SERVER_URL=http://127.0.0.1:4310
 ```
 
-Supported hot controls then use the local HTTP service and avoid repeated native
-setup in short-lived CLI processes. This fast path covers `launch`, `open-url`,
-normalized `touch`, normalized coordinate `tap`, normalized `swipe`, normalized
-`gesture`, `key`, `key-sequence`, `key-combo`, `dismiss-keyboard`, `home`,
-`app-switcher`, `button`, `rotate-left`, `rotate-right`, and
-`toggle-appearance`. Commands that need local files, selector-to-point
-resolution, screenshots, pasteboard, or batch execution stay on the direct
-native path.
-
-## `boot`
-
-Boot a simulator by UDID:
-
-```sh
-simdeck boot <udid>
-```
-
-```json
-{ "ok": true, "udid": "9D7E5BB7-...", "action": "boot" }
-```
-
-The native bridge prefers a private `CoreSimulator` direct boot when available and falls back to `xcrun simctl boot` otherwise.
-
-## `shutdown`
-
-Shut a simulator down by UDID:
-
-```sh
-simdeck shutdown <udid>
-```
-
-```json
-{ "ok": true, "udid": "9D7E5BB7-...", "action": "shutdown" }
-```
-
-If the server has a live session attached for the UDID, the registry tears it down before issuing the shutdown.
-
-## `open-url`
-
-Open a URL inside the simulator. This goes through `xcrun simctl openurl`, which routes `https://` and `http://` to MobileSafari and any other scheme to whichever app handles it:
-
-```sh
-simdeck open-url <udid> https://example.com
-```
-
-```json
-{ "ok": true, "udid": "9D7E5BB7-...", "url": "https://example.com" }
-```
-
-## `launch`
-
-Launch an installed app by its bundle identifier. This goes through `xcrun simctl launch`:
-
-```sh
-simdeck launch <udid> com.apple.Preferences
-```
-
-```json
-{ "ok": true, "udid": "9D7E5BB7-...", "bundleId": "com.apple.Preferences" }
-```
-
-If the simulator is shut down the command fails with a clear error. Boot it first with `simdeck boot <udid>`.
+This avoids repeated native setup in short-lived CLI processes. Commands that need local files, screenshots, pasteboard, or direct AX point queries still use the direct native path when appropriate.

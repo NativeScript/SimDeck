@@ -21,7 +21,7 @@ cat > "$OUTPUT" <<EOF
 set -euo pipefail
 
 SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
-if [[ "\${1:-}" == "serve" ]]; then
+if [[ "\${1:-}" == "daemon" && "\${2:-}" == "run" ]]; then
   while true; do
     set +e
     "\$SCRIPT_DIR/$(basename "$OUTPUT_BIN")" "\$@"

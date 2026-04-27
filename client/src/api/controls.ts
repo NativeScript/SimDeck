@@ -8,6 +8,10 @@ import type {
   TouchPayload,
 } from "./types";
 
+export type ControlMessage =
+  | ({ type: "touch" } & TouchPayload)
+  | ({ type: "key" } & KeyPayload);
+
 async function postSimulatorAction(
   udid: string,
   action: string,
@@ -50,6 +54,15 @@ export function sendTouch(udid: string, payload: TouchPayload) {
 
 export function sendKey(udid: string, payload: KeyPayload) {
   return postSimulatorAction(udid, "key", payload);
+}
+
+export function simulatorControlSocketUrl(udid: string) {
+  const url = new URL(
+    `/api/simulators/${encodeURIComponent(udid)}/control`,
+    window.location.href,
+  );
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
 }
 
 export function dismissKeyboard(udid: string) {

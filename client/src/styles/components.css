@@ -420,6 +420,12 @@
   color: color-mix(in srgb, #65d2ff 82%, var(--text));
 }
 
+.hierarchy-source-pill.source-react-native {
+  border-color: color-mix(in srgb, #61dafb 50%, var(--border));
+  background: color-mix(in srgb, #61dafb 14%, transparent);
+  color: color-mix(in srgb, #61dafb 78%, var(--text));
+}
+
 .hierarchy-source-pill.source-native-ax {
   border-color: color-mix(in srgb, #d7ba7d 55%, var(--border));
   background: color-mix(in srgb, #d7ba7d 13%, transparent);
@@ -915,6 +921,7 @@
   min-width: 0;
   width: 100%;
   height: 100%;
+  overscroll-behavior: none;
   background-color: var(--canvas-bg);
   background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
   background-size: 16px 16px;
@@ -931,6 +938,11 @@
 .device-anchor {
   transform-origin: center center;
   will-change: transform;
+}
+
+.device-anchor-loading {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .device-frame {
@@ -1022,6 +1034,42 @@
   pointer-events: none;
 }
 
+.touch-interaction-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.touch-indicator {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  margin: -15px 0 0 -15px;
+  border: 2px solid rgba(245, 245, 245, 0.92);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.44),
+    0 0 14px rgba(255, 255, 255, 0.26);
+  transform: translate3d(0, 0, 0) scale(0.86);
+  opacity: 0.9;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.touch-indicator-began,
+.touch-indicator-moved {
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+.touch-indicator-ended,
+.touch-indicator-cancelled {
+  opacity: 0;
+  transform: translate3d(0, 0, 0) scale(1.55);
+}
+
 .accessibility-rect {
   position: absolute;
   min-width: 8px;
@@ -1072,6 +1120,54 @@
   color: var(--text-muted);
   font-size: 13px;
   text-align: center;
+}
+
+.canvas-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.canvas-loading p {
+  margin: 0;
+}
+
+.loading-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid color-mix(in srgb, var(--text-muted) 25%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 780ms linear infinite;
+}
+
+.debug-overlay {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 14;
+  width: min(360px, calc(100% - 24px));
+  pointer-events: auto;
+}
+
+.debug-overlay .debug-panel-inline {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(10px);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .error-msg {

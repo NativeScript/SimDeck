@@ -27,6 +27,7 @@ export const ACCESSIBILITY_SOURCE_STORAGE_KEY = "xcw-hierarchy-source";
 
 const ACCESSIBILITY_SOURCE_ORDER: AccessibilitySource[] = [
   "nativescript",
+  "react-native",
   "in-app-inspector",
   "native-ax",
 ];
@@ -69,6 +70,25 @@ export function readPersistedUiState(): PersistedUiState {
   }
 }
 
+export function clearLegacyVolatileUiState(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.removeItem(DEBUG_VISIBLE_STORAGE_KEY);
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(UI_STATE_STORAGE_KEY) ?? "{}",
+    ) as PersistedUiState;
+    if (parsed.search != null) {
+      delete parsed.search;
+      window.localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(parsed));
+    }
+  } catch {
+    window.localStorage.removeItem(UI_STATE_STORAGE_KEY);
+  }
+}
+
 export function readStoredAccessibilitySource(): AccessibilitySourcePreference {
   if (typeof window === "undefined") {
     return "auto";
@@ -94,6 +114,7 @@ export function isAccessibilitySource(
 ): value is AccessibilitySource {
   return (
     value === "nativescript" ||
+    value === "react-native" ||
     value === "in-app-inspector" ||
     value === "native-ax"
   );

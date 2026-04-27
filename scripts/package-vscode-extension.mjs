@@ -22,6 +22,7 @@ const result = spawnSync(
     "--out",
     packagePath,
     "--allow-missing-repository",
+    "--no-dependencies",
   ],
   {
     cwd: extensionDir,

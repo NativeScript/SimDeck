@@ -1,6 +1,6 @@
 # CLI
 
-The `simdeck` binary is the only entrypoint SimDeck ships. It hosts the HTTP server, manages the launchd service, and exposes a small set of simulator-control subcommands that are convenient from scripts.
+The `simdeck` binary is the only entrypoint SimDeck ships. It opens the browser UI, manages a warm project daemon, and exposes simulator-control subcommands for scripts and tests.
 
 ## Synopsis
 
@@ -8,19 +8,21 @@ The `simdeck` binary is the only entrypoint SimDeck ships. It hosts the HTTP ser
 simdeck [--server-url <url>] <COMMAND> [OPTIONS]
 ```
 
-Set `SIMDECK_SERVER_URL=http://127.0.0.1:4310` or pass `--server-url` to route supported hot controls through an already-running local service. That avoids repeated native setup for agent loops while preserving the same JSON command output.
+Most commands automatically start or reuse the project daemon when that is the fastest path. Set `SIMDECK_SERVER_URL=http://127.0.0.1:4310` or pass `--server-url` to target a specific already-running daemon.
 
 ## Top-level commands
 
-| Command                    | Purpose                                                                                     |
-| -------------------------- | ------------------------------------------------------------------------------------------- |
-| `serve`                    | Start the HTTP and WebTransport servers in the foreground.                                  |
-| `service on/off`           | Install or remove the per-user `launchd` service. See [Background Service](/guide/service). |
-| `list`                     | Print every simulator known to the native bridge as JSON.                                   |
-| `boot <udid>`              | Boot the given simulator.                                                                   |
-| `shutdown <udid>`          | Shut the given simulator down.                                                              |
-| `open-url <udid> <url>`    | Open a URL inside the simulator (Safari for `https://`, deep links otherwise).              |
-| `launch <udid> <bundleId>` | Launch an installed app by its bundle identifier.                                           |
+| Command                                                 | Purpose                                                     |
+| ------------------------------------------------------- | ----------------------------------------------------------- |
+| `ui`                                                    | Start or reuse the project daemon and serve the browser UI. |
+| `daemon start/status/stop`                              | Manage the project daemon explicitly.                       |
+| `core-simulator ...`                                    | Restart or manage Apple's CoreSimulator service layer.      |
+| `list`                                                  | Print every simulator known to the native bridge as JSON.   |
+| `boot` / `shutdown` / `erase`                           | Manage simulator lifecycle.                                 |
+| `install` / `uninstall` / `launch` / `open-url`         | Manage apps and URLs inside a simulator.                    |
+| `describe`                                              | Print accessibility or in-app inspector hierarchy data.     |
+| `tap` / `swipe` / `gesture` / `type` / `key` / `button` | Drive simulator input.                                      |
+| `screenshot` / `logs` / `pasteboard` / `chrome-profile` | Collect evidence and device metadata.                       |
 
 Every subcommand returns an exit code that follows shell conventions: zero on success, non-zero on failure.
 

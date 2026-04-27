@@ -41,7 +41,11 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
     DFPrivateSimulatorDisplayBridge *bridge = [[DFPrivateSimulatorDisplayBridge alloc] initWithUDID:udid error:&bridgeError];
     if (bridge == nil) {
         if (error != NULL) {
-            *error = bridgeError;
+            *error = bridgeError ?: [NSError errorWithDomain:XCWPrivateSimulatorSessionErrorDomain
+                                                         code:1
+                                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"Unable to initialize the private simulator display bridge.",
+            }];
         }
         return nil;
     }

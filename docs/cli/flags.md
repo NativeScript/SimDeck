@@ -1,120 +1,90 @@
 # Flags & Options
 
-A consolidated list of every flag accepted by the SimDeck CLI, grouped by where it applies.
-
-## Global flags
-
-There are currently no global flags. Every option is scoped to a subcommand.
+A consolidated list of the public SimDeck CLI flags, grouped by command.
 
 ::: tip Help output
-Pass `--help` to any subcommand to see the same flag list directly from the binary, including any flags that may have been added after this page was written:
+Pass `--help` to any command to see the generated flag list from the binary:
 
 ```sh
-simdeck serve --help
-simdeck service on --help
+simdeck ui --help
+simdeck daemon start --help
+simdeck tap --help
 ```
 
 :::
 
-## `serve` and `service on` flags
-
-These two subcommands accept the same flags because the service command writes them straight into the launchd plist.
-
-### `--port <u16>`
-
-| Default | `4310`          |
-| ------- | --------------- |
-| Type    | unsigned 16-bit |
-
-The HTTP port. WebTransport listens on `port + 1`.
-
-### `--bind <ip>`
-
-| Default | `127.0.0.1`  |
-| ------- | ------------ |
-| Type    | IPv4 or IPv6 |
-
-Bind address for both the HTTP server and the WebTransport server. Common values:
-
-- `127.0.0.1` — localhost only.
-- `0.0.0.0` — every IPv4 interface.
-- `::` — every IPv4 and IPv6 interface (when supported by the OS dual-stack config).
-- A specific interface IP.
-
-### `--advertise-host <host>`
-
-| Default | matches `--bind` (or `localhost` for unspecified addresses) |
-| ------- | ----------------------------------------------------------- |
-| Type    | hostname or IP literal                                      |
-
-Hostname or IP that gets baked into the WebTransport URL template advertised at `GET /api/health`, and added to the certificate's Subject Alternative Names.
-
-If you bind to `0.0.0.0` and don't pass `--advertise-host`, SimDeck warns at startup because the default `localhost` won't work for remote clients.
-
-### `--client-root <path>`
-
-| Default | `client/dist` next to the binary, falling back to `./client/dist` |
-| ------- | ----------------------------------------------------------------- |
-| Type    | filesystem path                                                   |
-
-Override the static client directory. The Rust server serves the contents at the HTTP root and falls through to a 404 for missing files.
-
-### `--video-codec <codec>`
-
-| Default | `hevc`                                 |
-| ------- | -------------------------------------- |
-| Type    | one of `hevc`, `h264`, `h264-software` |
-
-Encoder used by the native bridge. See [Video Pipeline](/guide/video) for when to switch.
-
-### `--access-token <token>`
-
-| Default | generated at startup |
-| ------- | -------------------- |
-| Type    | string               |
-
-HTTP API and WebTransport access token. The served browser UI receives it automatically through a strict same-site cookie, so normal local use does not require copying the token. Direct API callers should send either `X-SimDeck-Token: <token>` or `Authorization: Bearer <token>`.
-
-## Global CLI flags
+## Global Flags
 
 ### `--server-url <url>`
 
-| Default | unset                          |
-| ------- | ------------------------------ |
-| Env     | `SIMDECK_SERVER_URL`           |
-| Type    | `http://` URL for local server |
+| Default | unset                |
+| ------- | -------------------- |
+| Env     | `SIMDECK_SERVER_URL` |
+| Type    | `http://` URL        |
 
-When set, supported hot controls delegate to the warm local SimDeck service instead of starting a fresh native control path in the CLI process. This is fastest for agent-driven loops. Supported delegated controls include `launch`, `open-url`, normalized `touch`, normalized coordinate `tap`, normalized `swipe`, normalized `gesture`, `key`, `key-sequence`, `key-combo`, `button`, `dismiss-keyboard`, `home`, `app-switcher`, `rotate-left`, `rotate-right`, and `toggle-appearance`.
+Targets a specific running SimDeck daemon for commands that support the HTTP fast path. If unset, commands start or reuse the current project's daemon when needed.
 
-## Positional arguments
+## `ui` And `daemon start`
 
-Subcommands that take positionals expect them in the order shown:
+`ui` and `daemon start` accept the same server options. `ui` also accepts `--open`.
 
-| Command    | Positionals         | Notes                                        |
-| ---------- | ------------------- | -------------------------------------------- |
-| `boot`     | `<udid>`            | Simulator UDID from `simdeck list`.          |
-| `shutdown` | `<udid>`            |                                              |
-| `open-url` | `<udid> <url>`      | Any URL scheme accepted by `simctl openurl`. |
-| `launch`   | `<udid> <bundleId>` | App must already be installed.               |
+| Flag               | Default               | Description                                                                  |
+| ------------------ | --------------------- | ---------------------------------------------------------------------------- |
+| `--port <u16>`     | `4310`                | HTTP port. WebTransport listens on `port + 1`.                               |
+| `--bind <ip>`      | `127.0.0.1`           | Bind address (`0.0.0.0` for [LAN access](/guide/lan-access), `::` for IPv6). |
+| `--advertise-host` | matches local host    | Hostname or IP advertised in the WebTransport URL template and certificate.  |
+| `--client-root`    | bundled `client/dist` | Override the static browser client directory.                                |
+| `--video-codec`    | `hevc`                | One of `hevc`, `h264`, `h264-software`. See [Video Pipeline](/guide/video).  |
+| `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                       |
 
-## `describe-ui` flags
+The public commands generate an access token automatically. Use `simdeck daemon status` to read it for direct API callers.
 
-| Flag                 | Default                                | Description                                                                      |
-| -------------------- | -------------------------------------- | -------------------------------------------------------------------------------- |
-| `--format`           | `json`                                 | Output format: `json`, `compact-json`, or `agent`.                               |
-| `--source`           | `auto`                                 | Hierarchy source: `auto`, `nativescript`, `uikit`, or `native-ax`.               |
-| `--max-depth`        | unlimited native / `80` service        | Trim descendants after the requested depth.                                      |
-| `--include-hidden`   | `false`                                | Include hidden in-app inspector views when supported.                            |
-| `--direct`           | `false`                                | Skip the local service and use the private native accessibility bridge directly. |
-| `--point <x>,<y>`    | unset                                  | Return the native element at a screen point.                                     |
-| `--server-url <url>` | global flag or `http://127.0.0.1:4310` | Local service URL used for source-aware hierarchy requests.                      |
+## `describe`
 
-## Exit codes
+| Flag               | Default                        | Description                                                               |
+| ------------------ | ------------------------------ | ------------------------------------------------------------------------- |
+| `--format`         | `json`                         | Output format: `json`, `compact-json`, or `agent`.                        |
+| `--source`         | `auto`                         | Hierarchy source: `auto`, `nativescript`, `uikit`, or `native-ax`.        |
+| `--max-depth`      | unlimited native / `80` daemon | Trim descendants after the requested depth.                               |
+| `--include-hidden` | `false`                        | Include hidden in-app inspector views when supported.                     |
+| `--direct`         | `false`                        | Skip the daemon and use the private native accessibility bridge directly. |
+| `--point <x>,<y>`  | unset                          | Return the native element at a screen point.                              |
+
+## Input Flags
+
+Common input commands:
+
+| Command          | Important flags                                                                                                                                                 |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tap`            | `--id`, `--label`, `--value`, `--element-type`, `--wait-timeout-ms`, `--poll-interval-ms`, `--normalized`, `--duration-ms`, `--pre-delay-ms`, `--post-delay-ms` |
+| `touch`          | `--phase`, `--normalized`, `--down`, `--up`, `--delay-ms`                                                                                                       |
+| `swipe`          | `--normalized`, `--duration-ms`, `--steps`, `--pre-delay-ms`, `--post-delay-ms`                                                                                 |
+| `gesture`        | `--screen-width`, `--screen-height`, `--normalized`, `--duration-ms`, `--delta`, `--pre-delay-ms`, `--post-delay-ms`                                            |
+| `pinch`          | `--start-distance`, `--end-distance`, `--angle-degrees`, `--normalized`, `--duration-ms`, `--steps`                                                             |
+| `rotate-gesture` | `--radius`, `--degrees`, `--normalized`, `--duration-ms`, `--steps`                                                                                             |
+| `type`           | `--stdin`, `--file`, `--delay-ms`                                                                                                                               |
+| `key`            | `--modifiers`, `--duration-ms`, `--pre-delay-ms`, `--post-delay-ms`                                                                                             |
+| `key-sequence`   | `--keycodes`, `--delay-ms`                                                                                                                                      |
+| `key-combo`      | `--modifiers`, `--key`                                                                                                                                          |
+| `button`         | `--duration-ms`                                                                                                                                                 |
+
+Coordinates are screen points unless `--normalized` is present. Normalized coordinates are clamped to `0.0..1.0`.
+
+## Evidence And Batch Flags
+
+| Command          | Flags                                                |
+| ---------------- | ---------------------------------------------------- |
+| `screenshot`     | `--output <path>`, `--stdout`                        |
+| `logs`           | `--seconds <f64>`, `--limit <usize>`                 |
+| `pasteboard set` | `--stdin`, `--file`                                  |
+| `batch`          | `--step`, `--file`, `--stdin`, `--continue-on-error` |
+
+## Exit Codes
 
 | Exit code | Meaning                                                                    |
 | --------- | -------------------------------------------------------------------------- |
 | `0`       | Success.                                                                   |
 | `1`       | Command-level failure (bad usage, missing simulator, native bridge error). |
-| `2`       | Reserved by Clap for usage / parser errors.                                |
+| `2`       | Clap parser errors.                                                        |
 
 Errors print a short message to stderr; structured JSON is reserved for success output.

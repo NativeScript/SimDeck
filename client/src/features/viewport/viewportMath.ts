@@ -4,6 +4,7 @@ import {
   DEVICE_SCREEN_WIDTH,
   FIT_MARGIN,
   MAX_ZOOM_MULTIPLIER,
+  MIN_ZOOM_MULTIPLIER,
 } from "../../shared/constants";
 import type { Point, ScreenRect, Size } from "./types";
 
@@ -102,6 +103,16 @@ export function computeChromeScreenRect(
     return null;
   }
 
+  const aspectDelta = Math.abs(deviceAspect - profileAspect) / profileAspect;
+  if (aspectDelta <= 0.01) {
+    return {
+      height: chromeProfile.screenHeight,
+      width: chromeProfile.screenWidth,
+      x: chromeProfile.screenX,
+      y: chromeProfile.screenY,
+    };
+  }
+
   let width = chromeProfile.screenWidth;
   let height = width / deviceAspect;
   let x = chromeProfile.screenX;
@@ -116,6 +127,45 @@ export function computeChromeScreenRect(
   }
 
   return { x, y, width, height };
+}
+
+export function computeChromeScreenBorderRadius(
+  chromeProfile: ChromeProfile | null,
+  screenRect: ScreenRect | null,
+): string | null {
+  if (!chromeProfile || !screenRect) {
+    return null;
+  }
+
+  const epsilon = 0.5;
+  const leftTouches = Math.abs(screenRect.x - chromeProfile.screenX) <= epsilon;
+  const topTouches = Math.abs(screenRect.y - chromeProfile.screenY) <= epsilon;
+  const rightTouches =
+    Math.abs(
+      screenRect.x +
+        screenRect.width -
+        (chromeProfile.screenX + chromeProfile.screenWidth),
+    ) <= epsilon;
+  const bottomTouches =
+    Math.abs(
+      screenRect.y +
+        screenRect.height -
+        (chromeProfile.screenY + chromeProfile.screenHeight),
+    ) <= epsilon;
+  const radius = Math.max(
+    0,
+    Math.min(
+      chromeProfile.cornerRadius,
+      screenRect.width / 2,
+      screenRect.height / 2,
+    ),
+  );
+  const topLeft = topTouches && leftTouches ? radius : 0;
+  const topRight = topTouches && rightTouches ? radius : 0;
+  const bottomRight = bottomTouches && rightTouches ? radius : 0;
+  const bottomLeft = bottomTouches && leftTouches ? radius : 0;
+
+  return `${topLeft}px ${topRight}px ${bottomRight}px ${bottomLeft}px`;
 }
 
 function computeScale(
@@ -199,7 +249,7 @@ export function computeCenterScale(
 }
 
 export function clampZoom(scale: number, fitScale: number): number {
-  const minZoom = Math.min(1, fitScale);
+  const minZoom = Math.min(1, fitScale) * MIN_ZOOM_MULTIPLIER;
   const maxZoom = Math.max(1, fitScale) * MAX_ZOOM_MULTIPLIER;
   return Math.min(Math.max(scale, minZoom), maxZoom);
 }

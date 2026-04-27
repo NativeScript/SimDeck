@@ -4,6 +4,7 @@ import type { AccessibilityNode } from "../../api/types";
 import { AccessibilityOverlay } from "../accessibility/AccessibilityOverlay";
 import { findAccessibilityItemAtPoint } from "../accessibility/accessibilityTree";
 import { normalizedPointerCoordinatesForOrientation } from "../input/gestureMath";
+import type { TouchIndicator } from "./types";
 
 interface DeviceChromeProps {
   accessibilityHoveredId: string | null;
@@ -15,6 +16,7 @@ interface DeviceChromeProps {
   hasFrame: boolean;
   isBooted: boolean;
   isStreamError: boolean;
+  onChromeLoad: () => void;
   onPanPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
   onPanPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
   onPanPointerUp: () => void;
@@ -30,6 +32,9 @@ interface DeviceChromeProps {
   shellStyle: CSSProperties | null;
   simulatorName: string;
   streamCanvasRef: Ref<HTMLCanvasElement | null>;
+  statusOverlayLabel: string;
+  touchIndicators: TouchIndicator[];
+  touchOverlayVisible: boolean;
   useChromeProfile: boolean;
 }
 
@@ -43,6 +48,7 @@ export function DeviceChrome({
   hasFrame,
   isBooted,
   isStreamError,
+  onChromeLoad,
   onPanPointerCancel,
   onPanPointerMove,
   onPanPointerUp,
@@ -58,6 +64,9 @@ export function DeviceChrome({
   shellStyle,
   simulatorName,
   streamCanvasRef,
+  statusOverlayLabel,
+  touchIndicators,
+  touchOverlayVisible,
   useChromeProfile,
 }: DeviceChromeProps) {
   if (useChromeProfile) {
@@ -75,6 +84,7 @@ export function DeviceChrome({
           aria-hidden="true"
           className="device-chrome"
           draggable={false}
+          onLoad={onChromeLoad}
           src={chromeUrl}
         />
         <ScreenLayer
@@ -95,6 +105,9 @@ export function DeviceChrome({
           rotationQuarterTurns={rotationQuarterTurns}
           simulatorName={simulatorName}
           streamCanvasRef={streamCanvasRef}
+          statusOverlayLabel={statusOverlayLabel}
+          touchIndicators={touchIndicators}
+          touchOverlayVisible={touchOverlayVisible}
           useChromeProfile
         />
       </div>
@@ -127,6 +140,9 @@ export function DeviceChrome({
         rotationQuarterTurns={rotationQuarterTurns}
         simulatorName={simulatorName}
         streamCanvasRef={streamCanvasRef}
+        statusOverlayLabel={statusOverlayLabel}
+        touchIndicators={touchIndicators}
+        touchOverlayVisible={touchOverlayVisible}
         useChromeProfile={false}
       />
     </div>
@@ -151,6 +167,9 @@ interface ScreenLayerProps {
   rotationQuarterTurns: number;
   simulatorName: string;
   streamCanvasRef: Ref<HTMLCanvasElement | null>;
+  statusOverlayLabel: string;
+  touchIndicators: TouchIndicator[];
+  touchOverlayVisible: boolean;
   useChromeProfile: boolean;
 }
 
@@ -172,6 +191,9 @@ function ScreenLayer({
   rotationQuarterTurns,
   simulatorName,
   streamCanvasRef,
+  statusOverlayLabel,
+  touchIndicators,
+  touchOverlayVisible,
   useChromeProfile,
 }: ScreenLayerProps) {
   return (
@@ -193,6 +215,9 @@ function ScreenLayer({
         roots={accessibilityRoots}
         selectedId={accessibilitySelectedId}
       />
+      {touchOverlayVisible ? (
+        <TouchInteractionOverlay indicators={touchIndicators} />
+      ) : null}
       {accessibilityPickerActive ? (
         <div
           className="accessibility-picker-layer"
@@ -226,12 +251,36 @@ function ScreenLayer({
           }}
         />
       ) : null}
-      {isBooted && !hasFrame && !isStreamError ? (
+      {statusOverlayLabel ? (
+        <div className="screen-overlay">{statusOverlayLabel}</div>
+      ) : null}
+      {isBooted && !hasFrame && !isStreamError && !statusOverlayLabel ? (
         <div className="screen-overlay">Waiting for first frame…</div>
       ) : null}
-      {!isBooted ? (
+      {!isBooted && !statusOverlayLabel ? (
         <div className="screen-overlay">Boot simulator to start streaming</div>
       ) : null}
+    </div>
+  );
+}
+
+function TouchInteractionOverlay({
+  indicators,
+}: {
+  indicators: TouchIndicator[];
+}) {
+  return (
+    <div className="touch-interaction-overlay" aria-hidden="true">
+      {indicators.map((indicator) => (
+        <span
+          className={`touch-indicator touch-indicator-${indicator.phase}`}
+          key={indicator.id}
+          style={{
+            left: `${indicator.x * 100}%`,
+            top: `${indicator.y * 100}%`,
+          }}
+        />
+      ))}
     </div>
   );
 }

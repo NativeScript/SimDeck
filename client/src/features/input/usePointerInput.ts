@@ -16,6 +16,7 @@ interface UsePointerInputOptions {
   rotationQuarterTurns: number;
   setPan: React.Dispatch<React.SetStateAction<Point>>;
   onTouch: (phase: TouchPhase, coords: Point) => void;
+  onTouchPreview?: (phase: TouchPhase, coords: Point) => void;
 }
 
 export function usePointerInput({
@@ -29,6 +30,7 @@ export function usePointerInput({
   rotationQuarterTurns,
   setPan,
   onTouch,
+  onTouchPreview,
 }: UsePointerInputOptions) {
   const activePointerRef = useRef<number | null>(null);
   const moveFrameRef = useRef<number>(0);
@@ -138,6 +140,7 @@ export function usePointerInput({
     }
     activePointerRef.current = event.pointerId;
     event.currentTarget.setPointerCapture(event.pointerId);
+    onTouchPreview?.("began", coords);
     onTouch("began", coords);
   }
 
@@ -151,6 +154,7 @@ export function usePointerInput({
       rotationQuarterTurns,
     );
     if (coords) {
+      onTouchPreview?.("moved", coords);
       queueMove(coords);
     }
   }
@@ -170,6 +174,7 @@ export function usePointerInput({
       rotationQuarterTurns,
     );
     if (coords) {
+      onTouchPreview?.(phase, coords);
       onTouch(phase, coords);
     }
   }

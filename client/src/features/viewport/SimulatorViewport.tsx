@@ -7,10 +7,11 @@ import type {
 } from "../../api/types";
 import { ZoomControls } from "../toolbar/ZoomControls";
 import { DeviceChrome } from "./DeviceChrome";
-import type { ViewMode } from "./types";
+import type { TouchIndicator, ViewMode } from "./types";
 
 interface SimulatorViewportProps {
   accessibilityHoveredId: string | null;
+  debugPanel: ReactNode;
   accessibilityPanel: ReactNode;
   accessibilityPickerActive: boolean;
   accessibilityRoots: AccessibilityNode[];
@@ -27,10 +28,12 @@ interface SimulatorViewportProps {
   isLoading: boolean;
   isStreamError: boolean;
   isPanning: boolean;
+  onChromeLoad: () => void;
   onPanPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
   onPanPointerUp: () => void;
   onPickerHover: (id: string | null) => void;
   onPickerSelect: (id: string) => void;
+  onViewportWheel: (event: React.WheelEvent<HTMLElement>) => void;
   onScreenPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
   onScreenPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
   onScreenPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
@@ -47,9 +50,13 @@ interface SimulatorViewportProps {
   selectedSimulator: SimulatorMetadata | null;
   shellStyle: CSSProperties | null;
   streamCanvasRef: Ref<HTMLCanvasElement | null>;
+  statusOverlayLabel: string;
+  touchIndicators: TouchIndicator[];
+  touchOverlayVisible: boolean;
   viewMode: ViewMode;
   zoomDockRef: Ref<HTMLDivElement | null>;
   zoomAnimating: boolean;
+  viewportReady: boolean;
 }
 
 export function SimulatorViewport({
@@ -58,6 +65,7 @@ export function SimulatorViewport({
   accessibilityPickerActive,
   accessibilityRoots,
   accessibilitySelectedId,
+  debugPanel,
   chromeProfile,
   chromeScreenStyle,
   chromeUrl,
@@ -70,10 +78,12 @@ export function SimulatorViewport({
   isLoading,
   isStreamError,
   isPanning,
+  onChromeLoad,
   onPanPointerMove,
   onPanPointerUp,
   onPickerHover,
   onPickerSelect,
+  onViewportWheel,
   onScreenPointerCancel,
   onScreenPointerDown,
   onScreenPointerMove,
@@ -90,10 +100,21 @@ export function SimulatorViewport({
   selectedSimulator,
   shellStyle,
   streamCanvasRef,
+  statusOverlayLabel,
+  touchIndicators,
+  touchOverlayVisible,
   viewMode,
   zoomDockRef,
   zoomAnimating,
+  viewportReady,
 }: SimulatorViewportProps) {
+  const showDeviceLoading = Boolean(
+    selectedSimulator?.isBooted && !viewportReady && !isStreamError,
+  );
+  const hideDeviceWhileLoading = Boolean(
+    selectedSimulator?.isBooted && !viewportReady,
+  );
+
   return (
     <div className="main">
       {accessibilityPanel}
@@ -109,11 +130,12 @@ export function SimulatorViewport({
         }}
         onPointerMove={onPanPointerMove}
         onPointerUp={onPanPointerUp}
+        onWheel={onViewportWheel}
         ref={outerCanvasRef}
       >
         {selectedSimulator ? (
           <div
-            className={`device-anchor ${zoomAnimating ? "animated" : ""}`}
+            className={`device-anchor ${zoomAnimating ? "animated" : ""} ${hideDeviceWhileLoading ? "device-anchor-loading" : ""}`}
             style={{ transform: deviceTransform }}
           >
             <div className="device-frame" style={deviceFrameStyle}>
@@ -131,6 +153,7 @@ export function SimulatorViewport({
                   hasFrame={hasFrame}
                   isBooted={selectedSimulator.isBooted}
                   isStreamError={isStreamError}
+                  onChromeLoad={onChromeLoad}
                   onPanPointerCancel={onPanPointerUp}
                   onPanPointerMove={onPanPointerMove}
                   onPanPointerUp={onPanPointerUp}
@@ -146,6 +169,9 @@ export function SimulatorViewport({
                   shellStyle={shellStyle}
                   simulatorName={selectedSimulator.name}
                   streamCanvasRef={streamCanvasRef}
+                  statusOverlayLabel={statusOverlayLabel}
+                  touchIndicators={touchIndicators}
+                  touchOverlayVisible={touchOverlayVisible}
                   useChromeProfile={Boolean(chromeProfile)}
                 />
               </div>
@@ -156,6 +182,13 @@ export function SimulatorViewport({
             <p>{isLoading ? "Loading simulators…" : "Select a simulator"}</p>
           </div>
         )}
+        {showDeviceLoading ? (
+          <div className="canvas-loading" role="status">
+            <div className="loading-spinner" />
+            <p>Loading simulator…</p>
+          </div>
+        ) : null}
+        {debugPanel ? <div className="debug-overlay">{debugPanel}</div> : null}
         {selectedSimulator ? (
           <div className="viewport-zoom-dock" ref={zoomDockRef}>
             <ZoomControls

@@ -1,0 +1,40 @@
+{
+  "name": "@simdeck/react-native-inspector",
+  "version": "0.1.0",
+  "description": "Debug-only React Native runtime inspector for SimDeck",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "react-native": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "react-native": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build"
+  },
+  "files": [
+    "dist",
+    "ios",
+    "src",
+    "README.md",
+    "simdeck-react-native-inspector.podspec"
+  ],
+  "keywords": [
+    "react-native",
+    "inspector",
+    "simdeck"
+  ],
+  "sideEffects": false,
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-native": ">=0.72.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.8.0"
+  }
+}

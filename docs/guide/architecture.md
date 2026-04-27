@@ -7,7 +7,7 @@ SimDeck is intentionally split into a small number of clearly-scoped layers. Eve
 SimDeck has three layers stacked between the browser and the iOS Simulator:
 
 1. **Browser / VS Code** runs the React client from `client/`. It speaks HTTP for control and WebTransport for live video, both served by the Rust server.
-2. **The Rust server** (`server/`, built on `axum` + `tokio`) owns REST routes (`api/`), the WebTransport hub and packet codec (`transport/`), the inspector WebSocket hub (`inspector.rs`), the per-UDID session registry (`simulators/`), metrics, log streaming, and the `launchd` service installer.
+2. **The Rust server** (`server/`, built on `axum` + `tokio`) owns the CLI entrypoint, project daemon lifecycle, REST routes (`api/`), the WebTransport hub and packet codec (`transport/`), the inspector WebSocket hub (`inspector.rs`), the per-UDID session registry (`simulators/`), metrics, and log streaming.
 3. **The Objective-C bridge** (`cli/`) is reached through a narrow C ABI in `cli/native/XCWNativeBridge.*`. It wraps `xcrun simctl`, the private `CoreSimulator` direct-boot path, the per-session HEVC/H.264 encoder, the headless display bridge that produces frames and accepts HID input, and the device-chrome renderer.
 
 Underneath all of that is the iOS Simulator itself — `CoreSimulator` for lifecycle, `SimulatorKit` for chrome assets.
@@ -16,22 +16,21 @@ Underneath all of that is the iOS Simulator itself — `CoreSimulator` for lifec
 
 ### `server/` — Rust HTTP and WebTransport
 
-Owns the public CLI shape (`simdeck serve`, `boot`, `shutdown`, …), the HTTP API, the WebTransport hub, the inspector hub, log streaming, and metrics.
+Owns the public CLI shape (`simdeck ui`, `daemon`, `boot`, `shutdown`, …), daemon metadata, the HTTP API, the WebTransport hub, the inspector hub, log streaming, and metrics.
 
 Key modules:
 
-| Module                                 | Responsibility                                                                         |
-| -------------------------------------- | -------------------------------------------------------------------------------------- |
-| `server/src/main.rs`                   | CLI entrypoint, AppKit main-thread shim, tokio runtime bootstrap.                      |
-| `server/src/api/routes.rs`             | Every `/api/*` route, including simulator control, accessibility, and inspector proxy. |
-| `server/src/transport/webtransport.rs` | WebTransport server, per-session frame fanout, keyframe handshake.                     |
-| `server/src/transport/packet.rs`       | Binary video packet header (`PACKET_VERSION`, flags, layout).                          |
-| `server/src/inspector.rs`              | WebSocket hub for the NativeScript runtime inspector.                                  |
-| `server/src/simulators/registry.rs`    | Per-UDID session registry with lazy attachment to the native bridge.                   |
-| `server/src/simulators/session.rs`     | Frame broadcast channel, keyframe gating, refresh requests.                            |
-| `server/src/metrics/counters.rs`       | Atomic counters and per-client stream stats accepted via `/api/client-stream-stats`.   |
-| `server/src/logs.rs`                   | `os_log` log streaming and filtering.                                                  |
-| `server/src/service.rs`                | `simdeck service on/off` — generates and bootstraps a `LaunchAgents` plist.            |
+| Module                                 | Responsibility                                                                               |
+| -------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `server/src/main.rs`                   | CLI entrypoint, project daemon management, AppKit main-thread shim, tokio runtime bootstrap. |
+| `server/src/api/routes.rs`             | Every `/api/*` route, including simulator control, accessibility, and inspector proxy.       |
+| `server/src/transport/webtransport.rs` | WebTransport server, per-session frame fanout, keyframe handshake.                           |
+| `server/src/transport/packet.rs`       | Binary video packet header (`PACKET_VERSION`, flags, layout).                                |
+| `server/src/inspector.rs`              | WebSocket hub for the NativeScript runtime inspector.                                        |
+| `server/src/simulators/registry.rs`    | Per-UDID session registry with lazy attachment to the native bridge.                         |
+| `server/src/simulators/session.rs`     | Frame broadcast channel, keyframe gating, refresh requests.                                  |
+| `server/src/metrics/counters.rs`       | Atomic counters and per-client stream stats accepted via `/api/client-stream-stats`.         |
+| `server/src/logs.rs`                   | `os_log` log streaming and filtering.                                                        |
 
 The Rust server runs the tokio runtime on a worker thread while the AppKit main loop spins on the main thread. The native bridge needs the main loop to deliver display callbacks and HID events.
 
@@ -73,8 +72,10 @@ The client never depends on private APIs and never assumes anything not exposed 
 ### `packages/` — companion packages
 
 - **`packages/nativescript-inspector/`** ships `@nativescript/simdeck-inspector`, a TypeScript runtime that connects from a NativeScript app to the server's WebSocket inspector hub. See [NativeScript Runtime](/inspector/nativescript).
+- **`packages/react-native-inspector/`** ships `@simdeck/react-native-inspector`, a React Native runtime that connects from an app to the server's WebSocket inspector hub and publishes React Fiber hierarchy data. See [React Native Runtime](/inspector/react-native).
 - **`packages/inspector-agent/`** ships `SimDeckInspectorAgent`, a Swift Package you can link from a debug iOS app to expose its UIKit hierarchy. See [Swift In-App Agent](/inspector/swift).
 - **`packages/vscode-extension/`** is the VS Code extension that opens the browser client inside a webview panel and auto-starts the server.
+- **`packages/simdeck-test/`** ships `simdeck/test`, a small JS/TS wrapper around daemon startup and the REST control API. See [Testing](/guide/testing).
 
 ## Data flow
 
@@ -110,7 +111,7 @@ SimDeck stays in one OS process. The Rust binary:
 2. Spawns a tokio runtime on a worker thread that owns the HTTP server, WebTransport server, inspector hub, and registry.
 3. Spins the AppKit main loop in 50 ms slices on the main thread to dispatch display and HID callbacks.
 
-`launchctl bootstrap` is the only sub-process SimDeck launches itself, and only when you opt into the [background service](/guide/service).
+Normal CLI commands may spawn `simdeck daemon run` in the background for the current project. The daemon writes metadata under the system temp directory, and later commands reuse it while `/api/health` stays healthy.
 
 ## Working rules
 

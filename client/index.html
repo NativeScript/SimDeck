@@ -8,6 +8,17 @@
     />
     <meta name="color-scheme" content="light dark" />
     <title>SimDeck</title>
+    <script>
+      try {
+        localStorage.removeItem("xcw-debug-visible");
+        const key = "xcw-ui-state";
+        const state = JSON.parse(localStorage.getItem(key) || "{}");
+        if (state && Object.prototype.hasOwnProperty.call(state, "search")) {
+          delete state.search;
+          localStorage.setItem(key, JSON.stringify(state));
+        }
+      } catch {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::{header, Method, Response, StatusCode, Uri};
+use axum::http::{header, HeaderName, Method, Response, StatusCode, Uri};
 use std::path::{Component, Path, PathBuf};
 
 pub async fn serve_static(
@@ -47,6 +47,14 @@ pub async fn serve_static(
         header::ACCESS_CONTROL_ALLOW_ORIGIN,
         "*".parse().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
     );
+    if content_type.starts_with("text/html") {
+        response.headers_mut().insert(
+            HeaderName::from_static("clear-site-data"),
+            "\"cache\""
+                .parse()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        );
+    }
     Ok(response)
 }
 

@@ -601,14 +601,23 @@ char *xcw_native_get_pasteboard_text(const char *udid, char **error_message) {
 
 void *xcw_native_session_create(const char *udid, char **error_message) {
     @autoreleasepool {
-        NSError *error = nil;
-        XCWNativeSession *session = [[XCWNativeSession alloc] initWithUDID:XCWStringFromCString(udid)
-                                                                     error:&error];
-        if (session == nil) {
+        @try {
+            NSError *error = nil;
+            XCWNativeSession *session = [[XCWNativeSession alloc] initWithUDID:XCWStringFromCString(udid)
+                                                                         error:&error];
+            if (session == nil) {
+                XCWSetErrorMessage(error_message, error);
+                return NULL;
+            }
+            return (__bridge_retained void *)session;
+        } @catch (NSException *exception) {
+            NSString *reason = exception.reason ?: exception.name ?: @"unknown Objective-C exception";
+            NSError *error = [NSError errorWithDomain:@"SimDeck.NativeBridge"
+                                                 code:91
+                                             userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Native simulator session creation threw: %@", reason] }];
             XCWSetErrorMessage(error_message, error);
             return NULL;
         }
-        return (__bridge_retained void *)session;
     }
 }
 

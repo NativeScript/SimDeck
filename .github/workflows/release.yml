@@ -92,6 +92,9 @@ jobs:
             "${ARTIFACTS_DIR}/simdeck-${VERSION}-macos.zip"
 
           npm pack --pack-destination "${ARTIFACTS_DIR}"
+          test -x "${BUNDLE_DIR}/simdeck"
+          test -x "${BUNDLE_DIR}/simdeck-bin"
+          tar -tzf "${ARTIFACTS_DIR}/simdeck-${VERSION}.tgz" | grep -qx "package/build/simdeck-bin"
           (
             cd packages/nativescript-inspector
             npm pack --pack-destination "${ARTIFACTS_DIR}"
@@ -112,7 +115,7 @@ jobs:
             exit 1
           fi
 
-          npm publish
+          npm publish "${RUNNER_TEMP}/release-assets/simdeck-${VERSION}.tgz"
 
       - name: Publish NativeScript inspector to npm
         env:

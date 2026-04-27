@@ -137,7 +137,7 @@ Published framework nodes may include `sourceLocation`:
 }
 ```
 
-`line` and `column` are one-based when produced by the NativeScript publisher.
+`line` and `column` are one-based when produced by NativeScript or React Native development metadata.
 
 ### `View.get`
 

@@ -9,26 +9,27 @@ SimDeck automates iOS Simulators. Use the CLI for automation and the browser UI 
 
 ## Start And View
 
-`simdeck service` is likely to be running in background. Check if it is running using `simdeck service status`. If not, start a local server:
+SimDeck uses one warm daemon per project. Check it with `simdeck daemon status`; start it or open the browser UI when needed:
 
 ```bash
-simdeck serve --port 4310
-./scripts/build-cli.sh && ./build/simdeck serve --port 4310
-simdeck serve --port 4310 --video-codec h264-software
-simdeck serve --port 4310 --bind 0.0.0.0 --advertise-host 192.168.1.50
+simdeck daemon start
+simdeck ui --open
+./scripts/build-cli.sh && ./build/simdeck ui --open
+simdeck daemon start --video-codec h264-software
+simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 ```
 
 Viewer: `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
 
 The viewer gets the API token automatically. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
 
-For fastest agent loops, keep the service warm and export:
+For fastest agent loops against a known daemon, export:
 
 ```bash
 export SIMDECK_SERVER_URL=http://127.0.0.1:4310
 ```
 
-Hot controls then delegate through the local service instead of cold-starting native control each time. This is supported for launch/open-url, normalized touch/tap/swipe/gesture, key/key-sequence/key-combo, hardware buttons, dismiss-keyboard, home/app-switcher, rotate, and appearance toggles. Use direct commands when you need screen-coordinate selector resolution, install/uninstall, screenshots, pasteboard, or batch.
+Hot controls then delegate through the selected daemon instead of cold-starting native control each time. This is supported for launch/open-url, normalized touch/tap/swipe/gesture, key/key-sequence/key-combo, hardware buttons, dismiss-keyboard, home/app-switcher, rotate, and appearance toggles. Use direct commands when you need screen-coordinate selector resolution, install/uninstall, screenshots, pasteboard, or batch.
 
 ## Device And App
 
@@ -50,31 +51,51 @@ simdeck toggle-appearance <UDID>
 
 Build apps with project tooling. SimDeck controls the simulator.
 
-## Inspect
+## Fast Agent Inspection
 
-Inspect before acting; always use `--format agent` for compact planning.
+Use targeted checks for test loops. `describe` is a diagnostic snapshot of the whole hierarchy; it is useful for planning, but it is expensive. For verification, prefer the daemon APIs exposed by `simdeck/test`: `query`, `waitFor`, `assert`, selector `tap`, and `batch`.
 
 ```bash
-simdeck describe-ui <UDID>
-simdeck describe-ui <UDID> --format agent --max-depth 4
-simdeck describe-ui <UDID> --format compact-json
-simdeck describe-ui <UDID> --point 120,240
-simdeck describe-ui <UDID> --source auto
-simdeck describe-ui <UDID> --source nativescript
-simdeck describe-ui <UDID> --source uikit
-simdeck describe-ui <UDID> --source native-ax
-simdeck describe-ui <UDID> --direct
+simdeck describe <UDID>
+simdeck describe <UDID> --format agent --max-depth 4
+simdeck describe <UDID> --format compact-json
+simdeck describe <UDID> --point 120,240
+simdeck describe <UDID> --source auto
+simdeck describe <UDID> --source nativescript
+simdeck describe <UDID> --source uikit
+simdeck describe <UDID> --source native-ax
+simdeck describe <UDID> --direct
 ```
 
-Use `--source auto` with `serve`. Use `--direct` or `--source native-ax` for the private CoreSimulator accessibility bridge. NativeScript inspector runtime can add richer hierarchy data.
+Use `--source auto` with the project daemon. Use `--direct` or `--source native-ax` for the private CoreSimulator accessibility bridge. NativeScript inspector runtime can add richer hierarchy data.
 
-Prefer selectors, coordinates only when needed. `describe-ui` coordinates are screen coordinates; add `--normalized` only for `0.0..1.0` inputs.
+Prefer selectors, coordinates only when needed. Selector taps go through the daemon and wait for the element server-side.
 
 ```bash
 simdeck tap <UDID> --id LoginButton --wait-timeout-ms 5000
 simdeck tap <UDID> --label "Continue" --element-type Button
 simdeck tap <UDID> 120 240
 ```
+
+For persistent app integration tests, use `simdeck/test` instead of shelling out repeatedly:
+
+```ts
+import { connect } from "simdeck/test";
+
+const simdeck = await connect();
+try {
+  await simdeck.launch(udid, "com.example.App");
+  await simdeck.waitFor(udid, { id: "login.button" }, { maxDepth: 8 });
+  await simdeck.tap(udid, 0.5, 0.5);
+  await simdeck.assert(udid, { label: "Welcome" }, { maxDepth: 8 });
+  const matches = await simdeck.query(udid, { id: "account.name" });
+  console.log(matches);
+} finally {
+  simdeck.close();
+}
+```
+
+Use `tree()`/`describe` only when a test needs to print the whole UI for debugging. In a normal agent loop, do not fetch the full tree after every action; verify the specific element or text that proves the step succeeded.
 
 ## Interact
 
@@ -118,7 +139,7 @@ Use `--stdin` or `--file` for text with quotes, newlines, shell variables, or sh
 
 ## Timing And Batch
 
-Input dispatch success does not prove the app reacted. Prefer selector waits, then verify with UI inspection, screenshot, logs, or viewer.
+Input dispatch success does not prove the app reacted. Prefer selector waits/asserts, then use screenshot/logs/viewer when visual evidence matters.
 
 ```bash
 simdeck tap <UDID> --label "Continue" --wait-timeout-ms 5000
@@ -138,6 +159,20 @@ simdeck batch <UDID> \
 
 Batch rules: one source (`--step`, `--file`, or `--stdin`); keep `<UDID>` at batch level; ordered steps; fail-fast by default; `--continue-on-error` for best effort. Step commands: `tap`, `swipe`, `gesture`, `pinch`, `rotate-gesture`, `touch`, `type`, `button`, `key`, `key-sequence`, `key-combo`, `sleep`.
 
+For JS tests, batch can combine action and verification without extra CLI process startup:
+
+```ts
+await simdeck.batch(udid, [
+  { action: "tap", selector: { label: "Continue" }, waitTimeoutMs: 5000 },
+  {
+    action: "waitFor",
+    selector: { label: "Continue Tapped" },
+    timeoutMs: 5000,
+  },
+  { action: "assert", selector: { id: "fixture.status" } },
+]);
+```
+
 ## Evidence
 
 ```bash
@@ -153,8 +188,9 @@ Use screenshots for still evidence.
 
 1. Serve, list, boot/select `<UDID>`, optionally open viewer.
 2. Build with project tools; install and launch with SimDeck.
-3. `describe-ui --format agent --max-depth 4`.
+3. Use one `describe --format agent --max-depth 4` to understand an unfamiliar screen.
 4. Interact with selectors first; use coordinates only when needed.
-5. Batch known flows; verify outcomes separately.
+5. Verify with `waitFor`/`assert`/`query`, not repeated full `describe` dumps.
+6. Batch known flows; keep `describe` as a failure/debug artifact.
 
-Final check: UDID explicit, warm service URL set for fast loops when available, selectors/coordinates inspected, timing intentional, complex text uses `--stdin`/`--file`, results verified, CLI/API/packet/inspector changes reflected here and in docs.
+Final check: UDID explicit, daemon URL set for fast loops when targeting a specific daemon, selectors/coordinates inspected, timing intentional, complex text uses `--stdin`/`--file`, results verified, CLI/API/packet/inspector changes reflected here and in docs.

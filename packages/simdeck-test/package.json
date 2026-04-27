@@ -1,0 +1,20 @@
+{
+  "name": "simdeck-test-internal",
+  "version": "0.1.0",
+  "description": "Internal source package for the simdeck/test subpath export",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build"
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.9.2"
+  }
+}

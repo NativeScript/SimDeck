@@ -10,21 +10,22 @@
     "LICENSE",
     "README.md",
     "bin/",
-    "cli/",
+    "build/simdeck-bin",
     "client/dist/",
-    "scripts/build-cli.sh",
-    "scripts/npm-postinstall.mjs",
-    "server/Cargo.lock",
-    "server/Cargo.toml",
-    "server/build.rs",
-    "server/src/"
+    "packages/simdeck-test/dist/"
   ],
+  "exports": {
+    "./test": {
+      "types": "./packages/simdeck-test/dist/index.d.ts",
+      "import": "./packages/simdeck-test/dist/index.js",
+      "default": "./packages/simdeck-test/dist/index.js"
+    }
+  },
   "engines": {
     "node": ">=18"
   },
   "os": [
-    "darwin",
-    "linux"
+    "darwin"
   ],
   "publishConfig": {
     "access": "public"
@@ -33,7 +34,9 @@
     "build:cli": "scripts/build-cli.sh",
     "build:client": "npm run --prefix client build",
     "build:nativescript-inspector": "npm run --prefix packages/nativescript-inspector build",
-    "build": "npm run build:cli && npm run build:client && npm run build:nativescript-inspector",
+    "build:react-native-inspector": "npm run --prefix packages/react-native-inspector build",
+    "build:simdeck-test": "tsc -p packages/simdeck-test/tsconfig.json && prettier --write packages/simdeck-test/dist",
+    "build": "npm run build:cli && npm run build:client && npm run build:nativescript-inspector && npm run build:react-native-inspector && npm run build:simdeck-test",
     "package:vscode-extension": "node scripts/package-vscode-extension.mjs",
     "install:vscode-extension": "node scripts/install-vscode-extension.mjs",
     "format": "prettier --write . && cargo fmt --manifest-path server/Cargo.toml",
@@ -42,17 +45,20 @@
     "test": "cargo test --manifest-path server/Cargo.toml && npm run --prefix client test",
     "test:integration:cli": "node scripts/integration/cli.mjs",
     "test:integration:cli:verbose": "SIMDECK_INTEGRATION_VERBOSE=1 SIMDECK_INTEGRATION_SHOW_SIMULATOR=1 node scripts/integration/cli.mjs",
+    "test:integration:js-api": "node scripts/integration/js-api.mjs",
+    "test:integration:js-api:verbose": "SIMDECK_INTEGRATION_SHOW_SIMULATOR=1 node scripts/integration/js-api.mjs",
     "ci": "npm run lint && npm run build && npm run test && npm run package:vscode-extension",
     "dev": "npm run build:cli && node scripts/dev.mjs",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
-    "postinstall": "node scripts/npm-postinstall.mjs",
-    "prepack": "npm run build:client"
+    "prepack": "npm run build:cli && npm run build:client"
   },
   "devDependencies": {
+    "@types/node": "^22.10.2",
     "@vscode/vsce": "^3.6.2",
     "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
     "vitepress": "^1.6.4"
   }
 }

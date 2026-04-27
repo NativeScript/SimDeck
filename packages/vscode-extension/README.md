@@ -1,11 +1,11 @@
 # SimDeck VS Code Extension
 
-This extension opens the local SimDeck simulator inside a VS Code webview panel.
+This extension opens the local SimDeck browser client inside a VS Code webview panel. It starts or reuses the project daemon through `simdeck ui`.
 
 ## Commands
 
 - `SimDeck: Open Simulator View`
-- `SimDeck: Stop Managed Server`
+- `SimDeck: Stop Project Daemon`
 - `SimDeck: Show Output`
 
 ## Settings
@@ -14,4 +14,4 @@ This extension opens the local SimDeck simulator inside a VS Code webview panel.
 - `simdeck.cliPath`
 - `simdeck.port`
 - `simdeck.bindAddress`
-- `simdeck.autoStartServer`
+- `simdeck.autoStartDaemon`

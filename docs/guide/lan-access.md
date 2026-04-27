@@ -7,7 +7,7 @@ SimDeck binds to `127.0.0.1` by default. You can move it to a LAN-reachable inte
 Use `--bind` to listen on a non-loopback address:
 
 ```sh
-simdeck serve --port 4310 --bind 0.0.0.0
+simdeck ui --port 4310 --bind 0.0.0.0 --open
 ```
 
 Both the HTTP server and the WebTransport server bind to the requested address. The HTTP server is plain HTTP, so any browser on the LAN can reach it through `http://<your-mac-ip>:4310`.
@@ -19,10 +19,11 @@ WebTransport needs a hostname or IP that matches the certificate the server gene
 Tell the server what host to advertise to remote clients:
 
 ```sh
-simdeck serve \
+simdeck ui \
   --port 4310 \
   --bind 0.0.0.0 \
-  --advertise-host 192.168.1.50
+  --advertise-host 192.168.1.50 \
+  --open
 ```
 
 The advertised host shows up in three places:
@@ -38,9 +39,9 @@ If you skip `--advertise-host` while binding to `0.0.0.0`, the server prints a w
 You can advertise either a DNS name (preferred when you have a stable mDNS or DHCP entry) or an IP literal. Examples:
 
 ```sh
-simdeck serve --bind 0.0.0.0 --advertise-host my-mac.lan
-simdeck serve --bind 0.0.0.0 --advertise-host 192.168.1.50
-simdeck serve --bind ::      --advertise-host my-mac.local
+simdeck ui --bind 0.0.0.0 --advertise-host my-mac.lan --open
+simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
+simdeck ui --bind ::      --advertise-host my-mac.local --open
 ```
 
 Whatever you advertise must be resolvable from the remote client.
@@ -72,7 +73,7 @@ Restarting the server invalidates the previous certificate. Open clients reconne
 
 ## Authentication and security
 
-SimDeck generates an API access token at startup unless you pass `--access-token <token>`. The served browser UI receives the token automatically through a strict same-site cookie, so opening `http://<advertise-host>:<port>` remains seamless.
+SimDeck generates an API access token when it starts the project daemon. The served browser UI receives the token automatically through a strict same-site cookie, so opening `http://<advertise-host>:<port>` remains seamless.
 
 Direct API callers must send one of:
 
@@ -83,10 +84,16 @@ Authorization: Bearer <token>
 
 The WebTransport URL template returned by authenticated `GET /api/health` includes a `simdeckToken` query parameter for the browser stream worker.
 
+Get the token for scripts with:
+
+```sh
+simdeck daemon status
+```
+
 Recommended practice for shared networks:
 
 - Run SimDeck only on networks you control.
-- Use `--access-token <stable-secret>` for background services or scripted LAN access.
+- Treat the token from `daemon status` as a secret for scripted LAN access.
 - Combine with macOS Application Firewall to restrict inbound access to known peers.
 - For shared NativeScript inspectors, set an `authToken` when starting the [Swift in-app agent](/inspector/swift#auth-token) so app-side requests must include the token.
 

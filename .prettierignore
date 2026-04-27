@@ -5,7 +5,10 @@ build
 client/dist
 packages/inspector-agent/.build
 packages/nativescript-inspector/dist
+packages/react-native-inspector/dist
 node_modules
 server/target
 docs/.vitepress/dist
 docs/.vitepress/cache
+.playwright-mcp
+simdeck-snapshot.md
