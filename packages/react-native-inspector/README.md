@@ -1,11 +1,11 @@
 # React Native Inspector
 
-`@simdeck/react-native-inspector` is a debug-only runtime inspector for React Native iOS apps. It connects to the SimDeck server over the same WebSocket inspector hub as the NativeScript runtime.
+`react-native-simdeck` is a debug-only runtime inspector for React Native iOS apps. It connects to the SimDeck server over the same WebSocket inspector hub as the NativeScript runtime.
 
 ## Install
 
 ```sh
-npm install @simdeck/react-native-inspector
+npm install react-native-simdeck
 cd ios && pod install
 ```
 
@@ -15,7 +15,7 @@ Install the inspector before `AppRegistry.registerComponent(...)` so it can capt
 
 ```ts
 import { AppRegistry } from "react-native";
-import { startSimDeckReactNativeInspector } from "@simdeck/react-native-inspector";
+import { startSimDeckReactNativeInspector } from "react-native-simdeck";
 import App from "./App";
 
 if (__DEV__) {
