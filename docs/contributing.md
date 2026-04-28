@@ -45,18 +45,18 @@ To run only the production server:
 
 ## Layout
 
-| Folder                             | What lives here                                                                                           |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Folder                             | What lives here                                                                                            |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `server/`                          | CLI entrypoint, project daemon, Rust HTTP server, stream transports, inspector hub, registry, and metrics. |
-| `cli/`                             | Objective-C native bridge for private CoreSimulator and SimulatorKit APIs.                                |
-| `client/`                          | React UI served at `/`.                                                                                   |
-| `packages/nativescript-inspector/` | TypeScript runtime for the NativeScript inspector.                                                        |
-| `packages/inspector-agent/`        | Swift Package for the Swift in-app inspector agent.                                                       |
-| `packages/simdeck-test/`           | JS/TS testing API for daemon-backed simulator automation.                                                 |
-| `packages/vscode-extension/`       | VS Code extension that opens the simulator inside an editor panel.                                        |
-| `scripts/`                         | Repeatable build entrypoints used by both local dev and CI.                                               |
-| `bin/`                             | Node launcher that locates and runs the compiled binary.                                                  |
-| `docs/`                            | This documentation site (VitePress).                                                                      |
+| `cli/`                             | Objective-C native bridge for private CoreSimulator and SimulatorKit APIs.                                 |
+| `client/`                          | React UI served at `/`.                                                                                    |
+| `packages/nativescript-inspector/` | TypeScript runtime for the NativeScript inspector.                                                         |
+| `packages/inspector-agent/`        | Swift Package for the Swift in-app inspector agent.                                                        |
+| `packages/simdeck-test/`           | JS/TS testing API for daemon-backed simulator automation.                                                  |
+| `packages/vscode-extension/`       | VS Code extension that opens the simulator inside an editor panel.                                         |
+| `scripts/`                         | Repeatable build entrypoints used by both local dev and CI.                                                |
+| `bin/`                             | Node launcher that locates and runs the compiled binary.                                                   |
+| `docs/`                            | This documentation site (VitePress).                                                                       |
 
 ## Working rules
 

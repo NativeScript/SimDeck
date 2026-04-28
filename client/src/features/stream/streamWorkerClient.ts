@@ -66,7 +66,9 @@ class WebRtcStreamClient implements StreamClientBackend {
   private stats: StreamStats = createEmptyStreamStats();
   private video: HTMLVideoElement | null = null;
 
-  constructor(private readonly onMessage: (message: WorkerToMainMessage) => void) {}
+  constructor(
+    private readonly onMessage: (message: WorkerToMainMessage) => void,
+  ) {}
 
   attachCanvas(canvasElement: HTMLCanvasElement) {
     this.canvas = canvasElement;
@@ -187,7 +189,13 @@ class WebRtcStreamClient implements StreamClientBackend {
     }
     if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
       this.syncCanvasSize(this.video.videoWidth, this.video.videoHeight);
-      this.context.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+      this.context.drawImage(
+        this.video,
+        0,
+        0,
+        this.canvas.width,
+        this.canvas.height,
+      );
       this.stats.decodedFrames += 1;
       this.stats.renderedFrames += 1;
       this.stats.receivedPackets += 1;
@@ -218,7 +226,10 @@ function streamTransportMode(): string {
   if (typeof window === "undefined") {
     return "webtransport";
   }
-  return new URLSearchParams(window.location.search).get("transport") ?? "webtransport";
+  return (
+    new URLSearchParams(window.location.search).get("transport") ??
+    "webtransport"
+  );
 }
 
 function iceServers(): RTCIceServer[] {
