@@ -130,6 +130,30 @@ Forces the encoder to emit a fresh keyframe. Useful after a discontinuity or whe
 { "ok": true }
 ```
 
+### `POST /api/simulators/{udid}/webrtc/offer`
+
+Experimental WebRTC transport for runner-hosted previews. The browser sends an
+SDP offer and the server responds with an SDP answer for a receive-only H.264
+video track:
+
+```json
+{
+  "sdp": "v=0\r\n...",
+  "type": "offer"
+}
+```
+
+```json
+{
+  "sdp": "v=0\r\n...",
+  "type": "answer"
+}
+```
+
+This endpoint requires the simulator stream to be H.264. For GitHub Actions
+provider runs, start the runner host with `--video-codec h264-software` and pass
+the one-time provider token as `--access-token`.
+
 ### `POST /api/simulators/{udid}/open-url`
 
 Opens a URL inside the simulator:

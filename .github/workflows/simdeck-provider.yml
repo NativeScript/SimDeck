@@ -86,7 +86,7 @@ jobs:
             ./scripts/build-client.sh
             ./scripts/build-cli.sh
           else
-            git clone --depth 1 https://github.com/DjDeveloperr/SimDeck.git simdeck-src
+            git clone --depth 1 https://github.com/NativeScript/SimDeck.git simdeck-src
             ./simdeck-src/scripts/build-client.sh
             ./simdeck-src/scripts/build-cli.sh
             mkdir -p build

@@ -193,10 +193,25 @@ fn origin_is_allowed(config: &Config, origin: &str) -> bool {
         format!("http://[::1]:{}", config.http_port),
     ];
     allowed.iter().any(|value| value == origin)
+        || extra_allowed_origins().any(|value| value == origin)
 }
 
 fn origin_is_cors_allowed(config: &Config, origin: &str) -> bool {
     origin == "null" || origin_is_allowed(config, origin)
+}
+
+fn extra_allowed_origins() -> impl Iterator<Item = String> {
+    std::env::var("SIMDECK_ALLOWED_ORIGINS")
+        .ok()
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
 }
 
 fn chrono_free_now_nanos() -> u128 {

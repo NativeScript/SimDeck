@@ -47,7 +47,7 @@ To run only the production server:
 
 | Folder                             | What lives here                                                                                           |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `server/`                          | CLI entrypoint, project daemon, Rust HTTP server, WebTransport hub, inspector hub, registry, and metrics. |
+| `server/`                          | CLI entrypoint, project daemon, Rust HTTP server, stream transports, inspector hub, registry, and metrics. |
 | `cli/`                             | Objective-C native bridge for private CoreSimulator and SimulatorKit APIs.                                |
 | `client/`                          | React UI served at `/`.                                                                                   |
 | `packages/nativescript-inspector/` | TypeScript runtime for the NativeScript inspector.                                                        |
@@ -70,7 +70,7 @@ If you contribute, keep these invariants in mind. They are also enforced by the 
 - Don't add a Node or Swift dependency to solve work that already fits in Foundation/AppKit.
 - When touching private API usage, keep the adaptation small and explicit and document any simulator/runtime assumptions in `AGENTS.md`.
 - Prefer stable CLI subcommands over hidden environment variables.
-- The supported live video path is WebTransport-only. Do not bring back legacy `/stream.h264` handling.
+- The supported live video paths are WebTransport and the experimental WebRTC offer endpoint. Do not bring back legacy `/stream.h264` handling.
 - If a feature depends on a booted simulator, fail with a clear JSON error instead of silently returning an empty asset.
 
 ## Linting and formatting
