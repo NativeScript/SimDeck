@@ -21,7 +21,7 @@ Optional:
 Clone, install dependencies, and build everything:
 
 ```sh
-git clone https://github.com/DjDeveloperr/SimDeck.git
+git clone https://github.com/NativeScript/SimDeck.git
 cd simdeck
 npm install
 npm run build

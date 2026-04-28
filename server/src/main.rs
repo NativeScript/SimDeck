@@ -95,7 +95,6 @@ enum Command {
         #[arg(long)]
         access_token: Option<String>,
     },
-    #[command(hide = true)]
     Service {
         #[command(subcommand)]
         command: ServiceCommand,

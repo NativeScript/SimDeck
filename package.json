@@ -10,6 +10,7 @@
     "LICENSE",
     "README.md",
     "bin/",
+    "scripts/postinstall.mjs",
     "build/simdeck-bin",
     "client/dist/",
     "packages/simdeck-test/dist/"
@@ -52,6 +53,7 @@
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
+    "postinstall": "node scripts/postinstall.mjs",
     "prepack": "npm run build:cli && npm run build:client"
   },
   "devDependencies": {
