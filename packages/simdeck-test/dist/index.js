@@ -175,7 +175,7 @@ export async function connect(options = {}) {
   return session;
 }
 async function startIsolatedDaemon(cliPath, options) {
-  const port = options.port ?? (await freePort());
+  const port = options.port ?? (await freePortPair());
   const projectRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "simdeck-test-project-"),
   );
@@ -204,12 +204,13 @@ async function startIsolatedDaemon(cliPath, options) {
     ],
     {
       cwd: options.projectRoot,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
     },
   );
+  const output = captureChildOutput(child);
   const url = `http://127.0.0.1:${port}`;
   try {
-    await waitForHealth(url, child);
+    await waitForHealth(url, child, output);
   } catch (error) {
     child.kill();
     fs.rmSync(projectRoot, { recursive: true, force: true });
@@ -225,12 +226,14 @@ async function startIsolatedDaemon(cliPath, options) {
     isolatedRoot: projectRoot,
   };
 }
-async function waitForHealth(endpoint, child) {
-  const deadline = Date.now() + 15_000;
+async function waitForHealth(endpoint, child, output) {
+  const deadline = Date.now() + 60_000;
   let lastError;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
-      throw new Error(`SimDeck isolated daemon exited with ${child.exitCode}`);
+      throw new Error(
+        `SimDeck isolated daemon exited with ${child.exitCode}.\n${output()}`,
+      );
     }
     try {
       await requestJson(endpoint, "GET", "/api/health");
@@ -241,8 +244,29 @@ async function waitForHealth(endpoint, child) {
     }
   }
   throw new Error(
-    `Timed out waiting for isolated SimDeck daemon: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    `Timed out waiting for isolated SimDeck daemon: ${lastError instanceof Error ? lastError.message : String(lastError)}\n${output()}`,
   );
+}
+function captureChildOutput(child) {
+  const chunks = [];
+  const append = (source, chunk) => {
+    chunks.push(`[${source}] ${chunk.toString("utf8")}`);
+    while (chunks.join("").length > 16_384) {
+      chunks.shift();
+    }
+  };
+  child.stdout?.on("data", (chunk) => append("stdout", chunk));
+  child.stderr?.on("data", (chunk) => append("stderr", chunk));
+  return () => chunks.join("").trim();
+}
+async function freePortPair() {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const port = await freePort();
+    if (port < 65535 && (await portAvailable(port + 1))) {
+      return port;
+    }
+  }
+  throw new Error("Unable to allocate adjacent free TCP ports.");
 }
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -258,6 +282,15 @@ function freePort() {
       server.close(() => resolve(port));
     });
     server.on("error", reject);
+  });
+}
+function portAvailable(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once("error", () => resolve(false));
+    server.listen(port, "127.0.0.1", () => {
+      server.close(() => resolve(true));
+    });
   });
 }
 function runJson(command, args, options = {}) {

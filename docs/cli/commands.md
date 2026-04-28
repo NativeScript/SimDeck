@@ -54,6 +54,26 @@ Stop the daemon for the current project:
 simdeck daemon stop
 ```
 
+### `service`
+
+Manage the optional always-on macOS user service. Use `simdeck daemon` for the
+normal per-project process; use `simdeck service` when you want a LaunchAgent
+that starts after login and stays available.
+
+```sh
+simdeck service on [--port 4310] [--bind 127.0.0.1]
+                   [--advertise-host <host>] [--client-root <path>]
+                   [--video-codec hevc|h264|h264-software]
+                   [--access-token <token>]
+simdeck service restart [same options as service on]
+simdeck service off
+```
+
+`service on` installs `~/Library/LaunchAgents/dev.nativescript.simdeck.plist`
+and starts a LaunchAgent that serves SimDeck after login. It is intended for
+agents and editor integrations that should be able to open the UI without first
+starting a project daemon.
+
 ### `core-simulator`
 
 Manage Apple's CoreSimulator service layer:

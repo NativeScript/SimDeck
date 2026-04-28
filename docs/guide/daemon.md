@@ -4,6 +4,9 @@ SimDeck runs one warm native host per project. The daemon owns the HTTP API, the
 
 Normal CLI commands start the daemon automatically when they need it. Use `simdeck daemon` only when you want to manage it explicitly.
 
+`simdeck daemon` is project-scoped. `simdeck service` is the optional macOS
+LaunchAgent wrapper for users who want an always-on daemon after login.
+
 ## Start
 
 ```sh
@@ -68,6 +71,35 @@ simdeck daemon stop
 ```
 
 This terminates the daemon for the current project and removes its metadata file from the system temp directory. The next CLI command that needs the daemon starts a fresh one.
+
+## Always-On Service
+
+For agents and editor integrations that should be able to reach SimDeck at any
+time after login, use `simdeck service` to install the macOS user service:
+
+```sh
+simdeck service on
+```
+
+This writes `~/Library/LaunchAgents/dev.nativescript.simdeck.plist`, starts the
+server with `launchctl`, and keeps it alive. It binds to `127.0.0.1:4310` by
+default and serves the bundled browser client.
+
+Restart it after changing options:
+
+```sh
+simdeck service restart --port 4310 --video-codec h264-software
+```
+
+Disable it when you do not want a persistent daemon:
+
+```sh
+simdeck service off
+```
+
+Prefer the project daemon for project-scoped metadata and automatic lifecycle.
+Use the service when the priority is easy access from Codex, VS Code, or a
+browser at any time.
 
 ## CoreSimulator Service Layer
 

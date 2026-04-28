@@ -29,12 +29,39 @@ This installs the launcher and bundled native binary to your global `node_module
 simdeck --help
 ```
 
+The global install prints the next setup steps:
+
+```sh
+simdeck ui --open
+npx skills add NativeScript/SimDeck --skill simdeck -a codex -g
+simdeck service on
+```
+
+Install the `nativescript.simdeck` VS Code extension if you want the simulator
+view inside VS Code.
+
+`simdeck service on` is recommended when agents or editor integrations should be
+able to reach SimDeck any time after login. It installs a localhost macOS
+LaunchAgent and can be removed with `simdeck service off`.
+
+## Install the Codex skill
+
+SimDeck includes an agent skill at `skills/simdeck/SKILL.md`. Install it with
+[skills.sh](https://skills.sh/) so Codex can choose the right commands and
+inspection loops automatically:
+
+```sh
+npx skills add NativeScript/SimDeck --skill simdeck -a codex -g
+```
+
+Restart Codex after installing the skill.
+
 ## Install from source
 
 Clone the repo and install dependencies:
 
 ```sh
-git clone https://github.com/DjDeveloperr/SimDeck.git
+git clone https://github.com/NativeScript/SimDeck.git
 cd simdeck
 npm install
 ```

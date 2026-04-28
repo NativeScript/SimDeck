@@ -276,6 +276,9 @@ async function main() {
       ),
     { phase: phaseSimulatorLifecycle },
   );
+  await measuredStep("close JS API session", () => closeSession(), {
+    phase: phaseSimulatorLifecycle,
+  });
   await measuredStep(
     "shutdown simulator",
     () => shutdownSimulatorIfNeeded(simulatorUDID),
@@ -283,7 +286,7 @@ async function main() {
   );
   await measuredStep(
     "erase simulator",
-    () => runJson(simdeck, ["erase", simulatorUDID]),
+    () => eraseSimulatorReliably(simulatorUDID),
     {
       phase: phaseSimulatorLifecycle,
     },
@@ -542,13 +545,37 @@ function preapproveFixtureUrlScheme() {
 
 function shutdownSimulatorIfNeeded(udid) {
   try {
-    return runJson(simdeck, ["shutdown", udid]);
+    runText("xcrun", ["simctl", "shutdown", udid], {
+      timeoutMs: 180_000,
+    });
+    return { ok: true, udid, action: "shutdown" };
   } catch (error) {
     if (String(error?.message ?? error).includes("current state: Shutdown")) {
       return { ok: true, udid, alreadyShutdown: true };
     }
     throw error;
   }
+}
+
+function eraseSimulatorReliably(udid) {
+  return retrySync(
+    () => {
+      shutdownSimulatorIfNeeded(udid);
+      runText("xcrun", ["simctl", "erase", udid], {
+        timeoutMs: 180_000,
+      });
+      return { ok: true, udid, action: "erase" };
+    },
+    "erase simulator",
+    3,
+    3_000,
+  );
+}
+
+function closeSession() {
+  session?.close();
+  session = null;
+  return { ok: true };
 }
 
 function assertRoots(payload, label) {
@@ -720,7 +747,7 @@ function openSimulatorApp(udid) {
 
 function cleanup() {
   try {
-    session?.close();
+    closeSession();
   } catch {}
   if (simulatorUDID && !keepSimulator) {
     spawnSync("xcrun", ["simctl", "shutdown", simulatorUDID], {

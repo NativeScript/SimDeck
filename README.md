@@ -7,6 +7,16 @@ Drive iOS Simulator apps from the CLI, browser, and automated tests on macOS.
 npm i -g simdeck@latest
 ```
 
+After installing the CLI, install the Codex skill so agents know the stable
+SimDeck workflow:
+
+```sh
+npx skills add NativeScript/SimDeck --skill simdeck -a codex -g
+```
+
+For VS Code, install the `nativescript.simdeck` extension to open the simulator
+view inside the editor.
+
 ## Features
 
 - WebTransport based streaming server in Rust, hardware encoded HVEC/H264 video stream
@@ -14,6 +24,7 @@ npm i -g simdeck@latest
 - CoreSimulator chrome asset rendering for device bezels
 - NativeScript and React Native runtime inspector plugins, plus a native UIKit inspector framework for other apps
 - Project daemon reuse: normal CLI commands automatically start and reuse one warm native host per project.
+- Optional macOS LaunchAgent service for an always-on local SimDeck daemon.
 - `simdeck/test` for fast JS/TS app tests that can query accessibility state and drive simulator controls.
 - Agent [`SKILL.md`](./skills/simdeck/SKILL.md) reference
 
@@ -42,6 +53,16 @@ npm install -g .
 ```
 
 After a global install, use the `simdeck` command directly. From a local checkout, you can also run `./build/simdeck`.
+
+Install the agent skill with [skills.sh](https://skills.sh/):
+
+```sh
+npx skills add NativeScript/SimDeck --skill simdeck -a codex -g
+```
+
+The npm postinstall message also prints this command after a global install.
+It also recommends `simdeck service on` for always-on local access from agents
+and editor integrations.
 
 ## Documentation
 
@@ -78,6 +99,18 @@ simdeck daemon start
 simdeck daemon status
 simdeck daemon stop
 ```
+
+`simdeck daemon` manages the normal per-project warm process. For an always-on
+daemon that is available after login, use the macOS user service commands:
+
+```sh
+simdeck service on
+simdeck service off
+```
+
+This uses a LaunchAgent, keeps the server bound to localhost by default, and is
+best for agents or editor integrations that should be able to open SimDeck
+without first starting a project daemon.
 
 Use software H.264 when macOS screen recording starves the hardware encoder:
 

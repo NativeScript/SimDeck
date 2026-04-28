@@ -1,7 +1,7 @@
 import { defineConfig } from "vitepress";
 
 const repoName = "SimDeck";
-const githubUrl = `https://github.com/DjDeveloperr/${repoName}`;
+const githubUrl = `https://github.com/NativeScript/${repoName}`;
 const siteUrl = "https://simdeck.nativescript.org";
 
 export default defineConfig({

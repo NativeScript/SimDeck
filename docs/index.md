@@ -14,7 +14,7 @@ hero:
       link: /guide/
     - theme: alt
       text: View on GitHub
-      link: https://github.com/DjDeveloperr/SimDeck
+      link: https://github.com/NativeScript/SimDeck
 
 features:
   - icon:
