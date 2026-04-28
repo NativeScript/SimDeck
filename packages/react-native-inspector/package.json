@@ -1,5 +1,5 @@
 {
-  "name": "@simdeck/react-native-inspector",
+  "name": "react-native-simdeck",
   "version": "0.1.0",
   "description": "Debug-only React Native runtime inspector for SimDeck",
   "license": "Apache-2.0",

@@ -27,7 +27,7 @@ SimDeck ships as a single npm package (`simdeck`) that installs:
 Optional companion packages:
 
 - [`@nativescript/simdeck-inspector`](/inspector/nativescript) — a debug-only NativeScript inspector runtime.
-- [`@simdeck/react-native-inspector`](/inspector/react-native) — a debug-only React Native inspector runtime.
+- [`react-native-simdeck`](/inspector/react-native) — a debug-only React Native inspector runtime.
 - [`packages/inspector-agent`](/inspector/swift) — a Swift Package you can link from your iOS app to expose its UIKit hierarchy.
 - [`packages/vscode-extension`](/extensions/vscode) — opens the simulator inside a VS Code panel.
 

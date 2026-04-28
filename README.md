@@ -198,7 +198,7 @@ locations with the React Native inspector package:
 
 ```ts
 import { AppRegistry } from "react-native";
-import { startSimDeckReactNativeInspector } from "@simdeck/react-native-inspector";
+import { startSimDeckReactNativeInspector } from "react-native-simdeck";
 import App from "./App";
 
 if (__DEV__) {

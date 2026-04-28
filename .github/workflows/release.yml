@@ -25,6 +25,7 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             client/package-lock.json
+            packages/react-native-inspector/package-lock.json
             packages/nativescript-inspector/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
@@ -42,7 +43,9 @@ jobs:
 
           VERSION="${TAG_NAME#v}"
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          REACT_NATIVE_INSPECTOR_VERSION="$(node -p "require('./packages/react-native-inspector/package.json').version")"
           INSPECTOR_VERSION="$(node -p "require('./packages/nativescript-inspector/package.json').version")"
+          VSCODE_EXTENSION_VERSION="$(node -p "require('./packages/vscode-extension/package.json').version")"
 
           if [ "${VERSION}" != "${PACKAGE_VERSION}" ]; then
             echo "Tag ${TAG_NAME} does not match package version ${PACKAGE_VERSION}" >&2
@@ -51,6 +54,16 @@ jobs:
 
           if [ "${VERSION}" != "${INSPECTOR_VERSION}" ]; then
             echo "Tag ${TAG_NAME} does not match NativeScript inspector version ${INSPECTOR_VERSION}" >&2
+            exit 1
+          fi
+
+          if [ "${VERSION}" != "${REACT_NATIVE_INSPECTOR_VERSION}" ]; then
+            echo "Tag ${TAG_NAME} does not match React Native inspector version ${REACT_NATIVE_INSPECTOR_VERSION}" >&2
+            exit 1
+          fi
+
+          if [ "${VERSION}" != "${VSCODE_EXTENSION_VERSION}" ]; then
+            echo "Tag ${TAG_NAME} does not match VS Code extension version ${VSCODE_EXTENSION_VERSION}" >&2
             exit 1
           fi
 
@@ -65,6 +78,9 @@ jobs:
 
       - name: Install NativeScript inspector dependencies
         run: npm ci --prefix packages/nativescript-inspector
+
+      - name: Install React Native inspector dependencies
+        run: npm ci --prefix packages/react-native-inspector
 
       - name: Lint, build, and test
         run: npm run ci
@@ -96,9 +112,14 @@ jobs:
           test -x "${BUNDLE_DIR}/simdeck-bin"
           tar -tzf "${ARTIFACTS_DIR}/simdeck-${VERSION}.tgz" | grep -qx "package/build/simdeck-bin"
           (
+            cd packages/react-native-inspector
+            npm pack --pack-destination "${ARTIFACTS_DIR}"
+          )
+          (
             cd packages/nativescript-inspector
             npm pack --pack-destination "${ARTIFACTS_DIR}"
           )
+          cp build/vscode/simdeck-vscode.vsix "${ARTIFACTS_DIR}/simdeck-vscode-${VERSION}.vsix"
 
       - name: Publish package to npm
         env:
@@ -117,6 +138,23 @@ jobs:
 
           npm publish "${RUNNER_TEMP}/release-assets/simdeck-${VERSION}.tgz"
 
+      - name: Publish React Native package to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          if npm view "react-native-simdeck@${VERSION}" version >/dev/null 2>&1; then
+            echo "react-native-simdeck@${VERSION} is already published on npm."
+            exit 0
+          fi
+
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "NPM_TOKEN repository secret is required to publish react-native-simdeck@${VERSION}." >&2
+            exit 1
+          fi
+
+          npm publish "${RUNNER_TEMP}/release-assets/react-native-simdeck-${VERSION}.tgz"
+
       - name: Publish NativeScript inspector to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -132,10 +170,24 @@ jobs:
             exit 1
           fi
 
-          (
-            cd packages/nativescript-inspector
-            npm publish --access public
-          )
+          npm publish "${RUNNER_TEMP}/release-assets/nativescript-simdeck-inspector-${VERSION}.tgz" --access public
+
+      - name: Publish VS Code extension
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          EXTENSION_ID="$(node -p "const pkg = require('./packages/vscode-extension/package.json'); `${pkg.publisher}.${pkg.name}`")"
+
+          if [ -z "${VSCE_PAT}" ]; then
+            echo "VSCE_PAT repository secret is required to publish ${EXTENSION_ID}." >&2
+            exit 1
+          fi
+
+          npx --no-install vsce publish \
+            --packagePath "${RUNNER_TEMP}/release-assets/simdeck-vscode-${VERSION}.vsix" \
+            --pat "${VSCE_PAT}" \
+            --skip-duplicate
 
       - name: Upload GitHub release assets
         env:
