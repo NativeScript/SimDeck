@@ -392,6 +392,7 @@ export class SimDeckReactNativeInspector {
         maxDepth,
         0,
         visited,
+        null,
       );
       if (node) {
         roots.push(node);
@@ -417,6 +418,7 @@ export class SimDeckReactNativeInspector {
       optionalNumber(params.maxDepth),
       0,
       new WeakSet<object>(),
+      null,
     );
     if (!node) {
       throw new InspectorFailure(-32004, `No view was found for id ${id}.`);
@@ -479,6 +481,7 @@ export class SimDeckReactNativeInspector {
     maxDepth: number | null,
     depth: number,
     visited: WeakSet<object>,
+    inheritedSourceLocation: JSONObject | null,
   ): Promise<JSONObject | null> {
     await Promise.resolve();
     if (traversalExpired(context)) {
@@ -498,10 +501,16 @@ export class SimDeckReactNativeInspector {
     const inspectableChildFiberList = childFiberList.filter(
       (child) => !isDevelopmentOverlayFiber(child),
     );
+    if (isInactiveTabScreenFiber(props, type)) {
+      return null;
+    }
     const visible = includeHidden || isFiberVisible(fiber);
     const transparentWrapper =
       visible &&
       isPassThroughWrapperFiber(fiber, props, inspectableChildFiberList);
+    const ownSourceLocation = await this.sourceLocationForFiber(fiber);
+    const effectiveSourceLocation =
+      ownSourceLocation ?? inheritedSourceLocation;
 
     if (!visible || transparentWrapper) {
       const children = await this.fiberChildren(
@@ -511,19 +520,19 @@ export class SimDeckReactNativeInspector {
         maxDepth,
         depth,
         visited,
+        effectiveSourceLocation,
       );
       if (children.length === 1) {
         return children[0];
       }
       if (children.length > 1) {
-        const sourceLocation = await this.sourceLocationForFiber(fiber);
         const tag = nativeTagForFiber(fiber);
         const frame = tag == null ? null : await this.measureNativeTag(tag);
         return this.syntheticFiberNode(
           fiber,
           type,
           props,
-          sourceLocation,
+          effectiveSourceLocation,
           tag,
           frame,
           children,
@@ -532,7 +541,6 @@ export class SimDeckReactNativeInspector {
       return null;
     }
 
-    const sourceLocation = await this.sourceLocationForFiber(fiber);
     const childDepth = consumesHierarchyDepth(
       fiber,
       props,
@@ -549,6 +557,7 @@ export class SimDeckReactNativeInspector {
             maxDepth,
             childDepth,
             visited,
+            effectiveSourceLocation,
           )
         : [];
     const tag = nativeTagForFiber(fiber);
@@ -557,7 +566,7 @@ export class SimDeckReactNativeInspector {
       fiber,
       type,
       props,
-      sourceLocation,
+      effectiveSourceLocation,
       tag,
       frame,
       children,
@@ -571,6 +580,7 @@ export class SimDeckReactNativeInspector {
     maxDepth: number | null,
     depth: number,
     visited: WeakSet<object>,
+    inheritedSourceLocation: JSONObject | null,
   ): Promise<JSONObject[]> {
     const nodes: JSONObject[] = [];
     for (const child of fibers) {
@@ -584,6 +594,7 @@ export class SimDeckReactNativeInspector {
         maxDepth,
         depth,
         visited,
+        inheritedSourceLocation,
       );
       if (node) {
         nodes.push(node);
@@ -599,6 +610,7 @@ export class SimDeckReactNativeInspector {
     maxDepth: number | null,
     depth: number,
     visited: WeakSet<object>,
+    inheritedSourceLocation: JSONObject | null,
   ): Promise<JSONObject[]> {
     if (maxDepth != null && depth >= maxDepth) {
       return [];
@@ -610,6 +622,7 @@ export class SimDeckReactNativeInspector {
       maxDepth,
       depth,
       visited,
+      inheritedSourceLocation,
     );
   }
 
@@ -669,6 +682,11 @@ export class SimDeckReactNativeInspector {
     }
     if (this.sourceLocationCache.has(key)) {
       return Promise.resolve(this.sourceLocationCache.get(key) ?? null);
+    }
+    const immediate = immediateSourceLocationForFiber(fiber);
+    if (immediate) {
+      this.sourceLocationCache.set(key, immediate);
+      return Promise.resolve(immediate);
     }
     if (!this.pendingSourceLocations.has(key)) {
       this.pendingSourceLocations.add(key);
@@ -961,6 +979,13 @@ function isDevelopmentOverlayFiber(fiber: Fiber): boolean {
   );
 }
 
+function isInactiveTabScreenFiber(props: JSONObject, type: string): boolean {
+  return (
+    (type === "TabsScreen" || type === "RNSBottomTabsScreen") &&
+    props.isFocused === false
+  );
+}
+
 function fiberDisplayName(fiber: Fiber): string {
   const type = fiber.elementType ?? fiber.type;
   if (typeof type === "string") {
@@ -986,18 +1011,25 @@ function fiberDisplayName(fiber: Fiber): string {
 async function resolveSourceLocationForFiber(
   fiber: Fiber,
 ): Promise<JSONObject | null> {
+  const immediate = immediateSourceLocationForFiber(fiber);
+  if (immediate) {
+    return immediate;
+  }
+
   const candidates = sourceLocationCandidatesForFiber(fiber);
   if (candidates.length === 0) {
     return null;
   }
 
-  const direct = bestSourceLocation(candidates.map(sourceLocationObject));
-  if (direct && !isGeneratedBundleLocation(direct)) {
-    return direct;
-  }
-
   const symbolicated = await symbolicateSourceLocations(candidates);
   return bestSourceLocation(symbolicated);
+}
+
+function immediateSourceLocationForFiber(fiber: Fiber): JSONObject | null {
+  const direct = bestSourceLocation(
+    sourceLocationCandidatesForFiber(fiber).map(sourceLocationObject),
+  );
+  return direct && !isGeneratedBundleLocation(direct) ? direct : null;
 }
 
 function sourceLocationCandidatesForFiber(fiber: Fiber): SourceLocation[] {
@@ -1025,7 +1057,7 @@ function sourceLocationCandidatesForFiber(fiber: Fiber): SourceLocation[] {
 function sourceLocationFromDisplayName(
   displayName: string,
 ): SourceLocation | null {
-  const match = displayName.match(/\((\.{1,2}\/[^)]+\.[cm]?[jt]sx?)\)$/);
+  const match = displayName.match(/\((\.{1,2}\/.+\.[cm]?[jt]sx?)\)$/);
   if (!match) {
     return null;
   }
