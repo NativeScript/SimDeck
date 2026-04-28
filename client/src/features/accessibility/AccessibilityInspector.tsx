@@ -288,6 +288,7 @@ export function AccessibilityInspector({
               const kind = accessibilityKind(item.node);
               const label = hierarchyNodeLabel(item.node, kind);
               const sourceBadge = sourceLocationBadgeText(item.node);
+              const sourceTitle = sourceLocationText(item.node);
               const chainBadge = compactedChainBadgeText(item.chain.length);
               const chainPath = compactedChainPathText(item);
               return (
@@ -348,7 +349,10 @@ export function AccessibilityInspector({
                       <span className="hierarchy-node-text">{label}</span>
                     ) : null}
                     {sourceBadge ? (
-                      <span className="hierarchy-node-source">
+                      <span
+                        className="hierarchy-node-source"
+                        title={sourceTitle}
+                      >
                         {sourceBadge}
                       </span>
                     ) : null}
@@ -605,8 +609,29 @@ function sourceLocationBadgeText(node: AccessibilityNode): string {
   }
 
   const line = finiteNumber(location.line);
-  const fileName = location.file.split(/[\\/]/).pop() ?? location.file;
+  const fileName = compactSourceFileLabel(location.file);
   return line == null ? fileName : `${fileName}:${line}`;
+}
+
+function compactSourceFileLabel(file: string): string {
+  const parts = file.split(/[\\/]/).filter(Boolean);
+  const fileName = parts.at(-1) ?? file;
+  if (!isCommonRouteFileName(fileName)) {
+    return fileName;
+  }
+
+  const parent = parts.at(-2);
+  if (!parent || parent === "." || parent === "..") {
+    return fileName;
+  }
+  return `${parent}/${fileName}`;
+}
+
+function isCommonRouteFileName(fileName: string): boolean {
+  return (
+    /^_?layout\.[cm]?[jt]sx?$/.test(fileName) ||
+    /^index\.[cm]?[jt]sx?$/.test(fileName)
+  );
 }
 
 function compactedChainBadgeText(count: number): string {
