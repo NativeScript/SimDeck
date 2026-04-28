@@ -87,7 +87,7 @@ interface TraversalContext {
 const protocolVersion = "0.1";
 const hookKey = "__REACT_DEVTOOLS_GLOBAL_HOOK__";
 const hierarchyDeadlineMs = 3000;
-const hierarchyNodeBudget = 450;
+const hierarchyNodeBudget = 3500;
 const measureTimeoutMs = 2;
 const commonEditableProps = [
   "accessibilityLabel",
