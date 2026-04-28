@@ -1,6 +1,7 @@
 import type { AccessibilityFrame, AccessibilityNode } from "../../api/types";
 
 export interface AccessibilityTreeItem {
+  chain: AccessibilityNode[];
   children: AccessibilityTreeItem[];
   depth: number;
   id: string;
@@ -130,14 +131,48 @@ function buildItem(
   id: string,
   depth: number,
 ): AccessibilityTreeItem {
+  const compacted = compactReactNativeChain(node, id);
   return {
-    children: (node.children ?? []).map((child, index) =>
-      buildItem(child, `${id}.${index}`, depth + 1),
+    chain: compacted.chain,
+    children: (compacted.node.children ?? []).map((child, index) =>
+      buildItem(child, `${compacted.id}.${index}`, depth + 1),
     ),
     depth,
-    id,
-    node,
+    id: compacted.id,
+    node: compacted.node,
   };
+}
+
+function compactReactNativeChain(
+  node: AccessibilityNode,
+  id: string,
+): {
+  chain: AccessibilityNode[];
+  id: string;
+  node: AccessibilityNode;
+} {
+  const chain: AccessibilityNode[] = [];
+  let current = node;
+  let currentId = id;
+
+  while (canCompactReactNativeNode(current)) {
+    const child = current.children?.[0];
+    if (!child || child.source !== "react-native") {
+      break;
+    }
+    chain.push(current);
+    current = child;
+    currentId = `${currentId}.0`;
+  }
+
+  return { chain, id: currentId, node: current };
+}
+
+function canCompactReactNativeNode(node: AccessibilityNode): boolean {
+  if (node.source !== "react-native" || node.children?.length !== 1) {
+    return false;
+  }
+  return !validFrame(node.frame) && !hasMeaningfulNodeContent(node);
 }
 
 function findContainingItem(

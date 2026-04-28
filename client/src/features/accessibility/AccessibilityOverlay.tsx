@@ -22,11 +22,11 @@ export function AccessibilityOverlay({
   const rootFrame = accessibilityRootFrame(roots);
   const tree = buildAccessibilityTree(roots);
   const selected = selectedId
-    ? findAccessibilityItem(tree, selectedId)?.node
+    ? framedNode(findAccessibilityItem(tree, selectedId)?.node)
     : null;
   const hovered =
     hoveredId && hoveredId !== selectedId
-      ? findAccessibilityItem(tree, hoveredId)?.node
+      ? framedNode(findAccessibilityItem(tree, hoveredId)?.node)
       : null;
 
   if (!rootFrame || (!selected && !hovered)) {
@@ -43,6 +43,24 @@ export function AccessibilityOverlay({
       ) : null}
     </div>
   );
+}
+
+function framedNode(
+  node: AccessibilityNode | null | undefined,
+): AccessibilityNode | null {
+  if (!node) {
+    return null;
+  }
+  if (validFrame(node.frame)) {
+    return node;
+  }
+  for (const child of node.children ?? []) {
+    const framed = framedNode(child);
+    if (framed) {
+      return framed;
+    }
+  }
+  return null;
 }
 
 function NodeRect({

@@ -69,7 +69,7 @@ import {
 
 const ACCESSIBILITY_REFRESH_MS = 1500;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
-const REACT_NATIVE_ACCESSIBILITY_MAX_DEPTH = 30;
+const REACT_NATIVE_ACCESSIBILITY_MAX_DEPTH = 60;
 
 clearLegacyVolatileUiState();
 
@@ -427,7 +427,6 @@ export function AppShell() {
       }
       const roots = snapshot.roots ?? [];
       const availableSources = mergeAccessibilitySources(
-        accessibilityAvailableSources,
         sanitizeAccessibilitySources(snapshot.availableSources),
         snapshot.source,
       );
@@ -475,11 +474,25 @@ export function AppShell() {
         setAccessibilityLoading(false);
       }
     }
-  }, [
-    accessibilityAvailableSources,
-    accessibilityPreferredSource,
-    selectedSimulator,
-  ]);
+  }, [accessibilityPreferredSource, selectedSimulator]);
+
+  const changeAccessibilitySource = useCallback(
+    (source: AccessibilitySource) => {
+      if (source === accessibilityPreferredSource) {
+        return;
+      }
+      accessibilityRequestIdRef.current += 1;
+      accessibilityLoadingRef.current = false;
+      setAccessibilityPreferredSource(source);
+      setAccessibilityRoots([]);
+      setAccessibilitySelectedId("");
+      setAccessibilityHoveredId(null);
+      setAccessibilityError("");
+      setAccessibilitySource("");
+      setAccessibilityLoading(false);
+    },
+    [accessibilityPreferredSource],
+  );
 
   useEffect(() => {
     if (!hierarchyVisible) {
@@ -1088,7 +1101,7 @@ export function AppShell() {
                 current === id ? "" : id,
               )
             }
-            onSourceChange={setAccessibilityPreferredSource}
+            onSourceChange={changeAccessibilitySource}
             pickerActive={accessibilityPickerActive}
             roots={accessibilityRoots}
             selectedId={accessibilitySelectedId}

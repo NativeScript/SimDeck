@@ -503,6 +503,22 @@
   white-space: nowrap;
 }
 
+.hierarchy-node-chain {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 16px;
+  padding: 0 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .hierarchy-node.selected .hierarchy-node-kind {
   color: color-mix(in srgb, var(--accent-text) 82%, var(--success));
 }

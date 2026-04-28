@@ -152,7 +152,10 @@ export function AccessibilityInspector({
     setExpandedIds(
       storedExpandedIds.length > 0
         ? new Set(storedExpandedIds)
-        : defaultExpandedAccessibilityIds(tree),
+        : defaultExpandedAccessibilityIds(
+            tree,
+            source === "react-native" ? 2 : 10,
+          ),
     );
     expandedInitializedKeyRef.current = expansionKey;
   }, [roots, selectedSimulator?.udid, source]);
@@ -285,6 +288,7 @@ export function AccessibilityInspector({
               const kind = accessibilityKind(item.node);
               const label = hierarchyNodeLabel(item.node, kind);
               const sourceBadge = sourceLocationBadgeText(item.node);
+              const chainBadge = compactedChainBadgeText(item.chain.length);
               return (
                 <div
                   className={`hierarchy-node ${item.id === selectedItem?.id ? "selected" : ""}`}
@@ -322,6 +326,14 @@ export function AccessibilityInspector({
                     }}
                     type="button"
                   >
+                    {chainBadge ? (
+                      <span
+                        className="hierarchy-node-chain"
+                        title={`${item.chain.length} compacted wrapper nodes`}
+                      >
+                        {chainBadge}
+                      </span>
+                    ) : null}
                     <span className="hierarchy-node-kind">{kind}</span>
                     {label ? (
                       <span className="hierarchy-node-text">{label}</span>
@@ -586,6 +598,10 @@ function sourceLocationBadgeText(node: AccessibilityNode): string {
   const line = finiteNumber(location.line);
   const fileName = location.file.split(/[\\/]/).pop() ?? location.file;
   return line == null ? fileName : `${fileName}:${line}`;
+}
+
+function compactedChainBadgeText(count: number): string {
+  return count > 0 ? `+${count}` : "";
 }
 
 function primarySourceLocation(

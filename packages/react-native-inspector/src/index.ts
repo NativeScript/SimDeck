@@ -61,6 +61,7 @@ interface Fiber {
   type?: unknown;
   _debugOwner?: Fiber | null;
   _debugSource?: SourceLocation | null;
+  _debugStack?: unknown;
 }
 
 interface SourceLocation {
@@ -78,9 +79,16 @@ interface HookRegistry {
   roots: Map<number, Set<FiberRoot>>;
 }
 
+interface TraversalContext {
+  deadline: number;
+  remainingNodes: number;
+}
+
 const protocolVersion = "0.1";
 const hookKey = "__REACT_DEVTOOLS_GLOBAL_HOOK__";
-const measureTimeoutMs = 24;
+const hierarchyDeadlineMs = 3000;
+const hierarchyNodeBudget = 450;
+const measureTimeoutMs = 2;
 const commonEditableProps = [
   "accessibilityLabel",
   "accessibilityHint",
@@ -116,13 +124,16 @@ export class SimDeckReactNativeInspector {
   private readonly ids = new WeakMap<object, string>();
   private readonly objects = new Map<string, Fiber>();
   private registry = installReactFiberHook();
+  private frameCache = new Map<number, JSONObject>();
   private metadata: JSONObject | null = null;
-  private measureCache = new Map<number, Promise<JSONObject | null>>();
   private nextObjectId = 1;
+  private pendingFrameMeasurements = new Set<number>();
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private polling = false;
+  private pendingSourceLocations = new Set<string>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private socket: InspectorSocket | null = null;
+  private sourceLocationCache = new Map<string, JSONObject | null>();
 
   constructor(options: SimDeckReactNativeInspectorOptions = {}) {
     this.options = {
@@ -371,23 +382,20 @@ export class SimDeckReactNativeInspector {
     const maxDepth = optionalNumber(params.maxDepth);
     const includeHidden = Boolean(params.includeHidden);
     const roots: JSONObject[] = [];
-    this.measureCache = new Map();
     const visited = new WeakSet<object>();
-    try {
-      for (const fiber of this.rootFibers()) {
-        const node = await this.fiberNode(
-          fiber,
-          includeHidden,
-          maxDepth,
-          0,
-          visited,
-        );
-        if (node) {
-          roots.push(node);
-        }
+    const context = createTraversalContext();
+    for (const fiber of this.rootFibers()) {
+      const node = await this.fiberNode(
+        context,
+        fiber,
+        includeHidden,
+        maxDepth,
+        0,
+        visited,
+      );
+      if (node) {
+        roots.push(node);
       }
-    } finally {
-      this.measureCache = new Map();
     }
     return {
       ...(await this.snapshotMetadata()),
@@ -403,6 +411,7 @@ export class SimDeckReactNativeInspector {
       throw new InspectorFailure(-32004, `No view was found for id ${id}.`);
     }
     const node = await this.fiberNode(
+      createTraversalContext(),
       fiber,
       true,
       optionalNumber(params.maxDepth),
@@ -464,6 +473,7 @@ export class SimDeckReactNativeInspector {
   }
 
   private async fiberNode(
+    context: TraversalContext,
     fiber: Fiber,
     includeHidden: boolean,
     maxDepth: number | null,
@@ -471,6 +481,11 @@ export class SimDeckReactNativeInspector {
     visited: WeakSet<object>,
   ): Promise<JSONObject | null> {
     await Promise.resolve();
+    if (traversalExpired(context)) {
+      return null;
+    }
+    context.remainingNodes -= 1;
+
     const fiberObject = fiber as object;
     if (visited.has(fiberObject)) {
       return null;
@@ -478,24 +493,19 @@ export class SimDeckReactNativeInspector {
     visited.add(fiberObject);
 
     const props = fiber.memoizedProps ?? {};
-    const sourceLocation = sourceLocationForFiber(fiber);
     const type = fiberDisplayName(fiber);
     const childFiberList = childFibers(fiber);
     const inspectableChildFiberList = childFiberList.filter(
       (child) => !isDevelopmentOverlayFiber(child),
     );
     const visible = includeHidden || isFiberVisible(fiber);
+    const transparentWrapper =
+      visible &&
+      isPassThroughWrapperFiber(fiber, props, inspectableChildFiberList);
 
-    if (
-      !visible ||
-      isTransparentWrapperFiber(
-        type,
-        props,
-        sourceLocation,
-        inspectableChildFiberList,
-      )
-    ) {
+    if (!visible || transparentWrapper) {
       const children = await this.fiberChildren(
+        context,
         inspectableChildFiberList,
         includeHidden,
         maxDepth,
@@ -506,6 +516,7 @@ export class SimDeckReactNativeInspector {
         return children[0];
       }
       if (children.length > 1) {
+        const sourceLocation = await this.sourceLocationForFiber(fiber);
         const tag = nativeTagForFiber(fiber);
         const frame = tag == null ? null : await this.measureNativeTag(tag);
         return this.syntheticFiberNode(
@@ -521,6 +532,7 @@ export class SimDeckReactNativeInspector {
       return null;
     }
 
+    const sourceLocation = await this.sourceLocationForFiber(fiber);
     const childDepth = consumesHierarchyDepth(
       fiber,
       props,
@@ -531,6 +543,7 @@ export class SimDeckReactNativeInspector {
     const children =
       maxDepth == null || depth < maxDepth
         ? await this.fiberNodes(
+            context,
             inspectableChildFiberList,
             includeHidden,
             maxDepth,
@@ -552,21 +565,35 @@ export class SimDeckReactNativeInspector {
   }
 
   private async fiberNodes(
+    context: TraversalContext,
     fibers: Fiber[],
     includeHidden: boolean,
     maxDepth: number | null,
     depth: number,
     visited: WeakSet<object>,
   ): Promise<JSONObject[]> {
-    const nodes = await Promise.all(
-      fibers.map((child) =>
-        this.fiberNode(child, includeHidden, maxDepth, depth, visited),
-      ),
-    );
-    return nodes.filter((node): node is JSONObject => node != null);
+    const nodes: JSONObject[] = [];
+    for (const child of fibers) {
+      if (traversalExpired(context)) {
+        break;
+      }
+      const node = await this.fiberNode(
+        context,
+        child,
+        includeHidden,
+        maxDepth,
+        depth,
+        visited,
+      );
+      if (node) {
+        nodes.push(node);
+      }
+    }
+    return nodes;
   }
 
   private async fiberChildren(
+    context: TraversalContext,
     fibers: Fiber[],
     includeHidden: boolean,
     maxDepth: number | null,
@@ -577,6 +604,7 @@ export class SimDeckReactNativeInspector {
       return [];
     }
     return this.fiberNodes(
+      context,
       fibers.filter((child) => !isDevelopmentOverlayFiber(child)),
       includeHidden,
       maxDepth,
@@ -595,6 +623,7 @@ export class SimDeckReactNativeInspector {
     children: JSONObject[],
   ): JSONObject {
     const id = this.objectId(fiber);
+    const effectiveFrame = frame ?? unionChildFrames(children);
     return {
       id,
       inspectorId: id,
@@ -604,8 +633,8 @@ export class SimDeckReactNativeInspector {
       source: "react-native",
       sourceLocation,
       sourceLocations: sourceLocation ? [sourceLocation] : [],
-      frame,
-      frameInScreen: frame,
+      frame: effectiveFrame,
+      frameInScreen: effectiveFrame,
       reactNative: {
         key: fiber.key ?? null,
         tag,
@@ -617,13 +646,38 @@ export class SimDeckReactNativeInspector {
   }
 
   private measureNativeTag(tag: number): Promise<JSONObject | null> {
-    const cached = this.measureCache.get(tag);
+    const cached = this.frameCache.get(tag);
     if (cached) {
-      return cached;
+      return Promise.resolve(cached);
     }
-    const measurement = measureNativeTag(tag);
-    this.measureCache.set(tag, measurement);
-    return measurement;
+    if (!this.pendingFrameMeasurements.has(tag)) {
+      this.pendingFrameMeasurements.add(tag);
+      void measureNativeTag(tag).then((frame) => {
+        this.pendingFrameMeasurements.delete(tag);
+        if (frame) {
+          this.frameCache.set(tag, frame);
+        }
+      });
+    }
+    return Promise.resolve(null);
+  }
+
+  private sourceLocationForFiber(fiber: Fiber): Promise<JSONObject | null> {
+    const key = sourceLocationCacheKey(fiber);
+    if (!key) {
+      return Promise.resolve(null);
+    }
+    if (this.sourceLocationCache.has(key)) {
+      return Promise.resolve(this.sourceLocationCache.get(key) ?? null);
+    }
+    if (!this.pendingSourceLocations.has(key)) {
+      this.pendingSourceLocations.add(key);
+      void resolveSourceLocationForFiber(fiber).then((location) => {
+        this.pendingSourceLocations.delete(key);
+        this.sourceLocationCache.set(key, location);
+      });
+    }
+    return Promise.resolve(null);
   }
 
   private objectId(fiber: Fiber): string {
@@ -873,6 +927,17 @@ function reactNativeVersion(): unknown {
   );
 }
 
+function createTraversalContext(): TraversalContext {
+  return {
+    deadline: Date.now() + hierarchyDeadlineMs,
+    remainingNodes: hierarchyNodeBudget,
+  };
+}
+
+function traversalExpired(context: TraversalContext): boolean {
+  return context.remainingNodes <= 0 || Date.now() >= context.deadline;
+}
+
 function childFibers(fiber: Fiber): Fiber[] {
   const children: Fiber[] = [];
   let child = fiber.child ?? null;
@@ -881,54 +946,6 @@ function childFibers(fiber: Fiber): Fiber[] {
     child = child.sibling ?? null;
   }
   return children;
-}
-
-function isTransparentWrapperFiber(
-  type: string,
-  props: JSONObject,
-  sourceLocation: JSONObject | null,
-  children: Fiber[],
-): boolean {
-  if (children.length !== 1 || sourceLocation) {
-    return false;
-  }
-  if (
-    stringOrNull(props.accessibilityLabel) ||
-    stringOrNull(props.testID) ||
-    stringOrNull(props.nativeID) ||
-    stringChild(props.children)
-  ) {
-    return false;
-  }
-  return (
-    transparentFiberTypes.has(type) ||
-    type === "" ||
-    type === "Component" ||
-    /^AnimatedComponent\(.+\)$/.test(type) ||
-    /^\d+$/.test(type)
-  );
-}
-
-function consumesHierarchyDepth(
-  fiber: Fiber,
-  props: JSONObject,
-  children: Fiber[],
-): boolean {
-  if (children.length !== 1) {
-    return true;
-  }
-  if (typeof (fiber.elementType ?? fiber.type) === "string") {
-    return true;
-  }
-  if (
-    stringOrNull(props.accessibilityLabel) ||
-    stringOrNull(props.testID) ||
-    stringOrNull(props.nativeID) ||
-    stringChild(props.children)
-  ) {
-    return true;
-  }
-  return false;
 }
 
 function isDevelopmentOverlayFiber(fiber: Fiber): boolean {
@@ -943,43 +960,6 @@ function isDevelopmentOverlayFiber(fiber: Fiber): boolean {
     type.startsWith("LogBox")
   );
 }
-
-const transparentFiberTypes = new Set([
-  "App",
-  "AppContainer",
-  "BaseNavigationContainer",
-  "Content",
-  "ContextNavigator",
-  "DrawerLayout",
-  "EnsureSingleNavigator",
-  "ExpoRoot",
-  "GestureDetector",
-  "LinkingContext",
-  "LinkPreviewContextProvider",
-  "LocaleDirContext",
-  "NavigationContainerInner",
-  "NavigationContent",
-  "NavigationStateListenerProvider",
-  "PerformanceLoggerContext",
-  "PreventRemoveProvider",
-  "RCTView",
-  "RNCSafeAreaProvider",
-  "RootTagContext",
-  "Route",
-  "Route()",
-  "RouteNode",
-  "SafeAreaFrameContext",
-  "SafeAreaInsetsContext",
-  "SafeAreaProvider",
-  "SceneView",
-  "StaticContainer",
-  "ThemeContext",
-  "ThemeProvider",
-  "UnhandledLinkingContext",
-  "View",
-  "Wrap",
-  "withDevTools(App)",
-]);
 
 function fiberDisplayName(fiber: Fiber): string {
   const type = fiber.elementType ?? fiber.type;
@@ -1003,8 +983,58 @@ function fiberDisplayName(fiber: Fiber): string {
   return fiber.tag === 6 ? "Text" : "Component";
 }
 
-function sourceLocationForFiber(fiber: Fiber): JSONObject | null {
-  const source = fiber._debugSource ?? fiber._debugOwner?._debugSource;
+async function resolveSourceLocationForFiber(
+  fiber: Fiber,
+): Promise<JSONObject | null> {
+  const candidates = sourceLocationCandidatesForFiber(fiber);
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const direct = bestSourceLocation(candidates.map(sourceLocationObject));
+  if (direct && !isGeneratedBundleLocation(direct)) {
+    return direct;
+  }
+
+  const symbolicated = await symbolicateSourceLocations(candidates);
+  return bestSourceLocation(symbolicated);
+}
+
+function sourceLocationCandidatesForFiber(fiber: Fiber): SourceLocation[] {
+  const candidates = [
+    sourceLocationFromDisplayName(fiberDisplayName(fiber)),
+    fiber._debugSource,
+    fiber._debugOwner?._debugSource,
+    ...sourceLocationsFromStack(fiber._debugStack),
+    ...sourceLocationsFromStack(fiber._debugOwner?._debugStack),
+  ];
+  const seen = new Set<string>();
+  return candidates.filter((candidate): candidate is SourceLocation => {
+    if (!candidate?.fileName) {
+      return false;
+    }
+    const key = `${candidate.fileName}:${candidate.lineNumber ?? ""}:${candidate.columnNumber ?? ""}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function sourceLocationFromDisplayName(
+  displayName: string,
+): SourceLocation | null {
+  const match = displayName.match(/\((\.{1,2}\/[^)]+\.[cm]?[jt]sx?)\)$/);
+  if (!match) {
+    return null;
+  }
+  return { fileName: match[1] };
+}
+
+function sourceLocationObject(
+  source: SourceLocation | null | undefined,
+): JSONObject | null {
   if (!source?.fileName) {
     return null;
   }
@@ -1014,6 +1044,203 @@ function sourceLocationForFiber(fiber: Fiber): JSONObject | null {
     column: source.columnNumber ?? null,
     kind: "react-native",
   };
+}
+
+function sourceLocationsFromStack(stackLike: unknown): SourceLocation[] {
+  const stack =
+    typeof stackLike === "string"
+      ? stackLike
+      : typeof (stackLike as { stack?: unknown } | null)?.stack === "string"
+        ? String((stackLike as { stack?: string }).stack)
+        : "";
+  const locations: SourceLocation[] = [];
+  for (const line of stack.split("\n")) {
+    const match = line.match(/\(?((?:https?|file):\/\/.+):(\d+):(\d+)\)?$/);
+    if (!match) {
+      continue;
+    }
+    locations.push({
+      fileName: match[1],
+      lineNumber: Number(match[2]),
+      columnNumber: Number(match[3]),
+    });
+  }
+  return locations;
+}
+
+async function symbolicateSourceLocations(
+  locations: SourceLocation[],
+): Promise<JSONObject[]> {
+  const bundleLocation = locations.find((location) =>
+    location.fileName ? isMetroBundleUrl(location.fileName) : false,
+  );
+  if (!bundleLocation?.fileName) {
+    return [];
+  }
+
+  const endpoint = metroSymbolicateUrl(bundleLocation.fileName);
+  if (!endpoint) {
+    return [];
+  }
+
+  try {
+    const response = await fetchWithTimeout(
+      endpoint,
+      {
+        body: JSON.stringify({
+          stack: locations.map((location) => ({
+            column: location.columnNumber ?? 0,
+            file: location.fileName,
+            lineNumber: location.lineNumber ?? 1,
+            methodName: "unknown",
+          })),
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      },
+      50,
+    );
+    if (!response.ok) {
+      return [];
+    }
+    const payload = (await response.json()) as {
+      stack?: Array<{
+        column?: number;
+        file?: string;
+        lineNumber?: number;
+      }>;
+    };
+    return (payload.stack ?? [])
+      .map((frame) =>
+        sourceLocationObject({
+          columnNumber: frame.column,
+          fileName: frame.file,
+          lineNumber: frame.lineNumber,
+        }),
+      )
+      .filter((location): location is JSONObject => location != null);
+  } catch {
+    return [];
+  }
+}
+
+function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(
+      () => reject(new Error("Symbolication timed out.")),
+      timeoutMs,
+    );
+    fetch(url, init).then(
+      (response) => {
+        clearTimeout(timeoutId);
+        resolve(response);
+      },
+      (error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      },
+    );
+  });
+}
+
+function bestSourceLocation(
+  locations: Array<JSONObject | null | undefined>,
+): JSONObject | null {
+  const usable = locations.filter((location): location is JSONObject => {
+    if (!location?.file) {
+      return false;
+    }
+    return !isGeneratedBundleLocation(location);
+  });
+  return (
+    usable.find((location) => isAppSourceFile(String(location.file))) ??
+    usable.find((location) => !isFrameworkSourceFile(String(location.file))) ??
+    null
+  );
+}
+
+function sourceLocationCacheKey(fiber: Fiber): string {
+  return sourceLocationCandidatesForFiber(fiber)
+    .map(
+      (location) =>
+        `${location.fileName}:${location.lineNumber ?? ""}:${location.columnNumber ?? ""}`,
+    )
+    .join("|");
+}
+
+function metroSymbolicateUrl(bundleUrl: string): string | null {
+  try {
+    const url = new URL(bundleUrl);
+    url.pathname = "/symbolicate";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function isGeneratedBundleLocation(location: JSONObject): boolean {
+  return isMetroBundleUrl(String(location.file ?? ""));
+}
+
+function isMetroBundleUrl(file: string): boolean {
+  return /^https?:\/\/[^/]+\/.*index\.bundle/.test(file);
+}
+
+function isAppSourceFile(file: string): boolean {
+  return (
+    !isFrameworkSourceFile(file) &&
+    !file.includes("/node_modules/") &&
+    !file.includes("/Libraries/")
+  );
+}
+
+function isFrameworkSourceFile(file: string): boolean {
+  return (
+    file.includes("/node_modules/react/") ||
+    file.includes("/node_modules/react-native/") ||
+    file.includes("/node_modules/expo/") ||
+    file.includes("/node_modules/expo-router/") ||
+    file.includes("/node_modules/@react-navigation/")
+  );
+}
+
+function consumesHierarchyDepth(
+  fiber: Fiber,
+  props: JSONObject,
+  children: Fiber[],
+): boolean {
+  return !isPassThroughWrapperFiber(fiber, props, children);
+}
+
+function isPassThroughWrapperFiber(
+  fiber: Fiber,
+  props: JSONObject,
+  children: Fiber[],
+): boolean {
+  if (children.length !== 1) {
+    return false;
+  }
+  const type = fiber.elementType ?? fiber.type;
+  return typeof type !== "string" && !hasMeaningfulFiberProps(props);
+}
+
+function hasMeaningfulFiberProps(props: JSONObject): boolean {
+  return [
+    props.accessibilityLabel,
+    props.accessibilityHint,
+    props.accessibilityRole,
+    props.accessibilityValue,
+    props.nativeID,
+    props.placeholder,
+    props.testID,
+    stringChild(props.children),
+  ].some((value) => stringOrNull(value) != null);
 }
 
 function nodeTitle(type: string, props: JSONObject): string {
@@ -1099,6 +1326,68 @@ function measureNativeTag(tag: number): Promise<JSONObject | null> {
       finish(null);
     }
   });
+}
+
+function unionChildFrames(children: JSONObject[]): JSONObject | null {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let found = false;
+
+  for (const child of children) {
+    const frame = validFrameObject(child.frame)
+      ? child.frame
+      : validFrameObject(child.frameInScreen)
+        ? child.frameInScreen
+        : null;
+    if (!frame) {
+      continue;
+    }
+    minX = Math.min(minX, frame.x);
+    minY = Math.min(minY, frame.y);
+    maxX = Math.max(maxX, frame.x + frame.width);
+    maxY = Math.max(maxY, frame.y + frame.height);
+    found = true;
+  }
+
+  if (!found) {
+    return null;
+  }
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+}
+
+function validFrameObject(value: unknown): value is {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+} {
+  const frame = value as {
+    height?: unknown;
+    width?: unknown;
+    x?: unknown;
+    y?: unknown;
+  };
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    typeof frame.x === "number" &&
+    typeof frame.y === "number" &&
+    typeof frame.width === "number" &&
+    typeof frame.height === "number" &&
+    Number.isFinite(frame.x) &&
+    Number.isFinite(frame.y) &&
+    Number.isFinite(frame.width) &&
+    Number.isFinite(frame.height) &&
+    frame.width > 0 &&
+    frame.height > 0
+  );
 }
 
 function isFiberVisible(fiber: Fiber): boolean {

@@ -1116,7 +1116,7 @@ async fn accessibility_tree_value(
 
     if requested_source == AccessibilityHierarchySource::NativeAX {
         let inspector_session = inspector_session_for_state(&state, &udid).await.ok();
-        let available_sources = available_sources_with_native_ax(inspector_session.as_ref());
+        let mut available_sources = available_sources_with_native_ax(inspector_session.as_ref());
         let native_snapshot =
             match accessibility_snapshot(state.clone(), udid.clone(), None, max_depth).await {
                 Ok(snapshot) => snapshot,
@@ -1128,6 +1128,13 @@ async fn accessibility_tree_value(
                     ));
                 }
             };
+        merge_connected_sources_for_pid(
+            &state,
+            &udid,
+            root_process_identifier(&native_snapshot),
+            &mut available_sources,
+        )
+        .await;
         let snapshot = attach_available_sources(native_snapshot, &available_sources);
         return Ok(snapshot);
     }
@@ -1175,11 +1182,6 @@ async fn accessibility_tree_value(
                 }
                 Err(_inspector_error) => {
                     let mut available_sources = available_sources_with_native_ax(Some(&session));
-                    if requested_source == AccessibilityHierarchySource::NativeScript {
-                        push_unique_source(&mut available_sources, SOURCE_NATIVE_SCRIPT);
-                    } else if requested_source == AccessibilityHierarchySource::ReactNative {
-                        push_unique_source(&mut available_sources, SOURCE_REACT_NATIVE);
-                    }
                     if requested_source == AccessibilityHierarchySource::UIKit {
                         if let Ok(snapshot) = run_in_app_inspector_hierarchy(
                             &state,
@@ -2076,6 +2078,7 @@ enum InAppHierarchySource {
     UIKit,
 }
 
+#[derive(Clone)]
 struct InspectorSession {
     transport: InspectorSessionTransport,
     available_sources: Vec<String>,
@@ -2093,12 +2096,16 @@ async fn inspector_session_for_state(
     state: &AppState,
     udid: &str,
 ) -> Result<InspectorSession, String> {
-    let connected_error = match connected_inspector_session(state, udid).await {
+    let frontmost_pid = frontmost_process_identifier(state, udid)
+        .await
+        .ok()
+        .flatten();
+    let connected_error = match connected_inspector_session(state, udid, frontmost_pid).await {
         Ok(session) => return Ok(session),
         Err(error) => error,
     };
 
-    match inspector_session(udid).await {
+    match inspector_session(udid, frontmost_pid).await {
         Ok(session) => Ok(session),
         Err(tcp_error) => Err(format!("{connected_error} {tcp_error}")),
     }
@@ -2107,19 +2114,33 @@ async fn inspector_session_for_state(
 async fn connected_inspector_session(
     state: &AppState,
     udid: &str,
+    frontmost_pid: Option<i64>,
 ) -> Result<InspectorSession, String> {
     let mut probed_inspectors = Vec::new();
+    let mut candidates = Vec::new();
     for inspector in state.inspectors.connected().await {
+        if frontmost_pid.is_some_and(|pid| pid != inspector.process_identifier) {
+            probed_inspectors.push(format!(
+                "background process {}",
+                inspector.process_identifier
+            ));
+            continue;
+        }
         if inspector_process_belongs_to_udid(udid, inspector.process_identifier).await? {
-            return Ok(InspectorSession {
+            candidates.push(InspectorSession {
                 transport: InspectorSessionTransport::Connected,
                 available_sources: inspector_available_sources(&inspector.info),
                 info: inspector.info,
                 process_identifier: inspector.process_identifier,
             });
+            continue;
         }
 
         probed_inspectors.push(format!("process {}", inspector.process_identifier));
+    }
+
+    if let Some(session) = best_inspector_session(candidates) {
+        return Ok(session);
     }
 
     if probed_inspectors.is_empty() {
@@ -2134,12 +2155,16 @@ async fn connected_inspector_session(
     }
 }
 
-async fn inspector_session(udid: &str) -> Result<InspectorSession, String> {
+async fn inspector_session(
+    udid: &str,
+    frontmost_pid: Option<i64>,
+) -> Result<InspectorSession, String> {
     let mut probed_inspectors = Vec::new();
     let mut probe_errors = Vec::new();
 
     if let Some(session) = find_inspector_session_on_ports(
         udid,
+        frontmost_pid,
         inspector_agent_ports().collect(),
         &mut probed_inspectors,
         &mut probe_errors,
@@ -2162,6 +2187,7 @@ async fn inspector_session(udid: &str) -> Result<InspectorSession, String> {
 
     if let Some(session) = find_inspector_session_on_ports(
         udid,
+        frontmost_pid,
         discovered_ports,
         &mut probed_inspectors,
         &mut probe_errors,
@@ -2191,10 +2217,12 @@ async fn inspector_session(udid: &str) -> Result<InspectorSession, String> {
 
 async fn find_inspector_session_on_ports(
     udid: &str,
+    frontmost_pid: Option<i64>,
     ports: Vec<u16>,
     probed_inspectors: &mut Vec<String>,
     probe_errors: &mut Vec<String>,
 ) -> Result<Option<InspectorSession>, String> {
+    let mut candidates = Vec::new();
     for port in ports {
         let info = match query_inspector_agent_on_port(port, "Inspector.getInfo", Value::Null).await
         {
@@ -2215,19 +2243,67 @@ async fn find_inspector_session_on_ports(
             }
         };
 
+        if frontmost_pid.is_some_and(|pid| pid != process_identifier) {
+            probed_inspectors.push(format!("{port}: background process {process_identifier}"));
+            continue;
+        }
+
         if inspector_process_belongs_to_udid(udid, process_identifier).await? {
-            return Ok(Some(InspectorSession {
+            candidates.push(InspectorSession {
                 transport: InspectorSessionTransport::Tcp { port },
                 available_sources: inspector_available_sources(&info),
                 info,
                 process_identifier,
-            }));
+            });
+            continue;
         }
 
         probed_inspectors.push(format!("{port}: process {process_identifier}"));
     }
 
-    Ok(None)
+    Ok(best_inspector_session(candidates))
+}
+
+fn best_inspector_session(mut candidates: Vec<InspectorSession>) -> Option<InspectorSession> {
+    candidates.sort_by_key(inspector_session_score);
+    candidates.into_iter().next()
+}
+
+fn inspector_session_score(session: &InspectorSession) -> u8 {
+    if session
+        .available_sources
+        .iter()
+        .any(|source| source == SOURCE_REACT_NATIVE)
+    {
+        return 0;
+    }
+    if session
+        .available_sources
+        .iter()
+        .any(|source| source == SOURCE_NATIVE_SCRIPT)
+    {
+        return 1;
+    }
+    if session
+        .available_sources
+        .iter()
+        .any(|source| source == SOURCE_UIKIT)
+    {
+        return 2;
+    }
+    3
+}
+
+async fn frontmost_process_identifier(state: &AppState, udid: &str) -> Result<Option<i64>, String> {
+    let snapshot = accessibility_snapshot(state.clone(), udid.to_owned(), None, Some(0))
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(snapshot
+        .get("roots")
+        .and_then(Value::as_array)
+        .and_then(|roots| roots.first())
+        .and_then(|root| root.get("pid"))
+        .and_then(Value::as_i64))
 }
 
 async fn run_in_app_inspector_hierarchy(
@@ -2399,6 +2475,39 @@ fn available_sources_for_snapshot(base_sources: &[String], snapshot: &Value) -> 
         sources.insert(insert_at, SOURCE_UIKIT.to_owned());
     }
     sources
+}
+
+async fn merge_connected_sources_for_pid(
+    state: &AppState,
+    udid: &str,
+    process_identifier: Option<i64>,
+    sources: &mut Vec<String>,
+) {
+    for inspector in state.inspectors.connected().await {
+        if process_identifier.is_some_and(|pid| pid != inspector.process_identifier) {
+            continue;
+        }
+        if inspector_process_belongs_to_udid(udid, inspector.process_identifier)
+            .await
+            .unwrap_or(false)
+        {
+            for source in inspector_available_sources(&inspector.info) {
+                push_unique_source(sources, &source);
+            }
+        }
+    }
+    if sources.iter().any(|source| source == SOURCE_REACT_NATIVE) {
+        sources.retain(|source| source != SOURCE_UIKIT);
+    }
+}
+
+fn root_process_identifier(snapshot: &Value) -> Option<i64> {
+    snapshot
+        .get("roots")
+        .and_then(Value::as_array)
+        .and_then(|roots| roots.first())
+        .and_then(|root| root.get("pid"))
+        .and_then(Value::as_i64)
 }
 
 fn framework_source(source: &str) -> bool {
