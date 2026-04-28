@@ -354,6 +354,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/batch", post(run_batch))
         .route("/api/simulators/{udid}/touch", post(send_touch))
         .route("/api/simulators/{udid}/control", get(control_socket))
+        .route("/api/simulators/{udid}/webrtc/offer", post(webrtc_offer))
         .route(
             "/api/simulators/{udid}/touch-sequence",
             post(send_touch_sequence),
@@ -888,6 +889,16 @@ async fn control_socket(
     websocket: WebSocketUpgrade,
 ) -> impl IntoResponse {
     websocket.on_upgrade(move |socket| handle_control_socket(state, udid, socket))
+}
+
+async fn webrtc_offer(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<crate::transport::webrtc::WebRtcOfferPayload>,
+) -> Result<Json<crate::transport::webrtc::WebRtcAnswerPayload>, AppError> {
+    crate::transport::webrtc::create_answer(state, udid, payload)
+        .await
+        .map(Json)
 }
 
 async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket) {

@@ -19,7 +19,7 @@ view inside the editor.
 
 ## Features
 
-- WebTransport based streaming server in Rust, hardware encoded HVEC/H264 video stream
+- WebTransport streaming server in Rust, plus experimental WebRTC for runner previews, using hardware encoded HEVC/H.264 video
 - Simulator control & inspection using private accessibility APIs
 - CoreSimulator chrome asset rendering for device bezels
 - NativeScript and React Native runtime inspector plugins, plus a native UIKit inspector framework for other apps
@@ -76,6 +76,10 @@ simdeck ui --open
 
 This starts or reuses the project daemon, enables the browser UI, and opens the authenticated local URL.
 To focus a specific simulator, add `?device=UDID` to the opened URL.
+SimDeck Cloud uses the same server binary as its GitHub Actions provider. The
+provider workflow starts `simdeck serve` on the runner, exposes it through a
+tunnel, and lets the hosted control plane connect to the simulator with a
+one-time access token.
 
 The daemon exposes HTTP on the requested port and WebTransport on `port + 1`.
 The browser bootstrap comes from `GET /api/health`, which returns the WebTransport URL template,

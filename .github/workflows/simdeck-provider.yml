@@ -1,0 +1,202 @@
+name: SimDeck Provider
+
+on:
+  workflow_dispatch:
+    inputs:
+      preview_id:
+        description: SimDeck Cloud preview deployment id
+        required: true
+      provider_token:
+        description: One-time provider registration token
+        required: true
+      simdeck_cloud_url:
+        description: SimDeck Cloud control plane URL
+        required: true
+      artifact_id:
+        description: GitHub Actions artifact id containing a simulator .app
+        required: false
+      source_run_id:
+        description: Source workflow run id that uploaded the simulator artifact
+        required: false
+      bundle_id:
+        description: iOS app bundle id to launch after install
+        required: false
+      simdeck_artifact_url:
+        description: Optional URL to a prebuilt simdeck binary tarball
+        required: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  provider:
+    runs-on: macos-latest
+    timeout-minutes: 360
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download simulator artifact
+        if: ${{ inputs.artifact_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          run-id: ${{ inputs.source_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+          path: simdeck-artifact
+
+      - name: Install cloudflared
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install cloudflare/cloudflare/cloudflared
+
+      - name: Register provider workflow
+        shell: bash
+        env:
+          SIMDECK_CLOUD_URL: ${{ inputs.simdeck_cloud_url }}
+          PREVIEW_ID: ${{ inputs.preview_id }}
+          PROVIDER_TOKEN: ${{ inputs.provider_token }}
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H 'content-type: application/json' \
+            -d "{
+              \"previewId\":\"$PREVIEW_ID\",
+              \"providerToken\":\"$PROVIDER_TOKEN\",
+              \"providerRunId\":\"$GITHUB_RUN_ID\",
+              \"providerRunUrl\":\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\",
+              \"status\":\"running\",
+              \"simulatorName\":\"GitHub Actions macOS runner\"
+            }" \
+            "$SIMDECK_CLOUD_URL/api/actions/providers/register"
+
+      - name: Build or download SimDeck
+        shell: bash
+        env:
+          SIMDECK_ARTIFACT_URL: ${{ inputs.simdeck_artifact_url }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${SIMDECK_ARTIFACT_URL:-}" ]]; then
+            mkdir -p build
+            curl -fsSL "$SIMDECK_ARTIFACT_URL" | tar -xz -C build
+            chmod +x build/simdeck
+          elif [[ -x ./scripts/build-client.sh && -x ./scripts/build-cli.sh ]]; then
+            ./scripts/build-client.sh
+            ./scripts/build-cli.sh
+          else
+            git clone --depth 1 https://github.com/NativeScript/SimDeck.git simdeck-src
+            ./simdeck-src/scripts/build-client.sh
+            ./simdeck-src/scripts/build-cli.sh
+            mkdir -p build
+            cp simdeck-src/build/simdeck build/simdeck
+            chmod +x build/simdeck
+          fi
+
+      - name: Start simulator provider
+        shell: bash
+        env:
+          SIMDECK_CLOUD_URL: ${{ inputs.simdeck_cloud_url }}
+          PREVIEW_ID: ${{ inputs.preview_id }}
+          PROVIDER_TOKEN: ${{ inputs.provider_token }}
+          BUNDLE_ID: ${{ inputs.bundle_id }}
+          SIMDECK_ALLOWED_ORIGINS: ${{ inputs.simdeck_cloud_url }}
+        run: |
+          set -euo pipefail
+
+          ios_udid="$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          for runtime, devices in data.get("devices", {}).items():
+              if "iOS" not in runtime:
+                  continue
+              for device in devices:
+                  if device.get("isAvailable"):
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No available iOS simulator")
+          ')"
+
+          xcrun simctl boot "$ios_udid" || true
+          xcrun simctl bootstatus "$ios_udid" -b
+
+          app_path=""
+          if [[ -d simdeck-artifact ]]; then
+            app_path="$(find simdeck-artifact -maxdepth 6 -type d -name '*.app' | head -n 1 || true)"
+          fi
+          if [[ -n "$app_path" ]]; then
+            xcrun simctl install "$ios_udid" "$app_path"
+          fi
+          if [[ -n "${BUNDLE_ID:-}" ]]; then
+            xcrun simctl launch "$ios_udid" "$BUNDLE_ID" || true
+          fi
+
+          ./build/simdeck serve \
+            --port 4310 \
+            --bind 127.0.0.1 \
+            --access-token "$PROVIDER_TOKEN" \
+            --video-codec h264-software \
+            > simdeck.log 2>&1 &
+          simdeck_pid="$!"
+
+          for _ in {1..120}; do
+            if curl -fsS http://127.0.0.1:4310/api/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          cloudflared tunnel --url http://127.0.0.1:4310 \
+            > cloudflared.log 2>&1 &
+          cloudflared_pid="$!"
+
+          tunnel_url=""
+          for _ in {1..120}; do
+            tunnel_url="$(grep -Eo 'https://[-a-zA-Z0-9.]+\.trycloudflare\.com' cloudflared.log | head -n 1 || true)"
+            if [[ -n "$tunnel_url" ]]; then
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ -z "$tunnel_url" ]]; then
+            echo "cloudflared did not print a trycloudflare.com URL"
+            cat cloudflared.log || true
+            exit 1
+          fi
+
+          register() {
+            curl -fsS \
+              -H 'content-type: application/json' \
+              -d "{
+                \"previewId\":\"$PREVIEW_ID\",
+                \"providerToken\":\"$PROVIDER_TOKEN\",
+                \"providerRunId\":\"$GITHUB_RUN_ID\",
+                \"providerRunUrl\":\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\",
+                \"baseUrl\":\"$tunnel_url/?simdeckToken=$PROVIDER_TOKEN&transport=webrtc&device=$ios_udid\",
+                \"simulatorUdid\":\"$ios_udid\",
+                \"simulatorName\":\"GitHub Actions macOS runner\",
+                \"runtimeName\":\"$(xcrun simctl getenv "$ios_udid" SIMULATOR_RUNTIME_VERSION 2>/dev/null || true)\",
+                \"status\":\"ready\",
+                \"simulatorCount\":1
+              }" \
+              "$SIMDECK_CLOUD_URL/api/actions/providers/register"
+          }
+
+          register
+          echo "SimDeck tunnel: $tunnel_url"
+          while true; do
+            sleep 30
+            if ! kill -0 "$simdeck_pid" 2>/dev/null; then
+              echo "simdeck exited"
+              cat simdeck.log || true
+              exit 1
+            fi
+            if ! kill -0 "$cloudflared_pid" 2>/dev/null; then
+              echo "cloudflared exited"
+              cat cloudflared.log || true
+              exit 1
+            fi
+            register
+          done

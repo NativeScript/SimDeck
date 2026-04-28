@@ -45,18 +45,18 @@ To run only the production server:
 
 ## Layout
 
-| Folder                             | What lives here                                                                                           |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `server/`                          | CLI entrypoint, project daemon, Rust HTTP server, WebTransport hub, inspector hub, registry, and metrics. |
-| `cli/`                             | Objective-C native bridge for private CoreSimulator and SimulatorKit APIs.                                |
-| `client/`                          | React UI served at `/`.                                                                                   |
-| `packages/nativescript-inspector/` | TypeScript runtime for the NativeScript inspector.                                                        |
-| `packages/inspector-agent/`        | Swift Package for the Swift in-app inspector agent.                                                       |
-| `packages/simdeck-test/`           | JS/TS testing API for daemon-backed simulator automation.                                                 |
-| `packages/vscode-extension/`       | VS Code extension that opens the simulator inside an editor panel.                                        |
-| `scripts/`                         | Repeatable build entrypoints used by both local dev and CI.                                               |
-| `bin/`                             | Node launcher that locates and runs the compiled binary.                                                  |
-| `docs/`                            | This documentation site (VitePress).                                                                      |
+| Folder                             | What lives here                                                                                            |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `server/`                          | CLI entrypoint, project daemon, Rust HTTP server, stream transports, inspector hub, registry, and metrics. |
+| `cli/`                             | Objective-C native bridge for private CoreSimulator and SimulatorKit APIs.                                 |
+| `client/`                          | React UI served at `/`.                                                                                    |
+| `packages/nativescript-inspector/` | TypeScript runtime for the NativeScript inspector.                                                         |
+| `packages/inspector-agent/`        | Swift Package for the Swift in-app inspector agent.                                                        |
+| `packages/simdeck-test/`           | JS/TS testing API for daemon-backed simulator automation.                                                  |
+| `packages/vscode-extension/`       | VS Code extension that opens the simulator inside an editor panel.                                         |
+| `scripts/`                         | Repeatable build entrypoints used by both local dev and CI.                                                |
+| `bin/`                             | Node launcher that locates and runs the compiled binary.                                                   |
+| `docs/`                            | This documentation site (VitePress).                                                                       |
 
 ## Working rules
 
@@ -70,7 +70,7 @@ If you contribute, keep these invariants in mind. They are also enforced by the 
 - Don't add a Node or Swift dependency to solve work that already fits in Foundation/AppKit.
 - When touching private API usage, keep the adaptation small and explicit and document any simulator/runtime assumptions in `AGENTS.md`.
 - Prefer stable CLI subcommands over hidden environment variables.
-- The supported live video path is WebTransport-only. Do not bring back legacy `/stream.h264` handling.
+- The supported live video paths are WebTransport and the experimental WebRTC offer endpoint. Do not bring back legacy `/stream.h264` handling.
 - If a feature depends on a booted simulator, fail with a clear JSON error instead of silently returning an empty asset.
 
 ## Linting and formatting

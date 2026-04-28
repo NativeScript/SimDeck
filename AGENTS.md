@@ -20,6 +20,8 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
   Defines REST routes for simulator control, health, metrics, and chrome assets.
 - `server/src/transport/webtransport.rs`
   Exposes one WebTransport session path per simulator and streams binary video packets.
+- `server/src/transport/webrtc.rs`
+  Exposes an experimental H.264 WebRTC offer/answer endpoint for browser-to-runner preview tunnels.
 - `server/src/simulators/registry.rs`
   Tracks Rust-side simulator session state and lazy native attachment by UDID.
 - `cli/XCWSimctl.*`
@@ -140,7 +142,7 @@ Useful direct commands:
 - If you change a CLI flag, REST route, packet format, or inspector method, update the matching page under `docs/` in the same pass.
 - If you expand the private framework bridge, document the Xcode/runtime assumptions here.
 - If a feature depends on a booted simulator, fail with a clear JSON error instead of silently returning an empty asset.
-- Do not reintroduce legacy `/stream.h264` handling. The supported live path is Rust-managed WebTransport.
+- Do not reintroduce legacy `/stream.h264` handling. The supported live paths are Rust-managed WebTransport and the experimental WebRTC offer endpoint.
 
 ## Near-Term Roadmap
 
