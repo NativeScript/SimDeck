@@ -91,7 +91,9 @@ jobs:
             ./simdeck-src/scripts/build-cli.sh
             mkdir -p build
             cp simdeck-src/build/simdeck build/simdeck
+            cp simdeck-src/build/simdeck-bin build/simdeck-bin
             chmod +x build/simdeck
+            chmod +x build/simdeck-bin
           fi
 
       - name: Start simulator provider
@@ -140,12 +142,24 @@ jobs:
             > simdeck.log 2>&1 &
           simdeck_pid="$!"
 
+          healthy=0
           for _ in {1..120}; do
+            if ! kill -0 "$simdeck_pid" 2>/dev/null; then
+              echo "simdeck exited before health check passed"
+              cat simdeck.log || true
+              exit 1
+            fi
             if curl -fsS http://127.0.0.1:4310/api/health >/dev/null; then
+              healthy=1
               break
             fi
             sleep 1
           done
+          if [[ "$healthy" != "1" ]]; then
+            echo "simdeck did not become healthy"
+            cat simdeck.log || true
+            exit 1
+          fi
 
           cloudflared tunnel --url http://127.0.0.1:4310 \
             > cloudflared.log 2>&1 &
