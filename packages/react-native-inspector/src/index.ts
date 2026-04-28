@@ -84,11 +84,17 @@ interface TraversalContext {
   remainingNodes: number;
 }
 
+interface FrameCacheEntry {
+  frame: JSONObject;
+  measuredAt: number;
+}
+
 const protocolVersion = "0.1";
 const hookKey = "__REACT_DEVTOOLS_GLOBAL_HOOK__";
 const hierarchyDeadlineMs = 3000;
 const hierarchyNodeBudget = 3500;
-const measureTimeoutMs = 2;
+const frameCacheTtlMs = 250;
+const measureTimeoutMs = 50;
 const commonEditableProps = [
   "accessibilityLabel",
   "accessibilityHint",
@@ -124,7 +130,7 @@ export class SimDeckReactNativeInspector {
   private readonly ids = new WeakMap<object, string>();
   private readonly objects = new Map<string, Fiber>();
   private registry = installReactFiberHook();
-  private frameCache = new Map<number, JSONObject>();
+  private frameCache = new Map<number, FrameCacheEntry>();
   private metadata: JSONObject | null = null;
   private nextObjectId = 1;
   private pendingFrameMeasurements = new Set<number>();
@@ -659,20 +665,24 @@ export class SimDeckReactNativeInspector {
   }
 
   private measureNativeTag(tag: number): Promise<JSONObject | null> {
+    const now = Date.now();
     const cached = this.frameCache.get(tag);
-    if (cached) {
-      return Promise.resolve(cached);
+    if (cached && now - cached.measuredAt <= frameCacheTtlMs) {
+      return Promise.resolve(cached.frame);
     }
     if (!this.pendingFrameMeasurements.has(tag)) {
       this.pendingFrameMeasurements.add(tag);
       void measureNativeTag(tag).then((frame) => {
         this.pendingFrameMeasurements.delete(tag);
         if (frame) {
-          this.frameCache.set(tag, frame);
+          this.frameCache.set(tag, {
+            frame,
+            measuredAt: Date.now(),
+          });
         }
       });
     }
-    return Promise.resolve(null);
+    return Promise.resolve(cached?.frame ?? null);
   }
 
   private sourceLocationForFiber(fiber: Fiber): Promise<JSONObject | null> {

@@ -68,6 +68,7 @@ import {
 } from "./uiState";
 
 const ACCESSIBILITY_REFRESH_MS = 1500;
+const REACT_NATIVE_ACCESSIBILITY_REFRESH_MS = 500;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const REACT_NATIVE_ACCESSIBILITY_MAX_DEPTH = 60;
 
@@ -500,11 +501,21 @@ export function AppShell() {
     }
 
     void loadAccessibilityTree();
+    const refreshMs =
+      accessibilityPreferredSource === "react-native" ||
+      accessibilitySource === "react-native"
+        ? REACT_NATIVE_ACCESSIBILITY_REFRESH_MS
+        : ACCESSIBILITY_REFRESH_MS;
     const interval = window.setInterval(() => {
       void loadAccessibilityTree();
-    }, ACCESSIBILITY_REFRESH_MS);
+    }, refreshMs);
     return () => window.clearInterval(interval);
-  }, [hierarchyVisible, loadAccessibilityTree]);
+  }, [
+    accessibilityPreferredSource,
+    accessibilitySource,
+    hierarchyVisible,
+    loadAccessibilityTree,
+  ]);
 
   useEffect(() => {
     if (!isBooted) {
