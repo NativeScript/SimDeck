@@ -172,7 +172,10 @@ function canCompactReactNativeNode(node: AccessibilityNode): boolean {
   if (node.source !== "react-native" || node.children?.length !== 1) {
     return false;
   }
-  return !validFrame(node.frame) && !hasMeaningfulNodeContent(node);
+  if (primarySourceLocationFile(node) || isRouteDisplayName(node)) {
+    return false;
+  }
+  return !hasMeaningfulNodeContent(node);
 }
 
 function findContainingItem(
@@ -239,8 +242,38 @@ function hasMeaningfulNodeContent(node: AccessibilityNode): boolean {
     node.title,
   ].some((value) => {
     const text = cleanText(value);
+    if (text && isGeneratedReactNativeText(node, text)) {
+      return false;
+    }
     return Boolean(text && !generatedNames.has(text));
   });
+}
+
+function primarySourceLocationFile(node: AccessibilityNode): string {
+  return (
+    cleanText(node.sourceLocation?.file) ??
+    cleanText(node.sourceLocations?.find((location) => location?.file)?.file) ??
+    cleanText(node.sourceFile) ??
+    ""
+  );
+}
+
+function isRouteDisplayName(node: AccessibilityNode): boolean {
+  return /\(\.{1,2}\/.+\.[cm]?[jt]sx?\)$/.test(cleanText(node.type) ?? "");
+}
+
+function isGeneratedReactNativeText(
+  node: AccessibilityNode,
+  text: string,
+): boolean {
+  if (node.source !== "react-native" || node.children?.length !== 1) {
+    return false;
+  }
+  const type = cleanText(node.type);
+  if (type === "Text" || type === "RCTText") {
+    return false;
+  }
+  return /^\d+$/.test(text);
 }
 
 function frameContainsPoint(

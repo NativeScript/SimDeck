@@ -289,6 +289,7 @@ export function AccessibilityInspector({
               const label = hierarchyNodeLabel(item.node, kind);
               const sourceBadge = sourceLocationBadgeText(item.node);
               const chainBadge = compactedChainBadgeText(item.chain.length);
+              const chainPath = compactedChainPathText(item);
               return (
                 <div
                   className={`hierarchy-node ${item.id === selectedItem?.id ? "selected" : ""}`}
@@ -329,9 +330,17 @@ export function AccessibilityInspector({
                     {chainBadge ? (
                       <span
                         className="hierarchy-node-chain"
-                        title={`${item.chain.length} compacted wrapper nodes`}
+                        title={compactedChainTitle(item)}
                       >
                         {chainBadge}
+                      </span>
+                    ) : null}
+                    {chainPath ? (
+                      <span
+                        className="hierarchy-node-chain-path"
+                        title={compactedChainTitle(item)}
+                      >
+                        {chainPath}
                       </span>
                     ) : null}
                     <span className="hierarchy-node-kind">{kind}</span>
@@ -602,6 +611,29 @@ function sourceLocationBadgeText(node: AccessibilityNode): string {
 
 function compactedChainBadgeText(count: number): string {
   return count > 0 ? `+${count}` : "";
+}
+
+function compactedChainPathText(
+  item: ReturnType<typeof buildAccessibilityTree>[number],
+): string {
+  if (item.chain.length === 0) {
+    return "";
+  }
+  const names = item.chain.map(accessibilityKind).filter(Boolean);
+  const tail = names.slice(-3);
+  const prefix = names.length > tail.length ? "... / " : "";
+  return `${prefix}${tail.join(" / ")} /`;
+}
+
+function compactedChainTitle(
+  item: ReturnType<typeof buildAccessibilityTree>[number],
+): string {
+  if (item.chain.length === 0) {
+    return "";
+  }
+  return [...item.chain.map(accessibilityKind), accessibilityKind(item.node)]
+    .filter(Boolean)
+    .join(" / ");
 }
 
 function primarySourceLocation(
