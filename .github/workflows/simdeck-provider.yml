@@ -32,14 +32,14 @@ permissions:
 jobs:
   provider:
     runs-on: macos-latest
-    timeout-minutes: 360
+    timeout-minutes: 35
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download simulator artifact
         if: ${{ inputs.artifact_id != '' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ inputs.artifact_id }}
           run-id: ${{ inputs.source_run_id || github.run_id }}
@@ -186,8 +186,17 @@ jobs:
 
           register
           echo "SimDeck tunnel: $tunnel_url"
+          deadline=$((SECONDS + 1800))
           while true; do
             sleep 30
+            if (( SECONDS >= deadline )); then
+              curl -fsS \
+                -H 'content-type: application/json' \
+                -d "{\"previewId\":\"$PREVIEW_ID\",\"providerToken\":\"$PROVIDER_TOKEN\",\"providerRunId\":\"$GITHUB_RUN_ID\",\"providerRunUrl\":\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\",\"status\":\"expired\"}" \
+                "$SIMDECK_CLOUD_URL/api/actions/providers/register" || true
+              echo "SimDeck provider hard timeout reached"
+              exit 0
+            fi
             if ! kill -0 "$simdeck_pid" 2>/dev/null; then
               echo "simdeck exited"
               cat simdeck.log || true
