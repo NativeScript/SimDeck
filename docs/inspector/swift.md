@@ -78,9 +78,65 @@ printf '{"id":2,"method":"View.getHierarchy","params":{"maxDepth":4}}\n' | nc 12
 
 For the full envelope shape and method list, see the [Inspector Protocol](/api/inspector-protocol).
 
+## SwiftUI view tree
+
+For SwiftUI apps you control, attach the root publisher to the top of your scene. The agent reflects the current SwiftUI value/body tree and publishes it as the `swiftui` hierarchy source while keeping the raw UIKit host tree available as `uikit`.
+
+```swift
+WindowGroup {
+    ContentView()
+        .simDeckPublishSwiftUIViewTree("ContentView", id: "app.root")
+}
+```
+
+`View.getHierarchy` returns the published SwiftUI tree by default. Pass `"source": "uikit"` to inspect the backing hosting views instead.
+
+This is a debug aid built on Swift reflection. It can show the declared view/body structure, including custom subviews, containers, labels, modifier names, active conditional branches, and `ForEach` rows whose data and content builder are available through SwiftUI's public API. Private/custom containers may still be opaque when they do not expose a child view value or content builder.
+
+## Experimental SwiftUI preview runner
+
+The repo includes a hacky local preview runner that extracts a `#Preview { ... }` block from a Swift file, builds it into a versioned iOS Simulator dylib, and asks a tiny installed host app to `dlopen` it. The host is rebuilt and reinstalled with `--rebuild-host`; cached runs send the new dylib over a localhost TCP reload socket so the simulator does not need a new app install.
+
+```sh
+npm run preview:swiftui -- \
+  --udid <booted-simulator-udid> \
+  --file Sources/MyFeature/MyView.swift \
+  --preview "Default" \
+  --watch
+```
+
+If `--udid` is omitted, the first booted simulator is used. Extra local source files can be passed with repeated `--extra-swift` flags, and raw compiler flags can be passed with repeated `--swiftc-arg` flags.
+
+Useful speed flags:
+
+- `--skip-codesign` skips ad-hoc signing for simulator reload dylibs. This worked in local simulator smoke tests and removed roughly 170-205ms.
+- `--split-compile` caches the preview source without its `#Preview` blocks as a testable Swift module. When only the preview body changes, reloads compile a tiny wrapper and link against the cached object.
+- `--profile` prints reload-stage timings so changes can be compared without Instruments.
+
+For a closer Xcode-compatible path, point the runner at the app workspace/project and scheme:
+
+```sh
+npm run preview:swiftui -- \
+  --workspace MyApp.xcworkspace \
+  --scheme MyApp \
+  --configuration Debug \
+  --udid <booted-simulator-udid> \
+  --file MyApp/Features/Profile/ProfileView.swift \
+  --preview "Default" \
+  --watch
+```
+
+In that mode the runner asks `xcodebuild` for the target build settings, does one warm app build, copies the app bundle's resources/frameworks into the preview host, and links reload dylibs against the target's Xcode-built debug dylib. Reloads then compile the edited preview source plus a tiny wrapper instead of rebuilding and reinstalling the whole app target. For the fastest loop after a warm build, pass `--skip-xcode-build --skip-codesign --split-compile`.
+
+The host listens on local TCP ports `47440-47455`. The preferred protocol streams the dylib bytes directly into the app's Documents directory and waits for a tiny `OK` acknowledgement. If that fails, the runner falls back to copying into the app container and notifying via TCP path reload, then to `simctl openurl`.
+
+When `--skip-xcode-build` is used, the runner also reuses a cached Xcode build context under `--build-root` after the first successful settings lookup. Delete that build root or run without `--skip-xcode-build` after changing schemes, destinations, package resolution, or major build settings.
+
+This is intentionally still not full Xcode Preview compatibility. It is best for simulator-debuggable app targets with Swift modules and a `.debug.dylib` available in DerivedData. Project dependencies and assets are reused from the warm Xcode build, but complex preview setup, generated sources that changed after the warm build, or build systems with unusual output layouts may still need `--extra-swift`, `--swiftc-arg`, or another warm `xcodebuild`.
+
 ## SwiftUI tagging
 
-The agent automatically reports SwiftUI hosting and bridge `UIView`s, but SwiftUI's value tree is not publicly enumerable at runtime. To make specific SwiftUI elements addressable, tag them in source:
+The agent also reports SwiftUI hosting and bridge `UIView`s in the UIKit tree. To make specific SwiftUI elements addressable in the raw UIKit hierarchy, tag them in source:
 
 ```swift
 Text("Continue")

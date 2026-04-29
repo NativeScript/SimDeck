@@ -249,7 +249,20 @@ should reject unsafe property names and coerce structured UIKit values such as
 
 ## SwiftUI
 
-SwiftUI's value tree is not publicly enumerable at runtime. The agent therefore exposes SwiftUI in two ways:
+For SwiftUI apps you control, attach the root publisher to the top of your scene:
+
+```swift
+WindowGroup {
+    ContentView()
+        .simDeckPublishSwiftUIViewTree("ContentView", id: "app.root")
+}
+```
+
+The agent reflects the current SwiftUI value/body tree and publishes it as the `swiftui` hierarchy source. `View.getHierarchy` returns that tree by default; pass `"source": "uikit"` to inspect the backing hosting views instead.
+
+This is a debug aid built on Swift reflection. It can show the declared view/body structure, including custom subviews, containers, labels, modifier names, active conditional branches, and `ForEach` rows whose data and content builder are available through SwiftUI's public API. Private/custom containers may still be opaque when they do not expose a child view value or content builder.
+
+The agent also exposes SwiftUI in the raw UIKit tree:
 
 - Automatic detection of UIKit bridge/hosting views whose runtime classes include `SwiftUI` or `UIHosting`.
 - Optional source-level tags using `View.simDeckInspectorTag(_:id:metadata:)`.
