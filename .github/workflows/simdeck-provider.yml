@@ -90,8 +90,11 @@ jobs:
             ./simdeck-src/scripts/build-client.sh
             ./simdeck-src/scripts/build-cli.sh
             mkdir -p build
+            mkdir -p client
             cp simdeck-src/build/simdeck build/simdeck
             cp simdeck-src/build/simdeck-bin build/simdeck-bin
+            rm -rf client/dist
+            cp -R simdeck-src/client/dist client/dist
             chmod +x build/simdeck
             chmod +x build/simdeck-bin
           fi
@@ -138,6 +141,7 @@ jobs:
             --port 4310 \
             --bind 127.0.0.1 \
             --access-token "$PROVIDER_TOKEN" \
+            --client-root "$PWD/client/dist" \
             --video-codec h264-software \
             > simdeck.log 2>&1 &
           simdeck_pid="$!"
