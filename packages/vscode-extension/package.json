@@ -3,7 +3,7 @@
   "displayName": "SimDeck",
   "description": "Open the local SimDeck simulator inside VS Code.",
   "version": "0.1.0",
-  "publisher": "dj",
+  "publisher": "nativescript",
   "license": "Apache-2.0",
   "engines": {
     "vscode": "^1.90.0"
