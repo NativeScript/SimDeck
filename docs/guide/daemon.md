@@ -4,6 +4,18 @@ SimDeck runs one warm native host per project. The daemon owns the HTTP API, the
 
 Normal CLI commands start the daemon automatically when they need it. Use `simdeck daemon` only when you want to manage it explicitly.
 
+Running `simdeck` with no subcommand starts a foreground workspace daemon, prints local and LAN browser URLs, and stops when the command exits. Pass a simulator name or UDID as the only argument to select it by default:
+
+```sh
+simdeck
+simdeck "iPhone 17 Pro Max"
+simdeck -d
+simdeck -k
+simdeck -r
+```
+
+The shorthand flags map to detached start, kill, and restart respectively. `simdeck -k` reports the PID that was killed, and `simdeck -r` returns the same JSON shape as `simdeck daemon start`.
+
 `simdeck daemon` is project-scoped. `simdeck service` is the optional macOS
 LaunchAgent wrapper for users who want an always-on daemon after login.
 

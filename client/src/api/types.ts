@@ -11,6 +11,7 @@ export interface SimulatorMetadata {
   name: string;
   runtimeName?: string;
   runtimeIdentifier?: string;
+  deviceTypeName?: string;
   deviceTypeIdentifier?: string;
   isBooted: boolean;
   privateDisplay?: PrivateDisplayInfo;

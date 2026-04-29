@@ -18,7 +18,15 @@ const message = `
 SimDeck is installed.
 
 Open the simulator UI:
-  simdeck ui --open
+  simdeck
+
+Open a specific simulator:
+  simdeck "iPhone 17 Pro"
+
+Detached daemon shortcuts:
+  simdeck -d
+  simdeck -k
+  simdeck -r
 
 Install the Codex skill:
   npx skills add NativeScript/SimDeck --skill simdeck -a codex -g

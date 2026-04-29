@@ -30,7 +30,7 @@ use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -52,6 +52,12 @@ const SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD: usize = 3;
 #[command(name = "simdeck")]
 #[command(bin_name = "simdeck")]
 #[command(about = "Project-local iOS Simulator devtool")]
+#[command(
+    override_usage = "simdeck [SIMULATOR_NAME_OR_UDID]\n       simdeck [-d|--detached]\n       simdeck [-k|--kill]\n       simdeck [-r|--restart]\n       simdeck <COMMAND> [OPTIONS]"
+)]
+#[command(
+    after_help = "Run without a subcommand to start a foreground workspace daemon. Pass a simulator name or UDID as the only argument to select it in the UI. Use -d/--detached, -k/--kill, or -r/--restart for shorthand daemon lifecycle commands."
+)]
 #[command(version)]
 struct Cli {
     #[arg(long, global = true, hide = true)]
@@ -586,17 +592,72 @@ fn stop_project_daemon() -> anyhow::Result<()> {
         println_json(&serde_json::json!({ "ok": true, "running": false }))?;
         return Ok(());
     };
+    terminate_daemon_metadata(&metadata)?;
+    println_json(&serde_json::json!({
+        "ok": true,
+        "running": false,
+        "pid": metadata.pid,
+        "killedPid": metadata.pid
+    }))
+}
+
+fn terminate_daemon_metadata(metadata: &DaemonMetadata) -> anyhow::Result<()> {
     let _ = ProcessCommand::new("kill")
         .arg(metadata.pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status();
+    wait_for_process_exit(metadata.pid, Duration::from_secs(3));
     let _ = fs::remove_file(daemon_metadata_path_for_root(&metadata.project_root)?);
-    println_json(&serde_json::json!({ "ok": true, "running": false, "pid": metadata.pid }))
+    Ok(())
+}
+
+fn wait_for_process_exit(pid: u32, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !process_exists(pid) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn process_exists(pid: u32) -> bool {
+    ProcessCommand::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn remove_daemon_metadata_if_current(root: &Path, pid: u32) -> anyhow::Result<()> {
+    let path = daemon_metadata_path_for_root(root)?;
+    let should_remove = fs::read_to_string(&path)
+        .ok()
+        .and_then(|data| serde_json::from_str::<DaemonMetadata>(&data).ok())
+        .is_some_and(|metadata| metadata.pid == pid);
+    if should_remove {
+        let _ = fs::remove_file(path);
+    }
+    Ok(())
 }
 
 fn daemon_status() -> anyhow::Result<()> {
     let metadata = read_daemon_metadata()?;
     let running = metadata.as_ref().is_some_and(daemon_is_healthy);
     println_json(&serde_json::json!({ "running": running, "daemon": metadata }))
+}
+
+fn print_daemon_start_result(metadata: &DaemonMetadata, started: bool) -> anyhow::Result<()> {
+    println_json(&serde_json::json!({
+        "ok": true,
+        "projectRoot": metadata.project_root,
+        "pid": metadata.pid,
+        "url": metadata.http_url,
+        "started": started
+    }))
 }
 
 fn wait_for_daemon(metadata: &DaemonMetadata, timeout: Duration) -> anyhow::Result<()> {
@@ -687,8 +748,175 @@ fn open_browser(url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+enum NoCommandAction {
+    Foreground(Option<String>),
+    Detached,
+    Kill,
+    Restart,
+}
+
+fn no_command_action_from_args() -> Option<NoCommandAction> {
+    let args: Vec<String> = env::args().skip(1).collect();
+    match args.as_slice() {
+        [] => Some(NoCommandAction::Foreground(None)),
+        [flag] if flag == "-d" || flag == "--detached" => Some(NoCommandAction::Detached),
+        [flag] if flag == "-k" || flag == "--kill" => Some(NoCommandAction::Kill),
+        [flag] if flag == "-r" || flag == "--restart" => Some(NoCommandAction::Restart),
+        [selector] if !selector.starts_with('-') && !is_known_command(selector) => {
+            Some(NoCommandAction::Foreground(Some(selector.clone())))
+        }
+        _ => None,
+    }
+}
+
+fn is_known_command(value: &str) -> bool {
+    matches!(
+        value,
+        "ui" | "daemon"
+            | "service"
+            | "core-simulator"
+            | "simctl-service"
+            | "list"
+            | "boot"
+            | "shutdown"
+            | "open-url"
+            | "launch"
+            | "toggle-appearance"
+            | "erase"
+            | "install"
+            | "uninstall"
+            | "pasteboard"
+            | "logs"
+            | "screenshot"
+            | "describe"
+            | "touch"
+            | "tap"
+            | "swipe"
+            | "gesture"
+            | "pinch"
+            | "rotate-gesture"
+            | "key"
+            | "key-sequence"
+            | "key-combo"
+            | "type"
+            | "button"
+            | "batch"
+            | "dismiss-keyboard"
+            | "home"
+            | "app-switcher"
+            | "rotate-left"
+            | "rotate-right"
+            | "chrome-profile"
+            | "help"
+    )
+}
+
+fn run_no_command_action(action: NoCommandAction) -> anyhow::Result<()> {
+    match action {
+        NoCommandAction::Foreground(selector) => run_foreground_ui(selector),
+        NoCommandAction::Detached => start_detached_daemon(DaemonLaunchOptions::default()),
+        NoCommandAction::Kill => stop_project_daemon(),
+        NoCommandAction::Restart => restart_detached_daemon(DaemonLaunchOptions::default()),
+    }
+}
+
+fn start_detached_daemon(options: DaemonLaunchOptions) -> anyhow::Result<()> {
+    let (metadata, started) = ensure_project_daemon_with_status(options)?;
+    print_daemon_start_result(&metadata, started)
+}
+
+fn restart_detached_daemon(options: DaemonLaunchOptions) -> anyhow::Result<()> {
+    if let Some(metadata) = read_daemon_metadata()? {
+        terminate_daemon_metadata(&metadata)?;
+    }
+    start_detached_daemon(options)
+}
+
+fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
+    if let Some(metadata) = read_daemon_metadata().ok().flatten() {
+        if daemon_is_healthy(&metadata) {
+            terminate_daemon_metadata(&metadata)?;
+        }
+    }
+
+    let project_root = project_root()?;
+    let port = choose_daemon_port(4310)?;
+    let bind = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+    let advertise_host = detect_lan_ip()
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        .to_string();
+    let access_token = auth::generate_access_token();
+    let executable = env::current_exe().context("resolve simdeck executable")?;
+    let metadata = DaemonMetadata {
+        project_root: project_root.clone(),
+        pid: std::process::id(),
+        http_url: format!("http://127.0.0.1:{port}"),
+        access_token: access_token.clone(),
+        binary_path: executable,
+        started_at: now_secs(),
+    };
+    write_daemon_metadata(&metadata)?;
+
+    let local_url = ui_url("127.0.0.1", port, &access_token, selector.as_deref());
+    let network_url = ui_url(&advertise_host, port, &access_token, selector.as_deref());
+    println!("SimDeck is running for {}", project_root.display());
+    println!("Local:   {local_url}");
+    println!("Network: {network_url}");
+    println!("Press Ctrl-C to stop.");
+
+    let result = serve_with_appkit(
+        port,
+        bind,
+        Some(advertise_host),
+        None,
+        VideoCodecMode::Hevc,
+        Some(access_token),
+    );
+    let _ = remove_daemon_metadata_if_current(&project_root, std::process::id());
+    result
+}
+
+fn detect_lan_ip() -> Option<IpAddr> {
+    for target in ["8.8.8.8:80", "1.1.1.1:80"] {
+        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+        if socket.connect(target).is_err() {
+            continue;
+        }
+        let ip = socket.local_addr().ok()?.ip();
+        if !ip.is_loopback() && !ip.is_unspecified() {
+            return Some(ip);
+        }
+    }
+    None
+}
+
+fn ui_url(host: &str, port: u16, access_token: &str, selector: Option<&str>) -> String {
+    let mut query = vec![format!("simdeckToken={}", percent_encode(access_token))];
+    if let Some(selector) = selector.filter(|value| !value.trim().is_empty()) {
+        query.push(format!("device={}", percent_encode(selector.trim())));
+    }
+    format!("http://{host}:{port}/?{}", query.join("&"))
+}
+
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(*byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
 fn main() -> anyhow::Result<()> {
     logging::init();
+    if let Some(action) = no_command_action_from_args() {
+        return run_no_command_action(action);
+    }
+
     let cli = Cli::parse();
     let explicit_server_url = cli.server_url.clone();
     let service_url = explicit_server_url
@@ -716,13 +944,7 @@ fn main() -> anyhow::Result<()> {
             if open {
                 open_browser(&metadata.http_url)?;
             }
-            println_json(&serde_json::json!({
-                "ok": true,
-                "projectRoot": metadata.project_root,
-                "pid": metadata.pid,
-                "url": metadata.http_url,
-                "started": started
-            }))?;
+            print_daemon_start_result(&metadata, started)?;
             Ok(())
         }
         Command::Daemon { command } => match command {
@@ -740,13 +962,7 @@ fn main() -> anyhow::Result<()> {
                     client_root,
                     video_codec,
                 })?;
-                println_json(&serde_json::json!({
-                    "ok": true,
-                    "projectRoot": metadata.project_root,
-                    "pid": metadata.pid,
-                    "url": metadata.http_url,
-                    "started": started
-                }))
+                print_daemon_start_result(&metadata, started)
             }
             DaemonCommand::Stop => stop_project_daemon(),
             DaemonCommand::Status => daemon_status(),

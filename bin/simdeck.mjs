@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,14 +23,28 @@ if (!existsSync(binaryPath)) {
   process.exit(1);
 }
 
-const result = spawnSync(binaryPath, process.argv.slice(2), {
+const child = spawn(binaryPath, process.argv.slice(2), {
   cwd: process.cwd(),
   stdio: "inherit",
 });
 
-if (result.error) {
-  console.error(result.error.message);
+child.on("error", (error) => {
+  console.error(error.message);
   process.exit(1);
+});
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.once(signal, () => {
+    if (!child.killed) {
+      child.kill(signal);
+    }
+  });
 }
 
-process.exit(result.status ?? 1);
+child.on("exit", (code, signal) => {
+  if (signal) {
+    process.kill(process.pid, signal);
+    return;
+  }
+  process.exit(code ?? 1);
+});

@@ -11,6 +11,13 @@ npm run package:vscode-extension
 npm run install:vscode-extension
 ```
 
+Short aliases are available too:
+
+```sh
+npm run package:vscode
+npm run install:vscode
+```
+
 This:
 
 1. Builds a `.vsix` at `build/vscode/simdeck-vscode.vsix`.

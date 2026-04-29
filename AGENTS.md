@@ -75,16 +75,19 @@ The current repo uses the private boot path, private display bridge, and private
 
 ## Build and Run
 
-Build the browser bundle:
+Build the native CLI and browser bundle:
 
 ```sh
-./scripts/build-client.sh
+npm run build
 ```
 
-Build the native CLI:
+Build individual pieces when needed:
 
 ```sh
-./scripts/build-cli.sh
+npm run build:cli
+npm run build:client
+npm run build:all
+npm run package:vscode
 ```
 
 This now builds the Rust server in `server/` and copies the resulting binary to `build/simdeck`.
@@ -92,8 +95,11 @@ This now builds the Rust server in `server/` and copies the resulting binary to 
 Run the local daemon:
 
 ```sh
+./build/simdeck
 ./build/simdeck daemon start --port 4310
 ```
+
+Running without a subcommand starts a foreground workspace daemon, prints local and LAN browser URLs, and stops when the command exits. Pass a simulator name or UDID as the only argument to select it by default in the UI. Use `./build/simdeck -d`, `./build/simdeck -k`, and `./build/simdeck -r` as detached start, kill, and restart shortcuts.
 
 Use software H.264 when macOS screen recording starves the hardware encoder:
 

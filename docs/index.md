@@ -22,7 +22,7 @@ features:
       width: 28
       height: 28
     title: Browser-first simulator
-    details: "`simdeck ui --open` starts or reuses a project daemon and opens a React UI with live WebTransport video, touch, keyboard, hardware-button, and rotation input."
+    details: "`simdeck` starts a foreground project daemon and prints local/LAN URLs for a React UI with live WebTransport video, touch, keyboard, hardware-button, and rotation input."
   - icon:
       src: /icons/zap.svg
       width: 28
@@ -61,7 +61,7 @@ features:
 
 SimDeck packages a full simulator workflow into one cross-tool surface:
 
-- **Stream a Simulator into a browser tab.** Run `simdeck ui --open` and use the same warm project daemon from the browser and CLI.
+- **Stream a Simulator into a browser tab.** Run `simdeck` and open one of the printed URLs, or use `simdeck ui --open` for a reusable background daemon.
 - **Drive Simulators from JavaScript.** `simdeck/test` can launch apps, tap, wait for accessibility state, batch steps, and capture screenshots.
 - **Embed a Simulator in your editor.** The bundled VS Code extension opens the same surface inside a panel.
 - **Run Simulators on your LAN.** Bind to `0.0.0.0`, advertise a host, and connect from any other Mac, iPad, or laptop on the network.

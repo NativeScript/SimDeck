@@ -4,6 +4,27 @@ Every public subcommand exposed by `simdeck`. Replace `simdeck` with `./build/si
 
 ## UI And Daemon
 
+### No Subcommand
+
+Start a foreground workspace daemon and print tokenized local and LAN browser URLs:
+
+```sh
+simdeck
+simdeck "iPhone 17 Pro Max"
+simdeck 9750DF52-0471-48FF-B49A-B184C4BD3A3D
+simdeck --detached
+simdeck --kill
+simdeck --restart
+```
+
+The single optional argument is a simulator name or UDID to select by default in the UI. The foreground daemon binds to all interfaces, advertises the detected LAN address when available, and stops when the command exits.
+
+Shorthand lifecycle flags are available without a subcommand:
+
+- `-d`, `--detached` starts or reuses the background project daemon, like `simdeck daemon start`.
+- `-k`, `--kill` stops the background project daemon and returns the killed PID.
+- `-r`, `--restart` stops the background project daemon, starts a fresh one, and returns the same JSON shape as `daemon start`.
+
 ### `ui`
 
 Start or reuse the project daemon and serve the browser UI.

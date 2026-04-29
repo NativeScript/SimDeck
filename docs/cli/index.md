@@ -5,8 +5,14 @@ The `simdeck` binary is the only entrypoint SimDeck ships. It opens the browser 
 ## Synopsis
 
 ```sh
+simdeck [SIMULATOR_NAME_OR_UDID]
+simdeck [-d|--detached]
+simdeck [-k|--kill]
+simdeck [-r|--restart]
 simdeck [--server-url <url>] <COMMAND> [OPTIONS]
 ```
+
+With no subcommand, `simdeck` starts a foreground workspace daemon and prints local/LAN browser URLs. A single argument selects that simulator by name or UDID in the UI. Use `-d`, `-k`, and `-r` as short aliases for detached start, stop, and restart.
 
 Most commands automatically start or reuse the project daemon when that is the fastest path. Set `SIMDECK_SERVER_URL=http://127.0.0.1:4310` or pass `--server-url` to target a specific already-running daemon.
 
@@ -14,6 +20,7 @@ Most commands automatically start or reuse the project daemon when that is the f
 
 | Command                                                 | Purpose                                                     |
 | ------------------------------------------------------- | ----------------------------------------------------------- |
+| _(none)_                                                | Start a foreground UI daemon until Ctrl-C.                  |
 | `ui`                                                    | Start or reuse the project daemon and serve the browser UI. |
 | `daemon start/status/stop`                              | Manage the project daemon explicitly.                       |
 | `core-simulator ...`                                    | Restart or manage Apple's CoreSimulator service layer.      |

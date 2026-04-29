@@ -18,7 +18,7 @@ Optional:
 
 ## First-time setup
 
-Clone, install dependencies, and build everything:
+Clone, install dependencies, and build the CLI plus browser client:
 
 ```sh
 git clone https://github.com/NativeScript/SimDeck.git
@@ -27,7 +27,7 @@ npm install
 npm run build
 ```
 
-`npm install` installs JavaScript tooling only. `npm run build` rebuilds everything top-to-bottom: Rust binary, React bundle, NativeScript inspector, and test package.
+`npm install` installs JavaScript tooling only. `npm run build` rebuilds the Rust binary and React bundle. Use `npm run build:all` when you also need the NativeScript inspector, React Native inspector, and `simdeck/test` outputs.
 
 ## Running locally
 
@@ -40,7 +40,7 @@ This starts the Rust server in the background and runs the Vite dev server for t
 To run only the production server:
 
 ```sh
-./build/simdeck ui --open
+./build/simdeck
 ```
 
 ## Layout
@@ -156,7 +156,7 @@ npm run ci
 This is the normal local CI script:
 
 1. `npm run lint` — formatting and lint checks.
-2. `npm run build` — Rust + Objective-C, React client, NativeScript inspector.
+2. `npm run build:all` — Rust + Objective-C, React client, NativeScript inspector, React Native inspector, and `simdeck/test`.
 3. `npm run test` — Rust and TypeScript tests.
 4. `npm run package:vscode-extension` — VS Code `.vsix`.
 

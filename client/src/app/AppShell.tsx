@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -46,6 +47,7 @@ import { Toolbar } from "../features/toolbar/Toolbar";
 import { SimulatorViewport } from "../features/viewport/SimulatorViewport";
 import type {
   Point,
+  Size,
   TouchIndicator,
   ViewMode,
 } from "../features/viewport/types";
@@ -60,6 +62,7 @@ import {
   shellSize,
 } from "../features/viewport/viewportMath";
 import {
+  DEVICE_SCREEN_WIDTH,
   STREAM_ORIGIN,
   ZOOM_ANIMATION_MS,
   ZOOM_STEP,
@@ -121,10 +124,39 @@ function shouldRenderNativeChrome(simulator: SimulatorMetadata): boolean {
   );
 }
 
+function simulatorDisplaySize(
+  simulator: SimulatorMetadata | null,
+): Size | null {
+  const display = simulator?.privateDisplay;
+  if (!display || display.displayWidth <= 0 || display.displayHeight <= 0) {
+    return null;
+  }
+  return {
+    width: display.displayWidth,
+    height: display.displayHeight,
+  };
+}
+
 function mergeAccessibilitySources(
   ...sources: unknown[]
 ): AccessibilitySource[] {
   return sanitizeAccessibilitySources(sources.flat());
+}
+
+function simulatorMatchesIdentifier(
+  simulator: SimulatorMetadata,
+  identifier: string,
+): boolean {
+  const normalized = identifier.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return [
+    simulator.udid,
+    simulator.name,
+    simulator.deviceTypeName,
+    simulator.deviceTypeIdentifier,
+  ].some((value) => value?.toLowerCase() === normalized);
 }
 
 type SimulatorTransition = {
@@ -255,6 +287,9 @@ export function AppShell() {
 
   const selectedSimulator =
     simulators.find((simulator) => simulator.udid === selectedUDID) ??
+    simulators.find((simulator) =>
+      simulatorMatchesIdentifier(simulator, selectedUDID),
+    ) ??
     filteredSimulators[0] ??
     null;
   const selectedSimulatorDetail =
@@ -294,6 +329,20 @@ export function AppShell() {
     canvasElement: streamCanvasElement,
     simulator: selectedSimulator,
   });
+  const shouldRenderChrome =
+    selectedSimulator != null && shouldRenderNativeChrome(selectedSimulator);
+  const viewportChromeProfile = shouldRenderChrome ? chromeProfile : null;
+  const effectiveDeviceNaturalSize = useMemo(
+    () =>
+      deviceNaturalSize ??
+      (!shouldRenderChrome && chromeProfile
+        ? {
+            width: chromeProfile.screenWidth,
+            height: chromeProfile.screenHeight,
+          }
+        : simulatorDisplaySize(selectedSimulator)),
+    [chromeProfile, deviceNaturalSize, selectedSimulator, shouldRenderChrome],
+  );
 
   const zoomDockReservedHeight =
     zoomDockElement && typeof window !== "undefined"
@@ -305,8 +354,8 @@ export function AppShell() {
 
   const { fitScale, effectiveZoom } = useViewportLayout({
     canvasSize,
-    chromeProfile,
-    deviceNaturalSize,
+    chromeProfile: viewportChromeProfile,
+    deviceNaturalSize: effectiveDeviceNaturalSize,
     pan,
     rotationQuarterTurns,
     reservedBottomInset: zoomDockReservedHeight,
@@ -317,11 +366,11 @@ export function AppShell() {
   const isBooted = Boolean(selectedSimulator?.isBooted);
   const autoViewportOffsetY =
     viewMode === "manual" ? 0 : -zoomDockReservedHeight / 2;
-  const screenAspect = screenAspectRatio(deviceNaturalSize);
+  const screenAspect = screenAspectRatio(effectiveDeviceNaturalSize);
   const chromeUrl = selectedSimulator
     ? buildChromeUrl(selectedSimulator.udid, streamStamp)
     : "";
-  const chromeRequired = Boolean(chromeProfile && chromeUrl);
+  const chromeRequired = Boolean(viewportChromeProfile && chromeUrl);
   const viewportReady = hasFrame && (!chromeRequired || chromeLoaded);
 
   useEffect(() => {
@@ -584,11 +633,6 @@ export function AppShell() {
         setChromeProfile(null);
         return;
       }
-      if (!shouldRenderNativeChrome(selectedSimulator)) {
-        setChromeProfile(null);
-        return;
-      }
-
       try {
         const profile = await fetchChromeProfile(selectedSimulator.udid);
         if (!cancelled) {
@@ -639,8 +683,8 @@ export function AppShell() {
         currentPan,
         effectiveZoom,
         canvasSize,
-        deviceNaturalSize,
-        chromeProfile,
+        effectiveDeviceNaturalSize,
+        viewportChromeProfile,
         rotationQuarterTurns,
       );
       return nextPan.x === currentPan.x && nextPan.y === currentPan.y
@@ -649,10 +693,10 @@ export function AppShell() {
     });
   }, [
     canvasSize,
-    chromeProfile,
-    deviceNaturalSize,
+    effectiveDeviceNaturalSize,
     effectiveZoom,
     rotationQuarterTurns,
+    viewportChromeProfile,
   ]);
 
   useEffect(() => {
@@ -684,8 +728,8 @@ export function AppShell() {
 
   const pointerInput = usePointerInput({
     canvasSize,
-    chromeProfile,
-    deviceNaturalSize,
+    chromeProfile: viewportChromeProfile,
+    deviceNaturalSize: effectiveDeviceNaturalSize,
     effectiveZoom,
     fitScale,
     isBooted,
@@ -708,22 +752,22 @@ export function AppShell() {
   const error = localError || streamError || listError;
   const deviceTransform = `translate(${pan.x}px, ${pan.y + autoViewportOffsetY}px) scale(${effectiveZoom})`;
   const chromeScreenRect = computeChromeScreenRect(
-    chromeProfile,
-    deviceNaturalSize,
+    viewportChromeProfile,
+    effectiveDeviceNaturalSize,
   );
   const chromeScreenBorderRadius = computeChromeScreenBorderRadius(
-    chromeProfile,
+    viewportChromeProfile,
     chromeScreenRect,
   );
   const chromeScreenStyle =
-    chromeProfile && chromeScreenRect
+    viewportChromeProfile && chromeScreenRect
       ? ({
-          left: `${(chromeScreenRect.x / chromeProfile.totalWidth) * 100}%`,
-          top: `${(chromeScreenRect.y / chromeProfile.totalHeight) * 100}%`,
-          width: `${(chromeScreenRect.width / chromeProfile.totalWidth) * 100}%`,
-          height: `${(chromeScreenRect.height / chromeProfile.totalHeight) * 100}%`,
+          left: `${(chromeScreenRect.x / viewportChromeProfile.totalWidth) * 100}%`,
+          top: `${(chromeScreenRect.y / viewportChromeProfile.totalHeight) * 100}%`,
+          width: `${(chromeScreenRect.width / viewportChromeProfile.totalWidth) * 100}%`,
+          height: `${(chromeScreenRect.height / viewportChromeProfile.totalHeight) * 100}%`,
           borderRadius: chromeScreenBorderRadius ?? "0",
-          ...(chromeProfile.hasScreenMask && selectedSimulator
+          ...(viewportChromeProfile.hasScreenMask && selectedSimulator
             ? {
                 maskImage: `url("${buildScreenMaskUrl(
                   selectedSimulator.udid,
@@ -742,18 +786,32 @@ export function AppShell() {
             : {}),
         } satisfies CSSProperties)
       : null;
-  const shellStyle = chromeProfile
+  const screenOnlyStyle =
+    !viewportChromeProfile && chromeProfile && chromeProfile.screenWidth > 0
+      ? ({
+          borderRadius: `${Math.min(
+            chromeProfile.cornerRadius *
+              (DEVICE_SCREEN_WIDTH / chromeProfile.screenWidth),
+            DEVICE_SCREEN_WIDTH / 2,
+          )}px`,
+        } satisfies CSSProperties)
+      : null;
+  const viewportScreenStyle = chromeScreenStyle ?? screenOnlyStyle;
+  const shellStyle = viewportChromeProfile
     ? {
-        width: `${chromeProfile.totalWidth}px`,
-        height: `${chromeProfile.totalHeight}px`,
+        width: `${viewportChromeProfile.totalWidth}px`,
+        height: `${viewportChromeProfile.totalHeight}px`,
       }
     : null;
   const deviceFrameSize = shellSize(
-    deviceNaturalSize,
-    chromeProfile,
+    effectiveDeviceNaturalSize,
+    viewportChromeProfile,
     rotationQuarterTurns,
   );
-  const naturalShellSize = shellSize(deviceNaturalSize, chromeProfile);
+  const naturalShellSize = shellSize(
+    effectiveDeviceNaturalSize,
+    viewportChromeProfile,
+  );
   const deviceFrameStyle = {
     width: `${deviceFrameSize.width}px`,
     height: `${deviceFrameSize.height}px`,
@@ -762,8 +820,8 @@ export function AppShell() {
     width: `${naturalShellSize.width}px`,
     height: `${naturalShellSize.height}px`,
     transform: buildShellRotationTransform(
-      deviceNaturalSize,
-      chromeProfile,
+      effectiveDeviceNaturalSize,
+      viewportChromeProfile,
       rotationQuarterTurns,
     ),
   };
@@ -877,8 +935,8 @@ export function AppShell() {
         nextPan,
         clampedScale,
         canvasSize,
-        deviceNaturalSize,
-        chromeProfile,
+        effectiveDeviceNaturalSize,
+        viewportChromeProfile,
         rotationQuarterTurns,
       ),
     );
@@ -950,8 +1008,8 @@ export function AppShell() {
         },
         effectiveZoom,
         canvasSize,
-        deviceNaturalSize,
-        chromeProfile,
+        effectiveDeviceNaturalSize,
+        viewportChromeProfile,
         rotationQuarterTurns,
       ),
     );
@@ -1197,8 +1255,8 @@ export function AppShell() {
         accessibilityPickerActive={accessibilityPickerActive}
         accessibilityRoots={accessibilityRoots}
         accessibilitySelectedId={accessibilitySelectedId}
-        chromeProfile={chromeProfile}
-        chromeScreenStyle={chromeScreenStyle}
+        chromeProfile={viewportChromeProfile}
+        chromeScreenStyle={viewportScreenStyle}
         chromeUrl={chromeUrl}
         debugPanel={
           debugVisible ? (

@@ -4,22 +4,29 @@ This guide walks you from a fresh install to a Simulator streaming in your brows
 
 ## 1. Open The UI
 
-After [installing](/guide/installation), start or reuse the project daemon and open the browser client:
+After [installing](/guide/installation), start a foreground SimDeck daemon and open one of the printed browser URLs:
 
 ```sh
-simdeck ui --open
+simdeck
 ```
 
-The command prints JSON:
+The command prints local and LAN URLs:
 
-```json
-{
-  "ok": true,
-  "projectRoot": "/path/to/app",
-  "pid": 12345,
-  "url": "http://127.0.0.1:4310",
-  "started": true
-}
+```text
+SimDeck is running for /path/to/app
+Local:   http://127.0.0.1:4310/?simdeckToken=...
+Network: http://192.168.1.50:4310/?simdeckToken=...
+Press Ctrl-C to stop.
+```
+
+This foreground daemon is scoped to the current workspace and exits when the command exits. Use `simdeck ui --open` or `simdeck daemon start` when you want a reusable background daemon.
+
+For shorthand background lifecycle commands:
+
+```sh
+simdeck -d  # detached start
+simdeck -k  # kill background daemon
+simdeck -r  # restart background daemon
 ```
 
 Two listeners run inside the daemon:
@@ -36,7 +43,12 @@ simdeck list
 simdeck boot <udid>
 ```
 
-To focus a specific simulator in the browser, add `?device=<UDID>` to the UI URL.
+To focus a specific simulator by name or UDID at launch:
+
+```sh
+simdeck "iPhone 17 Pro Max"
+simdeck 9750DF52-0471-48FF-B49A-B184C4BD3A3D
+```
 
 ::: tip First-frame delay
 On a cold boot the daemon has to launch the Simulator, attach the private display bridge, and wait for a keyframe before video flows. The first frame typically shows up within a second; subsequent reloads of the same Simulator are near-instant.

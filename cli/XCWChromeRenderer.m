@@ -268,7 +268,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     CGFloat cornerRadius = chromeCornerRadius;
     CGFloat maskCornerRadius = [self framebufferMaskCornerRadiusForChromeInfo:chromeInfo
                                                              pointScreenWidth:pointScreenWidth];
-    if (maskCornerRadius > 0.0) {
+    if (!phoneProfile && maskCornerRadius > 0.0) {
         cornerRadius = maskCornerRadius * radiusScale;
     }
 

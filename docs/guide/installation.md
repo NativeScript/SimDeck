@@ -26,13 +26,15 @@ npm install -g simdeck
 This installs the launcher and bundled native binary to your global `node_modules`. After it finishes:
 
 ```sh
-simdeck --help
+simdeck
 ```
+
+The foreground command prints local and LAN browser URLs and stops its workspace daemon when you press Ctrl-C. You can select a simulator by name or UDID with `simdeck "iPhone 17 Pro Max"`.
 
 The global install prints the next setup steps:
 
 ```sh
-simdeck ui --open
+simdeck
 npx skills add NativeScript/SimDeck --skill simdeck -a codex -g
 simdeck service on
 ```
@@ -82,7 +84,7 @@ build/simdeck-bin
 You can then run the local checkout directly:
 
 ```sh
-./build/simdeck ui --open
+./build/simdeck
 ```
 
 Or install the local checkout globally:
@@ -103,9 +105,9 @@ The client bundle ships pre-built when installed from npm. When working from sou
 
 This calls `npm install` and `npm run build` inside the `client/` workspace and writes the production bundle to `client/dist`. The Rust server serves that bundle at the HTTP root.
 
-## Build everything
+## Build from source
 
-The root `package.json` exposes a one-shot build that compiles every component:
+The root `package.json` exposes a one-shot app build for the native CLI and browser client:
 
 ```sh
 npm run build
@@ -115,11 +117,20 @@ This runs:
 
 - `npm run build:cli` — Rust server + Objective-C bridge → `build/simdeck`
 - `npm run build:client` — Vite production build → `client/dist`
+
+Use `npm run build:all` when you also need the companion package outputs:
+
+```sh
+npm run build:all
+```
+
+That adds:
+
 - `npm run build:nativescript-inspector` — TypeScript build of the NativeScript inspector
 - `npm run build:react-native-inspector` — TypeScript build of the React Native inspector
 - `npm run build:simdeck-test` — TypeScript build of `simdeck/test`
 
-You can also run any one of those scripts on its own.
+Other convenience scripts include `npm run build:docs`, `npm run build:vscode-extension`, `npm run package:vscode`, and `npm run package:all`. You can also run any one of the component scripts on its own.
 
 ## Update or uninstall
 

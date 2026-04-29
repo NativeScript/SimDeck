@@ -16,7 +16,7 @@ Underneath all of that is the iOS Simulator itself — `CoreSimulator` for lifec
 
 ### `server/` — Rust HTTP and stream transports
 
-Owns the public CLI shape (`simdeck ui`, `daemon`, `boot`, `shutdown`, …), daemon metadata, the HTTP API, WebTransport/WebRTC streaming, the inspector hub, log streaming, and metrics.
+Owns the public CLI shape (`simdeck`, `simdeck ui`, `daemon`, `boot`, `shutdown`, …), daemon metadata, the HTTP API, WebTransport/WebRTC streaming, the inspector hub, log streaming, and metrics.
 
 Key modules:
 

@@ -12,12 +12,19 @@ SimDeck automates iOS Simulators. Use the CLI for automation and the browser UI 
 SimDeck uses one warm daemon per project. Check it with `simdeck daemon status`; start it or open the browser UI when needed:
 
 ```bash
+simdeck
+simdeck "iPhone 17 Pro Max"
+simdeck -d
+simdeck -k
+simdeck -r
 simdeck daemon start
 simdeck ui --open
-./scripts/build-cli.sh && ./build/simdeck ui --open
+npm run build:cli && ./build/simdeck ui --open
 simdeck daemon start --video-codec h264-software
 simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 ```
+
+`simdeck` without a subcommand starts a foreground workspace daemon, prints local and LAN browser URLs, and stops on Ctrl-C. The optional single argument is a simulator name or UDID to select by default. Use `-d` for detached start, `-k` to kill the background daemon, and `-r` to restart it.
 
 Viewer: `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
 

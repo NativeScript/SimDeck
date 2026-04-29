@@ -116,7 +116,7 @@ export function DeviceChrome({
 
   return (
     <div
-      className="device-bezel"
+      className="device-shell screen-only-shell"
       onPointerCancel={onPanPointerCancel}
       onPointerDown={onStartPanning}
       onPointerMove={onPanPointerMove}
@@ -127,7 +127,10 @@ export function DeviceChrome({
         accessibilityPickerActive={accessibilityPickerActive}
         accessibilityRoots={accessibilityRoots}
         accessibilitySelectedId={accessibilitySelectedId}
-        chromeScreenStyle={{ aspectRatio: screenAspect }}
+        chromeScreenStyle={{
+          aspectRatio: screenAspect,
+          ...(chromeScreenStyle ?? {}),
+        }}
         hasFrame={hasFrame}
         isBooted={isBooted}
         isStreamError={isStreamError}
