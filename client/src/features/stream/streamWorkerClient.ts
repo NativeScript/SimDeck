@@ -105,6 +105,7 @@ class WebRtcStreamClient implements StreamClientBackend {
   private connectGeneration = 0;
   private context: CanvasRenderingContext2D | null = null;
   private controlChannel: RTCDataChannel | null = null;
+  private diagnostics = createWebRtcDiagnostics();
   private peerConnection: RTCPeerConnection | null = null;
   private reconnectTimeout = 0;
   private shouldReconnect = false;
@@ -141,6 +142,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     }
     const generation = ++this.connectGeneration;
     this.shouldReconnect = true;
+    this.diagnostics = createWebRtcDiagnostics();
     this.stats = createEmptyStreamStats();
     this.onMessage({
       type: "status",
@@ -150,8 +152,10 @@ class WebRtcStreamClient implements StreamClientBackend {
     try {
       const peerConnection = new RTCPeerConnection({
         iceServers: iceServers(),
+        iceTransportPolicy: iceTransportPolicy(),
       });
       this.peerConnection = peerConnection;
+      this.attachDiagnostics(peerConnection, target, generation);
       const transceiver = peerConnection.addTransceiver("video", {
         direction: "recvonly",
       });
@@ -174,6 +178,7 @@ class WebRtcStreamClient implements StreamClientBackend {
         if (generation !== this.connectGeneration) {
           return;
         }
+        event.track.contentHint = "motion";
         for (const receiver of peerConnection.getReceivers()) {
           configureLowLatencyReceiver(receiver);
         }
@@ -206,11 +211,16 @@ class WebRtcStreamClient implements StreamClientBackend {
       };
 
       peerConnection.onconnectionstatechange = () => {
+        this.diagnostics.peerConnectionState = peerConnection.connectionState;
+        this.postDiagnostics(target, "connectionstatechange");
         if (
           generation === this.connectGeneration &&
           (peerConnection.connectionState === "failed" ||
             peerConnection.connectionState === "disconnected")
         ) {
+          if (peerConnection.connectionState === "failed") {
+            void this.updateSelectedCandidatePair(peerConnection, target);
+          }
           this.handleConnectionError(
             target,
             generation,
@@ -232,6 +242,10 @@ class WebRtcStreamClient implements StreamClientBackend {
       if (!localDescription) {
         throw new Error("WebRTC local offer was not created.");
       }
+      this.diagnostics.localCandidateSummary = summarizeSdpCandidates(
+        localDescription.sdp,
+      );
+      this.postDiagnostics(target, "local-offer");
 
       const response = await fetch(
         `/api/simulators/${encodeURIComponent(target.udid)}/webrtc/offer`,
@@ -251,6 +265,10 @@ class WebRtcStreamClient implements StreamClientBackend {
       if (generation !== this.connectGeneration) {
         return;
       }
+      this.diagnostics.remoteCandidateSummary = summarizeSdpCandidates(
+        answer.sdp ?? "",
+      );
+      this.postDiagnostics(target, "remote-answer");
       await peerConnection.setRemoteDescription(answer);
     } catch (error) {
       this.handleConnectionError(target, generation, error);
@@ -328,6 +346,140 @@ class WebRtcStreamClient implements StreamClientBackend {
     }
     window.clearTimeout(this.reconnectTimeout);
     this.reconnectTimeout = 0;
+  }
+
+  private attachDiagnostics(
+    peerConnection: RTCPeerConnection,
+    target: StreamConnectTarget,
+    generation: number,
+  ) {
+    peerConnection.onicecandidate = (event) => {
+      if (generation !== this.connectGeneration) {
+        return;
+      }
+      if (event.candidate) {
+        this.diagnostics.localCandidateSummary = summarizeCandidateLines([
+          ...(this.diagnostics.localCandidateLines ?? []),
+          event.candidate.candidate,
+        ]);
+        this.diagnostics.localCandidateLines = [
+          ...(this.diagnostics.localCandidateLines ?? []),
+          event.candidate.candidate,
+        ];
+      }
+      this.postDiagnostics(
+        target,
+        event.candidate ? "local-candidate" : "local-candidates-complete",
+      );
+    };
+    peerConnection.oniceconnectionstatechange = () => {
+      if (generation !== this.connectGeneration) {
+        return;
+      }
+      this.diagnostics.iceConnectionState = peerConnection.iceConnectionState;
+      this.postDiagnostics(target, "iceconnectionstatechange");
+      if (
+        peerConnection.iceConnectionState === "connected" ||
+        peerConnection.iceConnectionState === "completed" ||
+        peerConnection.iceConnectionState === "failed"
+      ) {
+        void this.updateSelectedCandidatePair(peerConnection, target);
+      }
+    };
+    peerConnection.onicegatheringstatechange = () => {
+      if (generation !== this.connectGeneration) {
+        return;
+      }
+      this.diagnostics.iceGatheringState = peerConnection.iceGatheringState;
+      this.postDiagnostics(target, "icegatheringstatechange");
+    };
+    peerConnection.onsignalingstatechange = () => {
+      if (generation !== this.connectGeneration) {
+        return;
+      }
+      this.diagnostics.signalingState = peerConnection.signalingState;
+      this.postDiagnostics(target, "signalingstatechange");
+    };
+  }
+
+  private async updateSelectedCandidatePair(
+    peerConnection: RTCPeerConnection,
+    target: StreamConnectTarget,
+  ) {
+    try {
+      const stats = await peerConnection.getStats();
+      let selectedPair: RTCStats | undefined;
+      stats.forEach((report) => {
+        const pair = report as RTCStats & {
+          nominated?: boolean;
+          selected?: boolean;
+          state?: string;
+          localCandidateId?: string;
+          remoteCandidateId?: string;
+        };
+        if (
+          report.type === "candidate-pair" &&
+          (pair.selected || pair.nominated || pair.state === "succeeded")
+        ) {
+          selectedPair = report;
+        }
+      });
+      if (!selectedPair) {
+        this.diagnostics.selectedCandidatePair = "none";
+        this.postDiagnostics(target, "candidate-pair-none");
+        return;
+      }
+      const pair = selectedPair as RTCStats & {
+        localCandidateId?: string;
+        remoteCandidateId?: string;
+        state?: string;
+        currentRoundTripTime?: number;
+      };
+      const local = pair.localCandidateId
+        ? stats.get(pair.localCandidateId)
+        : undefined;
+      const remote = pair.remoteCandidateId
+        ? stats.get(pair.remoteCandidateId)
+        : undefined;
+      this.diagnostics.selectedCandidatePair =
+        `state=${pair.state ?? "?"},rtt=${pair.currentRoundTripTime ?? "?"},local=${candidateStatsSummary(local)},remote=${candidateStatsSummary(remote)}`;
+      this.postDiagnostics(target, "candidate-pair-selected");
+    } catch (error) {
+      this.diagnostics.selectedCandidatePair = `stats-error:${error instanceof Error ? error.message : String(error)}`;
+      this.postDiagnostics(target, "candidate-pair-error");
+    }
+  }
+
+  private postDiagnostics(target: StreamConnectTarget, detail: string) {
+    const payload = {
+      ...this.stats,
+      clientId: "webrtc-page",
+      connectionId: this.connectGeneration,
+      detail,
+      iceConnectionState: this.diagnostics.iceConnectionState,
+      iceGatheringState: this.diagnostics.iceGatheringState,
+      kind: "webrtc",
+      localCandidateSummary: this.diagnostics.localCandidateSummary,
+      peerConnectionState: this.diagnostics.peerConnectionState,
+      remoteCandidateSummary: this.diagnostics.remoteCandidateSummary,
+      selectedCandidatePair: this.diagnostics.selectedCandidatePair,
+      signalingState: this.diagnostics.signalingState,
+      status:
+        this.diagnostics.peerConnectionState ||
+        this.diagnostics.iceConnectionState,
+      timestampMs: Date.now(),
+      udid: target.udid,
+      url: window.location.href,
+      userAgent: window.navigator.userAgent,
+    };
+    void fetch(new URL("/api/client-stream-stats", window.location.href), {
+      body: JSON.stringify(payload),
+      cache: "no-store",
+      headers: apiHeaders(),
+      method: "POST",
+    }).catch(() => {
+      // Diagnostics only.
+    });
   }
 
   private drawVideoFrame = () => {
@@ -427,6 +579,9 @@ function streamTransportMode(): string {
 function iceServers(): RTCIceServer[] {
   const params = new URLSearchParams(window.location.search);
   const raw = params.get("iceServers") ?? "stun:stun.l.google.com:19302";
+  if (raw === "none") {
+    return [];
+  }
   return [
     {
       urls: raw
@@ -435,6 +590,86 @@ function iceServers(): RTCIceServer[] {
         .filter(Boolean),
     },
   ];
+}
+
+function iceTransportPolicy(): RTCIceTransportPolicy {
+  const value = new URLSearchParams(window.location.search).get(
+    "iceTransportPolicy",
+  );
+  return value === "relay" || value === "all" ? value : "all";
+}
+
+interface WebRtcDiagnostics {
+  iceConnectionState: string;
+  iceGatheringState: string;
+  localCandidateLines?: string[];
+  localCandidateSummary: string;
+  peerConnectionState: string;
+  remoteCandidateSummary: string;
+  selectedCandidatePair: string;
+  signalingState: string;
+}
+
+function createWebRtcDiagnostics(): WebRtcDiagnostics {
+  return {
+    iceConnectionState: "",
+    iceGatheringState: "",
+    localCandidateSummary: "",
+    peerConnectionState: "",
+    remoteCandidateSummary: "",
+    selectedCandidatePair: "",
+    signalingState: "",
+  };
+}
+
+function summarizeSdpCandidates(sdp: string): string {
+  return summarizeCandidateLines(
+    sdp
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("a=candidate:"))
+      .map((line) => line.slice("a=".length)),
+  );
+}
+
+function summarizeCandidateLines(lines: string[]): string {
+  const counts: Record<string, number> = {
+    host: 0,
+    prflx: 0,
+    relay: 0,
+    srflx: 0,
+    tcp: 0,
+    udp: 0,
+    other: 0,
+  };
+  for (const line of lines) {
+    const parts = line.split(/\s+/);
+    const typIndex = parts.indexOf("typ");
+    const typ = typIndex >= 0 ? parts[typIndex + 1] : "";
+    if (typ && typ in counts) {
+      counts[typ] += 1;
+    } else {
+      counts.other += 1;
+    }
+    const protocol = parts[2]?.toLowerCase();
+    if (protocol === "udp" || protocol === "tcp") {
+      counts[protocol] += 1;
+    }
+  }
+  return `host=${counts.host},srflx=${counts.srflx},prflx=${counts.prflx},relay=${counts.relay},udp=${counts.udp},tcp=${counts.tcp},other=${counts.other}`;
+}
+
+function candidateStatsSummary(candidate: RTCStats | undefined): string {
+  if (!candidate) {
+    return "none";
+  }
+  const stats = candidate as RTCStats & {
+    address?: string;
+    candidateType?: string;
+    ip?: string;
+    port?: number;
+    protocol?: string;
+  };
+  return `${stats.candidateType ?? "?"}/${stats.protocol ?? "?"}/${stats.address || stats.ip ? "addr" : "noaddr"}/${stats.port ?? "?"}`;
 }
 
 function waitForIceGathering(peerConnection: RTCPeerConnection) {
