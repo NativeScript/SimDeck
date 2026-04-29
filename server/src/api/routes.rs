@@ -316,6 +316,7 @@ const CONNECTED_INSPECTOR_HIERARCHY_TIMEOUT: Duration = Duration::from_secs(8);
 const SOURCE_NATIVE_AX: &str = "native-ax";
 const SOURCE_NATIVE_SCRIPT: &str = "nativescript";
 const SOURCE_REACT_NATIVE: &str = "react-native";
+const SOURCE_SWIFTUI: &str = "swiftui";
 const SOURCE_UIKIT: &str = "in-app-inspector";
 
 pub fn router(state: AppState) -> Router {
@@ -1156,6 +1157,7 @@ async fn accessibility_tree_value(
                 AccessibilityHierarchySource::Auto => InAppHierarchySource::Automatic,
                 AccessibilityHierarchySource::NativeScript => InAppHierarchySource::Automatic,
                 AccessibilityHierarchySource::ReactNative => InAppHierarchySource::Automatic,
+                AccessibilityHierarchySource::SwiftUI => InAppHierarchySource::Automatic,
                 AccessibilityHierarchySource::UIKit => InAppHierarchySource::UIKit,
                 AccessibilityHierarchySource::NativeAX => unreachable!(),
             };
@@ -1182,6 +1184,10 @@ async fn accessibility_tree_value(
                         && snapshot_source != Some(SOURCE_REACT_NATIVE)
                     {
                         Some("React Native hierarchy is not published by the app.".to_owned())
+                    } else if requested_source == AccessibilityHierarchySource::SwiftUI
+                        && snapshot_source != Some(SOURCE_SWIFTUI)
+                    {
+                        Some("SwiftUI hierarchy is not published by the app.".to_owned())
                     } else {
                         None
                     };
@@ -2064,6 +2070,7 @@ enum AccessibilityHierarchySource {
     Auto,
     NativeScript,
     ReactNative,
+    SwiftUI,
     UIKit,
     NativeAX,
 }
@@ -2074,6 +2081,7 @@ impl AccessibilityHierarchySource {
             "" | "auto" => Ok(Self::Auto),
             "nativescript" | "ns" => Ok(Self::NativeScript),
             "react-native" | "reactnative" | "rn" => Ok(Self::ReactNative),
+            "swiftui" | "swift-ui" => Ok(Self::SwiftUI),
             "uikit" | "in-app-inspector" => Ok(Self::UIKit),
             "ax" | "native-ax" | "native-accessibility" => Ok(Self::NativeAX),
             source => Err(AppError::bad_request(format!(
@@ -2298,11 +2306,18 @@ fn inspector_session_score(session: &InspectorSession) -> u8 {
     if session
         .available_sources
         .iter()
-        .any(|source| source == SOURCE_UIKIT)
+        .any(|source| source == SOURCE_SWIFTUI)
     {
         return 2;
     }
-    3
+    if session
+        .available_sources
+        .iter()
+        .any(|source| source == SOURCE_UIKIT)
+    {
+        return 3;
+    }
+    4
 }
 
 async fn frontmost_process_identifier(state: &AppState, udid: &str) -> Result<Option<i64>, String> {
@@ -2341,7 +2356,7 @@ async fn run_in_app_inspector_hierarchy(
         .get("source")
         .and_then(Value::as_str)
         .unwrap_or(SOURCE_UIKIT);
-    if source == SOURCE_NATIVE_SCRIPT || source == SOURCE_REACT_NATIVE {
+    if framework_source(source) {
         return Ok(json_value!({
             "roots": hierarchy.get("roots").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
             "source": source,
@@ -2411,6 +2426,7 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         match app_hierarchy_source {
             SOURCE_NATIVE_SCRIPT => sources.push(SOURCE_NATIVE_SCRIPT.to_owned()),
             SOURCE_REACT_NATIVE => push_unique_source(&mut sources, SOURCE_REACT_NATIVE),
+            SOURCE_SWIFTUI => push_unique_source(&mut sources, SOURCE_SWIFTUI),
             _ => {}
         }
     }
@@ -2446,6 +2462,13 @@ fn available_sources_for_session(session: &InspectorSession) -> Vec<String> {
         .any(|source| source == SOURCE_REACT_NATIVE)
     {
         push_unique_source(&mut sources, SOURCE_REACT_NATIVE);
+    }
+    if session
+        .available_sources
+        .iter()
+        .any(|source| source == SOURCE_SWIFTUI)
+    {
+        push_unique_source(&mut sources, SOURCE_SWIFTUI);
     }
     if session
         .available_sources
@@ -2522,7 +2545,7 @@ fn root_process_identifier(snapshot: &Value) -> Option<i64> {
 }
 
 fn framework_source(source: &str) -> bool {
-    source == SOURCE_NATIVE_SCRIPT || source == SOURCE_REACT_NATIVE
+    source == SOURCE_NATIVE_SCRIPT || source == SOURCE_REACT_NATIVE || source == SOURCE_SWIFTUI
 }
 
 fn attach_available_sources(snapshot: Value, available_sources: &[String]) -> Value {

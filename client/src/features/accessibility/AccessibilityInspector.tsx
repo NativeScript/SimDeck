@@ -726,6 +726,7 @@ function errorMessage(error: unknown): string {
 const HIERARCHY_SOURCE_ORDER: AccessibilitySource[] = [
   "nativescript",
   "react-native",
+  "swiftui",
   "in-app-inspector",
   "native-ax",
 ];
@@ -753,6 +754,9 @@ function sourceLabel(source: AccessibilitySource): string {
   }
   if (source === "react-native") {
     return "React Native";
+  }
+  if (source === "swiftui") {
+    return "SwiftUI";
   }
   return source === "in-app-inspector" ? "UIKit" : "Native AX";
 }
@@ -815,8 +819,12 @@ function swiftUIDescription(value: Record<string, unknown> | null | undefined) {
   const flags = [
     value.isHost === true ? "host" : "",
     value.isProbe === true ? "probe" : "",
+    value.isViewTreeNode === true ? "view tree" : "",
   ].filter(Boolean);
-  return [tag, tagId, flags.join(", ")].filter(Boolean).join(" / ");
+  const modifiers = Array.isArray(value.modifiers)
+    ? value.modifiers.filter((item) => typeof item === "string").join(", ")
+    : "";
+  return [tag, tagId, flags.join(", "), modifiers].filter(Boolean).join(" / ");
 }
 
 function frameText(frame: {

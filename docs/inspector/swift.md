@@ -78,9 +78,24 @@ printf '{"id":2,"method":"View.getHierarchy","params":{"maxDepth":4}}\n' | nc 12
 
 For the full envelope shape and method list, see the [Inspector Protocol](/api/inspector-protocol).
 
+## SwiftUI view tree
+
+For SwiftUI apps you control, attach the root publisher to the top of your scene. The agent reflects the current SwiftUI value/body tree and publishes it as the `swiftui` hierarchy source while keeping the raw UIKit host tree available as `uikit`.
+
+```swift
+WindowGroup {
+    ContentView()
+        .simDeckPublishSwiftUIViewTree("ContentView", id: "app.root")
+}
+```
+
+`View.getHierarchy` returns the published SwiftUI tree by default. Pass `"source": "uikit"` to inspect the backing hosting views instead.
+
+This is a debug aid built on Swift reflection. It can show the declared view/body structure, including custom subviews, containers, labels, modifier names, active conditional branches, and `ForEach` rows whose data and content builder are available through SwiftUI's public API. Private/custom containers may still be opaque when they do not expose a child view value or content builder.
+
 ## SwiftUI tagging
 
-The agent automatically reports SwiftUI hosting and bridge `UIView`s, but SwiftUI's value tree is not publicly enumerable at runtime. To make specific SwiftUI elements addressable, tag them in source:
+The agent also reports SwiftUI hosting and bridge `UIView`s in the UIKit tree. To make specific SwiftUI elements addressable in the raw UIKit hierarchy, tag them in source:
 
 ```swift
 Text("Continue")

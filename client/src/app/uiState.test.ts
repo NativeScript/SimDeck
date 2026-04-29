@@ -14,11 +14,12 @@ describe("uiState", () => {
       sanitizeAccessibilitySources([
         "native-ax",
         "unknown",
+        "swiftui",
         "nativescript",
         "native-ax",
         "in-app-inspector",
       ]),
-    ).toEqual(["nativescript", "in-app-inspector", "native-ax"]);
+    ).toEqual(["nativescript", "swiftui", "in-app-inspector", "native-ax"]);
   });
 
   it("sanitizes persisted viewport state and falls back to defaults", () => {

@@ -70,7 +70,7 @@ import {
 const ACCESSIBILITY_REFRESH_MS = 1500;
 const REACT_NATIVE_ACCESSIBILITY_REFRESH_MS = 500;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
-const REACT_NATIVE_ACCESSIBILITY_MAX_DEPTH = 60;
+const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 
 clearLegacyVolatileUiState();
 
@@ -420,7 +420,7 @@ export function AppShell() {
           maxDepth:
             accessibilityPreferredSource === "native-ax"
               ? DEFAULT_ACCESSIBILITY_MAX_DEPTH
-              : REACT_NATIVE_ACCESSIBILITY_MAX_DEPTH,
+              : LOGICAL_INSPECTOR_MAX_DEPTH,
         },
       );
       if (accessibilityRequestIdRef.current !== requestId) {
@@ -443,6 +443,12 @@ export function AppShell() {
         accessibilityPreferredSource !== "nativescript"
       ) {
         setAccessibilityPreferredSource("nativescript");
+      } else if (
+        snapshot.source === "native-ax" &&
+        availableSources.includes("swiftui") &&
+        accessibilityPreferredSource !== "swiftui"
+      ) {
+        setAccessibilityPreferredSource("swiftui");
       }
       if (
         accessibilityPreferredSource !== "auto" &&
