@@ -1,23 +1,98 @@
+# SimDeck Release Workflow
+#
+# Triggered manually from the Actions tab. Picks one package, bumps its version
+# locally with `npm version`, commits + tags, builds, and publishes:
+#   - npm packages publish over OIDC trusted publishing (no NPM_TOKEN).
+#   - The VS Code extension publishes via vsce + VSCE_PAT (no OIDC option).
+#
+# OIDC setup (do once per npm package on npmjs.com):
+#   Package -> Settings -> Trusted Publishers -> GitHub Actions
+#     Repository:     <owner>/SimDeck
+#     Workflow:       release.yml
+#     Environment:    npm-publish
+#
+# Trusted publishers must be configured for each of:
+#   simdeck
+#   react-native-simdeck
+#   @nativescript/simdeck-inspector
+#
+# Repository secrets / vars:
+#   VSCE_PAT      (only required when publishing simdeck-vscode)
+#
+# Tag scheme:
+#   <slug>-v<version>        e.g. simdeck-v0.2.0
+#                                  react-native-simdeck-v0.2.0
+#                                  nativescript-simdeck-inspector-v0.2.0
+#                                  simdeck-vscode-v0.2.0
+
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
-  release:
-    types:
-      - published
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to release"
+        required: true
+        type: choice
+        options:
+          - simdeck
+          - react-native-simdeck
+          - "@nativescript/simdeck-inspector"
+          - simdeck-vscode
+      bump:
+        description: "Version bump"
+        required: true
+        type: choice
+        default: prerelease
+        options:
+          - prerelease
+          - patch
+          - minor
+          - major
+      preid:
+        description: "Prerelease identifier (only used when bump=prerelease)"
+        required: false
+        type: string
+        default: next
+      dist-tag:
+        description: "npm dist-tag (default: prerelease->preid, otherwise 'latest')"
+        required: false
+        type: string
+        default: ""
+      dry-run:
+        description: "Skip git push and publish; print what would happen"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: simdeck-release-${{ inputs.package }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write    # commit + tag + GitHub release
+  id-token: write    # OIDC trusted publishing + npm provenance
 
 jobs:
   release:
+    name: Release ${{ inputs.package }} (${{ inputs.bump }})
     runs-on: macos-latest
-    permissions:
-      contents: write
+    environment:
+      name: ${{ inputs.dry-run && 'npm-publish-dry-run' || 'npm-publish' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        with:
+          egress-policy: audit
 
-      - uses: actions/setup-node@v4
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           registry-url: https://registry.npmjs.org
@@ -28,178 +103,416 @@ jobs:
             packages/react-native-inspector/package-lock.json
             packages/nativescript-inspector/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Resolve release metadata
-        id: meta
+      - name: Update npm (required for OIDC trusted publishing)
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            TAG_NAME="${{ github.event.release.tag_name }}"
-          else
-            TAG_NAME="${GITHUB_REF_NAME}"
-          fi
+          npm install -g npm@^11.5.1
+          npm --version
 
-          VERSION="${TAG_NAME#v}"
-          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          REACT_NATIVE_INSPECTOR_VERSION="$(node -p "require('./packages/react-native-inspector/package.json').version")"
-          INSPECTOR_VERSION="$(node -p "require('./packages/nativescript-inspector/package.json').version")"
-          VSCODE_EXTENSION_VERSION="$(node -p "require('./packages/vscode-extension/package.json').version")"
+      - name: Resolve package metadata
+        id: meta
+        shell: bash
+        env:
+          INPUT_PACKAGE: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          case "$INPUT_PACKAGE" in
+            simdeck)
+              dir="."
+              slug="simdeck"
+              kind="npm-cli"
+              ;;
+            react-native-simdeck)
+              dir="packages/react-native-inspector"
+              slug="react-native-simdeck"
+              kind="npm"
+              ;;
+            "@nativescript/simdeck-inspector")
+              dir="packages/nativescript-inspector"
+              slug="nativescript-simdeck-inspector"
+              kind="npm"
+              ;;
+            simdeck-vscode)
+              dir="packages/vscode-extension"
+              slug="simdeck-vscode"
+              kind="vsce"
+              ;;
+            *)
+              echo "Unknown package input: $INPUT_PACKAGE" >&2
+              exit 1
+              ;;
+          esac
+          echo "dir=$dir"   >> "$GITHUB_OUTPUT"
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
 
-          if [ "${VERSION}" != "${PACKAGE_VERSION}" ]; then
-            echo "Tag ${TAG_NAME} does not match package version ${PACKAGE_VERSION}" >&2
-            exit 1
-          fi
-
-          if [ "${VERSION}" != "${INSPECTOR_VERSION}" ]; then
-            echo "Tag ${TAG_NAME} does not match NativeScript inspector version ${INSPECTOR_VERSION}" >&2
-            exit 1
-          fi
-
-          if [ "${VERSION}" != "${REACT_NATIVE_INSPECTOR_VERSION}" ]; then
-            echo "Tag ${TAG_NAME} does not match React Native inspector version ${REACT_NATIVE_INSPECTOR_VERSION}" >&2
-            exit 1
-          fi
-
-          if [ "${VERSION}" != "${VSCODE_EXTENSION_VERSION}" ]; then
-            echo "Tag ${TAG_NAME} does not match VS Code extension version ${VSCODE_EXTENSION_VERSION}" >&2
-            exit 1
-          fi
-
-          echo "tag=${TAG_NAME}" >> "${GITHUB_OUTPUT}"
-          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+      - name: Setup Rust toolchain (root simdeck only)
+        if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install root dependencies
         run: npm ci
 
-      - name: Install client dependencies
+      - name: Install client dependencies (root simdeck only)
+        if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
         run: npm ci --prefix client
 
-      - name: Install NativeScript inspector dependencies
-        run: npm ci --prefix packages/nativescript-inspector
+      - name: Install package dependencies
+        if: ${{ steps.meta.outputs.kind == 'npm' }}
+        run: npm ci --prefix "${{ steps.meta.outputs.dir }}"
 
-      - name: Install React Native inspector dependencies
-        run: npm ci --prefix packages/react-native-inspector
-
-      - name: Lint, build, and test
-        run: npm run ci
-
-      - name: Prepare release assets
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
+      - name: Configure git author
         run: |
-          ARTIFACTS_DIR="${RUNNER_TEMP}/release-assets"
-          BUNDLE_DIR="${RUNNER_TEMP}/simdeck-${VERSION}-macos"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          rm -rf "${ARTIFACTS_DIR}" "${BUNDLE_DIR}"
-          mkdir -p "${ARTIFACTS_DIR}" "${BUNDLE_DIR}"
-
-          cp build/simdeck "${BUNDLE_DIR}/"
-          cp build/simdeck-bin "${BUNDLE_DIR}/"
-          cp README.md LICENSE "${BUNDLE_DIR}/"
-
-          tar -czf "${ARTIFACTS_DIR}/simdeck-${VERSION}-macos.tar.gz" \
-            -C "${RUNNER_TEMP}" \
-            "simdeck-${VERSION}-macos"
-
-          ditto -c -k --keepParent \
-            "${BUNDLE_DIR}" \
-            "${ARTIFACTS_DIR}/simdeck-${VERSION}-macos.zip"
-
-          npm pack --pack-destination "${ARTIFACTS_DIR}"
-          test -x "${BUNDLE_DIR}/simdeck"
-          test -x "${BUNDLE_DIR}/simdeck-bin"
-          tar -tzf "${ARTIFACTS_DIR}/simdeck-${VERSION}.tgz" | grep -qx "package/build/simdeck-bin"
-          (
-            cd packages/react-native-inspector
-            npm pack --pack-destination "${ARTIFACTS_DIR}"
-          )
-          (
-            cd packages/nativescript-inspector
-            npm pack --pack-destination "${ARTIFACTS_DIR}"
-          )
-          cp build/vscode/simdeck-vscode.vsix "${ARTIFACTS_DIR}/simdeck-vscode-${VERSION}.vsix"
-
-      - name: Publish package to npm
+      - name: Bump version
+        id: version
+        shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          VERSION: ${{ steps.meta.outputs.version }}
+          BUMP: ${{ inputs.bump }}
+          PREID: ${{ inputs.preid }}
+          PKG_DIR: ${{ steps.meta.outputs.dir }}
+          SLUG: ${{ steps.meta.outputs.slug }}
         run: |
-          if npm view "simdeck@${VERSION}" version >/dev/null 2>&1; then
-            echo "simdeck@${VERSION} is already published on npm."
-            exit 0
+          set -euo pipefail
+          cd "$PKG_DIR"
+
+          if [[ "$BUMP" == "prerelease" ]]; then
+            new="$(npm version prerelease --preid "$PREID" --no-git-tag-version)"
+          else
+            new="$(npm version "$BUMP" --no-git-tag-version)"
           fi
 
-          if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "NPM_TOKEN repository secret is required to publish simdeck@${VERSION}." >&2
-            exit 1
-          fi
+          version="${new#v}"
+          tag="${SLUG}-v${version}"
 
-          npm publish "${RUNNER_TEMP}/release-assets/simdeck-${VERSION}.tgz"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}"         >> "$GITHUB_OUTPUT"
+          echo "Bumped to ${version} (tag ${tag})"
 
-      - name: Publish React Native package to npm
+      - name: Resolve dist-tag
+        id: tag
+        shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          VERSION: ${{ steps.meta.outputs.version }}
+          INPUT_TAG: ${{ inputs.dist-tag }}
+          BUMP: ${{ inputs.bump }}
+          PREID: ${{ inputs.preid }}
         run: |
-          if npm view "react-native-simdeck@${VERSION}" version >/dev/null 2>&1; then
-            echo "react-native-simdeck@${VERSION} is already published on npm."
-            exit 0
+          set -euo pipefail
+          if [[ -n "$INPUT_TAG" ]]; then
+            value="$INPUT_TAG"
+          elif [[ "$BUMP" == "prerelease" ]]; then
+            value="${PREID:-next}"
+          else
+            value="latest"
           fi
+          echo "dist_tag=${value}" >> "$GITHUB_OUTPUT"
 
-          if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "NPM_TOKEN repository secret is required to publish react-native-simdeck@${VERSION}." >&2
-            exit 1
-          fi
-
-          npm publish "${RUNNER_TEMP}/release-assets/react-native-simdeck-${VERSION}.tgz"
-
-      - name: Publish NativeScript inspector to npm
+      - name: Commit and push version bump
+        if: ${{ !inputs.dry-run }}
+        shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          VERSION: ${{ steps.meta.outputs.version }}
+          PKG_DIR: ${{ steps.meta.outputs.dir }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+          NEW_VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          if npm view "@nativescript/simdeck-inspector@${VERSION}" version >/dev/null 2>&1; then
-            echo "@nativescript/simdeck-inspector@${VERSION} is already published on npm."
-            exit 0
+          set -euo pipefail
+          git add "${PKG_DIR}/package.json"
+          if [[ -f "${PKG_DIR}/package-lock.json" ]]; then
+            git add "${PKG_DIR}/package-lock.json"
+          fi
+          git commit -m "chore(release): ${INPUT_PACKAGE}@${NEW_VERSION}"
+          git tag "${TAG}"
+          git push origin HEAD:${{ github.ref_name }}
+          git push origin "${TAG}"
+
+      # ---------- Build (kind-specific) ----------
+
+      - name: Build root simdeck (universal native binary + client + simdeck-test)
+        if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
+        env:
+          SIMDECK_BUILD_UNIVERSAL: "1"
+        run: |
+          npm run build:cli
+          npm run build:client
+          npm run build:simdeck-test
+
+      - name: Verify CLI artifact is a universal binary
+        if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
+        run: |
+          test -x build/simdeck-bin
+          file build/simdeck-bin
+          lipo -info build/simdeck-bin
+
+      # ---------- Apple codesign + notarize (root simdeck only) ----------
+
+      - name: Detect Apple signing capability
+        if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
+        id: signing
+        shell: bash
+        env:
+          HAS_CERT: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
+          HAS_NOTARY: ${{ secrets.APPLE_NOTARY_KEY_BASE64 != '' }}
+          HAS_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY != '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$HAS_CERT" == "true" && "$HAS_NOTARY" == "true" && "$HAS_IDENTITY" == "true" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Apple signing + notarization enabled."
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Apple signing secrets/vars missing in this environment. The published binary will be UNSIGNED."
           fi
 
-          if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "NPM_TOKEN repository secret is required to publish @nativescript/simdeck-inspector@${VERSION}." >&2
-            exit 1
+      - name: Setup signing keychain
+        if: ${{ steps.signing.outputs.enabled == 'true' }}
+        shell: bash
+        env:
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/simdeck-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          printf '%s' "$APPLE_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          security import "$CERT_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERT_P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+
+          # Add temp keychain to user search list, preserving existing entries.
+          EXISTING_KEYCHAINS="$(security list-keychains -d user | sed -e 's/^[[:space:]]*//' -e 's/"//g')"
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING_KEYCHAINS
+
+          rm -f "$CERT_PATH"
+
+          echo "Signing keychain ready at $KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Codesign simdeck binary
+        if: ${{ steps.signing.outputs.enabled == 'true' }}
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/simdeck-signing.keychain-db"
+
+          codesign --force \
+            --options runtime \
+            --timestamp \
+            --keychain "$KEYCHAIN_PATH" \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --entitlements scripts/release/simdeck.entitlements \
+            build/simdeck-bin
+
+          codesign --verify --strict --verbose=2 build/simdeck-bin
+          echo "--- Signature details ---"
+          codesign -dv --verbose=4 build/simdeck-bin
+
+      - name: Notarize simdeck binary
+        if: ${{ steps.signing.outputs.enabled == 'true' && !inputs.dry-run }}
+        shell: bash
+        env:
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_KEY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_KEY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          NOTARY_KEY_PATH="$RUNNER_TEMP/notary.p8"
+          NOTARY_ZIP="$RUNNER_TEMP/simdeck-bin.zip"
+          NOTARY_RESULT="$RUNNER_TEMP/notary-result.json"
+
+          printf '%s' "$APPLE_NOTARY_KEY_BASE64" | base64 --decode > "$NOTARY_KEY_PATH"
+          chmod 600 "$NOTARY_KEY_PATH"
+
+          ditto -c -k --keepParent build/simdeck-bin "$NOTARY_ZIP"
+
+          set +e
+          xcrun notarytool submit "$NOTARY_ZIP" \
+            --key "$NOTARY_KEY_PATH" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_KEY_ISSUER_ID" \
+            --wait \
+            --timeout 30m \
+            --output-format json > "$NOTARY_RESULT"
+          NOTARY_STATUS=$?
+          set -e
+
+          echo "--- Notary submission result ---"
+          cat "$NOTARY_RESULT" || true
+
+          if [[ $NOTARY_STATUS -ne 0 ]]; then
+            SUBMISSION_ID="$(node -e 'try{const j=require(process.argv[1]);process.stdout.write(j.id||"")}catch(e){}' "$NOTARY_RESULT" 2>/dev/null || true)"
+            if [[ -n "${SUBMISSION_ID:-}" ]]; then
+              echo "--- Notary log for ${SUBMISSION_ID} ---"
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --key "$NOTARY_KEY_PATH" \
+                --key-id "$APPLE_NOTARY_KEY_ID" \
+                --issuer "$APPLE_NOTARY_KEY_ISSUER_ID" || true
+            fi
+            rm -f "$NOTARY_KEY_PATH" "$NOTARY_ZIP" "$NOTARY_RESULT"
+            exit "$NOTARY_STATUS"
           fi
 
-          npm publish "${RUNNER_TEMP}/release-assets/nativescript-simdeck-inspector-${VERSION}.tgz" --access public
+          rm -f "$NOTARY_KEY_PATH" "$NOTARY_ZIP" "$NOTARY_RESULT"
+
+      - name: Cleanup signing keychain
+        if: ${{ always() && steps.signing.outputs.enabled == 'true' }}
+        shell: bash
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/simdeck-signing.keychain-db"
+          if [[ -f "$KEYCHAIN_PATH" ]]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+          rm -f \
+            "$RUNNER_TEMP/cert.p12" \
+            "$RUNNER_TEMP/notary.p8" \
+            "$RUNNER_TEMP/simdeck-bin.zip" \
+            "$RUNNER_TEMP/notary-result.json" || true
+
+      - name: Build npm package
+        if: ${{ steps.meta.outputs.kind == 'npm' }}
+        run: npm --prefix "${{ steps.meta.outputs.dir }}" run build
+
+      - name: Package VS Code extension
+        if: ${{ steps.meta.outputs.kind == 'vsce' }}
+        run: npm run package:vscode-extension
+
+      # ---------- Publish (npm OIDC) ----------
+
+      - name: Publish to npm (OIDC, dry-run)
+        if: ${{ inputs.dry-run && (steps.meta.outputs.kind == 'npm' || steps.meta.outputs.kind == 'npm-cli') }}
+        shell: bash
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+          NODE_AUTH_TOKEN: ""
+          DIST_TAG: ${{ steps.tag.outputs.dist_tag }}
+          PKG_DIR: ${{ steps.meta.outputs.dir }}
+          SIMDECK_BUILD_UNIVERSAL: "1"
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN
+          rm -f ~/.npmrc || true
+          if [[ -n "${NPM_CONFIG_USERCONFIG:-}" ]]; then
+            rm -f "$NPM_CONFIG_USERCONFIG" || true
+          fi
+          cd "$PKG_DIR"
+          npm publish --provenance --access public --tag "$DIST_TAG" --dry-run
+
+      - name: Publish to npm (OIDC)
+        if: ${{ !inputs.dry-run && (steps.meta.outputs.kind == 'npm' || steps.meta.outputs.kind == 'npm-cli') }}
+        shell: bash
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+          NODE_AUTH_TOKEN: ""
+          DIST_TAG: ${{ steps.tag.outputs.dist_tag }}
+          PKG_DIR: ${{ steps.meta.outputs.dir }}
+          SIMDECK_BUILD_UNIVERSAL: "1"
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN
+          rm -f ~/.npmrc || true
+          if [[ -n "${NPM_CONFIG_USERCONFIG:-}" ]]; then
+            rm -f "$NPM_CONFIG_USERCONFIG" || true
+          fi
+          cd "$PKG_DIR"
+          npm publish --provenance --access public --tag "$DIST_TAG"
+
+      # ---------- Publish (VS Code Marketplace) ----------
+
+      - name: Publish VS Code extension (dry-run)
+        if: ${{ inputs.dry-run && steps.meta.outputs.kind == 'vsce' }}
+        run: |
+          ls -la build/vscode/
+          echo "[dry-run] would: vsce publish --packagePath build/vscode/simdeck-vscode.vsix"
 
       - name: Publish VS Code extension
+        if: ${{ !inputs.dry-run && steps.meta.outputs.kind == 'vsce' }}
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
-          EXTENSION_ID="$(node -p "const pkg = require('./packages/vscode-extension/package.json'); `${pkg.publisher}.${pkg.name}`")"
-
-          if [ -z "${VSCE_PAT}" ]; then
-            echo "VSCE_PAT repository secret is required to publish ${EXTENSION_ID}." >&2
+          if [[ -z "${VSCE_PAT:-}" ]]; then
+            echo "VSCE_PAT secret is required to publish the VS Code extension." >&2
             exit 1
           fi
-
           npx --no-install vsce publish \
-            --packagePath "${RUNNER_TEMP}/release-assets/simdeck-vscode-${VERSION}.vsix" \
-            --pat "${VSCE_PAT}" \
+            --packagePath build/vscode/simdeck-vscode.vsix \
+            --pat "$VSCE_PAT" \
             --skip-duplicate
 
-      - name: Upload GitHub release assets
+      # ---------- GitHub Release ----------
+
+      - name: Create GitHub release
+        if: ${{ !inputs.dry-run }}
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ steps.meta.outputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+          NEW_VERSION: ${{ steps.version.outputs.version }}
+          DIST_TAG: ${{ steps.tag.outputs.dist_tag }}
+          KIND: ${{ steps.meta.outputs.kind }}
+          BUMP: ${{ inputs.bump }}
         run: |
-          ARTIFACTS_DIR="${RUNNER_TEMP}/release-assets"
+          set -euo pipefail
+          notes="Released ${INPUT_PACKAGE}@${NEW_VERSION} (dist-tag: ${DIST_TAG})."
 
-          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
-            gh release upload "${TAG_NAME}" "${ARTIFACTS_DIR}"/* --clobber
-          else
-            gh release create "${TAG_NAME}" "${ARTIFACTS_DIR}"/* \
-              --generate-notes \
-              --title "${TAG_NAME}"
+          assets=()
+          case "$KIND" in
+            npm-cli)
+              assets+=("build/simdeck-bin")
+              ;;
+            vsce)
+              assets+=("build/vscode/simdeck-vscode.vsix")
+              ;;
+          esac
+
+          flags=()
+          if [[ "$BUMP" == "prerelease" ]]; then
+            flags+=(--prerelease)
           fi
+
+          gh release create "$TAG" \
+            ${assets[@]+"${assets[@]}"} \
+            --title "$TAG" \
+            --notes "$notes" \
+            ${flags[@]+"${flags[@]}"}
+
+      - name: Summary
+        if: always()
+        env:
+          PKG: ${{ inputs.package }}
+          BUMP: ${{ inputs.bump }}
+          NEW: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          DIST: ${{ steps.tag.outputs.dist_tag }}
+          DRY: ${{ inputs.dry-run }}
+        run: |
+          {
+            echo "### SimDeck Release"
+            echo ""
+            echo "- Package: \`$PKG\`"
+            echo "- Bump: \`$BUMP\`"
+            echo "- Version: \`$NEW\`"
+            echo "- Tag: \`$TAG\`"
+            echo "- Dist-tag: \`$DIST\`"
+            echo "- Dry-run: \`$DRY\`"
+          } >> "$GITHUB_STEP_SUMMARY"

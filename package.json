@@ -67,7 +67,7 @@
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "postinstall": "node scripts/postinstall.mjs",
-    "prepack": "npm run build:cli && npm run build:client"
+    "prepack": "npm run build:cli && npm run build:client && npm run build:simdeck-test"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
