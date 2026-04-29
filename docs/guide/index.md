@@ -21,7 +21,7 @@ SimDeck addresses all of those with one CLI, one HTTP API, one WebTransport endp
 SimDeck ships as a single npm package (`simdeck`) that installs:
 
 1. **A native CLI and project daemon.** Rust + Objective-C, compiled on install. It serves the HTTP API and a self-signed WebTransport endpoint for live video frames.
-2. **A bundled React client.** `simdeck ui --open` starts or reuses the daemon, renders a live Simulator surface, and ships the inspector UI.
+2. **A bundled React client.** `simdeck` starts a foreground daemon and prints browser URLs; `simdeck ui --open` starts or reuses a background daemon.
 3. **A JS/TS testing package.** `simdeck/test` gives app tests a small API for launching, tapping, querying accessibility state, batching actions, and taking screenshots.
 
 Optional companion packages:

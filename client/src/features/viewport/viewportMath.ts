@@ -1,6 +1,5 @@
 import type { ChromeProfile } from "../../api/types";
 import {
-  BEZEL_PADDING,
   DEVICE_SCREEN_WIDTH,
   FIT_MARGIN,
   MAX_ZOOM_MULTIPLIER,
@@ -38,8 +37,8 @@ export function shellSize(
             : 2.16;
           const screenHeight = DEVICE_SCREEN_WIDTH * aspectRatio;
           return {
-            height: screenHeight + BEZEL_PADDING * 2,
-            width: DEVICE_SCREEN_WIDTH + BEZEL_PADDING * 2,
+            height: screenHeight,
+            width: DEVICE_SCREEN_WIDTH,
           };
         })();
 

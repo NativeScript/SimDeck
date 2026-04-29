@@ -577,6 +577,14 @@ static NSDictionary<NSNumber *, id> * DFReadAdapterScreens(id adapter) {
     return unwrapped;
 }
 
+static NSDictionary<NSNumber *, id> * DFReadAvailableAdapterScreens(id adapterHost, id adapter) {
+    NSDictionary<NSNumber *, id> *screens = DFReadAdapterScreens(adapterHost);
+    if (screens.count == 0) {
+        screens = DFReadAdapterScreens(adapter);
+    }
+    return screens;
+}
+
 static uint32_t __attribute__((unused)) DFCallSwiftSelfGetterU32(id selfObject, const char *symbolName) {
     if (selfObject == nil) {
         return 0;
@@ -2268,11 +2276,11 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     // the bootstrap SimDeviceScreen is allocated — they trickle in over a few
     // seconds (or only after Simulator.app primes the device). Poll instead of
     // relying on a fixed 0.5s sleep.
-    NSDictionary<NSNumber *, id> *screens = DFReadAdapterScreens(_screenAdapterHost);
+    NSDictionary<NSNumber *, id> *screens = DFReadAvailableAdapterScreens(_screenAdapterHost, _screenAdapter);
     NSDate *screenDeadline = [NSDate dateWithTimeIntervalSinceNow:10.0];
     while (screens.count == 0 && [screenDeadline timeIntervalSinceNow] > 0) {
         DFSpinRunLoop(0.1);
-        screens = DFReadAdapterScreens(_screenAdapterHost);
+        screens = DFReadAvailableAdapterScreens(_screenAdapterHost, _screenAdapter);
     }
     if (screens.count == 0) {
         DFLog(@"SimulatorKit screen adapter exposed no live screens for %@", udid);
@@ -2958,7 +2966,7 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
             ((void(*)(id, SEL, id))objc_msgSend)(self->_screenAdapter, sel_registerName("unregisterScreenAdapterCallbacksWithUUID:"), self->_screenAdapterCallbackUUID);
         }
 
-        NSDictionary<NSNumber *, id> *screens = DFReadAdapterScreens(self->_screenAdapterHost);
+        NSDictionary<NSNumber *, id> *screens = DFReadAvailableAdapterScreens(self->_screenAdapterHost, self->_screenAdapter);
         id rawScreen = screens[@(self->_activeScreenID)];
         if (rawScreen != nil && self->_screenCallbackUUID != nil && [rawScreen respondsToSelector:sel_registerName("unregisterScreenCallbacksWithUUID:")]) {
             ((void(*)(id, SEL, id))objc_msgSend)(rawScreen, sel_registerName("unregisterScreenCallbacksWithUUID:"), self->_screenCallbackUUID);

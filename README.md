@@ -31,9 +31,10 @@ view inside the editor.
 ## Build
 
 ```sh
-./scripts/build-client.sh
-./scripts/build-cli.sh
+npm run build
 ```
+
+This builds the native CLI and browser client. To build companion packages too, run `npm run build:all`.
 
 Requirements:
 
@@ -71,11 +72,18 @@ Full documentation lives at [simdeck.nativescript.org](https://simdeck.nativescr
 ## Run
 
 ```sh
-simdeck ui --open
+simdeck
 ```
 
-This starts or reuses the project daemon, enables the browser UI, and opens the authenticated local URL.
-To focus a specific simulator, add `?device=UDID` to the opened URL.
+This starts a workspace-local foreground daemon, prints local and LAN browser URLs, and stops when you press Ctrl-C.
+To focus a specific simulator by name or UDID, pass it as the only argument:
+
+```sh
+simdeck "iPhone 17 Pro Max"
+```
+
+Use `simdeck ui --open` or `simdeck daemon start` when you want a reusable background daemon instead.
+The no-subcommand lifecycle shortcuts are `simdeck -d` for detached start, `simdeck -k` to kill the background daemon, and `simdeck -r` to restart it.
 SimDeck Cloud uses the same server binary as its GitHub Actions provider. The
 provider workflow starts `simdeck serve` on the runner, exposes it through a
 tunnel, and lets the hosted control plane connect to the simulator with a
@@ -257,6 +265,7 @@ npm run package:vscode-extension
 ```
 
 This writes `build/vscode/simdeck-vscode.vsix`.
+The shorter aliases `npm run package:vscode` and `npm run package:vsix` do the same thing.
 
 Install that local package into VS Code:
 
