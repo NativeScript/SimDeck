@@ -149,7 +149,7 @@ jobs:
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - name: Install root dependencies
         run: npm ci
@@ -231,21 +231,21 @@ jobs:
 
       # ---------- Build (kind-specific) ----------
 
-      - name: Build root simdeck (universal native binary + client + simdeck-test)
+      - name: Build root simdeck (arm64 native binary + client + simdeck-test)
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
         env:
-          SIMDECK_BUILD_UNIVERSAL: "1"
+          SIMDECK_BUILD_TARGET: aarch64-apple-darwin
         run: |
           npm run build:cli
           npm run build:client
           npm run build:simdeck-test
 
-      - name: Verify CLI artifact is a universal binary
+      - name: Verify CLI artifact is an arm64 Mach-O
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
         run: |
           test -x build/simdeck-bin
           file build/simdeck-bin
-          lipo -info build/simdeck-bin
+          file build/simdeck-bin | grep -q 'arm64'
 
       # ---------- Apple codesign + notarize (root simdeck only) ----------
 
@@ -407,7 +407,7 @@ jobs:
           NODE_AUTH_TOKEN: ""
           DIST_TAG: ${{ steps.tag.outputs.dist_tag }}
           PKG_DIR: ${{ steps.meta.outputs.dir }}
-          SIMDECK_BUILD_UNIVERSAL: "1"
+          SIMDECK_BUILD_TARGET: aarch64-apple-darwin
         run: |
           set -euo pipefail
           unset NODE_AUTH_TOKEN
@@ -426,7 +426,7 @@ jobs:
           NODE_AUTH_TOKEN: ""
           DIST_TAG: ${{ steps.tag.outputs.dist_tag }}
           PKG_DIR: ${{ steps.meta.outputs.dir }}
-          SIMDECK_BUILD_UNIVERSAL: "1"
+          SIMDECK_BUILD_TARGET: aarch64-apple-darwin
         run: |
           set -euo pipefail
           unset NODE_AUTH_TOKEN

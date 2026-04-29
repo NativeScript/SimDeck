@@ -29,6 +29,9 @@
   "os": [
     "darwin"
   ],
+  "cpu": [
+    "arm64"
+  ],
   "publishConfig": {
     "access": "public"
   },

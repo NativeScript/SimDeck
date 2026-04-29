@@ -43,9 +43,14 @@ npm run build:vscode-extension       # alias for package:vscode-extension
 ```
 
 `scripts/build-cli.sh` builds the Rust server in `server/` and copies the
-resulting binary to `build/simdeck-bin`. Set `SIMDECK_BUILD_UNIVERSAL=1` to
-produce a fat `arm64+x86_64` binary via `lipo` (the release workflow uses
-this); the default is a host-arch build for fast iteration.
+resulting binary to `build/simdeck-bin`. The default is a host-arch build for
+fast iteration. Set `SIMDECK_BUILD_TARGET=<rust-target-triple>` to pin the
+output to an explicit Rust target — the release workflow uses
+`SIMDECK_BUILD_TARGET=aarch64-apple-darwin` for deterministic arm64 builds.
+
+SimDeck is **arm64-only** by design: `cli/*.m` contains AArch64 inline asm
+that does not compile on x86_64, and the npm package is gated by
+`"cpu": ["arm64"]` so installs on Intel Macs fail fast.
 
 ## Run from a source checkout
 
