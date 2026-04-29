@@ -12,7 +12,9 @@ const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
 
 export function isWebRtcStreamMode(): boolean {
-  return streamTransportMode() === "webrtc" && Boolean(accessTokenFromLocation());
+  return (
+    streamTransportMode() === "webrtc" && Boolean(accessTokenFromLocation())
+  );
 }
 
 export function sendWebRtcControlMessage(encoded: string): boolean {

@@ -37,9 +37,10 @@ function createDefaultRuntimeInfo(): StreamRuntimeInfo {
     gpuRenderer: "",
     gpuVendor: "",
     renderBackend: "Unavailable",
-    streamBackend: streamTransportMode() === "webrtc"
-      ? "Browser WebRTC"
-      : "Worker / WebTransport",
+    streamBackend:
+      streamTransportMode() === "webrtc"
+        ? "Browser WebRTC"
+        : "Worker / WebTransport",
     webCodecs: false,
     webGL2: false,
     webTransport: false,
