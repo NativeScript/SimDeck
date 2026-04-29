@@ -201,6 +201,26 @@ xcw_native_owned_bytes xcw_native_render_chrome_png(const char *udid, char **err
     }
 }
 
+xcw_native_owned_bytes xcw_native_render_screen_mask_png(const char *udid, char **error_message) {
+    @autoreleasepool {
+        NSDictionary *simulator = XCWSimulatorRecordForUDID(udid, error_message);
+        if (simulator == nil) {
+            return (xcw_native_owned_bytes){0};
+        }
+
+        NSError *renderError = nil;
+        NSString *deviceName = simulator[@"deviceTypeName"] ?: simulator[@"name"] ?: @"";
+        NSData *pngData = [XCWChromeRenderer screenMaskPNGDataForDeviceName:deviceName
+                                                                      error:&renderError];
+        if (pngData == nil) {
+            XCWSetErrorMessage(error_message, renderError);
+            return (xcw_native_owned_bytes){0};
+        }
+
+        return XCWOwnedBytesFromData(pngData);
+    }
+}
+
 xcw_native_owned_bytes xcw_native_screenshot_png(const char *udid, char **error_message) {
     @autoreleasepool {
         XCWSimctl *simctl = [[XCWSimctl alloc] init];

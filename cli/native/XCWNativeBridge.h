@@ -41,6 +41,7 @@ bool xcw_native_open_url(const char * _Nonnull udid, const char * _Nonnull url, 
 bool xcw_native_launch_bundle(const char * _Nonnull udid, const char * _Nonnull bundle_id, char * _Nullable * _Nullable error_message);
 char * _Nullable xcw_native_get_chrome_profile(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 xcw_native_owned_bytes xcw_native_render_chrome_png(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
+xcw_native_owned_bytes xcw_native_render_screen_mask_png(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 xcw_native_owned_bytes xcw_native_screenshot_png(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 char * _Nullable xcw_native_recent_logs(const char * _Nonnull udid, double seconds, size_t limit, char * _Nullable * _Nullable error_message);
 char * _Nullable xcw_native_accessibility_snapshot(const char * _Nonnull udid, bool has_point, double x, double y, size_t max_depth, char * _Nullable * _Nullable error_message);

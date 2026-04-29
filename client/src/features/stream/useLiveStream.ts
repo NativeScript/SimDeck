@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { apiHeaders } from "../../api/client";
 import type { SimulatorMetadata } from "../../api/types";
 import type { Size } from "../viewport/types";
 import { createEmptyStreamStats } from "./stats";
@@ -36,11 +37,23 @@ function createDefaultRuntimeInfo(): StreamRuntimeInfo {
     gpuRenderer: "",
     gpuVendor: "",
     renderBackend: "Unavailable",
-    streamBackend: "Worker / WebTransport",
+    streamBackend: streamTransportMode() === "webrtc"
+      ? "Browser WebRTC"
+      : "Worker / WebTransport",
     webCodecs: false,
     webGL2: false,
     webTransport: false,
   };
+}
+
+function streamTransportMode(): string {
+  if (typeof window === "undefined") {
+    return "webtransport";
+  }
+  return (
+    new URLSearchParams(window.location.search).get("transport") ??
+    "webtransport"
+  );
 }
 
 function detectRuntimeInfo(): StreamRuntimeInfo {
@@ -63,7 +76,8 @@ function detectRuntimeInfo(): StreamRuntimeInfo {
     }
 
     runtimeInfo.webGL2 = true;
-    runtimeInfo.renderBackend = "WebGL2";
+    runtimeInfo.renderBackend =
+      streamTransportMode() === "webrtc" ? "Canvas 2D / Video" : "WebGL2";
 
     const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
     if (debugInfo) {
@@ -293,7 +307,7 @@ export function useLiveStream({
           visibilityState: document.visibilityState,
         }),
         cache: "no-store",
-        headers: { "content-type": "application/json" },
+        headers: apiHeaders(),
         method: "POST",
       }).catch(() => {
         // Diagnostic only; UI state should never depend on telemetry.

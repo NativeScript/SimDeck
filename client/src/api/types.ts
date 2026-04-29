@@ -32,6 +32,7 @@ export interface ChromeProfile {
   screenWidth: number;
   screenHeight: number;
   cornerRadius: number;
+  hasScreenMask?: boolean;
 }
 
 export interface AccessibilityFrame {
