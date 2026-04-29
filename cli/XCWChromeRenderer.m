@@ -18,11 +18,13 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     NSDictionary *json = chromeInfo[@"json"];
     NSDictionary *images = [json[@"images"] isKindOfClass:[NSDictionary class]] ? json[@"images"] : @{};
     NSDictionary *sizing = [images[@"sizing"] isKindOfClass:[NSDictionary class]] ? images[@"sizing"] : @{};
+    NSDictionary *stand = [images[@"stand"] isKindOfClass:[NSDictionary class]] ? images[@"stand"] : @{};
 
-    CGFloat insetTop = [self numberValue:sizing[@"topHeight"]];
-    CGFloat insetLeft = [self numberValue:sizing[@"leftWidth"]];
-    CGFloat insetBottom = [self numberValue:sizing[@"bottomHeight"]];
-    CGFloat insetRight = [self numberValue:sizing[@"rightWidth"]];
+    CGFloat sizingTop = [self numberValue:sizing[@"topHeight"]];
+    CGFloat sizingLeft = [self numberValue:sizing[@"leftWidth"]];
+    CGFloat sizingBottom = [self numberValue:sizing[@"bottomHeight"]];
+    CGFloat sizingRight = [self numberValue:sizing[@"rightWidth"]];
+    CGFloat standHeight = [self numberValue:stand[@"height"]];
 
     CGSize compositeSize = [self compositeSizeForChromeInfo:chromeInfo error:error];
     if (CGSizeEqualToSize(compositeSize, CGSizeZero)) {
@@ -31,19 +33,59 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
 
     NSDictionary *paths = [json[@"paths"] isKindOfClass:[NSDictionary class]] ? json[@"paths"] : @{};
     NSDictionary *border = [paths[@"simpleOutsideBorder"] isKindOfClass:[NSDictionary class]] ? paths[@"simpleOutsideBorder"] : @{};
+    NSDictionary *borderInsets = [border[@"insets"] isKindOfClass:[NSDictionary class]] ? border[@"insets"] : @{};
     CGFloat rawCornerRadius = [self numberValue:border[@"cornerRadiusX"]];
 
+    CGFloat borderTop = [self numberValue:borderInsets[@"top"]];
+    CGFloat borderLeft = [self numberValue:borderInsets[@"left"]];
+    CGFloat borderBottom = [self numberValue:borderInsets[@"bottom"]];
+    CGFloat borderRight = [self numberValue:borderInsets[@"right"]];
+
+    CGFloat bezelTop = sizingTop + borderTop;
+    CGFloat bezelLeft = sizingLeft + borderLeft;
+    CGFloat bezelBottom = sizingBottom + borderBottom;
+    CGFloat bezelRight = sizingRight + borderRight;
+
     BOOL watchProfile = [self isWatchProfile:plist];
+    BOOL hasComposite = [self compositeAssetPathForChromeInfo:chromeInfo].length > 0;
     CGFloat screenScale = MAX([self numberValue:plist[@"mainScreenScale"]], 1.0);
     CGFloat profileScreenWidth = [self numberValue:plist[@"mainScreenWidth"]];
     CGFloat profileScreenHeight = [self numberValue:plist[@"mainScreenHeight"]];
     CGFloat pointScreenWidth = watchProfile ? profileScreenWidth : profileScreenWidth / screenScale;
-    CGFloat screenWidth = watchProfile ? profileScreenWidth : MAX(compositeSize.width - insetLeft - insetRight, 1.0);
-    CGFloat screenHeight = watchProfile ? profileScreenHeight : MAX(compositeSize.height - insetTop - insetBottom, 1.0);
-    CGFloat screenX = watchProfile ? MAX((compositeSize.width - screenWidth) / 2.0, 0.0) : insetLeft;
-    CGFloat screenY = watchProfile ? MAX((compositeSize.height - screenHeight) / 2.0, 0.0) : insetTop;
-    CGFloat bezelWidth = MAX(insetLeft, insetTop);
-    CGFloat innerRadius = MAX(rawCornerRadius - bezelWidth, 0.0);
+    CGFloat pointScreenHeight = watchProfile ? profileScreenHeight : profileScreenHeight / screenScale;
+
+    CGFloat screenWidth;
+    CGFloat screenHeight;
+    CGFloat screenX;
+    CGFloat screenY;
+    if (hasComposite && pointScreenWidth > 0.0 && pointScreenHeight > 0.0) {
+        // The composite PDF defines authoritative chrome dimensions; the screen is the
+        // device's point size centered horizontally inside the chrome with the bezel
+        // insets pushing it down vertically (and stand area, if any, occupying the
+        // bottom of the composite).
+        screenWidth = pointScreenWidth;
+        screenHeight = pointScreenHeight;
+        screenX = MAX((compositeSize.width - screenWidth) / 2.0, 0.0);
+        CGFloat usableHeight = compositeSize.height - standHeight;
+        screenY = MAX((usableHeight - screenHeight) / 2.0, bezelTop);
+    } else if (watchProfile) {
+        screenWidth = profileScreenWidth;
+        screenHeight = profileScreenHeight;
+        screenX = MAX((compositeSize.width - screenWidth) / 2.0, 0.0);
+        screenY = MAX((compositeSize.height - screenHeight) / 2.0, 0.0);
+    } else {
+        // 9-slice path: bezel insets (sizing + simpleOutsideBorder) frame the screen.
+        // The stand, when present, sits below the chrome and outside the screen rect.
+        screenX = bezelLeft;
+        screenY = bezelTop;
+        screenWidth = MAX(compositeSize.width - bezelLeft - bezelRight, 1.0);
+        screenHeight = MAX(compositeSize.height - standHeight - bezelTop - bezelBottom, 1.0);
+    }
+
+    // Inner corner radius: when the thickest bezel exceeds the outer radius, the
+    // screen edge is past the curved region and the inner is effectively rectangular
+    // (e.g. iPhone 6s Plus's tall top/bottom bezel collapses the screen rounding).
+    CGFloat innerRadius = MAX(rawCornerRadius - MAX(bezelLeft, bezelTop), 0.0);
     CGFloat radiusScale = pointScreenWidth > 0.0 ? screenWidth / pointScreenWidth : 1.0;
     CGFloat cornerRadius = watchProfile ? rawCornerRadius : innerRadius * radiusScale;
 
@@ -271,6 +313,9 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         NSDictionary *json = chromeInfo[@"json"];
         NSDictionary *images = [json[@"images"] isKindOfClass:[NSDictionary class]] ? json[@"images"] : @{};
         NSDictionary *sizing = [images[@"sizing"] isKindOfClass:[NSDictionary class]] ? images[@"sizing"] : @{};
+        NSDictionary *paths = [json[@"paths"] isKindOfClass:[NSDictionary class]] ? json[@"paths"] : @{};
+        NSDictionary *bord = [paths[@"simpleOutsideBorder"] isKindOfClass:[NSDictionary class]] ? paths[@"simpleOutsideBorder"] : @{};
+        NSDictionary *bordI = [bord[@"insets"] isKindOfClass:[NSDictionary class]] ? bord[@"insets"] : @{};
         CGFloat screenScale = MAX([self numberValue:plist[@"mainScreenScale"]], 1.0);
         BOOL watchProfile = [self isWatchProfile:plist];
         CGFloat screenWidth = [self numberValue:plist[@"mainScreenWidth"]];
@@ -279,8 +324,14 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
             screenWidth /= screenScale;
             screenHeight /= screenScale;
         }
-        CGFloat totalWidth = screenWidth + [self numberValue:sizing[@"leftWidth"]] + [self numberValue:sizing[@"rightWidth"]];
-        CGFloat totalHeight = screenHeight + [self numberValue:sizing[@"topHeight"]] + [self numberValue:sizing[@"bottomHeight"]];
+        CGFloat bezelLeft = [self numberValue:sizing[@"leftWidth"]] + [self numberValue:bordI[@"left"]];
+        CGFloat bezelRight = [self numberValue:sizing[@"rightWidth"]] + [self numberValue:bordI[@"right"]];
+        CGFloat bezelTop = [self numberValue:sizing[@"topHeight"]] + [self numberValue:bordI[@"top"]];
+        CGFloat bezelBottom = [self numberValue:sizing[@"bottomHeight"]] + [self numberValue:bordI[@"bottom"]];
+        NSDictionary *stand = [images[@"stand"] isKindOfClass:[NSDictionary class]] ? images[@"stand"] : @{};
+        CGFloat standHeight = [self numberValue:stand[@"height"]];
+        CGFloat totalWidth = screenWidth + bezelLeft + bezelRight;
+        CGFloat totalHeight = screenHeight + bezelTop + bezelBottom + standHeight;
         if (totalWidth > 0.0 && totalHeight > 0.0) {
             return CGSizeMake(totalWidth, totalHeight);
         }
@@ -348,7 +399,10 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     CGFloat bottomHeight = MAX(MAX(MAX(bottom, bottomSize.height), bottomLeftSize.height), bottomRightSize.height);
     CGFloat rightWidth = MAX(MAX(MAX(right, rightSize.width), topRightSize.width), bottomRightSize.width);
     CGFloat middleWidth = MAX(size.width - leftWidth - rightWidth, 1.0);
-    CGFloat middleHeight = MAX(size.height - topHeight - bottomHeight, 1.0);
+    NSDictionary *stand = [images[@"stand"] isKindOfClass:[NSDictionary class]] ? images[@"stand"] : @{};
+    CGFloat standHeight = [self numberValue:stand[@"height"]];
+    CGFloat chromeHeight = MAX(size.height - standHeight, 1.0);
+    CGFloat middleHeight = MAX(chromeHeight - topHeight - bottomHeight, 1.0);
 
     NSArray<NSDictionary *> *pieces = @[
         @{ @"path": topLeftPath, @"rect": [NSValue valueWithRect:NSMakeRect(0, 0, leftWidth, topHeight)] },
@@ -377,6 +431,13 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
             return NO;
         }
     }
+    if (standHeight > 0.0 && ![self drawStandImagesForChromeInfo:chromeInfo
+                                                           inSize:size
+                                                        chromeYMax:chromeHeight
+                                                          context:context
+                                                            error:error]) {
+        return NO;
+    }
     if (!drewAny && error != NULL) {
         *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
                                      code:13
@@ -385,6 +446,62 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         }];
     }
     return drewAny;
+}
+
++ (BOOL)drawStandImagesForChromeInfo:(NSDictionary *)chromeInfo
+                               inSize:(CGSize)size
+                            chromeYMax:(CGFloat)chromeYMax
+                              context:(CGContextRef)context
+                                error:(NSError * _Nullable __autoreleasing *)error {
+    NSDictionary *json = chromeInfo[@"json"];
+    NSString *chromePath = chromeInfo[@"chromePath"];
+    NSDictionary *images = [json[@"images"] isKindOfClass:[NSDictionary class]] ? json[@"images"] : @{};
+    NSDictionary *stand = [images[@"stand"] isKindOfClass:[NSDictionary class]] ? images[@"stand"] : @{};
+    CGFloat standWidth = [self numberValue:stand[@"width"]];
+    CGFloat standHeight = [self numberValue:stand[@"height"]];
+    if (standWidth <= 0.0 || standHeight <= 0.0) {
+        return YES;
+    }
+
+    NSString *leftName = [stand[@"left"] isKindOfClass:[NSString class]] ? stand[@"left"] : @"";
+    NSString *centerName = [stand[@"center"] isKindOfClass:[NSString class]] ? stand[@"center"] : @"";
+    NSString *rightName = [stand[@"right"] isKindOfClass:[NSString class]] ? stand[@"right"] : @"";
+    NSString *leftPath = leftName.length > 0 ? [self resolvedChromeAssetPathForName:leftName chromePath:chromePath] : @"";
+    NSString *centerPath = centerName.length > 0 ? [self resolvedChromeAssetPathForName:centerName chromePath:chromePath] : @"";
+    NSString *rightPath = rightName.length > 0 ? [self resolvedChromeAssetPathForName:rightName chromePath:chromePath] : @"";
+    CGSize leftSize = [self PDFPageSizeAtPath:leftPath];
+    CGSize rightSize = [self PDFPageSizeAtPath:rightPath];
+    CGFloat leftWidth = MAX(leftSize.width, 0.0);
+    CGFloat rightWidth = MAX(rightSize.width, 0.0);
+    CGFloat centerWidth = MAX(standWidth - leftWidth - rightWidth, 1.0);
+    CGFloat x = MAX((size.width - standWidth) / 2.0, 0.0);
+    CGFloat y = chromeYMax;
+
+    if (leftPath.length > 0 && leftWidth > 0.0) {
+        if (![self drawPDFAtPath:leftPath
+                          inRect:CGRectMake(x, y, leftWidth, standHeight)
+                         context:context
+                           error:error]) {
+            return NO;
+        }
+    }
+    if (centerPath.length > 0) {
+        if (![self drawPDFAtPath:centerPath
+                          inRect:CGRectMake(x + leftWidth, y, centerWidth, standHeight)
+                         context:context
+                           error:error]) {
+            return NO;
+        }
+    }
+    if (rightPath.length > 0 && rightWidth > 0.0) {
+        if (![self drawPDFAtPath:rightPath
+                          inRect:CGRectMake(x + leftWidth + centerWidth, y, rightWidth, standHeight)
+                         context:context
+                           error:error]) {
+            return NO;
+        }
+    }
+    return YES;
 }
 
 + (BOOL)drawInputImagesForChromeInfo:(NSDictionary *)chromeInfo
