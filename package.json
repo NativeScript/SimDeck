@@ -1,6 +1,6 @@
 {
   "name": "simdeck",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Native macOS simulator control plane with a browser client",
   "license": "Apache-2.0",
   "bin": {
