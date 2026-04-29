@@ -1,4 +1,4 @@
-import { apiRequest } from "./client";
+import { accessTokenFromLocation, apiRequest } from "./client";
 import type {
   KeyPayload,
   LaunchPayload,
@@ -61,6 +61,10 @@ export function simulatorControlSocketUrl(udid: string) {
     `/api/simulators/${encodeURIComponent(udid)}/control`,
     window.location.href,
   );
+  const token = accessTokenFromLocation();
+  if (token) {
+    url.searchParams.set("simdeckToken", token);
+  }
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
 }

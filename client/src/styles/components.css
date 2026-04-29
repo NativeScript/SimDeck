@@ -1011,7 +1011,7 @@
   object-fit: fill;
   pointer-events: none;
   -webkit-user-drag: none;
-  z-index: 0;
+  z-index: 2;
 }
 
 .pan-enabled .device-bezel,
@@ -1194,6 +1194,51 @@
 .debug-overlay .debug-panel-inline {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(10px);
+}
+
+@media (max-width: 600px) {
+  .viewport-zoom-dock {
+    right: 8px;
+    bottom: 8px;
+    left: auto;
+    width: max-content;
+    max-width: calc(100vw - 16px);
+  }
+
+  .zoom-controls-floating {
+    width: max-content;
+    max-width: 100%;
+    justify-content: flex-end;
+    overflow-x: auto;
+    padding: 5px;
+    border-radius: 8px;
+  }
+
+  .zoom-controls-floating .tbtn {
+    flex: 0 0 auto;
+  }
+
+  .debug-overlay {
+    top: 8px;
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-height: calc(100% - 72px);
+    overflow: auto;
+  }
+
+  .device-bezel {
+    border-radius: 34px;
+    padding: 10px;
+  }
+
+  .device-screen {
+    width: min(320px, calc(100vw - 44px));
+  }
+
+  .accessibility-rect span {
+    max-width: 120px;
+  }
 }
 
 @keyframes spin {

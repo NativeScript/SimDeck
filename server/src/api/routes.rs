@@ -103,7 +103,7 @@ struct KeyPayload {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-enum ControlMessage {
+pub(crate) enum ControlMessage {
     Touch {
         x: f64,
         y: f64,
@@ -380,6 +380,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/chrome-profile", get(chrome_profile))
         .route("/api/simulators/{udid}/chrome.png", get(chrome_png))
         .route(
+            "/api/simulators/{udid}/screen-mask.png",
+            get(screen_mask_png),
+        )
+        .route(
             "/api/simulators/{udid}/accessibility-tree",
             get(accessibility_tree),
         )
@@ -421,6 +425,7 @@ async fn require_api_auth(
         request.method(),
         request.headers(),
         peer_is_loopback,
+        request.uri().query(),
     ) {
         return auth::unauthorized_response(&state.config, request.headers());
     }
@@ -952,7 +957,7 @@ async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket)
     }
 }
 
-async fn run_control_message(
+pub(crate) async fn run_control_message(
     session: SimulatorSession,
     message: ControlMessage,
 ) -> Result<(), AppError> {
@@ -1090,6 +1095,20 @@ async fn chrome_png(
     Path(udid): Path<String>,
 ) -> Result<(StatusCode, HeaderMap, Vec<u8>), AppError> {
     let png = run_bridge_action(state, move |bridge| bridge.chrome_png(&udid)).await?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
+    headers.insert(
+        header::CACHE_CONTROL,
+        "no-cache, no-store, must-revalidate".parse().unwrap(),
+    );
+    Ok((StatusCode::OK, headers, png))
+}
+
+async fn screen_mask_png(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+) -> Result<(StatusCode, HeaderMap, Vec<u8>), AppError> {
+    let png = run_bridge_action(state, move |bridge| bridge.screen_mask_png(&udid)).await?;
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
     headers.insert(

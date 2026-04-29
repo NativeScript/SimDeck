@@ -1,5 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 
+import { accessTokenFromLocation } from "../api/client";
 import {
   bootSimulator,
   dismissKeyboard,
@@ -21,6 +28,7 @@ import type {
   AccessibilitySourcePreference,
   AccessibilityTreeResponse,
   ChromeProfile,
+  SimulatorMetadata,
   TouchPhase,
 } from "../api/types";
 import { AccessibilityInspector } from "../features/accessibility/AccessibilityInspector";
@@ -28,6 +36,10 @@ import { useKeyboardInput } from "../features/input/useKeyboardInput";
 import { usePointerInput } from "../features/input/usePointerInput";
 import { simulatorRuntimeLabel } from "../features/simulators/simulatorDisplay";
 import { useSimulatorList } from "../features/simulators/useSimulatorList";
+import {
+  isWebRtcStreamMode,
+  sendWebRtcControlMessage,
+} from "../features/stream/streamWorkerClient";
 import { useLiveStream } from "../features/stream/useLiveStream";
 import { DebugPanel } from "../features/toolbar/DebugPanel";
 import { Toolbar } from "../features/toolbar/Toolbar";
@@ -75,7 +87,38 @@ const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 clearLegacyVolatileUiState();
 
 function buildChromeUrl(udid: string, stamp: number): string {
-  return `${STREAM_ORIGIN}/api/simulators/${udid}/chrome.png?stamp=${stamp}`;
+  return buildAuthenticatedAssetUrl(
+    `/api/simulators/${udid}/chrome.png`,
+    stamp,
+  );
+}
+
+function buildScreenMaskUrl(udid: string, stamp: number): string {
+  return buildAuthenticatedAssetUrl(
+    `/api/simulators/${udid}/screen-mask.png`,
+    stamp,
+  );
+}
+
+function buildAuthenticatedAssetUrl(path: string, stamp: number): string {
+  const url = new URL(path, `${STREAM_ORIGIN || window.location.origin}/`);
+  url.searchParams.set("stamp", String(stamp));
+  const token = accessTokenFromLocation();
+  if (token) {
+    url.searchParams.set("simdeckToken", token);
+  }
+  return url.toString();
+}
+
+function shouldRenderNativeChrome(simulator: SimulatorMetadata): boolean {
+  const identifier = simulator.deviceTypeIdentifier ?? "";
+  const name = simulator.name ?? "";
+  return (
+    identifier.includes(".iPhone-") ||
+    identifier.includes(".iPad-") ||
+    name.startsWith("iPhone") ||
+    name.startsWith("iPad")
+  );
 }
 
 function mergeAccessibilitySources(
@@ -541,6 +584,10 @@ export function AppShell() {
         setChromeProfile(null);
         return;
       }
+      if (!shouldRenderNativeChrome(selectedSimulator)) {
+        setChromeProfile(null);
+        return;
+      }
 
       try {
         const profile = await fetchChromeProfile(selectedSimulator.udid);
@@ -670,13 +717,30 @@ export function AppShell() {
   );
   const chromeScreenStyle =
     chromeProfile && chromeScreenRect
-      ? {
+      ? ({
           left: `${(chromeScreenRect.x / chromeProfile.totalWidth) * 100}%`,
           top: `${(chromeScreenRect.y / chromeProfile.totalHeight) * 100}%`,
           width: `${(chromeScreenRect.width / chromeProfile.totalWidth) * 100}%`,
           height: `${(chromeScreenRect.height / chromeProfile.totalHeight) * 100}%`,
           borderRadius: chromeScreenBorderRadius ?? "0",
-        }
+          ...(chromeProfile.hasScreenMask && selectedSimulator
+            ? {
+                maskImage: `url("${buildScreenMaskUrl(
+                  selectedSimulator.udid,
+                  streamStamp,
+                )}")`,
+                maskMode: "alpha",
+                maskRepeat: "no-repeat",
+                maskSize: "100% 100%",
+                WebkitMaskImage: `url("${buildScreenMaskUrl(
+                  selectedSimulator.udid,
+                  streamStamp,
+                )}")`,
+                WebkitMaskRepeat: "no-repeat",
+                WebkitMaskSize: "100% 100%",
+              }
+            : {}),
+        } satisfies CSSProperties)
       : null;
   const shellStyle = chromeProfile
     ? {
@@ -763,8 +827,11 @@ export function AppShell() {
 
   function sendControl(udid: string, message: ControlMessage) {
     setLocalError("");
-    const state = ensureControlSocket(udid);
     const encoded = JSON.stringify(message);
+    if (sendWebRtcControlMessage(encoded)) {
+      return;
+    }
+    const state = ensureControlSocket(udid);
     if (state.socket.readyState === WebSocket.OPEN) {
       state.socket.send(encoded);
     } else {
@@ -773,7 +840,7 @@ export function AppShell() {
   }
 
   useEffect(() => {
-    if (selectedSimulator?.isBooted) {
+    if (selectedSimulator?.isBooted && !isWebRtcStreamMode()) {
       ensureControlSocket(selectedSimulator.udid);
     } else {
       closeControlSocket();

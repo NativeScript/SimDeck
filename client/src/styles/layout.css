@@ -2,6 +2,7 @@
   display: grid;
   grid-template-rows: auto 1fr;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -78,6 +79,7 @@
   display: flex;
   align-items: center;
   gap: 2px;
+  min-width: 0;
 }
 
 .main {
@@ -97,6 +99,48 @@
 }
 
 @media (max-width: 600px) {
+  .app {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .toolbar {
+    height: auto;
+    min-height: 40px;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 6px;
+    padding: 6px;
+  }
+
+  .toolbar-left,
+  .toolbar-right {
+    width: 100%;
+  }
+
+  .toolbar-left {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+  }
+
+  .toolbar-right {
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .toolbar-right::-webkit-scrollbar {
+    display: none;
+  }
+
+  .toolbar-actions {
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .main {
+    flex-direction: column;
+  }
+
   .debug-grid {
     grid-template-columns: 1fr;
   }
@@ -116,9 +160,12 @@
   }
 
   .hierarchy-panel {
-    width: min(320px, 74vw);
+    width: 100%;
     min-width: 0;
-    max-width: 74vw;
+    max-width: none;
+    max-height: min(42dvh, 360px);
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
   }
 
   .toolbar-sim-detail {

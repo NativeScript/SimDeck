@@ -62,6 +62,10 @@ unsafe extern "C" {
         udid: *const c_char,
         error_message: *mut *mut c_char,
     ) -> xcw_native_owned_bytes;
+    pub fn xcw_native_render_screen_mask_png(
+        udid: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> xcw_native_owned_bytes;
     pub fn xcw_native_screenshot_png(
         udid: *const c_char,
         error_message: *mut *mut c_char,

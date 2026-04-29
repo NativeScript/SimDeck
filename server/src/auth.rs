@@ -46,8 +46,13 @@ pub fn api_request_authorized(
     method: &Method,
     headers: &HeaderMap,
     peer_is_loopback: bool,
+    uri_query: Option<&str>,
 ) -> bool {
     if bearer_or_header_token(headers).is_some_and(|token| token == config.access_token) {
+        return true;
+    }
+
+    if query_token_from_query(uri_query).is_some_and(|token| token == config.access_token) {
         return true;
     }
 
@@ -162,7 +167,11 @@ fn cookie_token(headers: &HeaderMap) -> Option<&str> {
 }
 
 fn query_token(path: &str) -> Option<&str> {
-    let query = path.split_once('?')?.1;
+    query_token_from_query(path.split_once('?').map(|(_, query)| query))
+}
+
+fn query_token_from_query(query: Option<&str>) -> Option<&str> {
+    let query = query?;
     query.split('&').find_map(|part| {
         let (name, value) = part.split_once('=')?;
         (name == ACCESS_TOKEN_QUERY).then_some(value)
@@ -253,7 +262,22 @@ mod tests {
             &config,
             &Method::POST,
             &headers,
-            false
+            false,
+            None
+        ));
+    }
+
+    #[test]
+    fn accepts_explicit_query_token_for_headerless_browser_requests() {
+        let config = config();
+        let headers = HeaderMap::new();
+
+        assert!(api_request_authorized(
+            &config,
+            &Method::GET,
+            &headers,
+            false,
+            Some("stamp=1&simdeckToken=secret-token")
         ));
     }
 
@@ -274,7 +298,8 @@ mod tests {
             &config,
             &Method::POST,
             &headers,
-            false
+            false,
+            None
         ));
     }
 
@@ -295,7 +320,8 @@ mod tests {
             &config,
             &Method::POST,
             &headers,
-            false
+            false,
+            None
         ));
     }
 
@@ -321,7 +347,8 @@ mod tests {
             &config,
             &Method::POST,
             &headers,
-            true
+            true,
+            None
         ));
     }
 
@@ -338,7 +365,8 @@ mod tests {
             &config,
             &Method::POST,
             &headers,
-            true
+            true,
+            None
         ));
     }
 
@@ -352,7 +380,8 @@ mod tests {
             &config,
             &Method::GET,
             &headers,
-            true
+            true,
+            None
         ));
     }
 
@@ -366,7 +395,8 @@ mod tests {
             &config,
             &Method::POST,
             &headers,
-            true
+            true,
+            None
         ));
     }
 }

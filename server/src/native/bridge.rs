@@ -113,6 +113,8 @@ pub struct ChromeProfile {
     pub screen_height: f64,
     #[serde(rename = "cornerRadius")]
     pub corner_radius: f64,
+    #[serde(rename = "hasScreenMask", default)]
+    pub has_screen_mask: bool,
 }
 
 #[derive(Default, Clone)]
@@ -202,6 +204,22 @@ impl NativeBridge {
         unsafe {
             let mut error = ptr::null_mut();
             let bytes = ffi::xcw_native_render_chrome_png(udid.as_ptr(), &mut error);
+            if bytes.data.is_null() {
+                return Err(
+                    take_error(error).unwrap_or_else(|| AppError::native("Unknown native error."))
+                );
+            }
+            let data = std::slice::from_raw_parts(bytes.data, bytes.length).to_vec();
+            ffi::xcw_native_free_bytes(bytes);
+            Ok(data)
+        }
+    }
+
+    pub fn screen_mask_png(&self, udid: &str) -> Result<Vec<u8>, AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            let bytes = ffi::xcw_native_render_screen_mask_png(udid.as_ptr(), &mut error);
             if bytes.data.is_null() {
                 return Err(
                     take_error(error).unwrap_or_else(|| AppError::native("Unknown native error."))
