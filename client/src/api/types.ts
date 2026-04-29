@@ -81,7 +81,14 @@ export interface AccessibilityNode {
   role?: string | null;
   role_description?: string | null;
   scroll?: Record<string, unknown> | null;
-  source?: "native-ax" | "in-app-inspector" | "nativescript" | string | null;
+  source?:
+    | "native-ax"
+    | "in-app-inspector"
+    | "nativescript"
+    | "react-native"
+    | "swiftui"
+    | string
+    | null;
   sourceColumn?: number | null;
   sourceFile?: string | null;
   sourceLine?: number | null;
@@ -102,7 +109,8 @@ export type AccessibilitySource =
   | "native-ax"
   | "in-app-inspector"
   | "nativescript"
-  | "react-native";
+  | "react-native"
+  | "swiftui";
 export type AccessibilitySourcePreference = AccessibilitySource | "auto";
 
 export interface AccessibilityTreeResponse {

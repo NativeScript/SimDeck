@@ -12,11 +12,11 @@ It reports anything the app publishes through the accessibility tree:
 
 It does **not** see:
 
-- SwiftUI value-tree internals.
+- SwiftUI value-tree internals unless the app links the Swift agent and attaches the SwiftUI root publisher.
 - NativeScript logical tree nodes.
 - UIView properties that aren't part of the accessibility surface.
 
-For those, you need to link the [Swift in-app agent](/inspector/swift) or use the [NativeScript runtime inspector](/inspector/nativescript).
+For those, you need to link the [Swift in-app agent](/inspector/swift), attach the SwiftUI root publisher, or use the [NativeScript runtime inspector](/inspector/nativescript).
 
 ## When AX is the right call
 

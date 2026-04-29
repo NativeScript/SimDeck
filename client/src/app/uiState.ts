@@ -28,6 +28,7 @@ export const ACCESSIBILITY_SOURCE_STORAGE_KEY = "xcw-hierarchy-source";
 const ACCESSIBILITY_SOURCE_ORDER: AccessibilitySource[] = [
   "nativescript",
   "react-native",
+  "swiftui",
   "in-app-inspector",
   "native-ax",
 ];
@@ -115,6 +116,7 @@ export function isAccessibilitySource(
   return (
     value === "nativescript" ||
     value === "react-native" ||
+    value === "swiftui" ||
     value === "in-app-inspector" ||
     value === "native-ax"
   );

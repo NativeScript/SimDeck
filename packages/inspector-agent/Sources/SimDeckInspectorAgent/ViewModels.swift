@@ -53,6 +53,35 @@ public struct InspectorSwiftUIInfo: Codable, Equatable {
     public var tag: String?
     public var tagId: String?
     public var metadata: [String: String]
+    public var isViewTreeNode: Bool?
+    public var valueType: String?
+    public var bodyType: String?
+    public var path: String?
+    public var modifiers: [String]?
+
+    public init(
+        isHost: Bool,
+        isProbe: Bool,
+        tag: String? = nil,
+        tagId: String? = nil,
+        metadata: [String: String] = [:],
+        isViewTreeNode: Bool? = nil,
+        valueType: String? = nil,
+        bodyType: String? = nil,
+        path: String? = nil,
+        modifiers: [String]? = nil
+    ) {
+        self.isHost = isHost
+        self.isProbe = isProbe
+        self.tag = tag
+        self.tagId = tagId
+        self.metadata = metadata
+        self.isViewTreeNode = isViewTreeNode
+        self.valueType = valueType
+        self.bodyType = bodyType
+        self.path = path
+        self.modifiers = modifiers
+    }
 }
 
 public struct InspectorScrollInfo: Codable, Equatable {

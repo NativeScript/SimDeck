@@ -426,6 +426,12 @@
   color: color-mix(in srgb, #61dafb 78%, var(--text));
 }
 
+.hierarchy-source-pill.source-swiftui {
+  border-color: color-mix(in srgb, #ff6b9d 50%, var(--border));
+  background: color-mix(in srgb, #ff6b9d 14%, transparent);
+  color: color-mix(in srgb, #ff6b9d 82%, var(--text));
+}
+
 .hierarchy-source-pill.source-native-ax {
   border-color: color-mix(in srgb, #d7ba7d 55%, var(--border));
   background: color-mix(in srgb, #d7ba7d 13%, transparent);

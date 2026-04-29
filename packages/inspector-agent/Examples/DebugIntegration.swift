@@ -18,6 +18,7 @@ struct TaggedSwiftUIExample: View {
                 .simDeckInspectorTag("pay-button", id: "checkout.pay")
         }
         .simDeckInspectorTag("checkout-screen", id: "checkout.screen")
+        .simDeckPublishSwiftUIViewTree("TaggedSwiftUIExample", id: "checkout.screen")
     }
 }
 #endif
