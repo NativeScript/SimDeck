@@ -7,44 +7,40 @@ OUTPUT="$BUILD_DIR/simdeck"
 OUTPUT_BIN="$BUILD_DIR/simdeck-bin"
 MANIFEST_PATH="$ROOT_DIR/server/Cargo.toml"
 SERVER_TARGET_DIR="$ROOT_DIR/server/target"
-SERVER_BIN="$SERVER_TARGET_DIR/release/simdeck-server"
+
+# SimDeck depends on AArch64 inline asm in cli/*.m and Apple Silicon-only
+# private CoreSimulator behavior, so the binary is arm64-only by design.
+# Optionally pin the build to an explicit Rust target triple via
+# SIMDECK_BUILD_TARGET (the release workflow uses aarch64-apple-darwin); when
+# unset we use the host triple so local dev on Apple Silicon stays fast.
 
 mkdir -p "$BUILD_DIR"
 
 TMP_OUTPUT_BIN="$OUTPUT_BIN.tmp.$$"
 trap 'rm -f "$TMP_OUTPUT_BIN"' EXIT
 
-if [[ "${SIMDECK_BUILD_UNIVERSAL:-0}" == "1" ]]; then
-  if ! command -v lipo >/dev/null 2>&1; then
-    echo "SIMDECK_BUILD_UNIVERSAL=1 requires Apple lipo (Xcode Command Line Tools)." >&2
-    exit 1
+if [[ -n "${SIMDECK_BUILD_TARGET:-}" ]]; then
+  TARGET="$SIMDECK_BUILD_TARGET"
+
+  if ! rustup target list --installed | grep -qx "$TARGET"; then
+    echo "Installing missing Rust target: $TARGET"
+    rustup target add "$TARGET"
   fi
 
-  for target in aarch64-apple-darwin x86_64-apple-darwin; do
-    if ! rustup target list --installed | grep -qx "$target"; then
-      echo "Installing missing Rust target: $target"
-      rustup target add "$target"
-    fi
-  done
-
-  cargo build --release --manifest-path "$MANIFEST_PATH" --target aarch64-apple-darwin
-  cargo build --release --manifest-path "$MANIFEST_PATH" --target x86_64-apple-darwin
-
-  lipo -create \
-    "$SERVER_TARGET_DIR/aarch64-apple-darwin/release/simdeck-server" \
-    "$SERVER_TARGET_DIR/x86_64-apple-darwin/release/simdeck-server" \
-    -output "$TMP_OUTPUT_BIN"
-
-  echo "Universal binary archs:"
-  lipo -info "$TMP_OUTPUT_BIN"
+  cargo build --release --manifest-path "$MANIFEST_PATH" --target "$TARGET"
+  SERVER_BIN="$SERVER_TARGET_DIR/$TARGET/release/simdeck-server"
 else
   cargo build --release --manifest-path "$MANIFEST_PATH"
-  cp "$SERVER_BIN" "$TMP_OUTPUT_BIN"
+  SERVER_BIN="$SERVER_TARGET_DIR/release/simdeck-server"
 fi
 
+cp "$SERVER_BIN" "$TMP_OUTPUT_BIN"
 chmod +x "$TMP_OUTPUT_BIN"
 mv -f "$TMP_OUTPUT_BIN" "$OUTPUT_BIN"
 trap - EXIT
+
+echo "Built $OUTPUT_BIN"
+file "$OUTPUT_BIN"
 
 cat > "$OUTPUT" <<EOF
 #!/usr/bin/env zsh
