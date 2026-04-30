@@ -333,6 +333,17 @@ impl NativeBridge {
         }
     }
 
+    pub fn open_app_switcher(&self, udid: &str) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_open_app_switcher(udid.as_ptr(), &mut error),
+                error,
+            )
+        }
+    }
+
     pub fn press_button(&self, udid: &str, button: &str, duration_ms: u32) -> Result<(), AppError> {
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
         let button = CString::new(button).map_err(|e| AppError::bad_request(e.to_string()))?;

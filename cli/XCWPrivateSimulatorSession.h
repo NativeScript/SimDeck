@@ -49,6 +49,7 @@ typedef void (^XCWPrivateSimulatorEncodedFrameHandler)(NSData *sampleData,
               error:(NSError * _Nullable * _Nullable)error;
 
 - (BOOL)pressHomeButton:(NSError * _Nullable * _Nullable)error;
+- (BOOL)openAppSwitcher:(NSError * _Nullable * _Nullable)error;
 - (BOOL)rotateRight:(NSError * _Nullable * _Nullable)error;
 - (BOOL)rotateLeft:(NSError * _Nullable * _Nullable)error;
 - (void)disconnect;

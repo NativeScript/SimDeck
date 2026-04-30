@@ -502,6 +502,22 @@ bool xcw_native_press_home(const char *udid, char **error_message) {
     }
 }
 
+bool xcw_native_open_app_switcher(const char *udid, char **error_message) {
+    @autoreleasepool {
+        DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
+        if (bridge == nil) {
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [bridge openAppSwitcher:&error];
+        [bridge disconnect];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
 bool xcw_native_press_button(const char *udid, const char *button_name, uint32_t duration_ms, char **error_message) {
     @autoreleasepool {
         DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
@@ -721,6 +737,17 @@ bool xcw_native_session_press_home(void *handle, char **error_message) {
     @autoreleasepool {
         NSError *error = nil;
         BOOL ok = [XCWNativeSessionFromHandle(handle) pressHome:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_session_open_app_switcher(void *handle, char **error_message) {
+    @autoreleasepool {
+        NSError *error = nil;
+        BOOL ok = [XCWNativeSessionFromHandle(handle) openAppSwitcher:&error];
         if (!ok) {
             XCWSetErrorMessage(error_message, error);
         }

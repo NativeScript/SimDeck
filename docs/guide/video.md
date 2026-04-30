@@ -32,6 +32,25 @@ matters more than maximum smoothness.
 
 The chosen codec is reported to clients in the JSON `videoCodec` field on `GET /api/health`.
 
+## Remote WebRTC ICE
+
+By default SimDeck advertises Google's public STUN server to both the Rust
+WebRTC peer and the browser. For remote browsers, especially Safari connecting
+to a GitHub Actions runner, provide a TURN server and force relay candidates:
+
+```sh
+SIMDECK_WEBRTC_ICE_SERVERS=turns:turn.example.com:5349?transport=tcp \
+SIMDECK_WEBRTC_ICE_USERNAME=simdeck \
+SIMDECK_WEBRTC_ICE_CREDENTIAL=secret \
+SIMDECK_WEBRTC_ICE_TRANSPORT_POLICY=relay \
+simdeck daemon start --video-codec h264-software --low-latency
+```
+
+The browser reads these settings from `GET /api/health` before creating its
+peer connection, so the local and remote peers use the same ICE configuration.
+Use `SIMDECK_WEBRTC_ICE_TRANSPORT_POLICY=all` or leave it unset for local LAN
+and localhost sessions.
+
 ## Keyframe handshake
 
 When a browser connects through `/api/simulators/{udid}/webrtc/offer`:

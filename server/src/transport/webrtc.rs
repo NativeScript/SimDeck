@@ -19,10 +19,12 @@ use webrtc::interceptor::registry::Registry;
 use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
+use webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::{
     RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
 };
+use webrtc::rtp_transceiver::RTCPFeedback;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 
@@ -56,6 +58,16 @@ pub struct WebRtcAnswerPayload {
     pub kind: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientIceServer {
+    pub urls: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+}
+
 pub async fn create_answer(
     state: AppState,
     udid: String,
@@ -79,13 +91,14 @@ pub async fn create_answer(
     }
     session.request_keyframe();
     info!(
-        "WebRTC offer for {udid}: remote_candidates={} remote_candidate_types={} ice_servers={}",
+        "WebRTC offer for {udid}: remote_candidates={} remote_candidate_types={} ice_servers={} ice_transport_policy={}",
         count_sdp_candidates(&payload.sdp),
         summarize_sdp_candidate_types(&payload.sdp),
         std::env::var("SIMDECK_WEBRTC_ICE_SERVERS")
             .ok()
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| DEFAULT_STUN_URL.to_owned())
+            .unwrap_or_else(|| DEFAULT_STUN_URL.to_owned()),
+        ice_transport_policy_label()
     );
 
     let first_frame = session
@@ -113,7 +126,7 @@ pub async fn create_answer(
                     clock_rate: 90_000,
                     channels: 0,
                     sdp_fmtp_line: h264_fmtp_line.clone(),
-                    rtcp_feedback: vec![],
+                    rtcp_feedback: h264_rtcp_feedback(),
                 },
                 payload_type: 96,
                 ..Default::default()
@@ -132,6 +145,7 @@ pub async fn create_answer(
     let peer_connection = Arc::new(
         api.new_peer_connection(RTCConfiguration {
             ice_servers: ice_servers(),
+            ice_transport_policy: ice_transport_policy(),
             ..Default::default()
         })
         .await
@@ -146,7 +160,7 @@ pub async fn create_answer(
             clock_rate: 90_000,
             channels: 0,
             sdp_fmtp_line: h264_fmtp_line,
-            rtcp_feedback: vec![],
+            rtcp_feedback: h264_rtcp_feedback(),
         },
         "simdeck-video".to_owned(),
         "simdeck".to_owned(),
@@ -366,6 +380,31 @@ fn h264_sdp_fmtp_line(codec: &str) -> String {
     format!("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id={profile_level_id}")
 }
 
+fn h264_rtcp_feedback() -> Vec<RTCPFeedback> {
+    vec![
+        RTCPFeedback {
+            typ: "goog-remb".to_owned(),
+            parameter: String::new(),
+        },
+        RTCPFeedback {
+            typ: "transport-cc".to_owned(),
+            parameter: String::new(),
+        },
+        RTCPFeedback {
+            typ: "ccm".to_owned(),
+            parameter: "fir".to_owned(),
+        },
+        RTCPFeedback {
+            typ: "nack".to_owned(),
+            parameter: String::new(),
+        },
+        RTCPFeedback {
+            typ: "nack".to_owned(),
+            parameter: "pli".to_owned(),
+        },
+    ]
+}
+
 fn register_webrtc_media_stream(udid: &str) -> (broadcast::Sender<()>, broadcast::Receiver<()>) {
     let (tx, rx) = broadcast::channel(1);
     let streams = WEBRTC_MEDIA_STREAMS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -415,7 +454,7 @@ pub fn has_media_stream(udid: &str) -> bool {
     })
 }
 
-fn ice_servers() -> Vec<RTCIceServer> {
+pub fn client_ice_servers() -> Vec<ClientIceServer> {
     let mut urls = std::env::var("SIMDECK_WEBRTC_ICE_SERVERS")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -428,10 +467,48 @@ fn ice_servers() -> Vec<RTCIceServer> {
     if urls.is_empty() {
         urls.push(DEFAULT_STUN_URL.to_owned());
     }
-    vec![RTCIceServer {
+    let username = std::env::var("SIMDECK_WEBRTC_ICE_USERNAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let credential = std::env::var("SIMDECK_WEBRTC_ICE_CREDENTIAL")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    vec![ClientIceServer {
         urls,
-        ..Default::default()
+        username,
+        credential,
     }]
+}
+
+pub fn ice_transport_policy_label() -> String {
+    match std::env::var("SIMDECK_WEBRTC_ICE_TRANSPORT_POLICY")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("relay") => "relay".to_owned(),
+        _ => "all".to_owned(),
+    }
+}
+
+fn ice_servers() -> Vec<RTCIceServer> {
+    client_ice_servers()
+        .into_iter()
+        .map(|server| RTCIceServer {
+            urls: server.urls,
+            username: server.username.unwrap_or_default(),
+            credential: server.credential.unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn ice_transport_policy() -> RTCIceTransportPolicy {
+    match ice_transport_policy_label().as_str() {
+        "relay" => RTCIceTransportPolicy::Relay,
+        _ => RTCIceTransportPolicy::All,
+    }
 }
 
 struct WebRtcMediaStream {

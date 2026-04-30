@@ -34,6 +34,11 @@ The browser uses WebRTC H.264 video for both hardware and software encoders.
 Add `--low-latency` on less capable runners to cap software H.264 at 15 fps,
 drop stale pending frames more aggressively, and cap the longest edge at 1170 px
 before latency piles up.
+For remote browsers where Safari stalls but Chrome works, run the daemon with a
+TURN server and relay-only ICE:
+`SIMDECK_WEBRTC_ICE_SERVERS=turns:turn.example.com:5349?transport=tcp`,
+`SIMDECK_WEBRTC_ICE_USERNAME`, `SIMDECK_WEBRTC_ICE_CREDENTIAL`, and
+`SIMDECK_WEBRTC_ICE_TRANSPORT_POLICY=relay`.
 
 The local viewer gets the API token automatically. LAN browsers pair with the printed code before receiving the API cookie. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
 

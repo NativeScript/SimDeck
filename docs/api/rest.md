@@ -23,11 +23,16 @@ Returns server health and the active video encoder mode.
   "httpPort": 4310,
   "timestamp": 1714094761.234,
   "videoCodec": "h264-software",
-  "lowLatency": false
+  "lowLatency": false,
+  "webRtc": {
+    "iceServers": [{ "urls": ["stun:stun.l.google.com:19302"] }],
+    "iceTransportPolicy": "all"
+  }
 }
 ```
 
-The browser client polls this endpoint at startup and again after a long disconnect to detect server restarts.
+The browser client polls this endpoint at startup to detect server restarts and
+to mirror the daemon's WebRTC ICE configuration.
 
 ### `GET /api/metrics`
 
@@ -259,7 +264,7 @@ Presses the home button:
 
 ### `POST /api/simulators/{udid}/app-switcher`
 
-Double-presses the home button to invoke the app switcher.
+Invokes the app switcher as one server-side native action.
 
 ### `POST /api/simulators/{udid}/rotate-left`
 

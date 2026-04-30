@@ -61,6 +61,7 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
                error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendKey(keyCode:down:));
 
 - (BOOL)pressHomeButton:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(pressHomeButton());
+- (BOOL)openAppSwitcher:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(openAppSwitcher());
 - (BOOL)pressHardwareButtonNamed:(NSString *)buttonName
                        durationMs:(NSUInteger)durationMs
                             error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(pressHardwareButton(named:durationMs:));

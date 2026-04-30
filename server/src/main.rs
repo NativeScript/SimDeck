@@ -1884,9 +1884,7 @@ fn main() -> anyhow::Result<()> {
             if let Some(server_url) = service_url.as_deref() {
                 service_post_ok(server_url, &udid, "app-switcher", &Value::Null)?;
             } else {
-                bridge.press_home(&udid)?;
-                std::thread::sleep(Duration::from_millis(140));
-                bridge.press_home(&udid)?;
+                bridge.open_app_switcher(&udid)?;
             }
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "app-switcher" }),
