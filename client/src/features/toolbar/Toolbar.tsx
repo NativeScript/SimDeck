@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
 
 import type { SimulatorMetadata, VideoCodecMode } from "../../api/types";
 import type { StreamTransportMode } from "../stream/streamWorkerClient";
@@ -73,6 +73,25 @@ export function Toolbar({
   touchOverlayVisible,
   videoCodec,
 }: ToolbarProps) {
+  const [errorCopied, setErrorCopied] = useState(false);
+
+  useEffect(() => {
+    setErrorCopied(false);
+  }, [error]);
+
+  async function copyError() {
+    if (!error) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(error);
+      setErrorCopied(true);
+      window.setTimeout(() => setErrorCopied(false), 1200);
+    } catch {
+      setErrorCopied(false);
+    }
+  }
+
   return (
     <header className="toolbar">
       <div className="toolbar-left">
@@ -205,7 +224,16 @@ export function Toolbar({
             </button>
           </div>
         ) : null}
-        {error ? <span className="error-msg">{error}</span> : null}
+        {error ? (
+          <button
+            className={`error-msg ${errorCopied ? "copied" : ""}`}
+            onClick={copyError}
+            title={errorCopied ? "Copied" : "Copy error"}
+            type="button"
+          >
+            {errorCopied ? "Copied" : error}
+          </button>
+        ) : null}
       </div>
     </header>
   );

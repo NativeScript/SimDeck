@@ -1380,6 +1380,11 @@
 }
 
 .error-msg {
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
   color: var(--error);
   font-size: 11px;
   white-space: nowrap;
@@ -1387,6 +1392,15 @@
   text-overflow: ellipsis;
   flex-shrink: 0;
   max-width: 220px;
+}
+
+.error-msg:hover {
+  border-color: color-mix(in srgb, var(--error) 35%, transparent);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+}
+
+.error-msg.copied {
+  color: var(--text);
 }
 
 .muted {
