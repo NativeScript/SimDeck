@@ -39,9 +39,7 @@ export interface StreamRuntimeInfo {
   gpuVendor: string;
   renderBackend: string;
   streamBackend: string;
-  webCodecs: boolean;
   webGL2: boolean;
-  webTransport: boolean;
 }
 
 export type StreamConnectionState =

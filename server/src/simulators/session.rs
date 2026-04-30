@@ -14,7 +14,7 @@ use tokio::task;
 use tokio::time::{timeout, Instant};
 use tracing::debug;
 
-const FRAME_BROADCAST_CAPACITY: usize = 32;
+const FRAME_BROADCAST_CAPACITY: usize = 1;
 const MIN_REFRESH_INTERVAL_MS: u64 = 16;
 const MIN_KEYFRAME_INTERVAL_MS: u64 = 250;
 
@@ -166,24 +166,6 @@ impl SimulatorSession {
             .keyframe_requests
             .fetch_add(1, Ordering::Relaxed);
         self.inner.native.request_keyframe();
-    }
-
-    pub fn reconfigure_video_codec(&self) -> Result<(), AppError> {
-        *self.inner.latest_keyframe.write().unwrap() = None;
-        self.inner.native.reconfigure_video_encoder()?;
-        self.request_keyframe();
-        Ok(())
-    }
-
-    pub async fn reconfigure_video_codec_async(&self) -> Result<(), AppError> {
-        let session = self.clone();
-        task::spawn_blocking(move || session.reconfigure_video_codec())
-            .await
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "Failed to join codec reconfiguration task: {error}"
-                ))
-            })?
     }
 
     pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {

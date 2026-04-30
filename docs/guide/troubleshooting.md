@@ -78,20 +78,17 @@ sudo xcode-select -s /Applications/Xcode.app
 
 The encoder did not produce a keyframe within 3 seconds. The most common causes:
 
-- **VideoToolbox is busy.** macOS screen recording can starve the HEVC encoder. Switch to software H.264:
+- **VideoToolbox is busy.** macOS screen recording can starve the hardware H.264 encoder. Switch to software H.264:
 
   ```sh
   simdeck daemon stop
   simdeck daemon start --video-codec h264-software
   ```
 
-  The bundled browser client selects the WebRTC media transport automatically
-  for software H.264 after reading `/api/health`.
-
-  On virtualized CI Macs where hardware H.264/HEVC is unavailable, keep
+  On virtualized CI Macs where hardware H.264 is unavailable, keep
   `h264-software`. If the stream still falls behind, restart with
-  `--video-codec h264-software --low-latency`; that profile caps at 45 fps,
-  drops stale pending frames, and reduces resolution slightly before backlog
+  `--video-codec h264-software --low-latency`; that profile caps at 30 fps,
+  drops stale pending frames, and caps the longest edge at 1170 pixels before backlog
   turns into visible stream delay.
 
 - **The Simulator window is minimised or off-screen.** The private display bridge captures from a headless context, so this is rare, but if you see it after waking from sleep, shut the simulator down and boot it again.
@@ -102,7 +99,6 @@ The encoder did not produce a keyframe within 3 seconds. The most common causes:
 The transport hub forces a keyframe whenever a client falls behind. If `frames_dropped_server` on `/api/metrics` climbs steadily, the bottleneck is between the encoder and the decoder.
 
 - Bring the client closer (LAN with low latency vs Wi-Fi mesh hops).
-- Switch to `h264` instead of `hevc` if the client decoder is slow.
 - Check `client_streams` in `/api/metrics`. If `decodedFps` is much lower than `packetFps`, the client decoder is the bottleneck.
 
 ## Inspector returns AX instead of NativeScript / UIKit

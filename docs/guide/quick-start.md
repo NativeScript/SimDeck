@@ -22,7 +22,7 @@ The command prints local and LAN URLs:
 q or ^C to stop server
 ```
 
-This foreground daemon is scoped to the current workspace and exits when the command exits, when you press `q`, or when you press Ctrl-C. Local browsers open without a prompt. LAN browsers pair once with the printed code, then receive the API cookie. On LAN HTTP, browsers that cannot use WebTransport fall back to WebRTC. Use `simdeck ui --open` or `simdeck daemon start` when you want a reusable background daemon.
+This foreground daemon is scoped to the current workspace and exits when the command exits, when you press `q`, or when you press Ctrl-C. Local browsers open without a prompt. LAN browsers pair once with the printed code, then receive the API cookie. Use `simdeck ui --open` or `simdeck daemon start` when you want a reusable background daemon.
 
 For shorthand background lifecycle commands:
 
@@ -32,10 +32,9 @@ simdeck -k  # kill background daemon
 simdeck -r  # restart background daemon
 ```
 
-Two listeners run inside the daemon:
+One HTTP listener runs inside the daemon:
 
-- **HTTP** on `--port` (default `4310`) for the REST API and the static React client.
-- **WebTransport** on `port + 1` (default `4311`) for binary video frames. The server generates a self-signed certificate per session and advertises its hash through `GET /api/health`.
+- **HTTP** on `--port` (default `4310`) for the REST API, static React client, inspector WebSocket, and WebRTC offer endpoint.
 
 ## 2. Pick A Simulator
 
@@ -80,12 +79,12 @@ See the full [CLI Reference](/cli/commands) for every command and flag.
 
 When you opened the UI:
 
-1. The browser fetched `/api/health` and learned where the WebTransport endpoint lives.
-2. It opened a WebTransport session at `wss://127.0.0.1:4311/wt/simulators/<udid>` and pinned the self-signed certificate by hash.
-3. The Rust transport hub asked the native bridge for a fresh keyframe and started forwarding binary video packets.
+1. The browser fetched `/api/health` and confirmed the active H.264 encoder mode.
+2. It posted a WebRTC SDP offer to `/api/simulators/<udid>/webrtc/offer`.
+3. The Rust transport hub asked the native bridge for a fresh keyframe and started writing H.264 samples to the WebRTC video track.
 4. Touch and keyboard events round-trip through `POST /api/simulators/<udid>/touch` and `/key`, which the native bridge replays through HID.
 
-You can read more about the layers involved in [Architecture](/guide/architecture) and [WebTransport](/api/webtransport).
+You can read more about the layers involved in [Architecture](/guide/architecture) and [Video Pipeline](/guide/video).
 
 ## Common follow-ups
 

@@ -15,13 +15,11 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
 ## Current Architecture
 
 - `server/src/main.rs`
-  Owns the CLI entrypoint, Rust subcommands, HTTP server, static asset serving, and WebTransport startup.
+  Owns the CLI entrypoint, Rust subcommands, HTTP server, and static asset serving.
 - `server/src/api/routes.rs`
   Defines REST routes for simulator control, health, metrics, and chrome assets.
-- `server/src/transport/webtransport.rs`
-  Exposes one WebTransport session path per simulator and streams binary video packets.
 - `server/src/transport/webrtc.rs`
-  Exposes an experimental H.264 WebRTC offer/answer endpoint for browser-to-runner preview tunnels.
+  Exposes the H.264 WebRTC offer/answer endpoint for browser live video.
 - `server/src/simulators/registry.rs`
   Tracks Rust-side simulator session state and lazy native attachment by UDID.
 - `cli/XCWSimctl.*`
@@ -31,7 +29,7 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
 - `cli/XCWAccessibilityBridge.*`
   Owns private CoreSimulator accessibility snapshots through `AccessibilityPlatformTranslation`.
 - `cli/XCWPrivateSimulatorSession.*`
-  Owns one private display bridge per booted simulator plus selectable HEVC/H.264 encode.
+  Owns one private display bridge per booted simulator plus selectable hardware/software H.264 encode.
 - `cli/native/XCWNativeBridge.*`
   Narrow C ABI for simulator control, chrome rendering, and native frame callbacks into Rust.
 - `cli/native/XCWNativeSession.*`
@@ -145,10 +143,10 @@ Useful direct commands:
 
 - If you add an API route, add the matching client affordance or document why it stays CLI-only.
 - If you change the CLI invocation shape, update `README.md` and `skills/simdeck/SKILL.md` in the same pass.
-- If you change a CLI flag, REST route, packet format, or inspector method, update the matching page under `docs/` in the same pass.
+- If you change a CLI flag, REST route, stream contract, or inspector method, update the matching page under `docs/` in the same pass.
 - If you expand the private framework bridge, document the Xcode/runtime assumptions here.
 - If a feature depends on a booted simulator, fail with a clear JSON error instead of silently returning an empty asset.
-- Do not reintroduce legacy `/stream.h264` handling. The supported live paths are Rust-managed WebTransport and the experimental WebRTC offer endpoint.
+- Do not reintroduce legacy `/stream.h264` handling. The supported live path is the Rust-managed WebRTC H.264 offer endpoint.
 
 ## Near-Term Roadmap
 

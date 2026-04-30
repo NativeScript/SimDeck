@@ -1,26 +1,20 @@
 # Video Pipeline
 
-SimDeck streams the iOS Simulator over WebTransport using a binary frame protocol. It also has an experimental WebRTC media path for browser-native video playout. This page walks through the encoder choices, the keyframe handshake, and the metrics you can use to tune them.
+SimDeck streams the iOS Simulator over WebRTC using browser-native H.264 video playout. This page walks through the encoder choices, the keyframe handshake, and the metrics you can use to tune them.
 
 ## Codec selection
 
-The server can encode the simulator display in three modes, picked at startup with `--video-codec` or changed from the browser simulator menu:
+The server can encode the simulator display in two modes, picked at startup with `--video-codec`:
 
-| Value                       | Encoder                         | When to use it                                                                                              |
-| --------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `hevc`                      | Hardware HEVC via VideoToolbox  | Best quality and bandwidth on modern Apple Silicon when hardware encode is available.                       |
-| `h264`                      | Hardware H.264 via VideoToolbox | Use when a downstream client cannot decode HEVC and hardware H.264 is available.                            |
-| `h264-software` _(default)_ | Software H.264 via VideoToolbox | Compatibility fallback when hardware encode is unavailable. The browser automatically selects WebRTC media. |
+| Value                       | Encoder                         | When to use it                                                 |
+| --------------------------- | ------------------------------- | -------------------------------------------------------------- |
+| `h264`                      | Hardware H.264 via VideoToolbox | Best local performance when the hardware encoder is available. |
+| `h264-software` _(default)_ | Software H.264 via VideoToolbox | Compatibility fallback when hardware encode is unavailable.    |
 
-You can switch from the browser menu next to the simulator list. That updates
-the process codec setting, waits for active streams on the selected simulator to
-drain, reconfigures the native encoder, and reconnects the stream. Posting the
-already-active codec is a no-op. You can also restart the server with a
-different flag:
+Restart the daemon to change encoder mode:
 
 ```sh
-simdeck daemon stop
-simdeck daemon start --video-codec h264-software
+simdeck daemon restart --video-codec h264-software
 ```
 
 For slower runners, add `--low-latency` with software H.264:
@@ -29,24 +23,21 @@ For slower runners, add `--low-latency` with software H.264:
 simdeck daemon start --video-codec h264-software --low-latency
 ```
 
-Low-latency mode caps software H.264 at 45 fps, keeps a single in-flight frame,
-scales the longest edge to 1472 pixels, and backs off FPS more aggressively when
+Low-latency mode caps software H.264 at 30 fps, keeps a single in-flight frame,
+scales the longest edge to 1170 pixels, and backs off FPS more aggressively when
 encode pressure rises. It is CLI-only because it is meant for less capable
 machines where freshness matters more than maximum smoothness.
 
-The chosen codec is reported to clients in two places:
-
-- The JSON `videoCodec` field on `GET /api/health`.
-- The `codec` field of the [`ControlHello`](/api/webtransport#control-hello) message that the WebTransport hub sends as soon as a session attaches.
+The chosen codec is reported to clients in the JSON `videoCodec` field on `GET /api/health`.
 
 ## Keyframe handshake
 
-When a browser opens a WebTransport session at `/wt/simulators/{udid}`:
+When a browser connects through `/api/simulators/{udid}/webrtc/offer`:
 
 1. The server ensures the `SimulatorSession` is started and asks the encoder for an immediate refresh.
 2. It waits up to 3 seconds for the next keyframe.
-3. As soon as a keyframe arrives, it writes a JSON `ControlHello` on a control unidirectional stream and the keyframe itself on a video unidirectional stream.
-4. Subsequent frames stream until the client disconnects.
+3. As soon as a keyframe arrives, it answers the browser's SDP offer and starts writing H.264 samples to a WebRTC video track.
+4. Subsequent frames stream until the peer connection closes.
 
 If the encoder cannot deliver a keyframe within 3 seconds, the server tears the session down with a clear error so the client can retry. This usually happens only when CoreSimulator is itself stuck.
 
@@ -58,17 +49,16 @@ The transport hub uses a tokio broadcast channel to fan out frames. If a slow cl
 2. Sets a "waiting for keyframe" flag and skips non-keyframes until a fresh one arrives.
 3. Calls `request_refresh()` on the session so the encoder forces a keyframe.
 
-Discontinuities are signalled to the client through the `FLAG_DISCONTINUITY` bit in the packet header. The client reacts by flushing its decoder queue and waiting for the next keyframe.
+The WebRTC path favors freshness: stale frames are dropped and the sender requests a new keyframe after discontinuities.
 
 ## Picking a codec
 
 A few practical guidelines:
 
 - **Start on the default for compatibility.** `h264-software` works without requiring the hardware encoder, but full-resolution latency can be high.
-- **Switch to `hevc` on local Apple Silicon when hardware encode is available.** HEVC delivers the best quality-per-bit and the lowest CPU on M-series Macs.
-- **Switch to `h264` when a remote client cannot decode HEVC.** Some browsers on older Apple devices are H.264-only.
-- **Switch to `h264-software` when the hardware encoder stalls and you can tolerate extra latency.** macOS screen recording can monopolise the VideoToolbox HEVC encoder. If you see "encoder unavailable" errors in the server log while QuickTime or `screencapture` is active, switch to `h264-software`. The browser automatically selects the WebRTC media transport for software H.264 so Chromium can use native video playout. The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
-- **Use `h264-software --low-latency` on virtualized CI Macs when hardware encode is unavailable.** This profile caps at 45 fps, uses a single pending frame, reduces the longest edge to 1472 pixels, and backs off before software encode latency turns into seconds of stream delay.
+- **Switch to `h264` on local Apple Silicon when hardware encode is available.** Hardware H.264 gives the smoothest local preview with the least CPU.
+- **Switch to `h264-software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
+- **Use `h264-software --low-latency` on virtualized CI Macs when hardware encode is unavailable.** This profile caps at 30 fps, uses a single pending frame, reduces the longest edge to 1170 pixels, and backs off before software encode latency turns into seconds of stream delay.
 
 ## Tuning with metrics
 
@@ -96,7 +86,7 @@ Useful signals:
 | `latest_first_frame_ms` | First-frame latency for the most recent connect. Should be a few hundred ms.      |
 | `frames_dropped_server` | If this climbs while a stream is open, the client cannot keep up.                 |
 | `keyframe_requests`     | Goes up every time the server forces a refresh. Frequent spikes mean rough seeks. |
-| `active_streams`        | Number of WebTransport sessions currently subscribed.                             |
+| `active_streams`        | Number of WebRTC streams currently subscribed.                                    |
 
 Clients can also push their decoder/renderer stats back to the server:
 
@@ -107,7 +97,7 @@ Content-Type: application/json
 {
   "clientId": "browser-ABC",
   "kind": "viewport",
-  "codec": "hevc",
+  "codec": "h264",
   "decodedFps": 59.7,
   "droppedFps": 0.1,
   "latestRenderMs": 6.2

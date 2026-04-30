@@ -8,7 +8,6 @@ use crate::metrics::counters::{ClientStreamStats, Metrics};
 use crate::native::bridge::{LogFilters, NativeBridge};
 use crate::simulators::registry::SessionRegistry;
 use crate::simulators::session::SimulatorSession;
-use crate::transport::packet::PACKET_VERSION;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Path, Query, State};
@@ -30,7 +29,7 @@ use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::task;
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 use tower_http::trace::TraceLayer;
 
 #[derive(Clone)]
@@ -40,7 +39,6 @@ pub struct AppState {
     pub logs: LogRegistry,
     pub inspectors: InspectorHub,
     pub metrics: Arc<Metrics>,
-    pub certificate_hash_hex: String,
 }
 
 #[derive(Deserialize)]
@@ -76,11 +74,6 @@ struct TouchPayload {
     x: f64,
     y: f64,
     phase: String,
-}
-
-#[derive(Deserialize)]
-struct VideoCodecPayload {
-    codec: String,
 }
 
 #[derive(Deserialize)]
@@ -364,7 +357,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/touch", post(send_touch))
         .route("/api/simulators/{udid}/control", get(control_socket))
         .route("/api/simulators/{udid}/webrtc/offer", post(webrtc_offer))
-        .route("/api/simulators/{udid}/video-codec", post(set_video_codec))
         .route(
             "/api/simulators/{udid}/touch-sequence",
             post(send_touch_sequence),
@@ -481,18 +473,9 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
     json(json_value!({
         "ok": true,
         "httpPort": state.config.http_port,
-        "wtPort": state.config.wt_port,
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64(),
         "videoCodec": active_video_codec(&state.config),
-        "lowLatency": state.config.low_latency,
-        "webTransport": {
-            "urlTemplate": auth::tokenized_webtransport_template(&state.config),
-            "certificateHash": {
-                "algorithm": "sha-256",
-                "value": state.certificate_hash_hex,
-            },
-            "packetVersion": PACKET_VERSION,
-        }
+        "lowLatency": state.config.low_latency
     }))
 }
 
@@ -505,7 +488,6 @@ fn active_video_codec(config: &Config) -> String {
 
 fn normalize_video_codec(codec: &str) -> Option<&'static str> {
     match codec.trim().to_ascii_lowercase().as_str() {
-        "hevc" => Some("hevc"),
         "h264" | "h264-hardware" | "avc" => Some("h264"),
         "h264-software" | "software-h264" => Some("h264-software"),
         _ => None,
@@ -731,65 +713,6 @@ async fn refresh_stream(
     }
     session.request_refresh();
     Ok(json(json_value!({ "ok": true })))
-}
-
-async fn set_video_codec(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<VideoCodecPayload>,
-) -> Result<Json<Value>, AppError> {
-    let codec = normalize_video_codec(&payload.codec).ok_or_else(|| {
-        AppError::bad_request("Request body must include codec: hevc, h264, or h264-software.")
-    })?;
-    let current_codec = active_video_codec(&state.config);
-    if current_codec == codec {
-        return Ok(json(json_value!({
-            "ok": true,
-            "changed": false,
-            "videoCodec": codec,
-        })));
-    }
-    wait_for_streams_to_drain(&udid).await?;
-    std::env::set_var("SIMDECK_VIDEO_CODEC", codec);
-    if let Some(session) = state.registry.get(&udid) {
-        if let Err(error) = session.reconfigure_video_codec_async().await {
-            std::env::set_var("SIMDECK_VIDEO_CODEC", current_codec);
-            return Err(error);
-        }
-    }
-    Ok(json(json_value!({
-        "ok": true,
-        "changed": true,
-        "videoCodec": codec,
-    })))
-}
-
-async fn wait_for_streams_to_drain(udid: &str) -> Result<(), AppError> {
-    const DRAIN_ATTEMPTS: usize = 40;
-    const DRAIN_INTERVAL: Duration = Duration::from_millis(100);
-
-    for attempt in 0..DRAIN_ATTEMPTS {
-        if !has_media_stream_for_udid(udid) {
-            return Ok(());
-        }
-        if attempt == 0 {
-            crate::transport::webrtc::cancel_media_stream(udid);
-            crate::transport::webtransport::cancel_media_stream(udid);
-        }
-        sleep(DRAIN_INTERVAL).await;
-    }
-
-    if !has_media_stream_for_udid(udid) {
-        return Ok(());
-    }
-    Err(AppError::conflict(
-        "Timed out waiting for the active stream to close before switching codec.",
-    ))
-}
-
-fn has_media_stream_for_udid(udid: &str) -> bool {
-    crate::transport::webrtc::has_media_stream(udid)
-        || crate::transport::webtransport::has_media_stream(udid)
 }
 
 async fn open_url(

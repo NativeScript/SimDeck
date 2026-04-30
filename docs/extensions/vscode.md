@@ -65,7 +65,7 @@ If none of those resolve, the extension surfaces an error in the output channel 
 
 ## Talking to a remote server
 
-Set `simdeck.serverUrl` to any reachable SimDeck endpoint. The extension is purely a webview shell — it doesn't open WebTransport itself and doesn't ship its own version of the React client. Whatever the daemon serves is what you get.
+Set `simdeck.serverUrl` to any reachable SimDeck endpoint. The extension is purely a webview shell and doesn't ship its own version of the React client. Whatever the daemon serves is what you get.
 
 For [LAN-reachable daemons](/guide/lan-access), point the extension at `http://<advertise-host>:<port>` and disable `autoStartDaemon` so the extension does not start a local project daemon.
 

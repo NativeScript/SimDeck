@@ -1,7 +1,6 @@
 import type { RefObject } from "react";
 
-import type { SimulatorMetadata, VideoCodecMode } from "../../api/types";
-import type { StreamTransportMode } from "../stream/streamWorkerClient";
+import type { SimulatorMetadata } from "../../api/types";
 import { SimulatorRow } from "./SimulatorRow";
 
 interface SimulatorMenuProps {
@@ -11,8 +10,6 @@ interface SimulatorMenuProps {
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
   onChangeSearch: (value: string) => void;
-  onChangeTransportMode: (mode: StreamTransportMode) => void;
-  onChangeVideoCodec: (codec: VideoCodecMode) => void;
   onCloseMenu: () => void;
   onOpenBundlePrompt: () => void;
   onOpenUrlPrompt: () => void;
@@ -21,8 +18,6 @@ interface SimulatorMenuProps {
   search: string;
   selectedSimulator: SimulatorMetadata | null;
   setSelectedUDID: (udid: string) => void;
-  streamTransportMode: StreamTransportMode;
-  videoCodec: VideoCodecMode;
 }
 
 export function SimulatorMenu({
@@ -32,8 +27,6 @@ export function SimulatorMenu({
   menuOpen,
   menuRef,
   onChangeSearch,
-  onChangeTransportMode,
-  onChangeVideoCodec,
   onCloseMenu,
   onOpenBundlePrompt,
   onOpenUrlPrompt,
@@ -42,20 +35,7 @@ export function SimulatorMenu({
   search,
   selectedSimulator,
   setSelectedUDID,
-  streamTransportMode,
-  videoCodec,
 }: SimulatorMenuProps) {
-  const codecOptions: { label: string; value: VideoCodecMode }[] = [
-    { label: "HEVC", value: "hevc" },
-    { label: "H.264", value: "h264" },
-    { label: "H.264 SW", value: "h264-software" },
-  ];
-  const transportOptions: { label: string; value: StreamTransportMode }[] = [
-    { label: "Auto", value: "auto" },
-    { label: "WebTransport", value: "webtransport" },
-    { label: "WebRTC", value: "webrtc" },
-  ];
-
   return (
     <div className="menu-wrap" ref={menuRef}>
       <button
@@ -109,43 +89,6 @@ export function SimulatorMenu({
               </div>
             </>
           ) : null}
-          <div className="menu-divider" />
-          <div className="menu-section">
-            <div className="menu-section-title">Codec</div>
-            <div className="menu-segment" role="group" aria-label="Codec">
-              {codecOptions.map((option) => (
-                <button
-                  className={`menu-option ${
-                    option.value === videoCodec ? "active" : ""
-                  }`}
-                  disabled={!selectedSimulator}
-                  key={option.value}
-                  onClick={() => onChangeVideoCodec(option.value)}
-                  type="button"
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="menu-section">
-            <div className="menu-section-title">Transport</div>
-            <div className="menu-segment" role="group" aria-label="Transport">
-              {transportOptions.map((option) => (
-                <button
-                  className={`menu-option ${
-                    option.value === streamTransportMode ? "active" : ""
-                  }`}
-                  key={option.value}
-                  onClick={() => onChangeTransportMode(option.value)}
-                  type="button"
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="menu-divider" />
           <div className="menu-actions">
             <button className="menu-action" onClick={onToggleDebug}>
               {debugVisible ? "Hide Debug Info" : "Show Debug Info"}

@@ -35,7 +35,7 @@ view inside the editor.
 
 ## Features
 
-- Local simulator video stream over WebTransport or WebRTC, hardware-encoded in full resolution
+- Local simulator video stream over browser-native WebRTC H.264
 - Full simulator control & inspection using private accessibility APIs
 - CoreSimulator chrome asset rendering for device bezels
 - NativeScript, React Native, UIKit and SwiftUI runtime inspector plugins to view app's view hierarchy live
@@ -77,11 +77,14 @@ Manage the project daemon explicitly when needed:
 
 ```sh
 simdeck daemon start
+simdeck daemon restart
 simdeck daemon status
 simdeck daemon stop
+simdeck daemon killall
 ```
 
-`simdeck daemon` manages the normal per-project warm process.
+`simdeck daemon` manages the normal per-project warm process. `daemon killall`
+stops SimDeck daemons across all workspaces.
 
 Use software H.264's low-latency profile on slower runners where freshness is
 more important than full-resolution smoothness:

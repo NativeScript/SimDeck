@@ -8,12 +8,7 @@ import {
   type FormEvent,
 } from "react";
 
-import {
-  ApiError,
-  accessTokenFromLocation,
-  fetchHealth,
-  pairBrowser,
-} from "../api/client";
+import { ApiError, accessTokenFromLocation, pairBrowser } from "../api/client";
 import {
   bootSimulator,
   dismissKeyboard,
@@ -23,7 +18,6 @@ import {
   pressHome,
   rotateLeft,
   rotateRight,
-  setSimulatorVideoCodec,
   simulatorControlSocketUrl,
   shutdownSimulator,
   toggleAppearance,
@@ -38,18 +32,13 @@ import type {
   ChromeProfile,
   SimulatorMetadata,
   TouchPhase,
-  VideoCodecMode,
 } from "../api/types";
 import { AccessibilityInspector } from "../features/accessibility/AccessibilityInspector";
 import { useKeyboardInput } from "../features/input/useKeyboardInput";
 import { usePointerInput } from "../features/input/usePointerInput";
 import { simulatorRuntimeLabel } from "../features/simulators/simulatorDisplay";
 import { useSimulatorList } from "../features/simulators/useSimulatorList";
-import {
-  initialStreamTransportMode,
-  sendWebRtcControlMessage,
-  type StreamTransportMode,
-} from "../features/stream/streamWorkerClient";
+import { sendWebRtcControlMessage } from "../features/stream/streamWorkerClient";
 import { useLiveStream } from "../features/stream/useLiveStream";
 import { DebugPanel } from "../features/toolbar/DebugPanel";
 import { Toolbar } from "../features/toolbar/Toolbar";
@@ -96,12 +85,6 @@ const REACT_NATIVE_ACCESSIBILITY_REFRESH_MS = 500;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
-const STREAM_TRANSPORT_STORAGE_KEY = "simdeck.streamTransport";
-const VIDEO_CODEC_STORAGE_KEY = "simdeck.videoCodec";
-const CODEC_SWITCH_SETTLE_MS = 180;
-const CODEC_SWITCH_RETRY_MS = 120;
-const CODEC_SWITCH_RETRY_LIMIT = 18;
-
 clearLegacyVolatileUiState();
 
 function buildChromeUrl(udid: string, stamp: number): string {
@@ -179,57 +162,6 @@ type SimulatorTransition = {
   udid: string;
 };
 
-function isVideoCodecMode(value: unknown): value is VideoCodecMode {
-  return value === "hevc" || value === "h264" || value === "h264-software";
-}
-
-function readStoredTransportMode(): StreamTransportMode {
-  if (typeof window === "undefined") {
-    return "auto";
-  }
-  if (new URLSearchParams(window.location.search).has("transport")) {
-    return initialStreamTransportMode();
-  }
-  const stored = window.localStorage.getItem(STREAM_TRANSPORT_STORAGE_KEY);
-  if (stored === "auto" || stored === "webtransport" || stored === "webrtc") {
-    return stored;
-  }
-  return initialStreamTransportMode();
-}
-
-function readStoredVideoCodec(): VideoCodecMode {
-  if (typeof window === "undefined") {
-    return "h264-software";
-  }
-  const stored = window.localStorage.getItem(VIDEO_CODEC_STORAGE_KEY);
-  return isVideoCodecMode(stored) ? stored : "h264-software";
-}
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
-
-async function setSimulatorVideoCodecWhenIdle(
-  udid: string,
-  codec: VideoCodecMode,
-) {
-  let lastError: unknown = null;
-  for (let attempt = 0; attempt < CODEC_SWITCH_RETRY_LIMIT; attempt += 1) {
-    try {
-      return await setSimulatorVideoCodec(udid, codec);
-    } catch (error) {
-      lastError = error;
-      if (!(error instanceof ApiError) || error.status !== 409) {
-        throw error;
-      }
-      await sleep(CODEC_SWITCH_RETRY_MS);
-    }
-  }
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Timed out waiting for the stream to disconnect.");
-}
-
 export function AppShell() {
   const [initialUiState] = useState(readPersistedUiState);
   const [initialSelectedUDID] = useState(
@@ -267,12 +199,6 @@ export function AppShell() {
     initialViewportState.rotationQuarterTurns,
   );
   const [streamStamp, setStreamStamp] = useState(Date.now());
-  const [streamSettingsRevision, setStreamSettingsRevision] = useState(0);
-  const [streamTransportMode, setStreamTransportMode] =
-    useState<StreamTransportMode>(readStoredTransportMode);
-  const [streamPaused, setStreamPaused] = useState(false);
-  const [videoCodec, setVideoCodec] =
-    useState<VideoCodecMode>(readStoredVideoCodec);
   const [viewMode, setViewMode] = useState<ViewMode>(
     initialViewportState.viewMode,
   );
@@ -323,7 +249,6 @@ export function AppShell() {
   const zoomAnimationTimeoutRef = useRef<number>(0);
   const touchIndicatorTimeoutRef = useRef<number>(0);
   const gestureStartZoomRef = useRef(1);
-  const codecSwitchInFlightRef = useRef(false);
   const accessibilityRequestIdRef = useRef(0);
   const accessibilityLoadingRef = useRef(false);
   const controlSocketRef = useRef<{
@@ -406,10 +331,7 @@ export function AppShell() {
     streamCanvasKey,
   } = useLiveStream({
     canvasElement: streamCanvasElement,
-    paused: streamPaused,
     simulator: selectedSimulator,
-    streamRevision: streamSettingsRevision,
-    transportMode: streamTransportMode,
   });
   const shouldRenderChrome =
     selectedSimulator != null && shouldRenderNativeChrome(selectedSimulator);
@@ -467,33 +389,6 @@ export function AppShell() {
       accessibilityPreferredSource,
     );
   }, [accessibilityPreferredSource]);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      STREAM_TRANSPORT_STORAGE_KEY,
-      streamTransportMode,
-    );
-  }, [streamTransportMode]);
-
-  useEffect(() => {
-    window.localStorage.setItem(VIDEO_CODEC_STORAGE_KEY, videoCodec);
-  }, [videoCodec]);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchHealth()
-      .then((health) => {
-        if (!cancelled && isVideoCodecMode(health.videoCodec)) {
-          setVideoCodec(health.videoCodec);
-        }
-      })
-      .catch(() => {
-        // Non-critical: stream setup still fetches health and reports errors.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [streamSettingsRevision]);
 
   useEffect(() => {
     if (simulatorTransition == null) {
@@ -1016,20 +911,6 @@ export function AppShell() {
     }
   }
 
-  useEffect(() => {
-    if (selectedSimulator?.isBooted && streamBackend === "webtransport") {
-      ensureControlSocket(selectedSimulator.udid);
-    } else {
-      closeControlSocket();
-    }
-  }, [
-    closeControlSocket,
-    ensureControlSocket,
-    selectedSimulator?.isBooted,
-    selectedSimulator?.udid,
-    streamBackend,
-  ]);
-
   useEffect(() => closeControlSocket, [closeControlSocket]);
 
   function beginZoomAnimation() {
@@ -1237,47 +1118,6 @@ export function AppShell() {
     );
   }
 
-  function handleSelectTransportMode(mode: StreamTransportMode) {
-    setStreamTransportMode(mode);
-    setStreamSettingsRevision((current) => current + 1);
-    setStreamStamp(Date.now());
-  }
-
-  function handleSelectVideoCodec(codec: VideoCodecMode) {
-    if (!selectedSimulator || codecSwitchInFlightRef.current) {
-      return;
-    }
-    const udid = selectedSimulator.udid;
-    setVideoCodec(codec);
-    void (async () => {
-      codecSwitchInFlightRef.current = true;
-      setStreamPaused(true);
-      closeControlSocket();
-      try {
-        await sleep(CODEC_SWITCH_SETTLE_MS);
-        const ok = await runAction(async () => {
-          const response = await setSimulatorVideoCodecWhenIdle(udid, codec);
-          setVideoCodec(response.videoCodec);
-        }, false);
-        await sleep(CODEC_SWITCH_SETTLE_MS);
-        setStreamSettingsRevision((current) => current + 1);
-        setStreamStamp(Date.now());
-        if (!ok) {
-          void fetchHealth()
-            .then((health) => {
-              if (isVideoCodecMode(health.videoCodec)) {
-                setVideoCodec(health.videoCodec);
-              }
-            })
-            .catch(() => {});
-        }
-      } finally {
-        codecSwitchInFlightRef.current = false;
-        setStreamPaused(false);
-      }
-    })();
-  }
-
   async function submitPairing(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const code = pairingCode.trim();
@@ -1339,7 +1179,6 @@ export function AppShell() {
         isLoading={isLoading}
         menuOpen={menuOpen}
         menuRef={menuRef}
-        onChangeVideoCodec={handleSelectVideoCodec}
         onBoot={() => {
           if (!selectedSimulator) {
             return;
@@ -1433,14 +1272,11 @@ export function AppShell() {
         onToggleTouchOverlay={() =>
           setTouchOverlayVisible((current) => !current)
         }
-        onChangeTransportMode={handleSelectTransportMode}
         search={search}
         selectedSimulator={selectedSimulator}
         selectedSimulatorIdentifier={selectedSimulatorDetail}
         setSelectedUDID={setSelectedUDID}
-        streamTransportMode={streamTransportMode}
         touchOverlayVisible={touchOverlayVisible}
-        videoCodec={videoCodec}
       />
       <SimulatorViewport
         accessibilityHoveredId={accessibilityHoveredId}

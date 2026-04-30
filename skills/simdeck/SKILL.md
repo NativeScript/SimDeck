@@ -18,6 +18,8 @@ simdeck -d
 simdeck -k
 simdeck -r
 simdeck daemon start
+simdeck daemon restart
+simdeck daemon killall
 simdeck ui --open
 npm run build:cli && ./build/simdeck ui --open
 simdeck daemon start --video-codec h264-software
@@ -28,10 +30,9 @@ simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 `simdeck` without a subcommand starts a foreground workspace daemon, prints local and LAN HTTP URLs, prints a six-digit pairing code for LAN browsers, and stops on `q` or Ctrl-C. The optional single argument is a simulator name or UDID to select by default. Use `-d` for detached start, `-k` to kill the background daemon, and `-r` to restart it.
 
 Viewer: `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
-With `--video-codec h264-software`, the browser automatically selects the
-WebRTC media stream so Chromium handles native video playout.
-Add `--low-latency` on less capable runners to cap software H.264 at 45 fps,
-drop stale pending frames more aggressively, and reduce resolution slightly
+The browser uses WebRTC H.264 video for both hardware and software encoders.
+Add `--low-latency` on less capable runners to cap software H.264 at 30 fps,
+drop stale pending frames more aggressively, and cap the longest edge at 1170 px
 before latency piles up.
 
 The local viewer gets the API token automatically. LAN browsers pair with the printed code before receiving the API cookie. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
@@ -206,4 +207,4 @@ Use screenshots for still evidence.
 5. Verify with `waitFor`/`assert`/`query`, not repeated full `describe` dumps.
 6. Batch known flows; keep `describe` as a failure/debug artifact.
 
-Final check: UDID explicit, daemon URL set for fast loops when targeting a specific daemon, selectors/coordinates inspected, timing intentional, complex text uses `--stdin`/`--file`, results verified, CLI/API/packet/inspector changes reflected here and in docs.
+Final check: UDID explicit, daemon URL set for fast loops when targeting a specific daemon, selectors/coordinates inspected, timing intentional, complex text uses `--stdin`/`--file`, results verified, CLI/API/inspector changes reflected here and in docs.

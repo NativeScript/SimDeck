@@ -8,30 +8,29 @@
 
 static const int32_t XCWMaximumEncodedDimension = 1920;
 static const int32_t XCWMaximumSoftwareEncodedDimension = 1600;
-static const int32_t XCWMaximumLowLatencySoftwareEncodedDimension = 1472;
+static const int32_t XCWMaximumLowLatencySoftwareEncodedDimension = 1170;
 static const int32_t XCWTargetRealTimeFrameRate = 60;
 static const int32_t XCWTargetSoftwareFrameRate = 60;
-static const int32_t XCWTargetLowLatencySoftwareFrameRate = 45;
+static const int32_t XCWTargetLowLatencySoftwareFrameRate = 30;
 static const NSUInteger XCWMaximumInFlightFrames = 2;
 static const int32_t XCWMinimumAverageBitRate = 18000000;
 static const int32_t XCWMinimumSoftwareAverageBitRate = 3000000;
-static const int32_t XCWMinimumLowLatencySoftwareAverageBitRate = 2500000;
+static const int32_t XCWMinimumLowLatencySoftwareAverageBitRate = 2000000;
 static const int64_t XCWBitsPerPixelBudget = 10;
 static const int64_t XCWSoftwareBitsPerPixelBudget = 6;
-static const int64_t XCWLowLatencySoftwareBitsPerPixelBudget = 4;
+static const int64_t XCWLowLatencySoftwareBitsPerPixelBudget = 3;
 static const uint64_t XCWSoftwareMinimumFrameIntervalUs = 16667;
 static const uint64_t XCWSoftwareInitialFrameIntervalUs = 16667;
 static const uint64_t XCWSoftwareMaximumFrameIntervalUs = 50000;
 static const uint64_t XCWSoftwareFrameIntervalStepUs = 5556;
 static const NSUInteger XCWSoftwareHealthyFrameWindow = 4;
-static const uint64_t XCWLowLatencySoftwareMinimumFrameIntervalUs = 22222;
-static const uint64_t XCWLowLatencySoftwareInitialFrameIntervalUs = 22222;
+static const uint64_t XCWLowLatencySoftwareMinimumFrameIntervalUs = 33333;
+static const uint64_t XCWLowLatencySoftwareInitialFrameIntervalUs = 33333;
 static const uint64_t XCWLowLatencySoftwareMaximumFrameIntervalUs = 100000;
 static const uint64_t XCWLowLatencySoftwareFrameIntervalStepUs = 11111;
 static const NSUInteger XCWLowLatencySoftwareHealthyFrameWindow = 8;
 
 typedef NS_ENUM(NSUInteger, XCWVideoEncoderMode) {
-    XCWVideoEncoderModeHEVCHardware,
     XCWVideoEncoderModeH264Hardware,
     XCWVideoEncoderModeH264Software,
 };
@@ -45,7 +44,7 @@ static XCWVideoEncoderMode XCWVideoEncoderModeFromEnvironment(void) {
     if ([value isEqualToString:@"h264-software"] || [value isEqualToString:@"software-h264"]) {
         return XCWVideoEncoderModeH264Software;
     }
-    return XCWVideoEncoderModeHEVCHardware;
+    return XCWVideoEncoderModeH264Software;
 }
 
 static BOOL XCWLowLatencyModeFromEnvironment(void) {
@@ -61,10 +60,8 @@ static CMVideoCodecType XCWVideoCodecTypeForMode(XCWVideoEncoderMode mode) {
     switch (mode) {
         case XCWVideoEncoderModeH264Hardware:
         case XCWVideoEncoderModeH264Software:
-            return kCMVideoCodecType_H264;
-        case XCWVideoEncoderModeHEVCHardware:
         default:
-            return kCMVideoCodecType_HEVC;
+            return kCMVideoCodecType_H264;
     }
 }
 
@@ -73,10 +70,8 @@ static NSString *XCWVideoEncoderModeName(XCWVideoEncoderMode mode) {
         case XCWVideoEncoderModeH264Hardware:
             return @"h264";
         case XCWVideoEncoderModeH264Software:
-            return @"h264-software";
-        case XCWVideoEncoderModeHEVCHardware:
         default:
-            return @"hevc";
+            return @"h264-software";
     }
 }
 
@@ -86,7 +81,6 @@ static NSString *XCWVideoEncoderIDForMode(XCWVideoEncoderMode mode) {
             return nil;
         case XCWVideoEncoderModeH264Software:
             return @"com.apple.videotoolbox.videoencoder.h264";
-        case XCWVideoEncoderModeHEVCHardware:
         default:
             return nil;
     }
@@ -120,53 +114,6 @@ static NSString *XCWCodecStringFromSPS(NSData *spsData) {
     return [NSString stringWithFormat:@"avc1.%02x%02x%02x", bytes[1], bytes[2], bytes[3]];
 }
 
-static uint32_t XCWReverseBits32(uint32_t value) {
-    value = ((value & 0x55555555u) << 1) | ((value >> 1) & 0x55555555u);
-    value = ((value & 0x33333333u) << 2) | ((value >> 2) & 0x33333333u);
-    value = ((value & 0x0f0f0f0fu) << 4) | ((value >> 4) & 0x0f0f0f0fu);
-    value = ((value & 0x00ff00ffu) << 8) | ((value >> 8) & 0x00ff00ffu);
-    return (value << 16) | (value >> 16);
-}
-
-static NSString *XCWCodecStringFromHVCC(NSData *hvcCData) {
-    const uint8_t *bytes = hvcCData.bytes;
-    if (bytes == NULL || hvcCData.length < 13) {
-        return @"hvc1.1.6.L123.B0";
-    }
-
-    static NSString *const profileSpaces[] = { @"", @"A", @"B", @"C" };
-    uint8_t profileByte = bytes[1];
-    uint8_t profileSpace = (profileByte >> 6) & 0x03;
-    BOOL tierFlag = (profileByte & 0x20) != 0;
-    uint8_t profileIdc = profileByte & 0x1f;
-    uint32_t rawCompatibility = ((uint32_t)bytes[2] << 24)
-        | ((uint32_t)bytes[3] << 16)
-        | ((uint32_t)bytes[4] << 8)
-        | (uint32_t)bytes[5];
-    uint32_t compatibility = XCWReverseBits32(rawCompatibility);
-    uint8_t levelIdc = bytes[12];
-
-    NSMutableArray<NSString *> *constraintParts = [NSMutableArray array];
-    NSInteger lastConstraintIndex = 11;
-    while (lastConstraintIndex >= 6 && bytes[lastConstraintIndex] == 0) {
-        lastConstraintIndex -= 1;
-    }
-    for (NSInteger index = 6; index <= lastConstraintIndex; index += 1) {
-        [constraintParts addObject:[NSString stringWithFormat:@"%02X", bytes[index]]];
-    }
-    if (constraintParts.count == 0) {
-        [constraintParts addObject:@"00"];
-    }
-
-    return [NSString stringWithFormat:@"hvc1.%@%u.%x.%@%u.%@",
-                                      profileSpaces[profileSpace],
-                                      profileIdc,
-                                      compatibility,
-                                      tierFlag ? @"H" : @"L",
-                                      levelIdc,
-                                      [constraintParts componentsJoinedByString:@"."]];
-}
-
 static NSData *XCWAVCDecoderConfigurationRecord(NSData *spsData, NSData *ppsData) {
     if (spsData.length == 0 || ppsData.length == 0) {
         return nil;
@@ -198,8 +145,6 @@ static NSData *XCWAVCDecoderConfigurationRecord(NSData *spsData, NSData *ppsData
 
 static NSString *XCWCodecName(CMVideoCodecType codecType) {
     switch (codecType) {
-        case kCMVideoCodecType_HEVC:
-            return @"hevc";
         case kCMVideoCodecType_H264:
             return @"h264";
         default:
@@ -423,7 +368,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _pendingLock = OS_UNFAIR_LOCK_INIT;
     _needsKeyFrame = YES;
     _encoderMode = XCWVideoEncoderModeFromEnvironment();
-    _lowLatencyMode = XCWLowLatencyModeFromEnvironment();
+    _lowLatencyMode = (_encoderMode == XCWVideoEncoderModeH264Software) && XCWLowLatencyModeFromEnvironment();
     _codecType = XCWVideoCodecTypeForMode(_encoderMode);
     _softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
     return self;
@@ -464,28 +409,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 
 - (void)requestKeyFrame {
     dispatch_async(_queue, ^{
-        self->_needsKeyFrame = YES;
-    });
-}
-
-- (void)reconfigureWithCurrentEnvironment {
-    os_unfair_lock_lock(&_pendingLock);
-    if (_pendingPixelBuffer != NULL) {
-        CVPixelBufferRelease(_pendingPixelBuffer);
-        _pendingPixelBuffer = NULL;
-    }
-    _drainScheduled = NO;
-    os_unfair_lock_unlock(&_pendingLock);
-
-    dispatch_sync(_queue, ^{
-        [self invalidateCompressionSessionLocked];
-        self->_encoderMode = XCWVideoEncoderModeFromEnvironment();
-        self->_lowLatencyMode = XCWLowLatencyModeFromEnvironment();
-        self->_codecType = XCWVideoCodecTypeForMode(self->_encoderMode);
-        self->_softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
-        self->_lastSoftwareSubmissionUs = 0;
-        self->_softwarePacedFrameCount = 0;
-        self->_softwareHealthyFrameCount = 0;
         self->_needsKeyFrame = YES;
     });
 }
@@ -780,9 +703,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     if (@available(macOS 10.14, *)) {
         VTSessionSetProperty(session, kVTCompressionPropertyKey_AllowOpenGOP, kCFBooleanFalse);
     }
-    if (_codecType == kCMVideoCodecType_HEVC) {
-        VTSessionSetProperty(session, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel);
-    } else if (_encoderMode == XCWVideoEncoderModeH264Software) {
+    if (_encoderMode == XCWVideoEncoderModeH264Software) {
         if (@available(macOS 12.0, *)) {
             VTSessionSetProperty(session,
                                  kVTCompressionPropertyKey_ProfileLevel,
@@ -949,10 +870,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         CMFormatDescriptionRef formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer);
         if (formatDescription != NULL) {
             CMVideoCodecType mediaSubType = CMFormatDescriptionGetMediaSubType(formatDescription);
-            if (mediaSubType == kCMVideoCodecType_HEVC) {
-                decoderConfig = XCWDecoderConfigurationRecordFromFormatDescription(formatDescription, @"hvcC");
-                codec = XCWCodecStringFromHVCC(decoderConfig);
-            } else if (mediaSubType == kCMVideoCodecType_H264) {
+            if (mediaSubType == kCMVideoCodecType_H264) {
                 decoderConfig = XCWDecoderConfigurationRecordFromFormatDescription(formatDescription, @"avcC");
                 if (decoderConfig.length >= 4) {
                     const uint8_t *bytes = decoderConfig.bytes;

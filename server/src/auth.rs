@@ -49,15 +49,6 @@ pub fn access_cookie_value(token: &str) -> String {
     format!("{ACCESS_TOKEN_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict")
 }
 
-pub fn tokenized_webtransport_template(config: &Config) -> String {
-    format!(
-        "{}?{}={}",
-        config.wt_endpoint_template(),
-        ACCESS_TOKEN_QUERY,
-        config.access_token
-    )
-}
-
 pub fn api_request_authorized(
     config: &Config,
     method: &Method,
@@ -90,15 +81,6 @@ pub fn api_request_authorized(
     }
 
     false
-}
-
-pub fn webtransport_request_authorized(config: &Config, path: &str, origin: Option<&str>) -> bool {
-    query_token(path).is_some_and(|token| token == config.access_token)
-        && origin.is_some_and(|origin| origin_is_allowed(config, origin))
-}
-
-pub fn strip_query(path: &str) -> &str {
-    path.split_once('?').map(|(path, _)| path).unwrap_or(path)
 }
 
 pub fn preflight_response(config: &Config, headers: &HeaderMap) -> Response {
@@ -183,10 +165,6 @@ fn cookie_token(headers: &HeaderMap) -> Option<&str> {
     })
 }
 
-fn query_token(path: &str) -> Option<&str> {
-    query_token_from_query(path.split_once('?').map(|(_, query)| query))
-}
-
 fn query_token_from_query(query: Option<&str>) -> Option<&str> {
     let query = query?;
     query.split('&').find_map(|part| {
@@ -249,7 +227,7 @@ fn chrono_free_now_nanos() -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::{api_request_authorized, tokenized_webtransport_template, ACCESS_TOKEN_HEADER};
+    use super::{api_request_authorized, ACCESS_TOKEN_HEADER};
     use crate::config::Config;
     use axum::http::{header, HeaderMap, HeaderValue, Method};
     use std::net::{IpAddr, Ipv4Addr};
@@ -261,7 +239,7 @@ mod tests {
             PathBuf::from("client/dist"),
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             None,
-            "hevc".to_owned(),
+            "h264-software".to_owned(),
             false,
             Some("secret-token".to_owned()),
             Some("123456".to_owned()),
@@ -329,7 +307,7 @@ mod tests {
             PathBuf::from("client/dist"),
             IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             Some("10.0.0.245".to_owned()),
-            "hevc".to_owned(),
+            "h264-software".to_owned(),
             false,
             Some("secret-token".to_owned()),
             Some("123456".to_owned()),
@@ -373,15 +351,6 @@ mod tests {
             false,
             None
         ));
-    }
-
-    #[test]
-    fn health_template_carries_webtransport_token() {
-        let config = config();
-        assert_eq!(
-            tokenized_webtransport_template(&config),
-            "https://127.0.0.1:4311/wt/simulators/{udid}?simdeckToken=secret-token"
-        );
     }
 
     #[test]

@@ -6,7 +6,6 @@ import type {
   SimulatorMetadata,
   SimulatorResponse,
   TouchPayload,
-  VideoCodecMode,
 } from "./types";
 
 export type ControlMessage =
@@ -88,14 +87,4 @@ export function rotateLeft(udid: string) {
 
 export function rotateRight(udid: string) {
   return postSimulatorAction(udid, "rotate-right");
-}
-
-export function setSimulatorVideoCodec(udid: string, codec: VideoCodecMode) {
-  return apiRequest<{ ok: boolean; videoCodec: VideoCodecMode }>(
-    `/api/simulators/${encodeURIComponent(udid)}/video-codec`,
-    {
-      body: JSON.stringify({ codec }),
-      method: "POST",
-    },
-  );
 }

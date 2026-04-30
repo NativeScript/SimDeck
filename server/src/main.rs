@@ -38,7 +38,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::info;
 
 const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
 const RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV: &str = "SIMDECK_RESTART_ON_CORE_SIMULATOR_MISMATCH";
@@ -376,7 +376,22 @@ enum DaemonCommand {
         #[arg(long)]
         low_latency: bool,
     },
+    Restart {
+        #[arg(long, default_value_t = 4310)]
+        port: u16,
+        #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
+        bind: IpAddr,
+        #[arg(long)]
+        advertise_host: Option<String>,
+        #[arg(long)]
+        client_root: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        video_codec: VideoCodecMode,
+        #[arg(long)]
+        low_latency: bool,
+    },
     Stop,
+    Killall,
     Status,
     #[command(hide = true)]
     Run {
@@ -464,7 +479,6 @@ enum PasteboardCommand {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum VideoCodecMode {
-    Hevc,
     H264,
     H264Software,
 }
@@ -511,7 +525,6 @@ struct DaemonLaunchOptions {
 impl VideoCodecMode {
     fn as_env_value(self) -> &'static str {
         match self {
-            Self::Hevc => "hevc",
             Self::H264 => "h264",
             Self::H264Software => "h264-software",
         }
@@ -640,6 +653,41 @@ fn terminate_daemon_metadata(metadata: &DaemonMetadata) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn kill_all_project_daemons() -> anyhow::Result<()> {
+    let mut killed = Vec::new();
+    let mut stale = Vec::new();
+    for metadata_path in daemon_metadata_paths()? {
+        let Some(metadata) = fs::read_to_string(&metadata_path)
+            .ok()
+            .and_then(|data| serde_json::from_str::<DaemonMetadata>(&data).ok())
+        else {
+            let _ = fs::remove_file(&metadata_path);
+            stale.push(metadata_path);
+            continue;
+        };
+        if process_exists(metadata.pid) {
+            terminate_daemon_metadata(&metadata)?;
+            let _ = fs::remove_file(&metadata_path);
+            killed.push(serde_json::json!({
+                "pid": metadata.pid,
+                "projectRoot": metadata.project_root,
+                "url": metadata.http_url,
+            }));
+        } else {
+            let _ = fs::remove_file(&metadata_path);
+            stale.push(metadata_path);
+        }
+    }
+    let killed_count = killed.len();
+    let stale_count = stale.len();
+    println_json(&serde_json::json!({
+        "ok": true,
+        "killed": killed,
+        "killedCount": killed_count,
+        "staleCount": stale_count,
+    }))
+}
+
 fn wait_for_process_exit(pid: u32, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -739,6 +787,21 @@ fn daemon_metadata_path_for_root(root: &Path) -> anyhow::Result<PathBuf> {
         .join(format!("{:016x}.json", hasher.finish())))
 }
 
+fn daemon_metadata_paths() -> anyhow::Result<Vec<PathBuf>> {
+    let dir = env::temp_dir().join("simdeck");
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
+        let path = entry?.path();
+        if path.extension().and_then(|value| value.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
 fn project_root() -> anyhow::Result<PathBuf> {
     let mut current = env::current_dir().context("resolve current directory")?;
     loop {
@@ -758,7 +821,7 @@ fn project_root() -> anyhow::Result<PathBuf> {
 fn choose_daemon_port(preferred: u16) -> anyhow::Result<u16> {
     let start = preferred.max(1024);
     for port in start..start.saturating_add(200) {
-        if port_available(port) && port_available(port.saturating_add(1)) {
+        if port_available(port) {
             return Ok(port);
         }
     }
@@ -1015,7 +1078,23 @@ fn main() -> anyhow::Result<()> {
                 })?;
                 print_daemon_start_result(&metadata, started)
             }
+            DaemonCommand::Restart {
+                port,
+                bind,
+                advertise_host,
+                client_root,
+                video_codec,
+                low_latency,
+            } => restart_detached_daemon(DaemonLaunchOptions {
+                port,
+                bind,
+                advertise_host,
+                client_root,
+                video_codec,
+                low_latency,
+            }),
             DaemonCommand::Stop => stop_project_daemon(),
+            DaemonCommand::Killall => kill_all_project_daemons(),
             DaemonCommand::Status => daemon_status(),
             DaemonCommand::Run {
                 project_root,
@@ -4002,14 +4081,12 @@ async fn serve(
     let registry = SessionRegistry::new(bridge, metrics.clone());
     let logs = LogRegistry::default();
     let inspectors = InspectorHub::default();
-    let (wt_runtime, wt_endpoint) = transport::webtransport::prepare(&config).await?;
     let state = AppState {
         config: config.clone(),
         registry,
         logs,
         inspectors,
         metrics,
-        certificate_hash_hex: wt_runtime.certificate_hash_hex.clone(),
     };
 
     let http_router = app_router(
@@ -4024,18 +4101,8 @@ async fn serve(
     start_server_health_watchdog(config.http_addr(), health_heartbeat.clone());
 
     info!("HTTP listening on http://{}", config.http_addr());
-    info!(
-        "WebTransport listening on {}",
-        wt_runtime.endpoint_url_template
-    );
     info!("Serving client from {}", config.client_root.display());
     info!("API access token: {}", config.access_token);
-    if config.bind_ip.is_unspecified() && config.advertise_host == Ipv4Addr::LOCALHOST.to_string() {
-        warn!(
-            "Server is listening on all interfaces, but WebTransport is still advertised as localhost. \
-Use --advertise-host <LAN-IP-or-DNS-name> for remote browser access."
-        );
-    }
 
     let http_task = tokio::spawn(async move {
         axum::serve(
@@ -4051,9 +4118,6 @@ Use --advertise-host <LAN-IP-or-DNS-name> for remote browser access."
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     });
-    let wt_task =
-        tokio::spawn(async move { transport::webtransport::serve(wt_endpoint, state).await });
-
     let (_terminal_mode, quit_key) = start_quit_key_listener();
     let quit_key_signal = async move {
         match quit_key {
@@ -4068,7 +4132,6 @@ Use --advertise-host <LAN-IP-or-DNS-name> for remote browser access."
     tokio::select! {
         result = http_task => result??,
         result = health_task => result.context("server health heartbeat task panicked")?,
-        result = wt_task => result??,
         _ = tokio::signal::ctrl_c() => {}
         _ = &mut quit_key_signal => {}
     }

@@ -4,39 +4,27 @@ Two endpoints expose every observable signal SimDeck collects: `GET /api/health`
 
 ## `GET /api/health`
 
-Returns the static bootstrap information the browser client needs to open a WebTransport session, plus a freshness timestamp.
+Returns the static bootstrap information the browser client needs, plus a freshness timestamp.
 
 ```json
 {
   "ok": true,
   "httpPort": 4310,
-  "wtPort": 4311,
   "timestamp": 1714094761.234,
   "videoCodec": "h264-software",
-  "lowLatency": false,
-  "webTransport": {
-    "urlTemplate": "https://127.0.0.1:4311/wt/simulators/{udid}?simdeckToken=...",
-    "certificateHash": {
-      "algorithm": "sha-256",
-      "value": "3f...e9"
-    },
-    "packetVersion": 1
-  }
+  "lowLatency": false
 }
 ```
 
-| Field                                | Notes                                                                                          |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `ok`                                 | Always `true` if the route is reachable. Network failures are signalled by HTTP errors.        |
-| `httpPort` / `wtPort`                | Numeric ports for the HTTP and WebTransport servers. WebTransport is always `httpPort + 1`.    |
-| `timestamp`                          | Server-side `time.now()` as a fractional Unix epoch in seconds.                                |
-| `videoCodec`                         | Active encoder. One of `hevc`, `h264`, or `h264-software`. See [Video Pipeline](/guide/video). |
-| `lowLatency`                         | `true` when software H.264 low-latency mode was enabled at daemon startup.                     |
-| `webTransport.urlTemplate`           | URL with a `{udid}` placeholder and access token query for the simulator stream.               |
-| `webTransport.certificateHash.value` | SHA-256 of the server's self-signed cert. Pin via `serverCertificateHashes` in the WT client.  |
-| `webTransport.packetVersion`         | The current binary packet protocol version. Clients should refuse to parse unknown versions.   |
+| Field        | Notes                                                                                   |
+| ------------ | --------------------------------------------------------------------------------------- |
+| `ok`         | Always `true` if the route is reachable. Network failures are signalled by HTTP errors. |
+| `httpPort`   | HTTP port for the REST API, browser UI, and WebRTC offer endpoint.                      |
+| `timestamp`  | Server-side `time.now()` as a fractional Unix epoch in seconds.                         |
+| `videoCodec` | Active encoder. One of `h264` or `h264-software`. See [Video Pipeline](/guide/video).   |
+| `lowLatency` | `true` when software H.264 low-latency mode was enabled at daemon startup.              |
 
-The certificate and default access token are regenerated every time the server restarts. A client that caches the hash should refetch `/api/health` after any disconnection.
+The default access token is regenerated every time the server restarts. A client should refetch `/api/health` after any disconnection.
 
 ## `GET /api/metrics`
 
@@ -61,7 +49,7 @@ Returns a snapshot of every server-side counter and the rolling buffer of client
       "kind": "viewport",
       "udid": "9D7E5BB7-...",
       "timestampMs": 1714094761234.0,
-      "codec": "hevc",
+      "codec": "h264",
       "width": 1170,
       "height": 2532,
       "decodedFps": 59.7,
@@ -79,12 +67,12 @@ Returns a snapshot of every server-side counter and the rolling buffer of client
 | -------------------------- | --------------------------------------------------------------------------------------- |
 | `frames_encoded`           | The native bridge produces a frame.                                                     |
 | `keyframes_encoded`        | The encoder emits a keyframe (always a subset of `frames_encoded`).                     |
-| `frames_sent`              | A frame is written to a WebTransport client.                                            |
+| `frames_sent`              | A frame is written to a WebRTC client.                                                  |
 | `frames_dropped_server`    | A client is too slow and the broadcast channel skips frames for them.                   |
 | `keyframe_requests`        | The transport hub asks the encoder for a fresh keyframe (e.g. on reconnect or refresh). |
-| `active_streams`           | Currently open WebTransport sessions.                                                   |
-| `subscribers_connected`    | Lifetime count of WebTransport sessions opened.                                         |
-| `subscribers_disconnected` | Lifetime count of WebTransport sessions closed.                                         |
+| `active_streams`           | Currently open WebRTC streams.                                                          |
+| `subscribers_connected`    | Lifetime count of WebRTC streams opened.                                                |
+| `subscribers_disconnected` | Lifetime count of WebRTC streams closed.                                                |
 | `avg_send_queue_depth`     | Running average of broadcast channel pressure.                                          |
 | `max_send_queue_depth`     | Peak broadcast channel pressure.                                                        |
 | `latest_first_frame_ms`    | First-frame latency for the most recent connect, in milliseconds.                       |
@@ -105,7 +93,7 @@ Content-Type: application/json
   "clientId": "browser-ABC",
   "kind": "viewport",
   "udid": "9D7E5BB7-...",
-  "codec": "hevc",
+  "codec": "h264",
   "width": 1170,
   "height": 2532,
   "decodedFps": 59.7,

@@ -36,8 +36,7 @@ client/
     │   ├── accessibility/
     │   └── toolbar/
     ├── shared/
-    ├── styles/
-    └── workers/
+    └── styles/
 ```
 
 | Folder                    | Responsibility                                                          |
@@ -45,20 +44,19 @@ client/
 | `api/`                    | Typed wrappers around the SimDeck REST API and shared TypeScript types. |
 | `features/simulators/`    | Sidebar list of simulators plus boot/shutdown affordances.              |
 | `features/viewport/`      | Frame canvas, chrome compositing, hit testing.                          |
-| `features/stream/`        | WebTransport reader, decoder workers, frame queueing.                   |
+| `features/stream/`        | WebRTC client, receiver stats, and video frame plumbing.                |
 | `features/input/`         | Touch / keyboard / hardware-button affordances.                         |
 | `features/accessibility/` | Accessibility tree pane and source switcher.                            |
 | `features/toolbar/`       | Top toolbar (rotate, home, app switcher, dark mode toggle, refresh).    |
-| `workers/`                | Off-main-thread video decoder workers.                                  |
 
 ## Bootstrap flow
 
 1. The browser fetches `index.html` from the Rust server.
 2. `main.tsx` mounts the React tree at `#root`.
-3. `AppShell` calls `GET /api/health` to learn the WebTransport URL template, certificate hash, and packet version.
+3. `AppShell` calls `GET /api/health` to learn the active encoder mode.
 4. The simulator sidebar fetches `GET /api/simulators` and renders the list.
-5. Selecting a simulator opens a WebTransport session at `wss://.../wt/simulators/<udid>` pinned by the cert hash.
-6. The decoder worker parses [packet headers](/api/packet-format), reassembles description + data, and pushes decoded frames to the renderer.
+5. Selecting a simulator posts an SDP offer to `/api/simulators/<udid>/webrtc/offer`.
+6. The browser renders the H.264 video track through native WebRTC playback.
 7. Touch and key events round-trip through `POST /api/simulators/<udid>/touch` and `/key`.
 
 ## Dev workflow
@@ -72,7 +70,7 @@ npm run dev
 This:
 
 - Builds the Rust CLI if it isn't built.
-- Stops any stale SimDeck server listening on `4310` or `4311`.
+- Stops any stale SimDeck server listening on `4310`.
 - Starts the Rust server in the background, logging to `build/cli.log`.
 - Runs `vite` from `client/` against the local server, with hot-module reload.
 
@@ -95,12 +93,12 @@ The daemon takes a `--client-root <path>` flag. You can ship a completely differ
 simdeck ui --port 4310 --client-root /path/to/your/dist --open
 ```
 
-As long as your client speaks the documented [REST API](/api/rest), [WebTransport](/api/webtransport), and [Packet Format](/api/packet-format), it will work end to end.
+As long as your client speaks the documented [REST API](/api/rest) and WebRTC offer endpoint, it will work end to end.
 
 ## Embedding in another app
 
 The browser client is designed to live inside any container that can host a webview. The bundled VS Code extension is one example; embedding it in an Electron app, a Tauri shell, or a custom dashboard works the same way:
 
 1. Point the host at `http://<simdeck-host>:<port>/`.
-2. Allow the host to talk to the same WebTransport endpoint exposed by the server.
+2. Allow the host to talk to the same HTTP origin exposed by the server.
 3. For direct API calls outside the served origin, pass the SimDeck access token with `X-SimDeck-Token` or `Authorization: Bearer`.

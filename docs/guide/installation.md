@@ -8,7 +8,7 @@ SimDeck only runs on macOS. The native bridge links private `CoreSimulator` and 
 
 | Requirement                        | Why                                                                                  |
 | ---------------------------------- | ------------------------------------------------------------------------------------ |
-| **macOS 13+**                      | Required for current `CoreSimulator` and Apple's HEVC hardware encoder.              |
+| **macOS 13+**                      | Required for current `CoreSimulator` and Apple's VideoToolbox H.264 encoder.         |
 | **Xcode + iOS Simulator runtimes** | The native bridge invokes `xcrun simctl` and the Simulator app.                      |
 | **Node.js ≥ 18**                   | The launcher (`bin/simdeck.mjs`) and the bundled client tooling.                     |
 | **Rust (stable)**                  | Required only when building from source. Installed via [rustup](https://rustup.rs/). |

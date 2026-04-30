@@ -7,7 +7,7 @@ const siteUrl = "https://simdeck.nativescript.org";
 export default defineConfig({
   title: "SimDeck",
   description:
-    "A local-first iOS Simulator control plane with a browser UI, REST API, and WebTransport video.",
+    "A local-first iOS Simulator control plane with a browser UI, REST API, and WebRTC video.",
   lang: "en-US",
   cleanUrls: true,
   lastUpdated: true,
@@ -21,7 +21,7 @@ export default defineConfig({
       {
         property: "og:description",
         content:
-          "A local iOS Simulator control plane with a browser UI, REST API, and WebTransport video.",
+          "A local iOS Simulator control plane with a browser UI, REST API, and WebRTC video.",
       },
     ],
     ["meta", { property: "og:url", content: `${siteUrl}/` }],
@@ -106,13 +106,6 @@ export default defineConfig({
           items: [
             { text: "REST Endpoints", link: "/api/rest" },
             { text: "Health & Metrics", link: "/api/health" },
-          ],
-        },
-        {
-          text: "Live Video",
-          items: [
-            { text: "WebTransport", link: "/api/webtransport" },
-            { text: "Packet Format", link: "/api/packet-format" },
           ],
         },
         {

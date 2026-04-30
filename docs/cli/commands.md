@@ -31,7 +31,7 @@ Start or reuse the project daemon and serve the browser UI.
 
 ```sh
 simdeck ui [--port 4310] [--bind 127.0.0.1] [--advertise-host <host>]
-           [--client-root <path>] [--video-codec hevc|h264|h264-software]
+           [--client-root <path>] [--video-codec h264|h264-software]
            [--low-latency] [--open]
 ```
 
@@ -44,7 +44,7 @@ Start or reuse the project daemon without opening the browser:
 ```sh
 simdeck daemon start [--port 4310] [--bind 127.0.0.1]
                      [--advertise-host <host>] [--client-root <path>]
-                     [--video-codec hevc|h264|h264-software] [--low-latency]
+                     [--video-codec h264|h264-software] [--low-latency]
 ```
 
 Output:
@@ -68,12 +68,31 @@ Print daemon metadata for the current project:
 simdeck daemon status
 ```
 
+### `daemon restart`
+
+Stop the daemon for the current project, then start a fresh one with the same
+options as `daemon start`:
+
+```sh
+simdeck daemon restart [--port 4310] [--bind 127.0.0.1]
+                       [--advertise-host <host>] [--client-root <path>]
+                       [--video-codec h264|h264-software] [--low-latency]
+```
+
 ### `daemon stop`
 
 Stop the daemon for the current project:
 
 ```sh
 simdeck daemon stop
+```
+
+### `daemon killall`
+
+Stop SimDeck project daemons across all workspaces:
+
+```sh
+simdeck daemon killall
 ```
 
 ### `service`
@@ -85,7 +104,7 @@ that starts after login and stays available.
 ```sh
 simdeck service on [--port 4310] [--bind 127.0.0.1]
                    [--advertise-host <host>] [--client-root <path>]
-                   [--video-codec hevc|h264|h264-software] [--low-latency]
+                   [--video-codec h264|h264-software] [--low-latency]
                    [--access-token <token>]
 simdeck service restart [same options as service on]
 simdeck service off

@@ -2070,11 +2070,13 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     id _hidClient;
     id _digitizerInputView;
     dispatch_queue_t _callbackQueue;
+    dispatch_queue_t _delegateFrameQueue;
     NSWindow *_headlessHostWindow;
     NSView *_headlessHostView;
     NSUUID *_screenAdapterCallbackUUID;
     NSUUID *_screenCallbackUUID;
     CVPixelBufferRef _latestPixelBuffer;
+    CVPixelBufferRef _pendingDelegatePixelBuffer;
     NSString *_displayStatusValue;
     uint32_t _activeScreenID;
     CGSize _displayPixelSize;
@@ -2084,6 +2086,7 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     BOOL _isActivatingDisplay;
     BOOL _hasActivatedDisplay;
     BOOL _digitizerInputReady;
+    BOOL _delegateFrameScheduled;
     double _deviceRotationDegrees;
 }
 
@@ -2143,20 +2146,63 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
 }
 
 - (void)notifyDelegateOfFrame:(CVPixelBufferRef)pixelBuffer {
-    id<DFPrivateSimulatorDisplayBridgeDelegate> delegate = self.delegate;
-    if (delegate == nil || pixelBuffer == nil) {
+    if (pixelBuffer == nil) {
         return;
     }
 
     CVPixelBufferRetain(pixelBuffer);
+    __block BOOL shouldScheduleDrain = NO;
+    dispatch_block_t work = ^{
+        if (self->_pendingDelegatePixelBuffer != nil) {
+            CVPixelBufferRelease(self->_pendingDelegatePixelBuffer);
+        }
+        self->_pendingDelegatePixelBuffer = pixelBuffer;
+        if (!self->_delegateFrameScheduled) {
+            self->_delegateFrameScheduled = YES;
+            shouldScheduleDrain = YES;
+        }
+    };
+    if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {
+        work();
+    } else {
+        dispatch_sync(_callbackQueue, work);
+    }
+
+    if (!shouldScheduleDrain) {
+        return;
+    }
+
     __weak typeof(self) weakSelf = self;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_async(_delegateFrameQueue, ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (strongSelf != nil) {
-            [delegate privateSimulatorDisplayBridge:strongSelf didUpdateFrame:pixelBuffer];
+            [strongSelf drainPendingDelegateFrames];
+        }
+    });
+}
+
+- (void)drainPendingDelegateFrames {
+    while (YES) {
+        __block CVPixelBufferRef pixelBuffer = nil;
+        __block id<DFPrivateSimulatorDisplayBridgeDelegate> delegate = nil;
+        dispatch_sync(_callbackQueue, ^{
+            pixelBuffer = self->_pendingDelegatePixelBuffer;
+            self->_pendingDelegatePixelBuffer = nil;
+            if (pixelBuffer == nil) {
+                self->_delegateFrameScheduled = NO;
+                return;
+            }
+            delegate = self.delegate;
+        });
+
+        if (pixelBuffer == nil) {
+            return;
+        }
+        if (delegate != nil) {
+            [delegate privateSimulatorDisplayBridge:self didUpdateFrame:pixelBuffer];
         }
         CVPixelBufferRelease(pixelBuffer);
-    });
+    }
 }
 
 - (nullable instancetype)initWithUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
@@ -2175,7 +2221,10 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
         return nil;
     }
 
-    _callbackQueue = dispatch_queue_create("org.nativescript.simdeck.private-screen", DISPATCH_QUEUE_SERIAL);
+    dispatch_queue_attr_t queueAttributes =
+        dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
+    _callbackQueue = dispatch_queue_create("org.nativescript.simdeck.private-screen", queueAttributes);
+    _delegateFrameQueue = dispatch_queue_create("org.nativescript.simdeck.private-screen.delegate-frame", queueAttributes);
     dispatch_queue_set_specific(_callbackQueue, DFPrivateSimulatorCallbackQueueKey, (void *)DFPrivateSimulatorCallbackQueueKey, NULL);
     [self updateStatus:[NSString stringWithFormat:@"Starting private CoreSimulator attach for %@", udid]];
 
@@ -2517,6 +2566,10 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     if (_latestPixelBuffer != nil) {
         CVPixelBufferRelease(_latestPixelBuffer);
         _latestPixelBuffer = nil;
+    }
+    if (_pendingDelegatePixelBuffer != nil) {
+        CVPixelBufferRelease(_pendingDelegatePixelBuffer);
+        _pendingDelegatePixelBuffer = nil;
     }
 }
 

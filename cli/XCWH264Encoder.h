@@ -19,7 +19,6 @@ typedef void (^XCWH264EncoderOutputHandler)(NSData *sampleData,
 
 - (void)encodePixelBuffer:(CVPixelBufferRef)pixelBuffer;
 - (void)requestKeyFrame;
-- (void)reconfigureWithCurrentEnvironment;
 - (NSDictionary *)statsRepresentation;
 - (void)invalidate;
 

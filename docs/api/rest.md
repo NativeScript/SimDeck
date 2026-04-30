@@ -15,28 +15,19 @@ The served browser UI receives the generated access token automatically through 
 
 ### `GET /api/health`
 
-Returns server health, the WebTransport URL template, and the certificate hash the client must pin.
+Returns server health and the active video encoder mode.
 
 ```json
 {
   "ok": true,
   "httpPort": 4310,
-  "wtPort": 4311,
   "timestamp": 1714094761.234,
   "videoCodec": "h264-software",
-  "lowLatency": false,
-  "webTransport": {
-    "urlTemplate": "https://127.0.0.1:4311/wt/simulators/{udid}?simdeckToken=...",
-    "certificateHash": {
-      "algorithm": "sha-256",
-      "value": "3f...e9"
-    },
-    "packetVersion": 1
-  }
+  "lowLatency": false
 }
 ```
 
-The browser client polls this endpoint at startup and again after a long disconnect to detect server restarts (which rotate the certificate).
+The browser client polls this endpoint at startup and again after a long disconnect to detect server restarts.
 
 ### `GET /api/metrics`
 
@@ -61,7 +52,7 @@ Content-Type: application/json
 {
   "clientId": "browser-ABC",
   "kind": "viewport",
-  "codec": "hevc",
+  "codec": "h264",
   "width": 1170,
   "height": 2532,
   "decodedFps": 59.7,
@@ -123,27 +114,6 @@ Toggles between light and dark appearance via `simctl ui appearance`.
 { "ok": true }
 ```
 
-### `POST /api/simulators/{udid}/video-codec`
-
-Switches the active encoder mode for new native simulator sessions and
-reconfigures the selected simulator session after active streams drain:
-
-```http
-POST /api/simulators/{udid}/video-codec
-Content-Type: application/json
-
-{ "codec": "h264-software" }
-```
-
-Accepted codecs are `hevc`, `h264`, and `h264-software`. The setting is
-process-wide; the UDID scopes which attached session is reconfigured
-immediately. Posting the already-active codec is a no-op and returns
-`"changed": false`.
-
-```json
-{ "ok": true, "changed": true, "videoCodec": "h264-software" }
-```
-
 ### `POST /api/simulators/{udid}/refresh`
 
 Forces the encoder to emit a fresh keyframe. Useful after a discontinuity or when the client decoder drifts.
@@ -154,9 +124,8 @@ Forces the encoder to emit a fresh keyframe. Useful after a discontinuity or whe
 
 ### `POST /api/simulators/{udid}/webrtc/offer`
 
-Experimental WebRTC transport for runner-hosted previews. The browser sends an
-SDP offer and the server responds with an SDP answer for a receive-only H.264
-or HEVC video track:
+WebRTC transport for browser-native live video. The browser sends an SDP offer
+and the server responds with an SDP answer for a receive-only H.264 video track:
 
 ```json
 {
@@ -172,9 +141,8 @@ or HEVC video track:
 }
 ```
 
-The endpoint accepts the active simulator stream codec when it is `h264`,
-`h264-software`, or `hevc`. Software H.264 is selected automatically by the
-bundled browser client because Chromium can use native WebRTC playout.
+The endpoint requires the active simulator stream codec to be `h264` or
+`h264-software`. The bundled browser client always uses this endpoint.
 
 ### `POST /api/simulators/{udid}/open-url`
 

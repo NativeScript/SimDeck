@@ -26,8 +26,6 @@ export interface HealthResponse {
   videoCodec?: string;
 }
 
-export type VideoCodecMode = "hevc" | "h264" | "h264-software";
-
 export interface SimulatorResponse {
   simulator: SimulatorMetadata;
 }

@@ -1,6 +1,6 @@
 # Project Daemon
 
-SimDeck runs one warm native host per project. The daemon owns the HTTP API, the WebTransport video endpoint, inspector routing, and lazy native simulator sessions.
+SimDeck runs one warm native host per project. The daemon owns the HTTP API, the WebRTC video endpoint, inspector routing, and lazy native simulator sessions.
 
 Normal CLI commands start the daemon automatically when they need it. Use `simdeck daemon` only when you want to manage it explicitly.
 
@@ -52,16 +52,16 @@ This starts or reuses the project daemon, serves the bundled browser client, and
 
 ## Options
 
-`daemon start` and `ui` accept the same server options:
+`daemon start`, `daemon restart`, and `ui` accept the same server options:
 
 | Flag               | Default               | Notes                                                                             |
 | ------------------ | --------------------- | --------------------------------------------------------------------------------- |
-| `--port <u16>`     | `4310`                | HTTP port. WebTransport listens on `port + 1`.                                    |
+| `--port <u16>`     | `4310`                | HTTP port for the REST API, browser UI, and WebRTC offer endpoint.                |
 | `--bind <ip>`      | `127.0.0.1`           | Bind address. Use `0.0.0.0` for [LAN access](/guide/lan-access).                  |
 | `--advertise-host` | matches local host    | Hostname or IP advertised to browser clients.                                     |
 | `--client-root`    | bundled `client/dist` | Override the static browser client directory.                                     |
-| `--video-codec`    | `h264-software`       | One of `hevc`, `h264`, or `h264-software`. See [Video](/guide/video).             |
-| `--low-latency`    | `false`               | Software H.264 profile for slower runners; caps at 45 fps and drops stale frames. |
+| `--video-codec`    | `h264-software`       | One of `h264` or `h264-software`. See [Video](/guide/video).                      |
+| `--low-latency`    | `false`               | Software H.264 profile for slower runners; caps at 30 fps and drops stale frames. |
 | `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                            |
 
 Example:
@@ -78,6 +78,14 @@ simdeck daemon status
 
 The status output includes the daemon URL, PID, project root, and access token. Local same-origin browser use does not require copying the token; direct remote API callers should send it as `X-SimDeck-Token` or `Authorization: Bearer <token>`.
 
+## Restart
+
+```sh
+simdeck daemon restart
+```
+
+This stops the daemon for the current project, starts a fresh one, and returns the same JSON shape as `daemon start`.
+
 ## Stop
 
 ```sh
@@ -85,6 +93,14 @@ simdeck daemon stop
 ```
 
 This terminates the daemon for the current project and removes its metadata file from the system temp directory. The next CLI command that needs the daemon starts a fresh one.
+
+## Kill All Project Daemons
+
+```sh
+simdeck daemon killall
+```
+
+This scans SimDeck daemon metadata across all workspaces, terminates live daemon PIDs, and removes stale metadata files.
 
 ## Always-On Service
 

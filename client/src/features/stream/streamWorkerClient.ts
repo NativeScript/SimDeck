@@ -1,8 +1,4 @@
-import {
-  accessTokenFromLocation,
-  apiHeaders,
-  fetchHealth,
-} from "../../api/client";
+import { apiHeaders, fetchHealth } from "../../api/client";
 import { createEmptyStreamStats } from "./stats";
 import type {
   StreamConnectTarget,
@@ -12,18 +8,13 @@ import type {
 
 const HAVE_CURRENT_DATA = 2;
 const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
+const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 3500;
+const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 3500;
 
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
 let activeStreamClient: StreamWorkerClient | null = null;
 
-export type StreamBackend = "webtransport" | "webrtc";
-export type StreamTransportMode = "auto" | StreamBackend;
-
-export function isWebRtcStreamMode(
-  transportMode: StreamTransportMode = initialStreamTransportMode(),
-): boolean {
-  return transportMode === "webrtc" && Boolean(accessTokenFromLocation());
-}
+export type StreamBackend = "webrtc";
 
 export function sendWebRtcControlMessage(encoded: string): boolean {
   if (activeWebRtcControlChannel?.readyState !== "open") {
@@ -35,37 +26,6 @@ export function sendWebRtcControlMessage(encoded: string): boolean {
 
 export function buildStreamTarget(udid: string): StreamConnectTarget {
   return { udid };
-}
-
-export function initialStreamBackend(
-  videoCodec?: string | null,
-  transportMode: StreamTransportMode = initialStreamTransportMode(),
-): StreamBackend {
-  if (transportMode === "webrtc") {
-    return "webrtc";
-  }
-  if (transportMode === "webtransport") {
-    return "webtransport";
-  }
-  if (videoCodec?.toLowerCase() === "h264-software" && canUseWebRtc()) {
-    return "webrtc";
-  }
-  if (canUseWebTransport()) {
-    return "webtransport";
-  }
-  return canUseWebRtc() ? "webrtc" : "webtransport";
-}
-
-export function streamModeIsForcedWebTransport(
-  transportMode: StreamTransportMode = initialStreamTransportMode(),
-): boolean {
-  return transportMode === "webtransport";
-}
-
-export function streamModeIsForced(
-  transportMode: StreamTransportMode = initialStreamTransportMode(),
-): boolean {
-  return transportMode === "webtransport" || transportMode === "webrtc";
 }
 
 export function canUseWebRtc(): boolean {
@@ -80,55 +40,17 @@ interface StreamClientBackend {
   disconnect(): void;
 }
 
-class WorkerStreamClient implements StreamClientBackend {
-  private readonly worker: Worker;
-
-  constructor(onMessage: (message: WorkerToMainMessage) => void) {
-    this.worker = new Worker(
-      new URL("../../workers/simulatorStream.worker.ts", import.meta.url),
-      {
-        type: "module",
-      },
-    );
-    this.worker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
-      onMessage(event.data);
-    };
-  }
-
-  attachCanvas(canvasElement: HTMLCanvasElement) {
-    const offscreenCanvas = canvasElement.transferControlToOffscreen();
-    this.worker.postMessage(
-      { type: "attach-canvas", canvas: offscreenCanvas },
-      [offscreenCanvas],
-    );
-  }
-
-  connect(target: StreamConnectTarget) {
-    this.worker.postMessage({ type: "connect", target });
-  }
-
-  disconnect() {
-    this.worker.postMessage({ type: "disconnect" });
-  }
-
-  clear() {
-    this.worker.postMessage({ type: "clear" });
-  }
-
-  destroy() {
-    this.worker.terminate();
-  }
-}
-
 class WebRtcStreamClient implements StreamClientBackend {
   private animationFrame = 0;
   private canvas: HTMLCanvasElement | null = null;
   private connectGeneration = 0;
   private controlChannel: RTCDataChannel | null = null;
   private diagnostics = createWebRtcDiagnostics();
+  private frameWatchdogTimeout = 0;
   private lastVideoFrameAt = 0;
   private peerConnection: RTCPeerConnection | null = null;
   private reconnectTimeout = 0;
+  private renderVideoToCanvas = false;
   private shouldReconnect = false;
   private stats: StreamStats = createEmptyStreamStats();
   private video: HTMLVideoElement | null = null;
@@ -140,6 +62,7 @@ class WebRtcStreamClient implements StreamClientBackend {
 
   attachCanvas(canvasElement: HTMLCanvasElement) {
     this.canvas = canvasElement;
+    this.canvas.classList.remove("stream-canvas-webrtc-render");
   }
 
   clear() {
@@ -173,11 +96,7 @@ class WebRtcStreamClient implements StreamClientBackend {
       const transceiver = peerConnection.addTransceiver("video", {
         direction: "recvonly",
       });
-      const health = await fetchHealth();
-      if (generation !== this.connectGeneration) {
-        return;
-      }
-      configureReceiverCodecPreferences(transceiver, health.videoCodec);
+      configureReceiverCodecPreferences(transceiver);
       configureLowLatencyReceiver(transceiver.receiver);
       const controlChannel = peerConnection.createDataChannel(
         WEBRTC_CONTROL_CHANNEL_LABEL,
@@ -203,8 +122,15 @@ class WebRtcStreamClient implements StreamClientBackend {
         }
         const stream = event.streams[0] ?? new MediaStream([event.track]);
         const video = document.createElement("video");
+        this.renderVideoToCanvas = shouldRenderWebRtcVideoThroughCanvas();
+        canvasElement.classList.toggle(
+          "stream-canvas-webrtc-render",
+          this.renderVideoToCanvas,
+        );
         video.autoplay = true;
-        video.className = "stream-video";
+        video.className = this.renderVideoToCanvas
+          ? "stream-video stream-video-canvas-source"
+          : "stream-video";
         video.disablePictureInPicture = true;
         video.muted = true;
         video.playsInline = true;
@@ -214,13 +140,16 @@ class WebRtcStreamClient implements StreamClientBackend {
         video.srcObject = stream;
         canvasElement.after(video);
         this.video = video;
-        video.onloadedmetadata = () => {
+        const startPlayback = () => {
           if (generation !== this.connectGeneration) {
             return;
           }
           void video.play().catch(() => {
             // The media stream can be detached during reconnect; retry on the next track.
           });
+          if (video.videoWidth <= 0 || video.videoHeight <= 0) {
+            return;
+          }
           this.syncCanvasSize(video.videoWidth, video.videoHeight);
           this.onMessage({
             type: "video-config",
@@ -232,6 +161,13 @@ class WebRtcStreamClient implements StreamClientBackend {
           });
           this.scheduleVideoFrame();
         };
+        video.addEventListener("loadedmetadata", startPlayback);
+        video.addEventListener("loadeddata", startPlayback);
+        video.addEventListener("canplay", startPlayback);
+        video.addEventListener("resize", startPlayback);
+        void video.play().catch(() => {
+          // The readiness listeners above retry once the media stream has data.
+        });
       };
 
       peerConnection.onconnectionstatechange = () => {
@@ -284,6 +220,7 @@ class WebRtcStreamClient implements StreamClientBackend {
       );
       this.postDiagnostics(target, "remote-answer");
       await peerConnection.setRemoteDescription(answer);
+      this.scheduleFrameWatchdog(target, generation);
     } catch (error) {
       this.handleConnectionError(target, generation, error);
     }
@@ -293,6 +230,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.shouldReconnect = false;
     this.connectGeneration += 1;
     this.clearReconnectTimeout();
+    this.clearFrameWatchdog();
     this.closeActiveConnection();
     this.onMessage({ type: "status", status: { state: "idle" } });
   }
@@ -304,6 +242,7 @@ class WebRtcStreamClient implements StreamClientBackend {
   private closeActiveConnection() {
     window.cancelAnimationFrame(this.animationFrame);
     this.animationFrame = 0;
+    this.clearFrameWatchdog();
     this.cancelVideoFrameCallback();
     this.video?.pause();
     if (this.video) {
@@ -311,6 +250,8 @@ class WebRtcStreamClient implements StreamClientBackend {
       this.video.remove();
     }
     this.video = null;
+    this.canvas?.classList.remove("stream-canvas-webrtc-render");
+    this.renderVideoToCanvas = false;
     this.controlChannel?.close();
     if (activeWebRtcControlChannel === this.controlChannel) {
       activeWebRtcControlChannel = null;
@@ -353,6 +294,45 @@ class WebRtcStreamClient implements StreamClientBackend {
         void this.connect(target);
       }
     }, 750);
+  }
+
+  private scheduleFrameWatchdog(
+    target: StreamConnectTarget,
+    generation: number,
+  ) {
+    this.clearFrameWatchdog();
+    this.frameWatchdogTimeout = window.setTimeout(
+      () => {
+        this.frameWatchdogTimeout = 0;
+        if (generation !== this.connectGeneration || !this.shouldReconnect) {
+          return;
+        }
+        const now = performance.now();
+        const hasRenderedFrame = this.stats.renderedFrames > 0;
+        const frameAgeMs =
+          this.lastVideoFrameAt > 0 ? now - this.lastVideoFrameAt : Infinity;
+        if (!hasRenderedFrame || frameAgeMs > WEBRTC_STALLED_FRAME_TIMEOUT_MS) {
+          this.handleConnectionError(
+            target,
+            generation,
+            new Error("WebRTC video stalled before rendering fresh frames."),
+          );
+          return;
+        }
+        this.scheduleFrameWatchdog(target, generation);
+      },
+      this.stats.renderedFrames > 0
+        ? WEBRTC_STALLED_FRAME_TIMEOUT_MS
+        : WEBRTC_FIRST_FRAME_TIMEOUT_MS,
+    );
+  }
+
+  private clearFrameWatchdog() {
+    if (!this.frameWatchdogTimeout) {
+      return;
+    }
+    window.clearTimeout(this.frameWatchdogTimeout);
+    this.frameWatchdogTimeout = 0;
   }
 
   private clearReconnectTimeout() {
@@ -508,12 +488,21 @@ class WebRtcStreamClient implements StreamClientBackend {
     ) {
       this.syncCanvasSize(this.video.videoWidth, this.video.videoHeight);
       const now = performance.now();
+      const renderStartedAt = performance.now();
+      if (this.renderVideoToCanvas) {
+        this.canvas
+          .getContext("2d")
+          ?.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+      }
+      const latestRenderMs = performance.now() - renderStartedAt;
       this.stats.decodedFrames += 1;
       this.stats.renderedFrames += 1;
       this.stats.receivedPackets += 1;
       this.stats.width = this.canvas.width;
       this.stats.height = this.canvas.height;
       this.stats.codec = "webrtc";
+      this.stats.latestRenderMs = latestRenderMs;
+      this.stats.maxRenderMs = Math.max(this.stats.maxRenderMs, latestRenderMs);
       if (this.lastVideoFrameAt > 0) {
         this.stats.latestFrameGapMs = now - this.lastVideoFrameAt;
       }
@@ -613,50 +602,30 @@ function configureLowLatencyReceiver(receiver: RTCRtpReceiver) {
   }
 }
 
-function configureReceiverCodecPreferences(
-  transceiver: RTCRtpTransceiver,
-  videoCodec?: string | null,
-) {
+function configureReceiverCodecPreferences(transceiver: RTCRtpTransceiver) {
   if (!transceiver.setCodecPreferences) {
-    return;
-  }
-  const preferredMimeType = preferredWebRtcMimeType(videoCodec);
-  if (!preferredMimeType) {
     return;
   }
   const capabilities = RTCRtpReceiver.getCapabilities("video");
   const codecs = capabilities?.codecs ?? [];
   const preferred = codecs.filter(
-    (codec) => codec.mimeType.toLowerCase() === preferredMimeType,
+    (codec) => codec.mimeType.toLowerCase() === "video/h264",
   );
   if (preferred.length === 0) {
     return;
   }
   transceiver.setCodecPreferences([
     ...preferred,
-    ...codecs.filter(
-      (codec) => codec.mimeType.toLowerCase() !== preferredMimeType,
-    ),
+    ...codecs.filter((codec) => codec.mimeType.toLowerCase() !== "video/h264"),
   ]);
 }
 
-function preferredWebRtcMimeType(videoCodec?: string | null): string | null {
-  const normalized = videoCodec?.toLowerCase();
-  if (normalized === "hevc") {
-    return "video/h265";
-  }
-  if (normalized === "h264" || normalized === "h264-software") {
-    return "video/h264";
-  }
-  return null;
-}
-
-export function initialStreamTransportMode(): StreamTransportMode {
-  if (typeof window === "undefined") {
-    return "auto";
-  }
-  const mode = new URLSearchParams(window.location.search).get("transport");
-  return mode === "webtransport" || mode === "webrtc" ? mode : "auto";
+function shouldRenderWebRtcVideoThroughCanvas(): boolean {
+  const userAgent = window.navigator.userAgent;
+  return (
+    /Safari/i.test(userAgent) &&
+    !/Chrome|Chromium|CriOS|Edg|OPR/i.test(userAgent)
+  );
 }
 
 function iceServers(): RTCIceServer[] {
@@ -776,10 +745,7 @@ export class StreamWorkerClient {
   private attachedCanvas = false;
   private disposed = false;
 
-  constructor(
-    onMessage: (message: WorkerToMainMessage) => void,
-    private readonly backendMode: StreamBackend,
-  ) {
+  constructor(onMessage: (message: WorkerToMainMessage) => void) {
     this.onMessage = onMessage;
     if (activeStreamClient && activeStreamClient !== this) {
       activeStreamClient.destroy();
@@ -792,7 +758,7 @@ export class StreamWorkerClient {
       return;
     }
 
-    this.backend = this.createBackend(canvasElement);
+    this.backend = new WebRtcStreamClient(this.onMessage);
     this.backend.attachCanvas(canvasElement);
     this.attachedCanvas = true;
   }
@@ -841,16 +807,4 @@ export class StreamWorkerClient {
       activeStreamClient = null;
     }
   }
-
-  private createBackend(canvasElement: HTMLCanvasElement): StreamClientBackend {
-    if (this.backendMode === "webrtc") {
-      return new WebRtcStreamClient(this.onMessage);
-    }
-    void canvasElement;
-    return new WorkerStreamClient(this.onMessage);
-  }
-}
-
-function canUseWebTransport(): boolean {
-  return typeof WebTransport === "function" && window.isSecureContext;
 }

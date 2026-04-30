@@ -22,13 +22,13 @@ features:
       width: 28
       height: 28
     title: Browser-first simulator
-    details: "`simdeck` starts a foreground project daemon and prints local/LAN URLs for a React UI with live WebTransport video, touch, keyboard, hardware-button, and rotation input."
+    details: "`simdeck` starts a foreground project daemon and prints local/LAN URLs for a React UI with live WebRTC H.264 video, touch, keyboard, hardware-button, and rotation input."
   - icon:
       src: /icons/zap.svg
       width: 28
       height: 28
     title: Native macOS performance
-    details: "A Rust HTTP server fronts an Objective-C bridge that talks to CoreSimulator, SimulatorKit, private display APIs, and HEVC or H.264 encoders."
+    details: "A Rust HTTP server fronts an Objective-C bridge that talks to CoreSimulator, SimulatorKit, private display APIs, and hardware or software H.264 encoders."
   - icon:
       src: /icons/network.svg
       width: 28

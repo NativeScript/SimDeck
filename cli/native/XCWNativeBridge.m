@@ -662,17 +662,6 @@ bool xcw_native_session_start(void *handle, char **error_message) {
     }
 }
 
-bool xcw_native_session_reconfigure_video_encoder(void *handle, char **error_message) {
-    @autoreleasepool {
-        NSError *error = nil;
-        BOOL ok = [XCWNativeSessionFromHandle(handle) reconfigureVideoEncoder:&error];
-        if (!ok) {
-            XCWSetErrorMessage(error_message, error);
-        }
-        return ok;
-    }
-}
-
 void xcw_native_session_request_refresh(void *handle) {
     @autoreleasepool {
         [XCWNativeSessionFromHandle(handle) requestRefresh];

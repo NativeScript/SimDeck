@@ -94,21 +94,6 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
     [self.session requestFrameRefresh];
 }
 
-- (BOOL)reconfigureVideoEncoder:(NSError * _Nullable __autoreleasing *)error {
-    [self.session reconfigureVideoEncoder];
-    if (![self.session waitForFirstEncodedFrameWithTimeout:2.0]) {
-        if (error != NULL) {
-            *error = [NSError errorWithDomain:@"SimDeck.NativeSession"
-                                         code:3
-                                     userInfo:@{
-                NSLocalizedDescriptionKey: @"Timed out waiting for the first encoded simulator frame after codec reconfiguration.",
-            }];
-        }
-        return NO;
-    }
-    return YES;
-}
-
 - (void)requestKeyFrame {
     [self.session requestKeyFrameRefresh];
 }

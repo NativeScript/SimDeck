@@ -24,18 +24,18 @@ simdeck tap --help
 
 Targets a specific running SimDeck daemon for commands that support the HTTP fast path. If unset, commands start or reuse the current project's daemon when needed.
 
-## `ui` And `daemon start`
+## `ui`, `daemon start`, And `daemon restart`
 
-`ui` and `daemon start` accept the same server options. `ui` also accepts `--open`.
+`ui`, `daemon start`, and `daemon restart` accept the same server options. `ui` also accepts `--open`.
 
 | Flag               | Default               | Description                                                                     |
 | ------------------ | --------------------- | ------------------------------------------------------------------------------- |
-| `--port <u16>`     | `4310`                | HTTP port. WebTransport listens on `port + 1`.                                  |
+| `--port <u16>`     | `4310`                | HTTP port for the REST API, browser UI, and WebRTC offer endpoint.              |
 | `--bind <ip>`      | `127.0.0.1`           | Bind address (`0.0.0.0` for [LAN access](/guide/lan-access), `::` for IPv6).    |
-| `--advertise-host` | matches local host    | Hostname or IP advertised in the WebTransport URL template and certificate.     |
+| `--advertise-host` | matches local host    | Hostname or IP printed for LAN browser access.                                  |
 | `--client-root`    | bundled `client/dist` | Override the static browser client directory.                                   |
-| `--video-codec`    | `h264-software`       | One of `hevc`, `h264`, or `h264-software`. See [Video Pipeline](/guide/video).  |
-| `--low-latency`    | `false`               | Software H.264 profile for slower runners: caps at 45 fps and favors freshness. |
+| `--video-codec`    | `h264-software`       | One of `h264` or `h264-software`. See [Video Pipeline](/guide/video).           |
+| `--low-latency`    | `false`               | Software H.264 profile for slower runners: caps at 30 fps and favors freshness. |
 | `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                          |
 
 The public commands generate an access token automatically. Use `simdeck daemon status` to read it for direct API callers.

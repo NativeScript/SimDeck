@@ -10,13 +10,11 @@ Use `--bind` to listen on a non-loopback address:
 simdeck ui --port 4310 --bind 0.0.0.0 --open
 ```
 
-Both the HTTP server and the WebTransport server bind to the requested address. The HTTP server is plain HTTP, so any browser on the LAN can reach it through `http://<your-mac-ip>:4310`. LAN browsers must enter the pairing code printed by the foreground command or returned by `daemon start` before the API cookie is issued.
+The HTTP server binds to the requested address. It serves the REST API, browser UI, inspector WebSocket, and WebRTC offer endpoint, so any browser on the LAN can reach SimDeck through `http://<your-mac-ip>:4310`. LAN browsers must enter the pairing code printed by the foreground command or returned by `daemon start` before the API cookie is issued.
 
 ## Advertise the right host
 
-WebTransport needs a hostname or IP that matches the certificate the server generates. By default SimDeck advertises `localhost`, which only works for browsers running on the same Mac.
-
-Tell the server what host to advertise to remote clients:
+By default SimDeck advertises `localhost`, which only works for browsers running on the same Mac. Tell the server what host to print for remote clients:
 
 ```sh
 simdeck ui \
@@ -26,11 +24,7 @@ simdeck ui \
   --open
 ```
 
-The advertised host shows up in three places:
-
-- The `webTransport.urlTemplate` field on `GET /api/health`.
-- The Subject Alternative Name list on the self-signed WebTransport certificate.
-- The certificate hash that the client pins by SHA-256.
+The advertised host is used in the printed Network URL and in `daemon start` JSON output.
 
 If you skip `--advertise-host` while binding to `0.0.0.0`, the server prints a warning at startup because it will still tell remote clients to dial `localhost`.
 
@@ -46,31 +40,20 @@ simdeck ui --bind ::      --advertise-host my-mac.local --open
 
 Whatever you advertise must be resolvable from the remote client.
 
-## Certificate handling
+## Health response
 
-The server generates a fresh self-signed certificate every time it starts. The certificate's SHA-256 hash is exposed on `GET /api/health`:
+`GET /api/health` reports the HTTP port and active video encoder mode:
 
 ```json
 {
   "ok": true,
   "httpPort": 4310,
-  "wtPort": 4311,
   "videoCodec": "h264-software",
-  "lowLatency": false,
-  "webTransport": {
-    "urlTemplate": "https://192.168.1.50:4311/wt/simulators/{udid}?simdeckToken=...",
-    "certificateHash": {
-      "algorithm": "sha-256",
-      "value": "..."
-    },
-    "packetVersion": 1
-  }
+  "lowLatency": false
 }
 ```
 
-The browser client passes that hash to the WebTransport API as the `serverCertificateHashes` option, so no certificate trust prompts are involved. As long as the client fetched the hash through HTTP and dialled the same advertised host, the WebTransport handshake completes without any user interaction.
-
-Restarting the server invalidates the previous certificate. Open clients reconnect automatically as soon as `/api/health` reports the new hash.
+Restarting the server rotates the generated API access token. Open clients reconnect automatically after pairing or receiving the loopback cookie again.
 
 ## Authentication and security
 
@@ -95,8 +78,6 @@ The foreground `simdeck` command prints an HTTP network URL and a pairing code:
 q or ^C to stop server
 ```
 
-On LAN HTTP, browsers that cannot use WebTransport fall back to WebRTC. The WebTransport URL template returned by authenticated `GET /api/health` includes a `simdeckToken` query parameter for the browser stream worker.
-
 Get the token for scripts with:
 
 ```sh
@@ -116,5 +97,5 @@ To make a SimDeck server reachable from another device:
 
 1. `--bind 0.0.0.0` (or `--bind ::`).
 2. `--advertise-host <reachable-host-or-ip>`.
-3. Allow the chosen ports through any firewalls.
+3. Allow the chosen port through any firewalls.
 4. Visit `http://<advertise-host>:<port>` from the remote device.

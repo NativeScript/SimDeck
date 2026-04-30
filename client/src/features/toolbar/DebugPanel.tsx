@@ -12,10 +12,6 @@ interface DebugPanelProps {
   status: StreamStatus;
 }
 
-function formatBoolean(value: boolean): string {
-  return value ? "Yes" : "No";
-}
-
 function formatFps(value: number): string {
   if (!Number.isFinite(value)) {
     return "0.0";
@@ -78,9 +74,6 @@ export function DebugPanel({
     { label: "Path", value: runtimeInfo.streamBackend },
     { label: "Renderer", value: runtimeInfo.renderBackend },
     { label: "GPU", value: formatGpuStatus(runtimeInfo) },
-    { label: "WebGL2", value: formatBoolean(runtimeInfo.webGL2) },
-    { label: "WebCodecs", value: formatBoolean(runtimeInfo.webCodecs) },
-    { label: "WebTransport", value: formatBoolean(runtimeInfo.webTransport) },
   ];
 
   const gpuRenderer = runtimeInfo.gpuRenderer.trim();
