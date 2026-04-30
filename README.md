@@ -63,6 +63,12 @@ Use `simdeck ui --open` or `simdeck daemon start` when you want a reusable backg
 The no-subcommand lifecycle shortcuts are `simdeck -d` for detached start, `simdeck -k` to kill the background daemon, and `simdeck -r` to restart it.
 The served loopback browser UI receives the generated API access token automatically. LAN browsers pair with the printed code before receiving the API cookie.
 
+SimDeck Studio providers run the daemon on loopback and use
+`scripts/studio-provider-bridge.mjs` for outbound control-plane communication
+with Studio. Studio hosts the browser UI and proxies SimDeck REST requests over
+that bridge while WebRTC media still negotiates directly between the browser and
+runner through ICE.
+
 CLI commands automatically use the same warm daemon:
 
 ```sh

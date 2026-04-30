@@ -39,6 +39,10 @@ TURN server and relay-only ICE:
 `SIMDECK_WEBRTC_ICE_SERVERS=turns:turn.example.com:5349?transport=tcp`,
 `SIMDECK_WEBRTC_ICE_USERNAME`, `SIMDECK_WEBRTC_ICE_CREDENTIAL`, and
 `SIMDECK_WEBRTC_ICE_TRANSPORT_POLICY=relay`.
+SimDeck Studio provider runners keep SimDeck bound to loopback and run
+`scripts/studio-provider-bridge.mjs` as an outbound bridge; Studio hosts the UI
+and proxies REST requests through that bridge while WebRTC media negotiates
+directly with the runner.
 
 The local viewer gets the API token automatically. LAN browsers pair with the printed code before receiving the API cookie. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
 

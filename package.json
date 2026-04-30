@@ -11,6 +11,7 @@
     "README.md",
     "bin/",
     "scripts/experimental/",
+    "scripts/studio-provider-bridge.mjs",
     "scripts/postinstall.mjs",
     "build/simdeck-bin",
     "client/dist/",
