@@ -2,7 +2,7 @@ use crate::api::routes::AppState;
 use crate::auth;
 use crate::metrics::counters::Metrics;
 use crate::simulators::session::SimulatorSession;
-use crate::transport::packet::{ControlHello, ForeignBytes, SharedFrame, PACKET_VERSION};
+use crate::transport::packet::{ControlHello, SharedFrame, PACKET_VERSION};
 use anyhow::Context;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -214,13 +214,13 @@ async fn send_frame(
     let description = frame
         .description
         .as_ref()
-        .map(ForeignBytes::as_slice)
+        .map(bytes::Bytes::as_ref)
         .unwrap_or(&[]);
     stream.write_all(&header).await?;
     if !description.is_empty() {
         stream.write_all(description).await?;
     }
-    let data = frame.data.as_slice();
+    let data = frame.data.as_ref();
     if !data.is_empty() {
         stream.write_all(data).await?;
     }

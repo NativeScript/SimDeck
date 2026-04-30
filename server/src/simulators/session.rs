@@ -3,7 +3,8 @@ use crate::metrics::counters::Metrics;
 use crate::native::bridge::{NativeBridge, NativeSession};
 use crate::native::ffi;
 use crate::simulators::state::SessionState;
-use crate::transport::packet::{ForeignBytes, FramePacket, SharedFrame};
+use crate::transport::packet::{FramePacket, SharedFrame};
+use bytes::Bytes;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -206,8 +207,8 @@ unsafe extern "C" fn native_frame_callback(
 
 impl SimulatorSessionInner {
     fn handle_frame(&self, frame: &ffi::xcw_native_frame) {
-        let description = unsafe { ForeignBytes::from_ffi(frame.description) };
-        let Some(data) = (unsafe { ForeignBytes::from_ffi(frame.data) }) else {
+        let description = unsafe { copy_ffi_bytes(frame.description) };
+        let Some(data) = (unsafe { copy_ffi_bytes(frame.data) }) else {
             return;
         };
         let packet = Arc::new(FramePacket {
@@ -247,6 +248,23 @@ impl SimulatorSessionInner {
             *self.state.lock().unwrap() = SessionState::Ready;
         }
     }
+}
+
+unsafe fn copy_ffi_bytes(bytes: ffi::xcw_native_shared_bytes) -> Option<Bytes> {
+    if bytes.data.is_null() || bytes.length == 0 {
+        if !bytes.owner.is_null() {
+            unsafe {
+                ffi::xcw_native_release_shared_bytes(bytes);
+            }
+        }
+        return None;
+    }
+
+    let copied = unsafe { Bytes::copy_from_slice(std::slice::from_raw_parts(bytes.data, bytes.length)) };
+    unsafe {
+        ffi::xcw_native_release_shared_bytes(bytes);
+    }
+    Some(copied)
 }
 
 fn c_string(ptr: *const i8) -> Option<String> {
