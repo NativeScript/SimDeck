@@ -1218,8 +1218,6 @@ export function AppShell() {
     }
     const udid = selectedSimulator.udid;
     setVideoCodec(codec);
-    setStreamSettingsRevision((current) => current + 1);
-    setStreamStamp(Date.now());
     void runAction(async () => {
       const response = await setSimulatorVideoCodec(udid, codec);
       setVideoCodec(response.videoCodec);

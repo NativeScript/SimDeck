@@ -21,12 +21,14 @@ use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Map;
 use serde_json::{json as json_value, Value};
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::Command;
+use tokio::sync::mpsc;
 use tokio::task;
 use tokio::time::timeout;
 use tower_http::trace::TraceLayer;
@@ -989,6 +991,8 @@ async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket)
                 .into(),
         ))
         .await;
+    let (control_tx, control_rx) = mpsc::channel::<ControlMessage>(8);
+    let control_task = task::spawn(run_control_queue(session, udid.clone(), control_rx));
 
     while let Some(message) = receiver.next().await {
         let text = match message {
@@ -1012,10 +1016,56 @@ async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket)
                 continue;
             }
         };
-        if let Err(error) = run_control_message(session.clone(), control_message).await {
+        match control_tx.try_send(control_message) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(message)) if control_message_is_move(&message) => {
+                // Drag streams can outpace native HID injection. Prefer the
+                // newest position over building latency with obsolete moves.
+            }
+            Err(mpsc::error::TrySendError::Full(message)) => {
+                if control_tx.send(message).await.is_err() {
+                    break;
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => break,
+        }
+    }
+    drop(control_tx);
+    let _ = control_task.await;
+}
+
+async fn run_control_queue(
+    session: SimulatorSession,
+    udid: String,
+    mut receiver: mpsc::Receiver<ControlMessage>,
+) {
+    let mut pending = VecDeque::new();
+    loop {
+        let mut message = match pending.pop_front() {
+            Some(message) => message,
+            None => match receiver.recv().await {
+                Some(message) => message,
+                None => break,
+            },
+        };
+        if control_message_is_move(&message) {
+            while let Ok(next_message) = receiver.try_recv() {
+                if control_message_is_move(&next_message) {
+                    message = next_message;
+                } else {
+                    pending.push_back(next_message);
+                    break;
+                }
+            }
+        }
+        if let Err(error) = run_control_message(session.clone(), message).await {
             tracing::debug!("Control message failed for {udid}: {error}");
         }
     }
+}
+
+fn control_message_is_move(message: &ControlMessage) -> bool {
+    matches!(message, ControlMessage::Touch { phase, .. } if phase == "moved")
 }
 
 pub(crate) async fn run_control_message(

@@ -4,6 +4,7 @@
 #import <os/lock.h>
 #import <QuartzCore/QuartzCore.h>
 #import <VideoToolbox/VideoToolbox.h>
+#include <stdlib.h>
 
 static const int32_t XCWMaximumEncodedDimension = 1920;
 static const int32_t XCWMaximumSoftwareEncodedDimension = 1600;
@@ -27,7 +28,8 @@ typedef NS_ENUM(NSUInteger, XCWVideoEncoderMode) {
 };
 
 static XCWVideoEncoderMode XCWVideoEncoderModeFromEnvironment(void) {
-    NSString *value = [[[NSProcessInfo processInfo] environment][@"SIMDECK_VIDEO_CODEC"] lowercaseString];
+    const char *rawValue = getenv("SIMDECK_VIDEO_CODEC");
+    NSString *value = rawValue != NULL ? [[[NSString alloc] initWithUTF8String:rawValue] lowercaseString] : @"";
     if ([value isEqualToString:@"h264"] || [value isEqualToString:@"h264-hardware"] || [value isEqualToString:@"avc"]) {
         return XCWVideoEncoderModeH264Hardware;
     }
