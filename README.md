@@ -69,6 +69,16 @@ with Studio. Studio hosts the browser UI and proxies SimDeck REST requests over
 that bridge while WebRTC media still negotiates directly between the browser and
 runner through ICE.
 
+Expose a local simulator through Studio with one command:
+
+```sh
+simdeck studio expose "iPhone 17 Pro"
+```
+
+The command starts or reuses the local daemon, creates an ephemeral Studio
+session, prints a unique `https://simdeck.djdev.me/simulator/...` URL, and keeps
+the outbound bridge alive until you press Ctrl-C.
+
 CLI commands automatically use the same warm daemon:
 
 ```sh

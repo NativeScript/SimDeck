@@ -43,6 +43,9 @@ SimDeck Studio provider runners keep SimDeck bound to loopback and run
 `scripts/studio-provider-bridge.mjs` as an outbound bridge; Studio hosts the UI
 and proxies REST requests through that bridge while WebRTC media negotiates
 directly with the runner.
+For an ad-hoc local provider that can be opened from another browser or phone,
+run `simdeck studio expose "iPhone 17 Pro"` and keep that process running. It
+prints the unique Studio simulator URL.
 
 The local viewer gets the API token automatically. LAN browsers pair with the printed code before receiving the API cookie. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
 

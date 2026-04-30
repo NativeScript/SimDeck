@@ -90,6 +90,10 @@ enum Command {
         #[command(subcommand)]
         command: DaemonCommand,
     },
+    Studio {
+        #[command(subcommand)]
+        command: StudioCommand,
+    },
     #[command(hide = true)]
     Serve {
         #[arg(long, default_value_t = 4310)]
@@ -420,6 +424,23 @@ enum DaemonCommand {
 }
 
 #[derive(Subcommand)]
+enum StudioCommand {
+    Expose {
+        simulator: Option<String>,
+        #[arg(long, default_value = "https://simdeck.djdev.me")]
+        studio_url: String,
+        #[arg(long, default_value_t = 4310)]
+        port: u16,
+        #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
+        bind: IpAddr,
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        video_codec: VideoCodecMode,
+        #[arg(long = "no-low-latency")]
+        no_low_latency: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum ServiceCommand {
     On {
         #[arg(long, default_value_t = 4310)]
@@ -521,6 +542,15 @@ struct DaemonLaunchOptions {
     bind: IpAddr,
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
+    video_codec: VideoCodecMode,
+    low_latency: bool,
+}
+
+struct StudioExposeOptions {
+    simulator: Option<String>,
+    studio_url: String,
+    port: u16,
+    bind: IpAddr,
     video_codec: VideoCodecMode,
     low_latency: bool,
 }
@@ -1053,6 +1083,149 @@ fn ui_url(host: &str, port: u16, selector: Option<&str>) -> String {
     url
 }
 
+fn expose_to_studio(options: StudioExposeOptions) -> anyhow::Result<()> {
+    let metadata = ensure_project_daemon(DaemonLaunchOptions {
+        port: options.port,
+        bind: options.bind,
+        advertise_host: None,
+        client_root: None,
+        video_codec: options.video_codec,
+        low_latency: options.low_latency,
+    })?;
+    let selected = if let Some(selector) = options.simulator.as_deref() {
+        select_studio_simulator(&metadata.http_url, selector)
+            .ok()
+            .flatten()
+    } else {
+        select_default_studio_simulator(&metadata.http_url)
+            .ok()
+            .flatten()
+    };
+    if let Some(simulator) = selected.as_ref() {
+        if !simulator.is_booted {
+            service_post_ok(&metadata.http_url, &simulator.udid, "boot", &Value::Null)
+                .with_context(|| format!("boot simulator {}", simulator.name))?;
+        }
+    }
+
+    let bridge_script = studio_provider_bridge_script()?;
+    println!(
+        "Exposing {} through SimDeck Studio...",
+        selected
+            .as_ref()
+            .map(|simulator| simulator.name.as_str())
+            .unwrap_or("the selected simulator")
+    );
+    println!("Press Ctrl-C to stop the Studio bridge.");
+    let status = ProcessCommand::new("node")
+        .arg(bridge_script)
+        .env(
+            "SIMDECK_CLOUD_URL",
+            options.studio_url.trim_end_matches('/'),
+        )
+        .env("SIMDECK_LOCAL_URL", &metadata.http_url)
+        .env("SIMDECK_LOCAL_TOKEN", &metadata.access_token)
+        .env(
+            "SIMDECK_STUDIO_SIMULATOR_NAME",
+            selected
+                .as_ref()
+                .map(|simulator| simulator.name.as_str())
+                .unwrap_or("Local Mac simulator"),
+        )
+        .env(
+            "SIMDECK_STUDIO_RUNTIME_NAME",
+            selected
+                .as_ref()
+                .and_then(|simulator| simulator.runtime_name.as_deref())
+                .unwrap_or(""),
+        )
+        .stdin(Stdio::null())
+        .status()
+        .context("run Studio provider bridge")?;
+    if !status.success() {
+        anyhow::bail!("Studio provider bridge exited with status {status}");
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct StudioSimulatorSelection {
+    udid: String,
+    name: String,
+    runtime_name: Option<String>,
+    is_booted: bool,
+}
+
+fn select_studio_simulator(
+    server_url: &str,
+    selector: &str,
+) -> anyhow::Result<Option<StudioSimulatorSelection>> {
+    let normalized = selector.trim().to_lowercase();
+    Ok(list_studio_simulators(server_url)?
+        .into_iter()
+        .find(|simulator| {
+            simulator.udid.eq_ignore_ascii_case(selector)
+                || simulator.name.eq_ignore_ascii_case(selector)
+                || simulator.name.to_lowercase().contains(&normalized)
+        }))
+}
+
+fn select_default_studio_simulator(
+    server_url: &str,
+) -> anyhow::Result<Option<StudioSimulatorSelection>> {
+    let simulators = list_studio_simulators(server_url)?;
+    Ok(simulators
+        .iter()
+        .find(|simulator| simulator.is_booted)
+        .cloned()
+        .or_else(|| simulators.into_iter().next()))
+}
+
+fn list_studio_simulators(server_url: &str) -> anyhow::Result<Vec<StudioSimulatorSelection>> {
+    let response = service_get_json(server_url, "/api/simulators")?;
+    let simulators = response
+        .get("simulators")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(simulators
+        .into_iter()
+        .filter_map(|value| {
+            Some(StudioSimulatorSelection {
+                udid: value.get("udid")?.as_str()?.to_owned(),
+                name: value.get("name")?.as_str()?.to_owned(),
+                runtime_name: value
+                    .get("runtimeName")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                is_booted: value
+                    .get("isBooted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            })
+        })
+        .collect())
+}
+
+fn studio_provider_bridge_script() -> anyhow::Result<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(root) = project_root() {
+        candidates.push(root.join("scripts/studio-provider-bridge.mjs"));
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(package_root) = current_exe.parent().and_then(Path::parent) {
+            candidates.push(package_root.join("scripts/studio-provider-bridge.mjs"));
+        }
+    }
+    if let Ok(current_dir) = env::current_dir() {
+        candidates.push(current_dir.join("scripts/studio-provider-bridge.mjs"));
+    }
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| anyhow::anyhow!("Unable to find scripts/studio-provider-bridge.mjs."))
+}
+
 fn format_pairing_code(pairing_code: &str) -> String {
     if pairing_code.len() == 6 {
         format!("{} {}", &pairing_code[..3], &pairing_code[3..])
@@ -1188,6 +1361,23 @@ fn main() -> anyhow::Result<()> {
                 let _ = fs::remove_file(metadata_path);
                 result
             }
+        },
+        Command::Studio { command } => match command {
+            StudioCommand::Expose {
+                simulator,
+                studio_url,
+                port,
+                bind,
+                video_codec,
+                no_low_latency,
+            } => expose_to_studio(StudioExposeOptions {
+                simulator,
+                studio_url,
+                port,
+                bind,
+                video_codec,
+                low_latency: !no_low_latency,
+            }),
         },
         Command::Serve {
             port,

@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 
-const cloudUrl = requiredEnv("SIMDECK_CLOUD_URL").replace(/\/$/, "");
-const previewId = requiredEnv("PREVIEW_ID");
-const providerToken = requiredEnv("PROVIDER_TOKEN");
+const cloudUrl = (
+  process.env.SIMDECK_CLOUD_URL || "https://simdeck.djdev.me"
+).replace(/\/$/, "");
+let previewId = process.env.PREVIEW_ID || "";
+let providerToken = process.env.PROVIDER_TOKEN || "";
+let publicUrl = process.env.SIMDECK_STUDIO_URL || "";
 const localUrl = (
   process.env.SIMDECK_LOCAL_URL || "http://127.0.0.1:4310"
 ).replace(/\/$/, "");
+let localToken = process.env.SIMDECK_LOCAL_TOKEN || providerToken;
 const registerIntervalMs = Number(
   process.env.SIMDECK_PROVIDER_REGISTER_INTERVAL_MS || 15000,
 );
@@ -17,6 +21,22 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     stopped = true;
   });
 }
+
+if (!previewId || !providerToken) {
+  const session = await createLocalProviderSession();
+  previewId = session.sessionId;
+  providerToken = session.providerToken;
+  publicUrl = session.url;
+}
+
+if (!publicUrl) {
+  publicUrl = `${cloudUrl}/simulator/${encodeURIComponent(previewId)}`;
+}
+if (!localToken) {
+  localToken = providerToken;
+}
+
+console.log(`[simdeck-provider-bridge] ${publicUrl}`);
 
 await registerProvider();
 
@@ -48,7 +68,7 @@ async function registerProvider() {
     await fetchJson(`${cloudUrl}/api/actions/providers/register`, {
       previewId,
       providerToken,
-      baseUrl: `${cloudUrl}/simulator/${encodeURIComponent(previewId)}`,
+      baseUrl: publicUrl,
       status: metadata.ok ? "ready" : "provider-online",
       simulatorUdid: metadata.simulator?.udid,
       simulatorName: metadata.simulator?.name,
@@ -60,6 +80,17 @@ async function registerProvider() {
       `[simdeck-provider-bridge] provider registration failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+async function createLocalProviderSession() {
+  const response = await fetchJson(`${cloudUrl}/api/local-provider-sessions`, {
+    simulatorName: process.env.SIMDECK_STUDIO_SIMULATOR_NAME,
+    runtimeName: process.env.SIMDECK_STUDIO_RUNTIME_NAME,
+  });
+  if (!response?.sessionId || !response?.providerToken || !response?.url) {
+    throw new Error("Studio did not return a local provider session.");
+  }
+  return response;
 }
 
 async function localProviderMetadata() {
@@ -84,10 +115,10 @@ async function handleRequest(request) {
   try {
     const target = new URL(request.path, `${localUrl}/`);
     if (!target.searchParams.has("simdeckToken")) {
-      target.searchParams.set("simdeckToken", providerToken);
+      target.searchParams.set("simdeckToken", localToken);
     }
     const headers = new Headers(request.headers || {});
-    headers.set("x-simdeck-token", providerToken);
+    headers.set("x-simdeck-token", localToken);
     headers.delete("host");
     headers.delete("content-length");
     const response = await fetch(target, {
@@ -129,9 +160,9 @@ async function handleRequest(request) {
 
 async function localJson(path) {
   const target = new URL(path, `${localUrl}/`);
-  target.searchParams.set("simdeckToken", providerToken);
+  target.searchParams.set("simdeckToken", localToken);
   const response = await fetch(target, {
-    headers: { "x-simdeck-token": providerToken },
+    headers: { "x-simdeck-token": localToken },
   });
   if (!response.ok) {
     throw new Error(
@@ -164,14 +195,6 @@ async function fetchJson(url, body) {
     );
   }
   return response.json();
-}
-
-function requiredEnv(name) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`${name} is required.`);
-  }
-  return value;
 }
 
 function sleep(ms) {
