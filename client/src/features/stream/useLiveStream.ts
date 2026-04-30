@@ -27,6 +27,7 @@ const DEBUG_RENDERER_SOFTWARE_PATTERN = /swiftshader|software|llvmpipe/i;
 
 interface UseLiveStreamOptions {
   canvasElement: HTMLCanvasElement | null;
+  paused?: boolean;
   simulator: SimulatorMetadata | null;
   streamRevision: number;
   transportMode: StreamTransportMode;
@@ -126,6 +127,7 @@ function buildClientTelemetryUrl(): string {
 
 export function useLiveStream({
   canvasElement,
+  paused = false,
   simulator,
   streamRevision,
   transportMode,
@@ -194,6 +196,7 @@ export function useLiveStream({
   useEffect(() => {
     if (
       !streamBackendResolved ||
+      paused ||
       !canvasElement ||
       workerClientRef.current ||
       canvasElement.dataset.streamBackend !== transportBackend
@@ -282,7 +285,13 @@ export function useLiveStream({
       workerClient.destroy();
       workerClientRef.current = null;
     };
-  }, [canvasElement, streamBackendResolved, transportBackend, transportMode]);
+  }, [
+    canvasElement,
+    paused,
+    streamBackendResolved,
+    transportBackend,
+    transportMode,
+  ]);
 
   useEffect(() => {
     latestDecodedFramesRef.current = stats.decodedFrames;
@@ -400,7 +409,7 @@ export function useLiveStream({
     setError("");
     setFps(0);
 
-    if (!simulator?.isBooted) {
+    if (paused || !simulator?.isBooted) {
       workerClient.disconnect();
       workerClient.clear();
       return;
@@ -414,6 +423,7 @@ export function useLiveStream({
     canvasElement,
     simulator?.isBooted,
     simulator?.udid,
+    paused,
     streamBackendResolved,
     transportBackend,
   ]);
