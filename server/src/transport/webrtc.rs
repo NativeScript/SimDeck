@@ -27,6 +27,7 @@ const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
 const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 12;
+const WEBRTC_REFRESH_INTERVAL: Duration = Duration::from_millis(33);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -349,11 +350,16 @@ async fn stream_h264_frames(
     let mut last_sequence = 0u64;
     let mut send_timing = WebRtcSendTiming::new();
     let mut bootstrap_interval = time::interval(WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL);
+    let mut refresh_interval = time::interval(WEBRTC_REFRESH_INTERVAL);
+    refresh_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
     let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
     loop {
         tokio::select! {
+            _ = refresh_interval.tick() => {
+                session.request_refresh();
+            }
             _ = bootstrap_interval.tick(), if bootstrap_frames_remaining > 0 => {
                 if let Err(error) = write_frame_sample(
                     &video_track,

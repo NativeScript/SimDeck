@@ -15,6 +15,7 @@ use tokio::time::{timeout, Instant};
 use tracing::debug;
 
 const FRAME_BROADCAST_CAPACITY: usize = 240;
+const MIN_REFRESH_INTERVAL_MS: u64 = 33;
 
 pub struct SimulatorSession {
     inner: Arc<SimulatorSessionInner>,
@@ -137,7 +138,7 @@ impl SimulatorSession {
     pub fn request_refresh(&self) {
         let now = now_ms();
         let previous = self.inner.last_refresh_ms.load(Ordering::Relaxed);
-        if now.saturating_sub(previous) < 200 {
+        if now.saturating_sub(previous) < MIN_REFRESH_INTERVAL_MS {
             return;
         }
         self.inner.last_refresh_ms.store(now, Ordering::Relaxed);
