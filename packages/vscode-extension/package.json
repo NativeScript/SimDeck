@@ -2,9 +2,10 @@
   "name": "simdeck-vscode",
   "displayName": "SimDeck",
   "description": "Open the local SimDeck simulator inside VS Code.",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "publisher": "nativescript",
   "license": "Apache-2.0",
+  "icon": "simdeck-logo.png",
   "engines": {
     "vscode": "^1.90.0"
   },
