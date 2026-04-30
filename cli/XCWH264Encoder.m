@@ -1,6 +1,5 @@
 #import "XCWH264Encoder.h"
 
-#import <CoreImage/CoreImage.h>
 #import <CoreMedia/CoreMedia.h>
 #import <os/lock.h>
 #import <QuartzCore/QuartzCore.h>
@@ -233,9 +232,12 @@ static int32_t XCWRoundToEvenDimension(double value) {
 }
 
 static CGSize XCWScaledDimensionsForSourceSize(int32_t width, int32_t height, XCWVideoEncoderMode mode) {
-    (void)mode;
     if (width <= 0 || height <= 0) {
         return CGSizeZero;
+    }
+
+    if (mode == XCWVideoEncoderModeH264Software) {
+        return CGSizeMake(width, height);
     }
 
     int32_t longestEdge = MAX(width, height);
@@ -343,7 +345,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     int32_t _height;
     uint64_t _timestampOriginUs;
     VTPixelTransferSessionRef _pixelTransferSession;
-    CIContext *_scalingContext;
     CVPixelBufferRef _scaledPixelBuffer;
     OSType _scaledPixelFormat;
     XCWVideoEncoderMode _encoderMode;
@@ -680,12 +681,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         return pixelBuffer;
     }
 
-    if (_encoderMode == XCWVideoEncoderModeH264Software) {
-        return [self copyCoreImageScaledPixelBuffer:pixelBuffer
-                                       targetWidth:targetWidth
-                                      targetHeight:targetHeight];
-    }
-
     if (_pixelTransferSession == NULL) {
         OSStatus sessionStatus = VTPixelTransferSessionCreate(kCFAllocatorDefault, &_pixelTransferSession);
         if (sessionStatus != noErr || _pixelTransferSession == NULL) {
@@ -743,67 +738,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     return _scaledPixelBuffer;
 }
 
-- (nullable CVPixelBufferRef)copyCoreImageScaledPixelBuffer:(CVPixelBufferRef)pixelBuffer
-                                                targetWidth:(int32_t)targetWidth
-                                               targetHeight:(int32_t)targetHeight {
-    OSType sourcePixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
-    BOOL needsNewBuffer = (_scaledPixelBuffer == NULL)
-        || ((int32_t)CVPixelBufferGetWidth(_scaledPixelBuffer) != targetWidth)
-        || ((int32_t)CVPixelBufferGetHeight(_scaledPixelBuffer) != targetHeight)
-        || (_scaledPixelFormat != sourcePixelFormat);
-    if (needsNewBuffer) {
-        if (_scaledPixelBuffer != NULL) {
-            CVPixelBufferRelease(_scaledPixelBuffer);
-            _scaledPixelBuffer = NULL;
-        }
-
-        NSDictionary *attributes = @{
-            (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
-        };
-        CVPixelBufferRef scaledPixelBuffer = NULL;
-        OSStatus bufferStatus = CVPixelBufferCreate(kCFAllocatorDefault,
-                                                    targetWidth,
-                                                    targetHeight,
-                                                    sourcePixelFormat,
-                                                    (__bridge CFDictionaryRef)attributes,
-                                                    &scaledPixelBuffer);
-        if (bufferStatus != noErr || scaledPixelBuffer == NULL) {
-            _lastScaleStatus = bufferStatus;
-            return NULL;
-        }
-        _scaledPixelBuffer = scaledPixelBuffer;
-        _scaledPixelFormat = sourcePixelFormat;
-    }
-
-    if (_scalingContext == nil) {
-        _scalingContext = [CIContext contextWithOptions:@{
-            kCIContextUseSoftwareRenderer: @YES,
-        }];
-    }
-
-    CIImage *image = [CIImage imageWithCVPixelBuffer:pixelBuffer];
-    if (image == nil) {
-        _lastScaleStatus = -1;
-        return NULL;
-    }
-
-    CGFloat scaleX = (CGFloat)targetWidth / MAX((CGFloat)CVPixelBufferGetWidth(pixelBuffer), 1.0);
-    CGFloat scaleY = (CGFloat)targetHeight / MAX((CGFloat)CVPixelBufferGetHeight(pixelBuffer), 1.0);
-    CIImage *scaledImage = [image imageByApplyingTransform:CGAffineTransformMakeScale(scaleX, scaleY)];
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    [_scalingContext render:scaledImage
-            toCVPixelBuffer:_scaledPixelBuffer
-                     bounds:CGRectMake(0, 0, targetWidth, targetHeight)
-                 colorSpace:colorSpace];
-    if (colorSpace != NULL) {
-        CGColorSpaceRelease(colorSpace);
-    }
-
-    _lastScaleStatus = noErr;
-    CVPixelBufferRetain(_scaledPixelBuffer);
-    return _scaledPixelBuffer;
-}
-
 - (void)invalidateScalingResourcesLocked {
     if (_scaledPixelBuffer != NULL) {
         CVPixelBufferRelease(_scaledPixelBuffer);
@@ -815,7 +749,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         CFRelease(_pixelTransferSession);
         _pixelTransferSession = NULL;
     }
-    _scalingContext = nil;
 }
 
 - (void)handleEncodedSampleBuffer:(CMSampleBufferRef)sampleBuffer
