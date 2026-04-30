@@ -98,6 +98,7 @@ const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
 const STREAM_TRANSPORT_STORAGE_KEY = "simdeck.streamTransport";
 const VIDEO_CODEC_STORAGE_KEY = "simdeck.videoCodec";
+const CODEC_SWITCH_SETTLE_MS = 180;
 
 clearLegacyVolatileUiState();
 
@@ -202,6 +203,10 @@ function readStoredVideoCodec(): VideoCodecMode {
   return isVideoCodecMode(stored) ? stored : "h264-software";
 }
 
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
 export function AppShell() {
   const [initialUiState] = useState(readPersistedUiState);
   const [initialSelectedUDID] = useState(
@@ -242,6 +247,7 @@ export function AppShell() {
   const [streamSettingsRevision, setStreamSettingsRevision] = useState(0);
   const [streamTransportMode, setStreamTransportMode] =
     useState<StreamTransportMode>(readStoredTransportMode);
+  const [streamPaused, setStreamPaused] = useState(false);
   const [videoCodec, setVideoCodec] =
     useState<VideoCodecMode>(readStoredVideoCodec);
   const [viewMode, setViewMode] = useState<ViewMode>(
@@ -294,6 +300,7 @@ export function AppShell() {
   const zoomAnimationTimeoutRef = useRef<number>(0);
   const touchIndicatorTimeoutRef = useRef<number>(0);
   const gestureStartZoomRef = useRef(1);
+  const codecSwitchInFlightRef = useRef(false);
   const accessibilityRequestIdRef = useRef(0);
   const accessibilityLoadingRef = useRef(false);
   const controlSocketRef = useRef<{
@@ -376,6 +383,7 @@ export function AppShell() {
     streamCanvasKey,
   } = useLiveStream({
     canvasElement: streamCanvasElement,
+    paused: streamPaused,
     simulator: selectedSimulator,
     streamRevision: streamSettingsRevision,
     transportMode: streamTransportMode,
@@ -1213,17 +1221,38 @@ export function AppShell() {
   }
 
   function handleSelectVideoCodec(codec: VideoCodecMode) {
-    if (!selectedSimulator) {
+    if (!selectedSimulator || codecSwitchInFlightRef.current) {
       return;
     }
     const udid = selectedSimulator.udid;
     setVideoCodec(codec);
-    void runAction(async () => {
-      const response = await setSimulatorVideoCodec(udid, codec);
-      setVideoCodec(response.videoCodec);
-      setStreamSettingsRevision((current) => current + 1);
-      setStreamStamp(Date.now());
-    }, false);
+    void (async () => {
+      codecSwitchInFlightRef.current = true;
+      setStreamPaused(true);
+      closeControlSocket();
+      try {
+        await sleep(CODEC_SWITCH_SETTLE_MS);
+        const ok = await runAction(async () => {
+          const response = await setSimulatorVideoCodec(udid, codec);
+          setVideoCodec(response.videoCodec);
+        }, false);
+        await sleep(CODEC_SWITCH_SETTLE_MS);
+        setStreamSettingsRevision((current) => current + 1);
+        setStreamStamp(Date.now());
+        if (!ok) {
+          void fetchHealth()
+            .then((health) => {
+              if (isVideoCodecMode(health.videoCodec)) {
+                setVideoCodec(health.videoCodec);
+              }
+            })
+            .catch(() => {});
+        }
+      } finally {
+        codecSwitchInFlightRef.current = false;
+        setStreamPaused(false);
+      }
+    })();
   }
 
   async function submitPairing(event: FormEvent<HTMLFormElement>) {

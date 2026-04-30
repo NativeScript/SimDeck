@@ -1,7 +1,23 @@
-# SimDeck
+<p align="center">
+  <img width="180" src="./client/public/simdeck.png">
 
-SimDeck is a developer tool built for streamlining mobile app development for coding agents.
-Drive iOS Simulator apps from the CLI, browser, and automated tests on macOS.
+  <h1 align="center">SimDeck</h1>
+
+  <p align="center">
+    SimDeck is a developer tool built for streamlining mobile app development for coding agents.
+    Drive Simulator from the CLI using agents, browser, and automated tests on macOS.
+  </p>
+</p>
+
+<hr/>
+
+## Try it out
+
+```sh
+npx simdeck
+```
+
+Install the CLI globally for agentic-use:
 
 ```sh
 npm i -g simdeck@latest
@@ -11,25 +27,24 @@ After installing the CLI, install the Codex skill so agents know the stable
 SimDeck workflow:
 
 ```sh
-npx skills add NativeScript/SimDeck --skill simdeck -a codex -g
+npx skills add NativeScript/SimDeck --skill simdeck -g
 ```
 
-For VS Code, install the `nativescript.simdeck` extension to open the simulator
+For VS Code, install the `nativescript.simdeck-vscode` extension to open the simulator
 view inside the editor.
 
 ## Features
 
-- WebTransport streaming server in Rust, plus experimental WebRTC media previews, using HEVC or H.264 video
-- Simulator control & inspection using private accessibility APIs
+- Local simulator video stream over WebTransport or WebRTC, hardware-encoded in full resolution
+- Full simulator control & inspection using private accessibility APIs
 - CoreSimulator chrome asset rendering for device bezels
-- NativeScript and React Native runtime inspector plugins, plus a native UIKit inspector framework for other apps
-- Project daemon reuse: normal CLI commands automatically start and reuse one warm native host per project.
-- Optional macOS LaunchAgent service for an always-on local SimDeck daemon.
+- NativeScript, React Native, UIKit and SwiftUI runtime inspector plugins to view app's view hierarchy live
 - `simdeck/test` for fast JS/TS app tests that can query accessibility state and drive simulator controls.
+- SimDeck Studio for automatic PR deployments to on-demand simulators
 
 ## Documentation
 
-Full documentation lives at [simdeck.nativescript.org](https://simdeck.nativescript.org/), with guides, the CLI reference, the REST API, the WebTransport video pipeline, and the inspector protocols.
+Full documentation lives at [simdeck.nativescript.org](https://simdeck.nativescript.org/), with guides, the CLI reference, the REST API, the video pipeline, and the inspector protocols.
 
 ## Quick start
 
@@ -66,32 +81,7 @@ simdeck daemon status
 simdeck daemon stop
 ```
 
-`simdeck daemon` manages the normal per-project warm process. For an always-on
-daemon that is available after login, use the macOS user service commands:
-
-```sh
-simdeck service on
-simdeck service off
-```
-
-This uses a LaunchAgent, keeps the server bound to localhost by default, and is
-best for agents or editor integrations that should be able to open SimDeck
-without first starting a project daemon.
-
-Use software H.264 when macOS screen recording starves the hardware encoder:
-
-```sh
-simdeck daemon start --video-codec h264-software
-```
-
-The browser reads `/api/health` and automatically selects the WebRTC media
-transport for software H.264.
-
-For LAN browser access:
-
-```sh
-simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
-```
+`simdeck daemon` manages the normal per-project warm process.
 
 Restart the CoreSimulator service layer when `simctl` reports a stale service
 version or the live display gets stuck before the first frame:
@@ -155,59 +145,6 @@ accessibility bridge. Use `--format agent` or `--format compact-json` for
 lower-token hierarchy dumps. Coordinate commands accept screen coordinates from
 the accessibility tree by default; pass `--normalized` to send `0.0..1.0`
 coordinates directly.
-
-## Daemon
-
-Manage the project daemon explicitly when needed:
-
-```sh
-simdeck daemon start
-simdeck daemon status
-simdeck daemon stop
-```
-
-`simdeck daemon` manages the normal per-project warm process. For an always-on
-daemon that is available after login, use the macOS user service commands:
-
-```sh
-simdeck service on
-simdeck service off
-```
-
-This uses a LaunchAgent, keeps the server bound to localhost by default, and is
-best for agents or editor integrations that should be able to open SimDeck
-without first starting a project daemon.
-
-Use software H.264 when macOS screen recording starves the hardware encoder:
-
-```sh
-simdeck daemon start --video-codec h264-software
-```
-
-For LAN browser access:
-
-```sh
-simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
-```
-
-Restart the CoreSimulator service layer when `simctl` reports a stale service
-version or the live display gets stuck before the first frame:
-
-```sh
-simdeck core-simulator restart
-```
-
-You can also start or stop the CoreSimulator service layer explicitly:
-
-```sh
-simdeck core-simulator start
-simdeck core-simulator shutdown
-```
-
-The daemon exposes HTTP on the requested port and WebTransport on `port + 1`.
-The browser bootstrap comes from `GET /api/health`, which returns the WebTransport URL template,
-certificate hash, and packet version needed by the client.
-The served browser UI receives the generated API access token automatically.
 
 ## JS/TS Tests
 
@@ -273,20 +210,15 @@ run `SimDeck: Open Simulator View` from the Command Palette. The extension
 opens the simulator inside a VS Code panel and auto-starts the local daemon
 when it is not already reachable.
 
-## SimDeck Cloud
-
-SimDeck Cloud uses the same server binary as its GitHub Actions provider. The
-provider workflow starts `simdeck serve` on the runner, exposes it through a
-tunnel, and lets the hosted control plane connect to the simulator with a
-one-time access token.
-
 ## Contributing
 
 Contributors should read [CONTRIBUTING.md](CONTRIBUTING.md) for local build
 instructions, the dev workflow, and architecture notes.
 
-## License
+## Copyright notice
 
-Copyright 2026 Dj
+Copyright [OpenJS Foundation](https://openjsf.org) and `NativeScript` contributors. All rights reserved. The [OpenJS Foundation](https://openjsf.org) has registered trademarks and uses trademarks. For a list of trademarks of the [OpenJS Foundation](https://openjsf.org), please see our [Trademark Policy](https://trademark-policy.openjsf.org/) and [Trademark List](https://trademark-list.openjsf.org/). Trademarks and logos not indicated on the [list of OpenJS Foundation trademarks](https://trademark-list.openjsf.org) are trademarks™ or registered® trademarks of their respective holders. Use of them does not imply any affiliation with or endorsement by them.
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+[The OpenJS Foundation](https://openjsf.org/) | [Terms of Use](https://terms-of-use.openjsf.org/) | [Privacy Policy](https://privacy-policy.openjsf.org/) | [OpenJS Foundation Bylaws](https://bylaws.openjsf.org/) | [Trademark Policy](https://trademark-policy.openjsf.org/) | [Trademark List](https://trademark-list.openjsf.org/) | [Cookie Policy](https://www.linuxfoundation.org/cookies/)
+
+<h3 align="center">Made with ❤️</h3>
