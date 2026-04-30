@@ -85,6 +85,15 @@ The encoder did not produce a keyframe within 3 seconds. The most common causes:
   simdeck daemon start --video-codec h264-software
   ```
 
+  On virtualized CI Macs where hardware H.264/HEVC is unavailable and full
+  resolution matters, use the experimental JPEG data-channel stream instead:
+
+  ```sh
+  simdeck daemon stop
+  simdeck daemon start --video-codec jpeg
+  # open the browser with ?transport=webrtc-data
+  ```
+
 - **The Simulator window is minimised or off-screen.** The private display bridge captures from a headless context, so this is rare, but if you see it after waking from sleep, shut the simulator down and boot it again.
 - **The simulator is mid-shutdown.** Wait for `simdeck list` to report `isBooted: true`.
 

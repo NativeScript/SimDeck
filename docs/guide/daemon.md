@@ -54,14 +54,15 @@ This starts or reuses the project daemon, serves the bundled browser client, and
 
 `daemon start` and `ui` accept the same server options:
 
-| Flag               | Default               | Notes                                                              |
-| ------------------ | --------------------- | ------------------------------------------------------------------ |
-| `--port <u16>`     | `4310`                | HTTP port. WebTransport listens on `port + 1`.                     |
-| `--bind <ip>`      | `127.0.0.1`           | Bind address. Use `0.0.0.0` for [LAN access](/guide/lan-access).   |
-| `--advertise-host` | matches local host    | Hostname or IP advertised to browser clients.                      |
-| `--client-root`    | bundled `client/dist` | Override the static browser client directory.                      |
-| `--video-codec`    | `h264-software`       | One of `hevc`, `h264`, `h264-software`. See [Video](/guide/video). |
-| `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.             |
+| Flag               | Default               | Notes                                                                      |
+| ------------------ | --------------------- | -------------------------------------------------------------------------- |
+| `--port <u16>`     | `4310`                | HTTP port. WebTransport listens on `port + 1`.                             |
+| `--bind <ip>`      | `127.0.0.1`           | Bind address. Use `0.0.0.0` for [LAN access](/guide/lan-access).           |
+| `--advertise-host` | matches local host    | Hostname or IP advertised to browser clients.                              |
+| `--client-root`    | bundled `client/dist` | Override the static browser client directory.                              |
+| `--video-codec`    | `h264-software`       | One of `hevc`, `h264`, `h264-software`, `jpeg`. See [Video](/guide/video). |
+| `--jpeg-quality`   | `1.0`                 | JPEG quality from `0.1` to `1.0` when `--video-codec jpeg` is used.        |
+| `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                     |
 
 Example:
 
