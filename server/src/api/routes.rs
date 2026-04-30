@@ -23,6 +23,7 @@ use serde_json::Map;
 use serde_json::{json as json_value, Value};
 use std::collections::VecDeque;
 use std::net::SocketAddr;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -740,6 +741,12 @@ async fn set_video_codec(
     let codec = normalize_video_codec(&payload.codec).ok_or_else(|| {
         AppError::bad_request("Request body must include codec: hevc, h264, or h264-software.")
     })?;
+    let active_streams = state.metrics.active_streams.load(Ordering::Relaxed);
+    if active_streams > 0 {
+        return Err(AppError::conflict(format!(
+            "Cannot switch codec while {active_streams} stream(s) are active."
+        )));
+    }
     std::env::set_var("SIMDECK_VIDEO_CODEC", codec);
     state.registry.remove(&udid);
     Ok(json(json_value!({
