@@ -26,8 +26,10 @@ const ANNEX_B_START_CODE: &[u8] = &[0, 0, 0, 1];
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
 const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(250);
-const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 12;
-const WEBRTC_REFRESH_INTERVAL: Duration = Duration::from_millis(66);
+const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 4;
+const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
+const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,7 +63,7 @@ pub async fn create_answer(
         state.registry.remove(&udid);
         return Err(error);
     }
-    session.request_refresh();
+    session.request_keyframe();
     info!(
         "WebRTC offer for {udid}: remote_candidates={} remote_candidate_types={} ice_servers={}",
         count_sdp_candidates(&payload.sdp),
@@ -350,15 +352,19 @@ async fn stream_h264_frames(
     let mut last_sequence = 0u64;
     let mut send_timing = WebRtcSendTiming::new();
     let mut bootstrap_interval = time::interval(WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL);
-    let mut refresh_interval = time::interval(WEBRTC_REFRESH_INTERVAL);
-    refresh_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+    let mut refresh_sleep = Box::pin(time::sleep(WEBRTC_MIN_REFRESH_INTERVAL));
     let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
+    let mut adaptive_refresh_interval = WEBRTC_MIN_REFRESH_INTERVAL;
+    let mut waiting_for_keyframe = false;
     let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
     loop {
         tokio::select! {
-            _ = refresh_interval.tick() => {
+            _ = &mut refresh_sleep => {
                 session.request_refresh();
+                refresh_sleep
+                    .as_mut()
+                    .reset(time::Instant::now() + adaptive_refresh_interval);
             }
             _ = bootstrap_interval.tick(), if bootstrap_frames_remaining > 0 => {
                 if let Err(error) = write_frame_sample(
@@ -380,7 +386,8 @@ async fn stream_h264_frames(
                             .metrics
                             .frames_dropped_server
                             .fetch_add(skipped, Ordering::Relaxed);
-                        session.request_refresh();
+                        waiting_for_keyframe = true;
+                        session.request_keyframe();
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -392,7 +399,8 @@ async fn stream_h264_frames(
                         .frames_dropped_server
                         .fetch_add(skipped, Ordering::Relaxed);
                     if !frame.is_keyframe {
-                        session.request_refresh();
+                        waiting_for_keyframe = true;
+                        session.request_keyframe();
                         continue;
                     }
                 }
@@ -401,14 +409,32 @@ async fn stream_h264_frames(
                         .metrics
                         .frames_dropped_server
                         .fetch_add(frame.frame_sequence - last_sequence - 1, Ordering::Relaxed);
-                    session.request_refresh();
+                    waiting_for_keyframe = true;
+                    session.request_keyframe();
+                    continue;
+                }
+                if waiting_for_keyframe && !frame.is_keyframe {
+                    state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
                 if frame.is_keyframe {
                     latest_keyframe = frame.clone();
+                    waiting_for_keyframe = false;
                 }
                 let duration = send_timing.duration_for(&frame);
-                if let Err(error) = write_frame_sample(&video_track, &frame, duration).await {
+                let started_at = time::Instant::now();
+                let write_result = time::timeout(
+                    WEBRTC_WRITE_TIMEOUT,
+                    write_frame_sample(&video_track, &frame, duration),
+                ).await;
+                adaptive_refresh_interval = adaptive_interval_for_write(started_at.elapsed());
+                if let Err(error) = write_result
+                    .map_err(|_| anyhow::anyhow!(
+                        "timed out writing WebRTC frame after {}ms",
+                        WEBRTC_WRITE_TIMEOUT.as_millis()
+                    ))
+                    .and_then(|result| result)
+                {
                     warn!("WebRTC frame write failed for {udid}: {error}");
                     break;
                 }
@@ -419,6 +445,14 @@ async fn stream_h264_frames(
     }
 
     let _ = peer_connection.close().await;
+}
+
+fn adaptive_interval_for_write(write_elapsed: Duration) -> Duration {
+    let target_ms = (write_elapsed.as_millis() as u64).saturating_mul(2).clamp(
+        WEBRTC_MIN_REFRESH_INTERVAL.as_millis() as u64,
+        WEBRTC_MAX_REFRESH_INTERVAL.as_millis() as u64,
+    );
+    Duration::from_millis(target_ms)
 }
 
 async fn write_frame_sample(

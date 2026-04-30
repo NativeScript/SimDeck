@@ -14,8 +14,9 @@ use tokio::task;
 use tokio::time::{timeout, Instant};
 use tracing::debug;
 
-const FRAME_BROADCAST_CAPACITY: usize = 240;
-const MIN_REFRESH_INTERVAL_MS: u64 = 66;
+const FRAME_BROADCAST_CAPACITY: usize = 32;
+const MIN_REFRESH_INTERVAL_MS: u64 = 16;
+const MIN_KEYFRAME_INTERVAL_MS: u64 = 250;
 
 pub struct SimulatorSession {
     inner: Arc<SimulatorSessionInner>,
@@ -34,6 +35,7 @@ struct SimulatorSessionInner {
     display_height: AtomicU64,
     frame_sequence: AtomicU64,
     last_refresh_ms: AtomicU64,
+    last_keyframe_ms: AtomicU64,
 }
 
 impl SimulatorSession {
@@ -56,6 +58,7 @@ impl SimulatorSession {
             display_height: AtomicU64::new(0),
             frame_sequence: AtomicU64::new(0),
             last_refresh_ms: AtomicU64::new(0),
+            last_keyframe_ms: AtomicU64::new(0),
         });
 
         let user_data = Weak::into_raw(Arc::downgrade(&inner)) as *mut c_void;
@@ -147,6 +150,22 @@ impl SimulatorSession {
             .keyframe_requests
             .fetch_add(1, Ordering::Relaxed);
         self.inner.native.request_refresh();
+    }
+
+    pub fn request_keyframe(&self) {
+        let now = now_ms();
+        let previous = self.inner.last_keyframe_ms.load(Ordering::Relaxed);
+        if now.saturating_sub(previous) < MIN_KEYFRAME_INTERVAL_MS {
+            self.request_refresh();
+            return;
+        }
+        self.inner.last_keyframe_ms.store(now, Ordering::Relaxed);
+        self.inner.last_refresh_ms.store(now, Ordering::Relaxed);
+        self.inner
+            .metrics
+            .keyframe_requests
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner.native.request_keyframe();
     }
 
     pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {

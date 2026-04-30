@@ -565,7 +565,7 @@ function configureLowLatencyReceiver(receiver: RTCRtpReceiver) {
     jitterBufferTarget?: number;
   };
   if ("jitterBufferTarget" in lowLatencyReceiver) {
-    lowLatencyReceiver.jitterBufferTarget = 0.03;
+    lowLatencyReceiver.jitterBufferTarget = 0.001;
   }
 }
 
