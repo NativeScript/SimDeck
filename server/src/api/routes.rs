@@ -77,6 +77,11 @@ struct TouchPayload {
 }
 
 #[derive(Deserialize)]
+struct VideoCodecPayload {
+    codec: String,
+}
+
+#[derive(Deserialize)]
 struct TouchSequencePayload {
     events: Vec<TouchSequenceEvent>,
 }
@@ -357,6 +362,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/touch", post(send_touch))
         .route("/api/simulators/{udid}/control", get(control_socket))
         .route("/api/simulators/{udid}/webrtc/offer", post(webrtc_offer))
+        .route("/api/simulators/{udid}/video-codec", post(set_video_codec))
         .route(
             "/api/simulators/{udid}/touch-sequence",
             post(send_touch_sequence),
@@ -475,7 +481,7 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "httpPort": state.config.http_port,
         "wtPort": state.config.wt_port,
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64(),
-        "videoCodec": state.config.video_codec,
+        "videoCodec": active_video_codec(&state.config),
         "webTransport": {
             "urlTemplate": auth::tokenized_webtransport_template(&state.config),
             "certificateHash": {
@@ -485,6 +491,22 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
             "packetVersion": PACKET_VERSION,
         }
     }))
+}
+
+fn active_video_codec(config: &Config) -> String {
+    std::env::var("SIMDECK_VIDEO_CODEC")
+        .ok()
+        .and_then(|value| normalize_video_codec(&value).map(ToOwned::to_owned))
+        .unwrap_or_else(|| config.video_codec.clone())
+}
+
+fn normalize_video_codec(codec: &str) -> Option<&'static str> {
+    match codec.trim().to_ascii_lowercase().as_str() {
+        "hevc" => Some("hevc"),
+        "h264" | "h264-hardware" | "avc" => Some("h264"),
+        "h264-software" | "software-h264" => Some("h264-software"),
+        _ => None,
+    }
 }
 
 async fn metrics(State(state): State<AppState>) -> Json<Value> {
@@ -706,6 +728,22 @@ async fn refresh_stream(
     }
     session.request_refresh();
     Ok(json(json_value!({ "ok": true })))
+}
+
+async fn set_video_codec(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<VideoCodecPayload>,
+) -> Result<Json<Value>, AppError> {
+    let codec = normalize_video_codec(&payload.codec).ok_or_else(|| {
+        AppError::bad_request("Request body must include codec: hevc, h264, or h264-software.")
+    })?;
+    std::env::set_var("SIMDECK_VIDEO_CODEC", codec);
+    state.registry.remove(&udid);
+    Ok(json(json_value!({
+        "ok": true,
+        "videoCodec": codec,
+    })))
 }
 
 async fn open_url(

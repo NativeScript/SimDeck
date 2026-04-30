@@ -122,6 +122,23 @@ Toggles between light and dark appearance via `simctl ui appearance`.
 { "ok": true }
 ```
 
+### `POST /api/simulators/{udid}/video-codec`
+
+Switches the active encoder mode for new native simulator sessions and drops the cached session for `{udid}` so the next stream reconnect uses it:
+
+```http
+POST /api/simulators/{udid}/video-codec
+Content-Type: application/json
+
+{ "codec": "h264-software" }
+```
+
+Accepted codecs are `hevc`, `h264`, and `h264-software`. The setting is process-wide; the UDID scopes which cached session is recreated immediately.
+
+```json
+{ "ok": true, "videoCodec": "h264-software" }
+```
+
 ### `POST /api/simulators/{udid}/refresh`
 
 Forces the encoder to emit a fresh keyframe. Useful after a discontinuity or when the client decoder drifts.
