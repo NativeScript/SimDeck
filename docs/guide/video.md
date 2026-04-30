@@ -4,7 +4,7 @@ SimDeck streams the iOS Simulator over WebTransport using a binary frame protoco
 
 ## Codec selection
 
-The server can encode the simulator display in three modes, picked at startup with `--video-codec`:
+The server can encode the simulator display in three modes, picked at startup with `--video-codec` or changed from the browser simulator menu:
 
 | Value                       | Encoder                         | When to use it                                                                                              |
 | --------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -12,7 +12,7 @@ The server can encode the simulator display in three modes, picked at startup wi
 | `h264`                      | Hardware H.264 via VideoToolbox | Use when a downstream client cannot decode HEVC and hardware H.264 is available.                            |
 | `h264-software` _(default)_ | Software H.264 via VideoToolbox | Compatibility fallback when hardware encode is unavailable. The browser automatically selects WebRTC media. |
 
-You can switch at any time by restarting the server with a different flag:
+You can switch from the browser menu next to the simulator list. That updates the process codec setting, drops the cached native session for the selected simulator, and reconnects the stream. You can also restart the server with a different flag:
 
 ```sh
 simdeck daemon stop

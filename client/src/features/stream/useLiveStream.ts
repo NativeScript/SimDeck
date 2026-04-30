@@ -12,6 +12,7 @@ import {
   streamModeIsForcedWebTransport,
   StreamWorkerClient,
   type StreamBackend,
+  type StreamTransportMode,
 } from "./streamWorkerClient";
 import type {
   StreamRuntimeInfo,
@@ -27,6 +28,8 @@ const DEBUG_RENDERER_SOFTWARE_PATTERN = /swiftshader|software|llvmpipe/i;
 interface UseLiveStreamOptions {
   canvasElement: HTMLCanvasElement | null;
   simulator: SimulatorMetadata | null;
+  streamRevision: number;
+  transportMode: StreamTransportMode;
 }
 
 interface UseLiveStreamResult {
@@ -41,8 +44,10 @@ interface UseLiveStreamResult {
   streamCanvasKey: string;
 }
 
-function streamBackendCanResolveSynchronously(): boolean {
-  return streamModeIsForced();
+function streamBackendCanResolveSynchronously(
+  transportMode: StreamTransportMode,
+): boolean {
+  return streamModeIsForced(transportMode);
 }
 
 function createDefaultRuntimeInfo(
@@ -122,6 +127,8 @@ function buildClientTelemetryUrl(): string {
 export function useLiveStream({
   canvasElement,
   simulator,
+  streamRevision,
+  transportMode,
 }: UseLiveStreamOptions): UseLiveStreamResult {
   const clientTelemetryIdRef = useRef("");
   const workerClientRef = useRef<StreamWorkerClient | null>(null);
@@ -130,7 +137,9 @@ export function useLiveStream({
   const latestStatsRef = useRef<StreamStats>(createEmptyStreamStats());
   const latestStatusRef = useRef<StreamStatus>({ state: "idle" });
   const pageFpsRef = useRef(0);
-  const transportBackendRef = useRef<StreamBackend>(initialStreamBackend());
+  const transportBackendRef = useRef<StreamBackend>(
+    initialStreamBackend(null, transportMode),
+  );
   const fallbackTriedRef = useRef(false);
   const serverVideoCodecRef = useRef<string | null>(null);
   const [deviceNaturalSize, setDeviceNaturalSize] = useState<Size | null>(null);
@@ -141,8 +150,8 @@ export function useLiveStream({
   const [transportBackend, setTransportBackend] = useState<StreamBackend>(
     () => transportBackendRef.current,
   );
-  const [streamBackendResolved, setStreamBackendResolved] = useState(
-    streamBackendCanResolveSynchronously,
+  const [streamBackendResolved, setStreamBackendResolved] = useState(() =>
+    streamBackendCanResolveSynchronously(transportMode),
   );
   const [streamCanvasRevision, setStreamCanvasRevision] = useState(0);
   const [runtimeInfo, setRuntimeInfo] = useState<StreamRuntimeInfo>(() =>
@@ -204,6 +213,7 @@ export function useLiveStream({
             shouldFallbackToWebRtc(
               message.status,
               transportBackendRef.current,
+              transportMode,
               fallbackTriedRef.current,
               latestStatsRef.current,
             )
@@ -272,7 +282,7 @@ export function useLiveStream({
       workerClient.destroy();
       workerClientRef.current = null;
     };
-  }, [canvasElement, streamBackendResolved, transportBackend]);
+  }, [canvasElement, streamBackendResolved, transportBackend, transportMode]);
 
   useEffect(() => {
     latestDecodedFramesRef.current = stats.decodedFrames;
@@ -313,12 +323,17 @@ export function useLiveStream({
 
   useEffect(() => {
     fallbackTriedRef.current = false;
-    setStreamBackendResolved(streamBackendCanResolveSynchronously());
-    const nextBackend = initialStreamBackend(serverVideoCodecRef.current);
+    setStreamBackendResolved(
+      streamBackendCanResolveSynchronously(transportMode),
+    );
+    const nextBackend = initialStreamBackend(
+      serverVideoCodecRef.current,
+      transportMode,
+    );
     transportBackendRef.current = nextBackend;
     setTransportBackend(nextBackend);
     setStreamCanvasRevision((current) => current + 1);
-  }, [simulator?.udid]);
+  }, [simulator?.udid, streamRevision, transportMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -327,7 +342,7 @@ export function useLiveStream({
       if (!simulator?.udid) {
         return;
       }
-      if (streamModeIsForcedWebTransport()) {
+      if (streamModeIsForcedWebTransport(transportMode)) {
         serverVideoCodecRef.current = null;
         setStreamBackendResolved(true);
         return;
@@ -338,7 +353,10 @@ export function useLiveStream({
           return;
         }
         serverVideoCodecRef.current = health.videoCodec ?? null;
-        const nextBackend = initialStreamBackend(health.videoCodec);
+        const nextBackend = initialStreamBackend(
+          health.videoCodec,
+          transportMode,
+        );
         if (nextBackend !== transportBackendRef.current) {
           fallbackTriedRef.current = false;
           transportBackendRef.current = nextBackend;
@@ -368,7 +386,7 @@ export function useLiveStream({
     return () => {
       cancelled = true;
     };
-  }, [simulator?.isBooted, simulator?.udid]);
+  }, [simulator?.isBooted, simulator?.udid, streamRevision, transportMode]);
 
   useEffect(() => {
     const workerClient = workerClientRef.current;
@@ -461,13 +479,14 @@ function formatStreamBackendLabel(backend: StreamBackend): string {
 function shouldFallbackToWebRtc(
   status: StreamStatus,
   backend: StreamBackend,
+  transportMode: StreamTransportMode,
   fallbackTried: boolean,
   stats: StreamStats,
 ): boolean {
   return Boolean(
     backend === "webtransport" &&
     !fallbackTried &&
-    !streamModeIsForcedWebTransport() &&
+    !streamModeIsForcedWebTransport(transportMode) &&
     canUseWebRtc() &&
     status.state === "error" &&
     status.error &&

@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 
-import type { SimulatorMetadata } from "../../api/types";
+import type { SimulatorMetadata, VideoCodecMode } from "../../api/types";
+import type { StreamTransportMode } from "../stream/streamWorkerClient";
 import { SimulatorMenu } from "../simulators/SimulatorMenu";
 
 interface ToolbarProps {
@@ -32,6 +33,10 @@ interface ToolbarProps {
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
   closeMenu: () => void;
+  onChangeTransportMode: (mode: StreamTransportMode) => void;
+  onChangeVideoCodec: (codec: VideoCodecMode) => void;
+  streamTransportMode: StreamTransportMode;
+  videoCodec: VideoCodecMode;
 }
 
 export function Toolbar({
@@ -45,6 +50,8 @@ export function Toolbar({
   menuRef,
   onBoot,
   onChangeSearch,
+  onChangeTransportMode,
+  onChangeVideoCodec,
   onDismissKeyboard,
   onHome,
   onOpenAppSwitcher,
@@ -62,7 +69,9 @@ export function Toolbar({
   selectedSimulator,
   selectedSimulatorIdentifier,
   setSelectedUDID,
+  streamTransportMode,
   touchOverlayVisible,
+  videoCodec,
 }: ToolbarProps) {
   return (
     <header className="toolbar">
@@ -82,6 +91,8 @@ export function Toolbar({
           isLoading={isLoading}
           menuOpen={menuOpen}
           menuRef={menuRef}
+          onChangeTransportMode={onChangeTransportMode}
+          onChangeVideoCodec={onChangeVideoCodec}
           onChangeSearch={onChangeSearch}
           onCloseMenu={closeMenu}
           onOpenBundlePrompt={onOpenBundlePrompt}
@@ -91,6 +102,8 @@ export function Toolbar({
           search={search}
           selectedSimulator={selectedSimulator}
           setSelectedUDID={setSelectedUDID}
+          streamTransportMode={streamTransportMode}
+          videoCodec={videoCodec}
         />
         {selectedSimulator ? (
           <div className="toolbar-sim-info">

@@ -13,12 +13,12 @@ let activeWebRtcControlChannel: RTCDataChannel | null = null;
 let activeStreamClient: StreamWorkerClient | null = null;
 
 export type StreamBackend = "webtransport" | "webrtc";
+export type StreamTransportMode = "auto" | StreamBackend;
 
-export function isWebRtcStreamMode(): boolean {
-  return (
-    streamTransportMode().startsWith("webrtc") &&
-    Boolean(accessTokenFromLocation())
-  );
+export function isWebRtcStreamMode(
+  transportMode: StreamTransportMode = initialStreamTransportMode(),
+): boolean {
+  return transportMode === "webrtc" && Boolean(accessTokenFromLocation());
 }
 
 export function sendWebRtcControlMessage(encoded: string): boolean {
@@ -35,12 +35,12 @@ export function buildStreamTarget(udid: string): StreamConnectTarget {
 
 export function initialStreamBackend(
   videoCodec?: string | null,
+  transportMode: StreamTransportMode = initialStreamTransportMode(),
 ): StreamBackend {
-  const mode = streamTransportMode();
-  if (mode === "webrtc") {
+  if (transportMode === "webrtc") {
     return "webrtc";
   }
-  if (mode === "webtransport") {
+  if (transportMode === "webtransport") {
     return "webtransport";
   }
   if (videoCodec?.toLowerCase() === "h264-software" && canUseWebRtc()) {
@@ -52,13 +52,16 @@ export function initialStreamBackend(
   return canUseWebRtc() ? "webrtc" : "webtransport";
 }
 
-export function streamModeIsForcedWebTransport(): boolean {
-  return streamTransportMode() === "webtransport";
+export function streamModeIsForcedWebTransport(
+  transportMode: StreamTransportMode = initialStreamTransportMode(),
+): boolean {
+  return transportMode === "webtransport";
 }
 
-export function streamModeIsForced(): boolean {
-  const mode = streamTransportMode();
-  return mode === "webtransport" || mode === "webrtc";
+export function streamModeIsForced(
+  transportMode: StreamTransportMode = initialStreamTransportMode(),
+): boolean {
+  return transportMode === "webtransport" || transportMode === "webrtc";
 }
 
 export function canUseWebRtc(): boolean {
@@ -578,11 +581,12 @@ function configureLowLatencyReceiver(receiver: RTCRtpReceiver) {
   }
 }
 
-function streamTransportMode(): string {
+export function initialStreamTransportMode(): StreamTransportMode {
   if (typeof window === "undefined") {
     return "auto";
   }
-  return new URLSearchParams(window.location.search).get("transport") ?? "auto";
+  const mode = new URLSearchParams(window.location.search).get("transport");
+  return mode === "webtransport" || mode === "webrtc" ? mode : "auto";
 }
 
 function iceServers(): RTCIceServer[] {
@@ -769,8 +773,7 @@ export class StreamWorkerClient {
   }
 
   private createBackend(canvasElement: HTMLCanvasElement): StreamClientBackend {
-    const mode = streamTransportMode();
-    if (this.backendMode === "webrtc" || mode === "webrtc") {
+    if (this.backendMode === "webrtc") {
       return new WebRtcStreamClient(this.onMessage);
     }
     void canvasElement;

@@ -8,7 +8,12 @@ import {
   type FormEvent,
 } from "react";
 
-import { ApiError, accessTokenFromLocation, pairBrowser } from "../api/client";
+import {
+  ApiError,
+  accessTokenFromLocation,
+  fetchHealth,
+  pairBrowser,
+} from "../api/client";
 import {
   bootSimulator,
   dismissKeyboard,
@@ -18,6 +23,7 @@ import {
   pressHome,
   rotateLeft,
   rotateRight,
+  setSimulatorVideoCodec,
   simulatorControlSocketUrl,
   shutdownSimulator,
   toggleAppearance,
@@ -32,13 +38,18 @@ import type {
   ChromeProfile,
   SimulatorMetadata,
   TouchPhase,
+  VideoCodecMode,
 } from "../api/types";
 import { AccessibilityInspector } from "../features/accessibility/AccessibilityInspector";
 import { useKeyboardInput } from "../features/input/useKeyboardInput";
 import { usePointerInput } from "../features/input/usePointerInput";
 import { simulatorRuntimeLabel } from "../features/simulators/simulatorDisplay";
 import { useSimulatorList } from "../features/simulators/useSimulatorList";
-import { sendWebRtcControlMessage } from "../features/stream/streamWorkerClient";
+import {
+  initialStreamTransportMode,
+  sendWebRtcControlMessage,
+  type StreamTransportMode,
+} from "../features/stream/streamWorkerClient";
 import { useLiveStream } from "../features/stream/useLiveStream";
 import { DebugPanel } from "../features/toolbar/DebugPanel";
 import { Toolbar } from "../features/toolbar/Toolbar";
@@ -85,6 +96,8 @@ const REACT_NATIVE_ACCESSIBILITY_REFRESH_MS = 500;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
+const STREAM_TRANSPORT_STORAGE_KEY = "simdeck.streamTransport";
+const VIDEO_CODEC_STORAGE_KEY = "simdeck.videoCodec";
 
 clearLegacyVolatileUiState();
 
@@ -163,6 +176,32 @@ type SimulatorTransition = {
   udid: string;
 };
 
+function isVideoCodecMode(value: unknown): value is VideoCodecMode {
+  return value === "hevc" || value === "h264" || value === "h264-software";
+}
+
+function readStoredTransportMode(): StreamTransportMode {
+  if (typeof window === "undefined") {
+    return "auto";
+  }
+  if (new URLSearchParams(window.location.search).has("transport")) {
+    return initialStreamTransportMode();
+  }
+  const stored = window.localStorage.getItem(STREAM_TRANSPORT_STORAGE_KEY);
+  if (stored === "auto" || stored === "webtransport" || stored === "webrtc") {
+    return stored;
+  }
+  return initialStreamTransportMode();
+}
+
+function readStoredVideoCodec(): VideoCodecMode {
+  if (typeof window === "undefined") {
+    return "h264-software";
+  }
+  const stored = window.localStorage.getItem(VIDEO_CODEC_STORAGE_KEY);
+  return isVideoCodecMode(stored) ? stored : "h264-software";
+}
+
 export function AppShell() {
   const [initialUiState] = useState(readPersistedUiState);
   const [initialSelectedUDID] = useState(
@@ -200,6 +239,11 @@ export function AppShell() {
     initialViewportState.rotationQuarterTurns,
   );
   const [streamStamp, setStreamStamp] = useState(Date.now());
+  const [streamSettingsRevision, setStreamSettingsRevision] = useState(0);
+  const [streamTransportMode, setStreamTransportMode] =
+    useState<StreamTransportMode>(readStoredTransportMode);
+  const [videoCodec, setVideoCodec] =
+    useState<VideoCodecMode>(readStoredVideoCodec);
   const [viewMode, setViewMode] = useState<ViewMode>(
     initialViewportState.viewMode,
   );
@@ -333,6 +377,8 @@ export function AppShell() {
   } = useLiveStream({
     canvasElement: streamCanvasElement,
     simulator: selectedSimulator,
+    streamRevision: streamSettingsRevision,
+    transportMode: streamTransportMode,
   });
   const shouldRenderChrome =
     selectedSimulator != null && shouldRenderNativeChrome(selectedSimulator);
@@ -390,6 +436,33 @@ export function AppShell() {
       accessibilityPreferredSource,
     );
   }, [accessibilityPreferredSource]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      STREAM_TRANSPORT_STORAGE_KEY,
+      streamTransportMode,
+    );
+  }, [streamTransportMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem(VIDEO_CODEC_STORAGE_KEY, videoCodec);
+  }, [videoCodec]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchHealth()
+      .then((health) => {
+        if (!cancelled && isVideoCodecMode(health.videoCodec)) {
+          setVideoCodec(health.videoCodec);
+        }
+      })
+      .catch(() => {
+        // Non-critical: stream setup still fetches health and reports errors.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [streamSettingsRevision]);
 
   useEffect(() => {
     if (simulatorTransition == null) {
@@ -1133,6 +1206,28 @@ export function AppShell() {
     );
   }
 
+  function handleSelectTransportMode(mode: StreamTransportMode) {
+    setStreamTransportMode(mode);
+    setStreamSettingsRevision((current) => current + 1);
+    setStreamStamp(Date.now());
+  }
+
+  function handleSelectVideoCodec(codec: VideoCodecMode) {
+    if (!selectedSimulator) {
+      return;
+    }
+    const udid = selectedSimulator.udid;
+    setVideoCodec(codec);
+    setStreamSettingsRevision((current) => current + 1);
+    setStreamStamp(Date.now());
+    void runAction(async () => {
+      const response = await setSimulatorVideoCodec(udid, codec);
+      setVideoCodec(response.videoCodec);
+      setStreamSettingsRevision((current) => current + 1);
+      setStreamStamp(Date.now());
+    }, false);
+  }
+
   async function submitPairing(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const code = pairingCode.trim();
@@ -1194,6 +1289,7 @@ export function AppShell() {
         isLoading={isLoading}
         menuOpen={menuOpen}
         menuRef={menuRef}
+        onChangeVideoCodec={handleSelectVideoCodec}
         onBoot={() => {
           if (!selectedSimulator) {
             return;
@@ -1287,11 +1383,14 @@ export function AppShell() {
         onToggleTouchOverlay={() =>
           setTouchOverlayVisible((current) => !current)
         }
+        onChangeTransportMode={handleSelectTransportMode}
         search={search}
         selectedSimulator={selectedSimulator}
         selectedSimulatorIdentifier={selectedSimulatorDetail}
         setSelectedUDID={setSelectedUDID}
+        streamTransportMode={streamTransportMode}
         touchOverlayVisible={touchOverlayVisible}
+        videoCodec={videoCodec}
       />
       <SimulatorViewport
         accessibilityHoveredId={accessibilityHoveredId}
