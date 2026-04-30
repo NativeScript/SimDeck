@@ -432,8 +432,8 @@ async fn write_frame_sample(
 }
 
 fn h264_annex_b_sample(frame: &crate::transport::packet::FramePacket) -> anyhow::Result<Vec<u8>> {
-    let data = frame.data.as_slice();
-    let description = frame.description.as_ref().map(|bytes| bytes.as_slice());
+    let data = frame.data.as_ref();
+    let description = frame.description.as_ref().map(bytes::Bytes::as_ref);
     let mut sample = Vec::with_capacity(data.len() + description.map_or(0, |bytes| bytes.len()));
 
     if frame.is_keyframe {
