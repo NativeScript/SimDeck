@@ -19,7 +19,7 @@ view inside the editor.
 
 ## Features
 
-- WebTransport streaming server in Rust, plus experimental WebRTC for runner previews, using hardware encoded HEVC/H.264 video
+- WebTransport streaming server in Rust, plus experimental WebRTC for runner previews, using HEVC/H.264 video or full-resolution JPEG on CI runners
 - Simulator control & inspection using private accessibility APIs
 - CoreSimulator chrome asset rendering for device bezels
 - NativeScript and React Native runtime inspector plugins, plus a native UIKit inspector framework for other apps
@@ -54,6 +54,62 @@ CLI commands automatically use the same warm daemon:
 simdeck list
 simdeck tap <udid> 0.5 0.5 --normalized
 simdeck describe <udid> --format agent --max-depth 2
+```
+
+## Daemon
+
+Manage the project daemon explicitly when needed:
+
+```sh
+simdeck daemon start
+simdeck daemon status
+simdeck daemon stop
+```
+
+`simdeck daemon` manages the normal per-project warm process. For an always-on
+daemon that is available after login, use the macOS user service commands:
+
+```sh
+simdeck service on
+simdeck service off
+```
+
+This uses a LaunchAgent, keeps the server bound to localhost by default, and is
+best for agents or editor integrations that should be able to open SimDeck
+without first starting a project daemon.
+
+Use software H.264 when macOS screen recording starves the hardware encoder:
+
+```sh
+simdeck daemon start --video-codec h264-software
+```
+
+On GitHub Actions macOS runners where VideoToolbox hardware encode is not
+available, use the experimental full-resolution JPEG data-channel stream:
+
+```sh
+simdeck daemon start --video-codec jpeg
+# open http://127.0.0.1:4310?transport=webrtc-data
+```
+
+For LAN browser access:
+
+```sh
+simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
+```
+
+Restart the CoreSimulator service layer when `simctl` reports a stale service
+version or the live display gets stuck before the first frame:
+
+```sh
+simdeck core-simulator restart
+```
+
+You can also start or stop the CoreSimulator service layer explicitly:
+
+```sh
+simdeck core-simulator start
+simdeck core-simulator shutdown
 ```
 
 ## CLI

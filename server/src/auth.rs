@@ -262,6 +262,7 @@ mod tests {
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             None,
             "hevc".to_owned(),
+            1.0,
             Some("secret-token".to_owned()),
             Some("123456".to_owned()),
         )
@@ -329,6 +330,7 @@ mod tests {
             IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             Some("10.0.0.245".to_owned()),
             "hevc".to_owned(),
+            1.0,
             Some("secret-token".to_owned()),
             Some("123456".to_owned()),
         );

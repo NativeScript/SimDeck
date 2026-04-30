@@ -23,7 +23,8 @@ Returns server health, the WebTransport URL template, and the certificate hash t
   "httpPort": 4310,
   "wtPort": 4311,
   "timestamp": 1714094761.234,
-  "videoCodec": "hevc",
+  "videoCodec": "h264-software",
+  "jpegQuality": 1.0,
   "webTransport": {
     "urlTemplate": "https://127.0.0.1:4311/wt/simulators/{udid}?simdeckToken=...",
     "certificateHash": {
@@ -150,9 +151,11 @@ video track:
 }
 ```
 
-This endpoint requires the simulator stream to be H.264. For GitHub Actions
-provider runs, start the runner host with `--video-codec h264-software` and pass
-the one-time provider token as `--access-token`.
+By default this endpoint creates an H.264 WebRTC media track, so the simulator
+stream must be H.264. For GitHub Actions provider runs that need full
+resolution without hardware H.264/HEVC, post the offer with
+`"transport": "data-channel"`, start the runner host with `--video-codec jpeg`,
+and open the browser UI with `?transport=webrtc-data`.
 
 ### `POST /api/simulators/{udid}/open-url`
 

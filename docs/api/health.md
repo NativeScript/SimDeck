@@ -12,7 +12,8 @@ Returns the static bootstrap information the browser client needs to open a WebT
   "httpPort": 4310,
   "wtPort": 4311,
   "timestamp": 1714094761.234,
-  "videoCodec": "hevc",
+  "videoCodec": "h264-software",
+  "jpegQuality": 1.0,
   "webTransport": {
     "urlTemplate": "https://127.0.0.1:4311/wt/simulators/{udid}?simdeckToken=...",
     "certificateHash": {
@@ -24,15 +25,16 @@ Returns the static bootstrap information the browser client needs to open a WebT
 }
 ```
 
-| Field                                | Notes                                                                                         |
-| ------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `ok`                                 | Always `true` if the route is reachable. Network failures are signalled by HTTP errors.       |
-| `httpPort` / `wtPort`                | Numeric ports for the HTTP and WebTransport servers. WebTransport is always `httpPort + 1`.   |
-| `timestamp`                          | Server-side `time.now()` as a fractional Unix epoch in seconds.                               |
-| `videoCodec`                         | Active encoder. One of `hevc`, `h264`, `h264-software`. See [Video Pipeline](/guide/video).   |
-| `webTransport.urlTemplate`           | URL with a `{udid}` placeholder and access token query for the simulator stream.              |
-| `webTransport.certificateHash.value` | SHA-256 of the server's self-signed cert. Pin via `serverCertificateHashes` in the WT client. |
-| `webTransport.packetVersion`         | The current binary packet protocol version. Clients should refuse to parse unknown versions.  |
+| Field                                | Notes                                                                                                  |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `ok`                                 | Always `true` if the route is reachable. Network failures are signalled by HTTP errors.                |
+| `httpPort` / `wtPort`                | Numeric ports for the HTTP and WebTransport servers. WebTransport is always `httpPort + 1`.            |
+| `timestamp`                          | Server-side `time.now()` as a fractional Unix epoch in seconds.                                        |
+| `videoCodec`                         | Active encoder. One of `hevc`, `h264`, `h264-software`, or `jpeg`. See [Video Pipeline](/guide/video). |
+| `jpegQuality`                        | JPEG encoder quality from `0.1` to `1.0`; only affects `videoCodec: "jpeg"`.                           |
+| `webTransport.urlTemplate`           | URL with a `{udid}` placeholder and access token query for the simulator stream.                       |
+| `webTransport.certificateHash.value` | SHA-256 of the server's self-signed cert. Pin via `serverCertificateHashes` in the WT client.          |
+| `webTransport.packetVersion`         | The current binary packet protocol version. Clients should refuse to parse unknown versions.           |
 
 The certificate and default access token are regenerated every time the server restarts. A client that caches the hash should refetch `/api/health` after any disconnection.
 

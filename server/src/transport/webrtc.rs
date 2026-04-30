@@ -12,11 +12,13 @@ use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::data_channel::data_channel_state::RTCDataChannelState;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
 use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
@@ -25,11 +27,18 @@ use webrtc::track::track_local::TrackLocal;
 const ANNEX_B_START_CODE: &[u8] = &[0, 0, 0, 1];
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
+const WEBRTC_JPEG_CHANNEL_LABEL: &str = "simdeck-video-jpeg";
 const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 4;
 const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
 const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
+const JPEG_CHUNK_MAGIC: &[u8; 4] = b"SDJF";
+const JPEG_CHUNK_VERSION: u8 = 1;
+const JPEG_CHUNK_HEADER_BYTES: usize = 40;
+const JPEG_CHUNK_PAYLOAD_BYTES: usize = 60 * 1024;
+const JPEG_CHANNEL_MIN_BUFFERED_BYTES: usize = 2 * 1024 * 1024;
+const JPEG_CHANNEL_BUFFERED_FRAME_MULTIPLIER: usize = 2;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +46,7 @@ pub struct WebRtcOfferPayload {
     pub sdp: String,
     #[serde(rename = "type")]
     pub kind: String,
+    pub transport: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,6 +88,10 @@ pub async fn create_answer(
         .wait_for_keyframe(Duration::from_secs(3))
         .await
         .ok_or_else(|| AppError::native("Timed out waiting for a simulator keyframe."))?;
+    if payload.transport.as_deref() == Some("data-channel") {
+        return create_data_channel_answer(state, udid, session, first_frame, payload).await;
+    }
+
     let codec = first_frame
         .codec
         .as_deref()
@@ -272,6 +286,141 @@ fn redact_candidate_address(address: &str) -> String {
     "<host>".to_owned()
 }
 
+async fn create_data_channel_answer(
+    state: AppState,
+    udid: String,
+    session: crate::simulators::session::SimulatorSession,
+    first_frame: crate::transport::packet::SharedFrame,
+    payload: WebRtcOfferPayload,
+) -> Result<WebRtcAnswerPayload, AppError> {
+    let codec = first_frame
+        .codec
+        .as_deref()
+        .unwrap_or_default()
+        .to_lowercase();
+    if codec != "jpeg" {
+        return Err(AppError::bad_request(
+            "WebRTC data-channel preview requires `--video-codec jpeg`.",
+        ));
+    }
+
+    let mut media_engine = MediaEngine::default();
+    media_engine
+        .register_default_codecs()
+        .map_err(|error| AppError::internal(format!("register WebRTC codecs: {error}")))?;
+    let mut registry = Registry::new();
+    registry = register_default_interceptors(registry, &mut media_engine)
+        .map_err(|error| AppError::internal(format!("register WebRTC interceptors: {error}")))?;
+    let api = APIBuilder::new()
+        .with_media_engine(media_engine)
+        .with_interceptor_registry(registry)
+        .build();
+
+    let peer_connection = Arc::new(
+        api.new_peer_connection(RTCConfiguration {
+            ice_servers: ice_servers(),
+            ..Default::default()
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("create WebRTC peer connection: {error}")))?,
+    );
+    register_diagnostics(&peer_connection, &udid);
+    register_data_channel_streams(
+        &peer_connection,
+        state.clone(),
+        session.clone(),
+        udid.clone(),
+        first_frame,
+    );
+
+    let offer = RTCSessionDescription::offer(payload.sdp)
+        .map_err(|error| AppError::bad_request(format!("invalid WebRTC offer: {error}")))?;
+    peer_connection
+        .set_remote_description(offer)
+        .await
+        .map_err(|error| AppError::bad_request(format!("set remote WebRTC offer: {error}")))?;
+
+    let answer = peer_connection
+        .create_answer(None)
+        .await
+        .map_err(|error| AppError::internal(format!("create WebRTC answer: {error}")))?;
+    let mut gather_complete = peer_connection.gathering_complete_promise().await;
+    peer_connection
+        .set_local_description(answer)
+        .await
+        .map_err(|error| AppError::internal(format!("set WebRTC answer: {error}")))?;
+    let _ = gather_complete.recv().await;
+    let local_description = peer_connection
+        .local_description()
+        .await
+        .ok_or_else(|| AppError::internal("WebRTC local description was not set."))?;
+    tokio::spawn(hold_peer_connection_until_closed(peer_connection));
+
+    Ok(WebRtcAnswerPayload {
+        sdp: local_description.sdp,
+        kind: "answer".to_owned(),
+    })
+}
+
+async fn hold_peer_connection_until_closed(
+    peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
+) {
+    loop {
+        if matches!(
+            peer_connection.connection_state(),
+            RTCPeerConnectionState::Closed | RTCPeerConnectionState::Failed
+        ) {
+            break;
+        }
+        time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+fn register_data_channel_streams(
+    peer_connection: &Arc<webrtc::peer_connection::RTCPeerConnection>,
+    state: AppState,
+    session: crate::simulators::session::SimulatorSession,
+    udid: String,
+    first_frame: crate::transport::packet::SharedFrame,
+) {
+    peer_connection.on_data_channel(Box::new(move |channel: Arc<RTCDataChannel>| {
+        let state = state.clone();
+        let session = session.clone();
+        let udid = udid.clone();
+        let first_frame = first_frame.clone();
+        Box::pin(async move {
+            match channel.label() {
+                WEBRTC_CONTROL_CHANNEL_LABEL => {
+                    attach_control_data_channel(channel, session, udid);
+                }
+                WEBRTC_JPEG_CHANNEL_LABEL => {
+                    let state_for_stream = state.clone();
+                    let session_for_stream = session.clone();
+                    let udid_for_stream = udid.clone();
+                    let stream_channel = channel.clone();
+                    channel.on_open(Box::new(move || {
+                        let channel = stream_channel.clone();
+                        let state = state_for_stream.clone();
+                        let session = session_for_stream.clone();
+                        let udid = udid_for_stream.clone();
+                        let first_frame = first_frame.clone();
+                        Box::pin(async move {
+                            tokio::spawn(stream_jpeg_data_channel_frames(
+                                state,
+                                udid,
+                                session,
+                                first_frame,
+                                channel,
+                            ));
+                        })
+                    }));
+                }
+                _ => {}
+            }
+        })
+    }));
+}
+
 fn register_control_data_channel(
     peer_connection: &Arc<webrtc::peer_connection::RTCPeerConnection>,
     session: crate::simulators::session::SimulatorSession,
@@ -284,26 +433,34 @@ fn register_control_data_channel(
             if channel.label() != WEBRTC_CONTROL_CHANNEL_LABEL {
                 return;
             }
-            channel.on_message(Box::new(move |message: DataChannelMessage| {
-                let session = session.clone();
-                let udid = udid.clone();
-                Box::pin(async move {
-                    let Ok(text) = std::str::from_utf8(&message.data) else {
-                        warn!("Invalid WebRTC control message bytes for {udid}");
-                        return;
-                    };
-                    let control_message = match serde_json::from_str::<ControlMessage>(text) {
-                        Ok(message) => message,
-                        Err(error) => {
-                            warn!("Invalid WebRTC control message for {udid}: {error}");
-                            return;
-                        }
-                    };
-                    if let Err(error) = run_control_message(session, control_message).await {
-                        warn!("WebRTC control message failed for {udid}: {error}");
-                    }
-                })
-            }));
+            attach_control_data_channel(channel, session, udid);
+        })
+    }));
+}
+
+fn attach_control_data_channel(
+    channel: Arc<RTCDataChannel>,
+    session: crate::simulators::session::SimulatorSession,
+    udid: String,
+) {
+    channel.on_message(Box::new(move |message: DataChannelMessage| {
+        let session = session.clone();
+        let udid = udid.clone();
+        Box::pin(async move {
+            let Ok(text) = std::str::from_utf8(&message.data) else {
+                warn!("Invalid WebRTC control message bytes for {udid}");
+                return;
+            };
+            let control_message = match serde_json::from_str::<ControlMessage>(text) {
+                Ok(message) => message,
+                Err(error) => {
+                    warn!("Invalid WebRTC control message for {udid}: {error}");
+                    return;
+                }
+            };
+            if let Err(error) = run_control_message(session, control_message).await {
+                warn!("WebRTC control message failed for {udid}: {error}");
+            }
         })
     }));
 }
@@ -457,6 +614,114 @@ fn adaptive_interval_for_write(write_elapsed: Duration) -> Duration {
         WEBRTC_MAX_REFRESH_INTERVAL.as_millis() as u64,
     );
     Duration::from_millis(target_ms)
+}
+
+async fn stream_jpeg_data_channel_frames(
+    state: AppState,
+    udid: String,
+    session: crate::simulators::session::SimulatorSession,
+    first_frame: crate::transport::packet::SharedFrame,
+    channel: Arc<RTCDataChannel>,
+) {
+    let mut rx = session.subscribe();
+    let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
+
+    if let Err(error) = write_jpeg_frame_chunks(&channel, &first_frame).await {
+        warn!("WebRTC JPEG first frame write failed for {udid}: {error}");
+        return;
+    }
+    let mut last_sequence = first_frame.frame_sequence;
+    state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
+
+    loop {
+        if channel.ready_state() != RTCDataChannelState::Open {
+            break;
+        }
+
+        let frame = match rx.recv().await {
+            Ok(frame) => frame,
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                state
+                    .metrics
+                    .frames_dropped_server
+                    .fetch_add(skipped, Ordering::Relaxed);
+                continue;
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        };
+        let (frame, skipped) = freshest_available_frame(frame, &mut rx);
+        if skipped > 0 {
+            state
+                .metrics
+                .frames_dropped_server
+                .fetch_add(skipped, Ordering::Relaxed);
+        }
+        if frame
+            .codec
+            .as_deref()
+            .is_some_and(|codec| !codec.eq_ignore_ascii_case("jpeg"))
+        {
+            warn!("WebRTC JPEG channel received non-JPEG frame for {udid}");
+            break;
+        }
+
+        let buffered = channel.buffered_amount().await;
+        let max_buffered = (frame.data.len() * JPEG_CHANNEL_BUFFERED_FRAME_MULTIPLIER)
+            .max(JPEG_CHANNEL_MIN_BUFFERED_BYTES);
+        if buffered > max_buffered {
+            state
+                .metrics
+                .frames_dropped_server
+                .fetch_add(1 + skipped, Ordering::Relaxed);
+            continue;
+        }
+
+        if last_sequence != 0 && frame.frame_sequence > last_sequence + 1 {
+            state
+                .metrics
+                .frames_dropped_server
+                .fetch_add(frame.frame_sequence - last_sequence - 1, Ordering::Relaxed);
+        }
+
+        if let Err(error) = write_jpeg_frame_chunks(&channel, &frame).await {
+            warn!("WebRTC JPEG frame write failed for {udid}: {error}");
+            break;
+        }
+        last_sequence = frame.frame_sequence;
+        state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+async fn write_jpeg_frame_chunks(
+    channel: &RTCDataChannel,
+    frame: &crate::transport::packet::FramePacket,
+) -> anyhow::Result<()> {
+    let payload = frame.data.as_ref();
+    let chunk_count = payload.len().div_ceil(JPEG_CHUNK_PAYLOAD_BYTES);
+    if chunk_count == 0 || chunk_count > u16::MAX as usize {
+        anyhow::bail!("invalid JPEG frame chunk count {chunk_count}");
+    }
+
+    for chunk_index in 0..chunk_count {
+        let start = chunk_index * JPEG_CHUNK_PAYLOAD_BYTES;
+        let end = (start + JPEG_CHUNK_PAYLOAD_BYTES).min(payload.len());
+        let chunk_payload = &payload[start..end];
+        let mut message = Vec::with_capacity(JPEG_CHUNK_HEADER_BYTES + chunk_payload.len());
+        message.extend_from_slice(JPEG_CHUNK_MAGIC);
+        message.push(JPEG_CHUNK_VERSION);
+        message.push(if frame.is_keyframe { 1 } else { 0 });
+        message.extend_from_slice(&(chunk_index as u16).to_be_bytes());
+        message.extend_from_slice(&(chunk_count as u16).to_be_bytes());
+        message.extend_from_slice(&0u16.to_be_bytes());
+        message.extend_from_slice(&frame.frame_sequence.to_be_bytes());
+        message.extend_from_slice(&frame.timestamp_us.to_be_bytes());
+        message.extend_from_slice(&frame.width.to_be_bytes());
+        message.extend_from_slice(&frame.height.to_be_bytes());
+        message.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        message.extend_from_slice(chunk_payload);
+        channel.send(&Bytes::from(message)).await?;
+    }
+    Ok(())
 }
 
 async fn write_frame_sample(
