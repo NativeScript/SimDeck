@@ -87,7 +87,7 @@ The encoder did not produce a keyframe within 3 seconds. The most common causes:
 
   On virtualized CI Macs where hardware H.264 is unavailable, keep
   `h264-software`. If the stream still falls behind, restart with
-  `--video-codec h264-software --low-latency`; that profile caps at 30 fps,
+  `--video-codec h264-software --low-latency`; that profile caps at 15 fps,
   drops stale pending frames, and caps the longest edge at 1170 pixels before backlog
   turns into visible stream delay.
 

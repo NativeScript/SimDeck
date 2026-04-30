@@ -31,7 +31,7 @@ simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 
 Viewer: `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
 The browser uses WebRTC H.264 video for both hardware and software encoders.
-Add `--low-latency` on less capable runners to cap software H.264 at 30 fps,
+Add `--low-latency` on less capable runners to cap software H.264 at 15 fps,
 drop stale pending frames more aggressively, and cap the longest edge at 1170 px
 before latency piles up.
 

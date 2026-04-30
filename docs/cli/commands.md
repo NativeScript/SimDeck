@@ -68,6 +68,9 @@ Print daemon metadata for the current project:
 simdeck daemon status
 ```
 
+Detached daemons report the supervisor PID and `logPath`; the supervised child
+process is restarted automatically after recoverable server exits.
+
 ### `daemon restart`
 
 Stop the daemon for the current project, then start a fresh one with the same

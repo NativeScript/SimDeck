@@ -35,7 +35,7 @@ Targets a specific running SimDeck daemon for commands that support the HTTP fas
 | `--advertise-host` | matches local host    | Hostname or IP printed for LAN browser access.                                  |
 | `--client-root`    | bundled `client/dist` | Override the static browser client directory.                                   |
 | `--video-codec`    | `h264-software`       | One of `h264` or `h264-software`. See [Video Pipeline](/guide/video).           |
-| `--low-latency`    | `false`               | Software H.264 profile for slower runners: caps at 30 fps and favors freshness. |
+| `--low-latency`    | `false`               | Software H.264 profile for slower runners: caps at 15 fps and favors freshness. |
 | `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                          |
 
 The public commands generate an access token automatically. Use `simdeck daemon status` to read it for direct API callers.

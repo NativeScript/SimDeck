@@ -20,7 +20,9 @@ use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+use webrtc::rtp_transceiver::rtp_codec::{
+    RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
+};
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 
@@ -31,6 +33,8 @@ const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(150);
 const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 8;
 const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
 const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+const WEBRTC_LOW_LATENCY_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
+const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
@@ -99,10 +103,24 @@ pub async fn create_answer(
         ));
     }
 
+    let h264_fmtp_line = h264_sdp_fmtp_line(&codec);
     let mut media_engine = MediaEngine::default();
     media_engine
-        .register_default_codecs()
-        .map_err(|error| AppError::internal(format!("register WebRTC codecs: {error}")))?;
+        .register_codec(
+            RTCRtpCodecParameters {
+                capability: RTCRtpCodecCapability {
+                    mime_type: MIME_TYPE_H264.to_owned(),
+                    clock_rate: 90_000,
+                    channels: 0,
+                    sdp_fmtp_line: h264_fmtp_line.clone(),
+                    rtcp_feedback: vec![],
+                },
+                payload_type: 96,
+                ..Default::default()
+            },
+            RTPCodecType::Video,
+        )
+        .map_err(|error| AppError::internal(format!("register WebRTC H.264 codec: {error}")))?;
     let mut registry = Registry::new();
     registry = register_default_interceptors(registry, &mut media_engine)
         .map_err(|error| AppError::internal(format!("register WebRTC interceptors: {error}")))?;
@@ -127,7 +145,7 @@ pub async fn create_answer(
             mime_type: MIME_TYPE_H264.to_owned(),
             clock_rate: 90_000,
             channels: 0,
-            sdp_fmtp_line: h264_sdp_fmtp_line(&codec),
+            sdp_fmtp_line: h264_fmtp_line,
             rtcp_feedback: vec![],
         },
         "simdeck-video".to_owned(),
@@ -444,19 +462,15 @@ impl WebRtcMediaStream {
         let mut send_timing = WebRtcSendTiming::new();
         let mut peer_state_interval = time::interval(Duration::from_millis(250));
         let mut bootstrap_sleep = Box::pin(time::sleep(WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL));
-        let mut refresh_sleep = Box::pin(time::sleep(WEBRTC_MIN_REFRESH_INTERVAL));
-        let mut adaptive_refresh_interval = WEBRTC_MIN_REFRESH_INTERVAL;
+        let refresh_floor = refresh_floor_for_low_latency(state.config.low_latency);
+        let refresh_ceiling = refresh_ceiling_for_low_latency(state.config.low_latency);
+        let mut refresh_sleep = Box::pin(time::sleep(refresh_floor));
+        let mut adaptive_refresh_interval = refresh_floor;
         let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
         let mut waiting_for_keyframe = false;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
-        match write_frame_sample_with_timeout(
-            &video_track,
-            &first_frame,
-            WEBRTC_MIN_REFRESH_INTERVAL,
-        )
-        .await
-        {
+        match write_frame_sample_with_timeout(&video_track, &first_frame, refresh_floor).await {
             Ok(true) => {
                 state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
             }
@@ -553,7 +567,8 @@ impl WebRtcMediaStream {
                     let duration = send_timing.duration_for(&frame);
                     let started_at = time::Instant::now();
                     let write_result = write_frame_sample_with_timeout(&video_track, &frame, duration).await;
-                    adaptive_refresh_interval = adaptive_interval_for_write(started_at.elapsed());
+                    adaptive_refresh_interval =
+                        adaptive_interval_for_write(started_at.elapsed(), refresh_floor, refresh_ceiling);
                     match write_result {
                         Ok(true) => {
                             state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
@@ -564,7 +579,7 @@ impl WebRtcMediaStream {
                                 .frames_dropped_server
                                 .fetch_add(1, Ordering::Relaxed);
                             waiting_for_keyframe = true;
-                            adaptive_refresh_interval = WEBRTC_MAX_REFRESH_INTERVAL;
+                            adaptive_refresh_interval = refresh_ceiling;
                             session.request_keyframe();
                         }
                         Err(error) => {
@@ -610,10 +625,30 @@ fn drain_to_latest_frame(
     (frame, stale_frames)
 }
 
-fn adaptive_interval_for_write(write_elapsed: Duration) -> Duration {
+fn refresh_floor_for_low_latency(low_latency: bool) -> Duration {
+    if low_latency {
+        WEBRTC_LOW_LATENCY_REFRESH_INTERVAL
+    } else {
+        WEBRTC_MIN_REFRESH_INTERVAL
+    }
+}
+
+fn refresh_ceiling_for_low_latency(low_latency: bool) -> Duration {
+    if low_latency {
+        WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL
+    } else {
+        WEBRTC_MAX_REFRESH_INTERVAL
+    }
+}
+
+fn adaptive_interval_for_write(
+    write_elapsed: Duration,
+    refresh_floor: Duration,
+    refresh_ceiling: Duration,
+) -> Duration {
     let target_ms = (write_elapsed.as_millis() as u64).saturating_mul(2).clamp(
-        WEBRTC_MIN_REFRESH_INTERVAL.as_millis() as u64,
-        WEBRTC_MAX_REFRESH_INTERVAL.as_millis() as u64,
+        refresh_floor.as_millis() as u64,
+        refresh_ceiling.as_millis() as u64,
     );
     Duration::from_millis(target_ms)
 }

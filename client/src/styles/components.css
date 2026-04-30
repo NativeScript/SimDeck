@@ -1167,10 +1167,6 @@
   pointer-events: none;
 }
 
-.stream-canvas-webrtc-render {
-  z-index: 1;
-}
-
 .stream-video {
   position: absolute;
   inset: 0;
@@ -1181,11 +1177,6 @@
   background: #000000;
   object-fit: fill;
   pointer-events: none;
-}
-
-.stream-video-canvas-source {
-  z-index: 0;
-  opacity: 0;
 }
 
 .accessibility-picker-layer {

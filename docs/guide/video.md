@@ -23,10 +23,12 @@ For slower runners, add `--low-latency` with software H.264:
 simdeck daemon start --video-codec h264-software --low-latency
 ```
 
-Low-latency mode caps software H.264 at 30 fps, keeps a single in-flight frame,
+Low-latency mode caps software H.264 at 15 fps, keeps a single in-flight frame,
 scales the longest edge to 1170 pixels, and backs off FPS more aggressively when
-encode pressure rises. It is CLI-only because it is meant for less capable
-machines where freshness matters more than maximum smoothness.
+encode pressure rises. WebRTC refresh pacing uses the same 15 fps floor so the
+server does not keep waking capture/encode faster than the stream can consume.
+It is CLI-only because it is meant for less capable machines where freshness
+matters more than maximum smoothness.
 
 The chosen codec is reported to clients in the JSON `videoCodec` field on `GET /api/health`.
 
@@ -58,7 +60,7 @@ A few practical guidelines:
 - **Start on the default for compatibility.** `h264-software` works without requiring the hardware encoder, but full-resolution latency can be high.
 - **Switch to `h264` on local Apple Silicon when hardware encode is available.** Hardware H.264 gives the smoothest local preview with the least CPU.
 - **Switch to `h264-software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
-- **Use `h264-software --low-latency` on virtualized CI Macs when hardware encode is unavailable.** This profile caps at 30 fps, uses a single pending frame, reduces the longest edge to 1170 pixels, and backs off before software encode latency turns into seconds of stream delay.
+- **Use `h264-software --low-latency` on virtualized CI Macs when hardware encode is unavailable.** This profile caps at 15 fps, uses a single pending frame, reduces the longest edge to 1170 pixels, and backs off before software encode latency turns into seconds of stream delay.
 
 ## Tuning with metrics
 

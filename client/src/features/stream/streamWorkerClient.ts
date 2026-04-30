@@ -8,8 +8,8 @@ import type {
 
 const HAVE_CURRENT_DATA = 2;
 const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
-const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 3500;
-const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 3500;
+const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 10000;
+const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 8000;
 
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
 let activeStreamClient: StreamWorkerClient | null = null;
@@ -50,7 +50,7 @@ class WebRtcStreamClient implements StreamClientBackend {
   private lastVideoFrameAt = 0;
   private peerConnection: RTCPeerConnection | null = null;
   private reconnectTimeout = 0;
-  private renderVideoToCanvas = false;
+  private reportedVideoConfig = false;
   private shouldReconnect = false;
   private stats: StreamStats = createEmptyStreamStats();
   private video: HTMLVideoElement | null = null;
@@ -62,7 +62,6 @@ class WebRtcStreamClient implements StreamClientBackend {
 
   attachCanvas(canvasElement: HTMLCanvasElement) {
     this.canvas = canvasElement;
-    this.canvas.classList.remove("stream-canvas-webrtc-render");
   }
 
   clear() {
@@ -80,6 +79,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     const generation = ++this.connectGeneration;
     this.shouldReconnect = true;
     this.diagnostics = createWebRtcDiagnostics();
+    this.reportedVideoConfig = false;
     this.stats = createEmptyStreamStats();
     this.onMessage({
       type: "status",
@@ -122,18 +122,13 @@ class WebRtcStreamClient implements StreamClientBackend {
         }
         const stream = event.streams[0] ?? new MediaStream([event.track]);
         const video = document.createElement("video");
-        this.renderVideoToCanvas = shouldRenderWebRtcVideoThroughCanvas();
-        canvasElement.classList.toggle(
-          "stream-canvas-webrtc-render",
-          this.renderVideoToCanvas,
-        );
         video.autoplay = true;
-        video.className = this.renderVideoToCanvas
-          ? "stream-video stream-video-canvas-source"
-          : "stream-video";
+        video.className = "stream-video";
         video.disablePictureInPicture = true;
         video.muted = true;
         video.playsInline = true;
+        video.setAttribute("playsinline", "");
+        video.setAttribute("webkit-playsinline", "");
         video.preload = "auto";
         (video as HTMLVideoElement & { latencyHint?: string }).latencyHint =
           "interactive";
@@ -151,14 +146,7 @@ class WebRtcStreamClient implements StreamClientBackend {
             return;
           }
           this.syncCanvasSize(video.videoWidth, video.videoHeight);
-          this.onMessage({
-            type: "video-config",
-            size: { height: video.videoHeight, width: video.videoWidth },
-          });
-          this.onMessage({
-            type: "status",
-            status: { detail: "WebRTC media connected", state: "streaming" },
-          });
+          this.reportVideoConfig(video.videoWidth, video.videoHeight);
           this.scheduleVideoFrame();
         };
         video.addEventListener("loadedmetadata", startPlayback);
@@ -168,6 +156,7 @@ class WebRtcStreamClient implements StreamClientBackend {
         void video.play().catch(() => {
           // The readiness listeners above retry once the media stream has data.
         });
+        this.scheduleVideoFrame();
       };
 
       peerConnection.onconnectionstatechange = () => {
@@ -250,8 +239,7 @@ class WebRtcStreamClient implements StreamClientBackend {
       this.video.remove();
     }
     this.video = null;
-    this.canvas?.classList.remove("stream-canvas-webrtc-render");
-    this.renderVideoToCanvas = false;
+    this.reportedVideoConfig = false;
     this.controlChannel?.close();
     if (activeWebRtcControlChannel === this.controlChannel) {
       activeWebRtcControlChannel = null;
@@ -487,13 +475,9 @@ class WebRtcStreamClient implements StreamClientBackend {
       this.video.videoHeight > 0
     ) {
       this.syncCanvasSize(this.video.videoWidth, this.video.videoHeight);
+      this.reportVideoConfig(this.video.videoWidth, this.video.videoHeight);
       const now = performance.now();
       const renderStartedAt = performance.now();
-      if (this.renderVideoToCanvas) {
-        this.canvas
-          .getContext("2d")
-          ?.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
-      }
       const latestRenderMs = performance.now() - renderStartedAt;
       this.stats.decodedFrames += 1;
       this.stats.renderedFrames += 1;
@@ -528,6 +512,21 @@ class WebRtcStreamClient implements StreamClientBackend {
     }
     window.cancelAnimationFrame(this.animationFrame);
     this.animationFrame = window.requestAnimationFrame(this.drawVideoFrame);
+  }
+
+  private reportVideoConfig(width: number, height: number) {
+    if (this.reportedVideoConfig) {
+      return;
+    }
+    this.reportedVideoConfig = true;
+    this.onMessage({
+      type: "video-config",
+      size: { height, width },
+    });
+    this.onMessage({
+      type: "status",
+      status: { detail: "WebRTC media connected", state: "streaming" },
+    });
   }
 
   private cancelVideoFrameCallback() {
@@ -618,14 +617,6 @@ function configureReceiverCodecPreferences(transceiver: RTCRtpTransceiver) {
     ...preferred,
     ...codecs.filter((codec) => codec.mimeType.toLowerCase() !== "video/h264"),
   ]);
-}
-
-function shouldRenderWebRtcVideoThroughCanvas(): boolean {
-  const userAgent = window.navigator.userAgent;
-  return (
-    /Safari/i.test(userAgent) &&
-    !/Chrome|Chromium|CriOS|Edg|OPR/i.test(userAgent)
-  );
 }
 
 function iceServers(): RTCIceServer[] {

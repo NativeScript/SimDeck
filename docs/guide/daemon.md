@@ -61,7 +61,7 @@ This starts or reuses the project daemon, serves the bundled browser client, and
 | `--advertise-host` | matches local host    | Hostname or IP advertised to browser clients.                                     |
 | `--client-root`    | bundled `client/dist` | Override the static browser client directory.                                     |
 | `--video-codec`    | `h264-software`       | One of `h264` or `h264-software`. See [Video](/guide/video).                      |
-| `--low-latency`    | `false`               | Software H.264 profile for slower runners; caps at 30 fps and drops stale frames. |
+| `--low-latency`    | `false`               | Software H.264 profile for slower runners; caps at 15 fps and drops stale frames. |
 | `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                            |
 
 Example:
@@ -76,7 +76,10 @@ simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 simdeck daemon status
 ```
 
-The status output includes the daemon URL, PID, project root, and access token. Local same-origin browser use does not require copying the token; direct remote API callers should send it as `X-SimDeck-Token` or `Authorization: Bearer <token>`.
+The status output includes the daemon URL, supervisor PID, project root, access
+token, and detached daemon log path. Local same-origin browser use does not
+require copying the token; direct remote API callers should send it as
+`X-SimDeck-Token` or `Authorization: Bearer <token>`.
 
 ## Restart
 

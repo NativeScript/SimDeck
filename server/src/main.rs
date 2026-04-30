@@ -41,6 +41,7 @@ use std::time::{Duration, Instant};
 use tracing::info;
 
 const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
+const SUPERVISED_DAEMON_METADATA_PID_ENV: &str = "SIMDECK_DAEMON_METADATA_PID";
 const RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV: &str = "SIMDECK_RESTART_ON_CORE_SIMULATOR_MISMATCH";
 const SERVER_FD_RESTART_THRESHOLD: usize = 4096;
 const SERVER_HEALTH_WATCHDOG_INITIAL_DELAY: Duration = Duration::from_secs(15);
@@ -510,6 +511,8 @@ struct DaemonMetadata {
     pairing_code: Option<String>,
     binary_path: PathBuf,
     started_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    log_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -572,6 +575,7 @@ fn ensure_project_daemon_with_status(
 fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMetadata> {
     let project_root = project_root()?;
     let metadata_path = daemon_metadata_path_for_root(&project_root)?;
+    let log_path = daemon_log_path_for_root(&project_root)?;
     let port = choose_daemon_port(options.port)?;
     let access_token = auth::generate_access_token();
     let pairing_code = auth::generate_pairing_code();
@@ -606,11 +610,43 @@ fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMe
         args.push(client_root.to_string_lossy().into_owned());
     }
 
-    let child = ProcessCommand::new(&executable)
+    let log_stdout = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("open daemon log {}", log_path.display()))?;
+    let log_stderr = log_stdout
+        .try_clone()
+        .with_context(|| format!("clone daemon log {}", log_path.display()))?;
+    let supervisor_script = format!(
+        r#"trap 'if [ -n "$child" ]; then kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; fi; exit 0' TERM INT
+while :; do
+  {metadata_pid_env}=$$ "$@" &
+  child=$!
+  wait "$child"
+  status=$?
+  child=
+  if [ "$status" -eq {recoverable_restart_exit_code} ] || [ "$status" -ge 128 ]; then
+    printf '[simdeck-supervisor] daemon exited with status %s; restarting\n' "$status" >&2
+    sleep 1
+    continue
+  fi
+  exit "$status"
+done
+"#,
+        metadata_pid_env = SUPERVISED_DAEMON_METADATA_PID_ENV,
+        recoverable_restart_exit_code = RECOVERABLE_RESTART_EXIT_CODE
+    );
+
+    let child = ProcessCommand::new("/bin/sh")
+        .arg("-c")
+        .arg(supervisor_script)
+        .arg("simdeck-supervisor")
+        .arg(&executable)
         .args(args)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(log_stdout))
+        .stderr(Stdio::from(log_stderr))
         .spawn()
         .context("start project SimDeck daemon")?;
 
@@ -622,6 +658,7 @@ fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMe
         pairing_code: Some(pairing_code),
         binary_path: executable,
         started_at: now_secs(),
+        log_path: Some(log_path),
     };
     write_daemon_metadata(&metadata)?;
     wait_for_daemon(&metadata, Duration::from_secs(15))?;
@@ -787,6 +824,14 @@ fn daemon_metadata_path_for_root(root: &Path) -> anyhow::Result<PathBuf> {
         .join(format!("{:016x}.json", hasher.finish())))
 }
 
+fn daemon_log_path_for_root(root: &Path) -> anyhow::Result<PathBuf> {
+    let mut hasher = DefaultHasher::new();
+    root.to_string_lossy().hash(&mut hasher);
+    Ok(env::temp_dir()
+        .join("simdeck")
+        .join(format!("{:016x}.log", hasher.finish())))
+}
+
 fn daemon_metadata_paths() -> anyhow::Result<Vec<PathBuf>> {
     let dir = env::temp_dir().join("simdeck");
     if !dir.exists() {
@@ -950,6 +995,7 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
         pairing_code: Some(pairing_code.clone()),
         binary_path: executable,
         started_at: now_secs(),
+        log_path: None,
     };
     write_daemon_metadata(&metadata)?;
 
@@ -976,6 +1022,13 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
     );
     let _ = remove_daemon_metadata_if_current(&project_root, std::process::id());
     result
+}
+
+fn supervised_daemon_metadata_pid() -> Option<u32> {
+    env::var(SUPERVISED_DAEMON_METADATA_PID_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|pid| *pid > 0)
 }
 
 fn detect_lan_ip() -> Option<IpAddr> {
@@ -1111,14 +1164,16 @@ fn main() -> anyhow::Result<()> {
                 env::set_current_dir(&project_root).with_context(|| {
                     format!("set daemon project root to {}", project_root.display())
                 })?;
+                let log_path = daemon_log_path_for_root(&project_root).ok();
                 write_daemon_metadata(&DaemonMetadata {
                     project_root,
-                    pid: std::process::id(),
+                    pid: supervised_daemon_metadata_pid().unwrap_or_else(std::process::id),
                     http_url: format!("http://127.0.0.1:{port}"),
                     access_token: access_token.clone(),
                     pairing_code: pairing_code.clone(),
                     binary_path: env::current_exe().context("resolve daemon executable")?,
                     started_at: now_secs(),
+                    log_path,
                 })?;
                 let result = serve_with_appkit(
                     port,
