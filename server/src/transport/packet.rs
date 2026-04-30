@@ -1,7 +1,5 @@
-use crate::native::ffi;
+use bytes::Bytes;
 use serde::Serialize;
-use std::ffi::c_void;
-use std::fmt;
 use std::sync::Arc;
 
 pub const PACKET_VERSION: u8 = 1;
@@ -9,69 +7,6 @@ pub const FLAG_KEYFRAME: u8 = 1 << 0;
 pub const FLAG_CONFIG: u8 = 1 << 1;
 pub const FLAG_DISCONTINUITY: u8 = 1 << 2;
 pub const PACKET_HEADER_BYTES: usize = 36;
-
-pub struct ForeignBytes {
-    data: *const u8,
-    length: usize,
-    owner: *const c_void,
-}
-
-impl ForeignBytes {
-    pub unsafe fn from_ffi(bytes: ffi::xcw_native_shared_bytes) -> Option<Self> {
-        if bytes.data.is_null() || bytes.length == 0 {
-            if !bytes.owner.is_null() {
-                unsafe {
-                    ffi::xcw_native_release_shared_bytes(bytes);
-                }
-            }
-            return None;
-        }
-
-        Some(Self {
-            data: bytes.data,
-            length: bytes.length,
-            owner: bytes.owner,
-        })
-    }
-
-    pub fn as_slice(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.data, self.length) }
-    }
-
-    pub fn len(&self) -> usize {
-        self.length
-    }
-}
-
-impl AsRef<[u8]> for ForeignBytes {
-    fn as_ref(&self) -> &[u8] {
-        self.as_slice()
-    }
-}
-
-impl Drop for ForeignBytes {
-    fn drop(&mut self) {
-        unsafe {
-            ffi::xcw_native_release_shared_bytes(ffi::xcw_native_shared_bytes {
-                data: self.data,
-                length: self.length,
-                owner: self.owner,
-            });
-        }
-    }
-}
-
-impl fmt::Debug for ForeignBytes {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ForeignBytes")
-            .field("length", &self.length)
-            .finish()
-    }
-}
-
-unsafe impl Send for ForeignBytes {}
-unsafe impl Sync for ForeignBytes {}
 
 #[derive(Debug)]
 pub struct FramePacket {
@@ -81,13 +16,13 @@ pub struct FramePacket {
     pub width: u32,
     pub height: u32,
     pub codec: Option<String>,
-    pub description: Option<ForeignBytes>,
-    pub data: ForeignBytes,
+    pub description: Option<Bytes>,
+    pub data: Bytes,
 }
 
 impl FramePacket {
     pub fn header_bytes(&self, discontinuity: bool) -> [u8; PACKET_HEADER_BYTES] {
-        let description_length = self.description.as_ref().map_or(0, ForeignBytes::len);
+        let description_length = self.description.as_ref().map_or(0, Bytes::len);
         let mut flags = 0u8;
         if self.is_keyframe {
             flags |= FLAG_KEYFRAME;

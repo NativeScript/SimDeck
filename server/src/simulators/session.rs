@@ -3,7 +3,8 @@ use crate::metrics::counters::Metrics;
 use crate::native::bridge::{NativeBridge, NativeSession};
 use crate::native::ffi;
 use crate::simulators::state::SessionState;
-use crate::transport::packet::{ForeignBytes, FramePacket, SharedFrame};
+use crate::transport::packet::{FramePacket, SharedFrame};
+use bytes::Bytes;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -13,7 +14,9 @@ use tokio::task;
 use tokio::time::{timeout, Instant};
 use tracing::debug;
 
-const FRAME_BROADCAST_CAPACITY: usize = 240;
+const FRAME_BROADCAST_CAPACITY: usize = 32;
+const MIN_REFRESH_INTERVAL_MS: u64 = 16;
+const MIN_KEYFRAME_INTERVAL_MS: u64 = 250;
 
 pub struct SimulatorSession {
     inner: Arc<SimulatorSessionInner>,
@@ -32,6 +35,7 @@ struct SimulatorSessionInner {
     display_height: AtomicU64,
     frame_sequence: AtomicU64,
     last_refresh_ms: AtomicU64,
+    last_keyframe_ms: AtomicU64,
 }
 
 impl SimulatorSession {
@@ -54,6 +58,7 @@ impl SimulatorSession {
             display_height: AtomicU64::new(0),
             frame_sequence: AtomicU64::new(0),
             last_refresh_ms: AtomicU64::new(0),
+            last_keyframe_ms: AtomicU64::new(0),
         });
 
         let user_data = Weak::into_raw(Arc::downgrade(&inner)) as *mut c_void;
@@ -136,7 +141,7 @@ impl SimulatorSession {
     pub fn request_refresh(&self) {
         let now = now_ms();
         let previous = self.inner.last_refresh_ms.load(Ordering::Relaxed);
-        if now.saturating_sub(previous) < 200 {
+        if now.saturating_sub(previous) < MIN_REFRESH_INTERVAL_MS {
             return;
         }
         self.inner.last_refresh_ms.store(now, Ordering::Relaxed);
@@ -145,6 +150,22 @@ impl SimulatorSession {
             .keyframe_requests
             .fetch_add(1, Ordering::Relaxed);
         self.inner.native.request_refresh();
+    }
+
+    pub fn request_keyframe(&self) {
+        let now = now_ms();
+        let previous = self.inner.last_keyframe_ms.load(Ordering::Relaxed);
+        if now.saturating_sub(previous) < MIN_KEYFRAME_INTERVAL_MS {
+            self.request_refresh();
+            return;
+        }
+        self.inner.last_keyframe_ms.store(now, Ordering::Relaxed);
+        self.inner.last_refresh_ms.store(now, Ordering::Relaxed);
+        self.inner
+            .metrics
+            .keyframe_requests
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner.native.request_keyframe();
     }
 
     pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
@@ -206,8 +227,8 @@ unsafe extern "C" fn native_frame_callback(
 
 impl SimulatorSessionInner {
     fn handle_frame(&self, frame: &ffi::xcw_native_frame) {
-        let description = unsafe { ForeignBytes::from_ffi(frame.description) };
-        let Some(data) = (unsafe { ForeignBytes::from_ffi(frame.data) }) else {
+        let description = unsafe { copy_ffi_bytes(frame.description) };
+        let Some(data) = (unsafe { copy_ffi_bytes(frame.data) }) else {
             return;
         };
         let packet = Arc::new(FramePacket {
@@ -247,6 +268,24 @@ impl SimulatorSessionInner {
             *self.state.lock().unwrap() = SessionState::Ready;
         }
     }
+}
+
+unsafe fn copy_ffi_bytes(bytes: ffi::xcw_native_shared_bytes) -> Option<Bytes> {
+    if bytes.data.is_null() || bytes.length == 0 {
+        if !bytes.owner.is_null() {
+            unsafe {
+                ffi::xcw_native_release_shared_bytes(bytes);
+            }
+        }
+        return None;
+    }
+
+    let copied =
+        unsafe { Bytes::copy_from_slice(std::slice::from_raw_parts(bytes.data, bytes.length)) };
+    unsafe {
+        ffi::xcw_native_release_shared_bytes(bytes);
+    }
+    Some(copied)
 }
 
 fn c_string(ptr: *const i8) -> Option<String> {

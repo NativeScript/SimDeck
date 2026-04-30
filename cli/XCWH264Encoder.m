@@ -231,9 +231,13 @@ static int32_t XCWRoundToEvenDimension(double value) {
     return rounded;
 }
 
-static CGSize XCWScaledDimensionsForSourceSize(int32_t width, int32_t height) {
+static CGSize XCWScaledDimensionsForSourceSize(int32_t width, int32_t height, XCWVideoEncoderMode mode) {
     if (width <= 0 || height <= 0) {
         return CGSizeZero;
+    }
+
+    if (mode == XCWVideoEncoderModeH264Software) {
+        return CGSizeMake(width, height);
     }
 
     int32_t longestEdge = MAX(width, height);
@@ -494,7 +498,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         return NO;
     }
 
-    CGSize targetSize = XCWScaledDimensionsForSourceSize(sourceWidth, sourceHeight);
+    CGSize targetSize = XCWScaledDimensionsForSourceSize(sourceWidth, sourceHeight, _encoderMode);
     int32_t targetWidth = (int32_t)targetSize.width;
     int32_t targetHeight = (int32_t)targetSize.height;
     if (targetWidth <= 0 || targetHeight <= 0) {

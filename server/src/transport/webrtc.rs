@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::{self, error::TryRecvError};
 use tokio::time;
-use tracing::warn;
+use tracing::{info, warn};
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
 use webrtc::api::APIBuilder;
@@ -26,7 +26,10 @@ const ANNEX_B_START_CODE: &[u8] = &[0, 0, 0, 1];
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
 const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(250);
-const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 12;
+const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 4;
+const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
+const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,7 +63,16 @@ pub async fn create_answer(
         state.registry.remove(&udid);
         return Err(error);
     }
-    session.request_refresh();
+    session.request_keyframe();
+    info!(
+        "WebRTC offer for {udid}: remote_candidates={} remote_candidate_types={} ice_servers={}",
+        count_sdp_candidates(&payload.sdp),
+        summarize_sdp_candidate_types(&payload.sdp),
+        std::env::var("SIMDECK_WEBRTC_ICE_SERVERS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_STUN_URL.to_owned())
+    );
 
     let first_frame = session
         .wait_for_keyframe(Duration::from_secs(3))
@@ -97,6 +109,7 @@ pub async fn create_answer(
         .await
         .map_err(|error| AppError::internal(format!("create WebRTC peer connection: {error}")))?,
     );
+    register_diagnostics(&peer_connection, &udid);
     register_control_data_channel(&peer_connection, session.clone(), udid.clone());
 
     let video_track = Arc::new(TrackLocalStaticSample::new(
@@ -141,6 +154,11 @@ pub async fn create_answer(
         .local_description()
         .await
         .ok_or_else(|| AppError::internal("WebRTC local description was not set."))?;
+    info!(
+        "WebRTC answer for {udid}: local_candidates={} local_candidate_types={}",
+        count_sdp_candidates(&local_description.sdp),
+        summarize_sdp_candidate_types(&local_description.sdp)
+    );
 
     tokio::spawn(stream_h264_frames(
         state,
@@ -155,6 +173,103 @@ pub async fn create_answer(
         sdp: local_description.sdp,
         kind: "answer".to_owned(),
     })
+}
+
+fn register_diagnostics(
+    peer_connection: &Arc<webrtc::peer_connection::RTCPeerConnection>,
+    udid: &str,
+) {
+    let candidate_udid = udid.to_owned();
+    peer_connection.on_ice_candidate(Box::new(move |candidate| {
+        let candidate_udid = candidate_udid.clone();
+        Box::pin(async move {
+            match candidate {
+                Some(candidate) => {
+                    info!(
+                        "WebRTC local candidate for {candidate_udid}: type={} protocol={} address={} port={} related={}:{} tcp={}",
+                        candidate.typ,
+                        candidate.protocol,
+                        redact_candidate_address(&candidate.address),
+                        candidate.port,
+                        redact_candidate_address(&candidate.related_address),
+                        candidate.related_port,
+                        candidate.tcp_type
+                    );
+                }
+                None => {
+                    info!("WebRTC local candidate gathering complete for {candidate_udid}");
+                }
+            }
+        })
+    }));
+
+    let gathering_udid = udid.to_owned();
+    peer_connection.on_ice_gathering_state_change(Box::new(move |state| {
+        let gathering_udid = gathering_udid.clone();
+        Box::pin(async move {
+            info!("WebRTC ICE gathering state for {gathering_udid}: {state}");
+        })
+    }));
+
+    let ice_udid = udid.to_owned();
+    peer_connection.on_ice_connection_state_change(Box::new(move |state| {
+        let ice_udid = ice_udid.clone();
+        Box::pin(async move {
+            info!("WebRTC ICE connection state for {ice_udid}: {state}");
+        })
+    }));
+
+    let peer_udid = udid.to_owned();
+    peer_connection.on_peer_connection_state_change(Box::new(move |state| {
+        let peer_udid = peer_udid.clone();
+        Box::pin(async move {
+            info!("WebRTC peer connection state for {peer_udid}: {state}");
+        })
+    }));
+}
+
+fn count_sdp_candidates(sdp: &str) -> usize {
+    sdp.lines()
+        .filter(|line| line.starts_with("a=candidate:"))
+        .count()
+}
+
+fn summarize_sdp_candidate_types(sdp: &str) -> String {
+    let mut host = 0usize;
+    let mut srflx = 0usize;
+    let mut prflx = 0usize;
+    let mut relay = 0usize;
+    let mut other = 0usize;
+    for line in sdp.lines().filter(|line| line.starts_with("a=candidate:")) {
+        match line
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .find_map(|pair| {
+                if pair[0] == "typ" {
+                    Some(pair[1])
+                } else {
+                    None
+                }
+            }) {
+            Some("host") => host += 1,
+            Some("srflx") => srflx += 1,
+            Some("prflx") => prflx += 1,
+            Some("relay") => relay += 1,
+            Some(_) | None => other += 1,
+        }
+    }
+    format!("host={host},srflx={srflx},prflx={prflx},relay={relay},other={other}")
+}
+
+fn redact_candidate_address(address: &str) -> String {
+    if address.is_empty() {
+        return String::new();
+    }
+    if address.parse::<std::net::IpAddr>().is_ok() {
+        return "<ip>".to_owned();
+    }
+    "<host>".to_owned()
 }
 
 fn register_control_data_channel(
@@ -241,11 +356,20 @@ async fn stream_h264_frames(
     let mut last_sequence = 0u64;
     let mut send_timing = WebRtcSendTiming::new();
     let mut bootstrap_interval = time::interval(WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL);
+    let mut refresh_sleep = Box::pin(time::sleep(WEBRTC_MIN_REFRESH_INTERVAL));
     let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
+    let mut adaptive_refresh_interval = WEBRTC_MIN_REFRESH_INTERVAL;
+    let mut waiting_for_keyframe = false;
     let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
     loop {
         tokio::select! {
+            _ = &mut refresh_sleep => {
+                session.request_refresh();
+                refresh_sleep
+                    .as_mut()
+                    .reset(time::Instant::now() + adaptive_refresh_interval);
+            }
             _ = bootstrap_interval.tick(), if bootstrap_frames_remaining > 0 => {
                 if let Err(error) = write_frame_sample(
                     &video_track,
@@ -266,7 +390,8 @@ async fn stream_h264_frames(
                             .metrics
                             .frames_dropped_server
                             .fetch_add(skipped, Ordering::Relaxed);
-                        session.request_refresh();
+                        waiting_for_keyframe = true;
+                        session.request_keyframe();
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -278,7 +403,8 @@ async fn stream_h264_frames(
                         .frames_dropped_server
                         .fetch_add(skipped, Ordering::Relaxed);
                     if !frame.is_keyframe {
-                        session.request_refresh();
+                        waiting_for_keyframe = true;
+                        session.request_keyframe();
                         continue;
                     }
                 }
@@ -287,14 +413,32 @@ async fn stream_h264_frames(
                         .metrics
                         .frames_dropped_server
                         .fetch_add(frame.frame_sequence - last_sequence - 1, Ordering::Relaxed);
-                    session.request_refresh();
+                    waiting_for_keyframe = true;
+                    session.request_keyframe();
+                    continue;
+                }
+                if waiting_for_keyframe && !frame.is_keyframe {
+                    state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
                 if frame.is_keyframe {
                     latest_keyframe = frame.clone();
+                    waiting_for_keyframe = false;
                 }
                 let duration = send_timing.duration_for(&frame);
-                if let Err(error) = write_frame_sample(&video_track, &frame, duration).await {
+                let started_at = time::Instant::now();
+                let write_result = time::timeout(
+                    WEBRTC_WRITE_TIMEOUT,
+                    write_frame_sample(&video_track, &frame, duration),
+                ).await;
+                adaptive_refresh_interval = adaptive_interval_for_write(started_at.elapsed());
+                if let Err(error) = write_result
+                    .map_err(|_| anyhow::anyhow!(
+                        "timed out writing WebRTC frame after {}ms",
+                        WEBRTC_WRITE_TIMEOUT.as_millis()
+                    ))
+                    .and_then(|result| result)
+                {
                     warn!("WebRTC frame write failed for {udid}: {error}");
                     break;
                 }
@@ -305,6 +449,14 @@ async fn stream_h264_frames(
     }
 
     let _ = peer_connection.close().await;
+}
+
+fn adaptive_interval_for_write(write_elapsed: Duration) -> Duration {
+    let target_ms = (write_elapsed.as_millis() as u64).saturating_mul(2).clamp(
+        WEBRTC_MIN_REFRESH_INTERVAL.as_millis() as u64,
+        WEBRTC_MAX_REFRESH_INTERVAL.as_millis() as u64,
+    );
+    Duration::from_millis(target_ms)
 }
 
 async fn write_frame_sample(
@@ -324,8 +476,8 @@ async fn write_frame_sample(
 }
 
 fn h264_annex_b_sample(frame: &crate::transport::packet::FramePacket) -> anyhow::Result<Vec<u8>> {
-    let data = frame.data.as_slice();
-    let description = frame.description.as_ref().map(|bytes| bytes.as_slice());
+    let data = frame.data.as_ref();
+    let description = frame.description.as_ref().map(bytes::Bytes::as_ref);
     let mut sample = Vec::with_capacity(data.len() + description.map_or(0, |bytes| bytes.len()));
 
     if frame.is_keyframe {

@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (BOOL)start:(NSError * _Nullable * _Nullable)error;
 - (void)requestRefresh;
+- (void)requestKeyFrame;
 - (BOOL)sendTouchAtX:(double)x
                    y:(double)y
                phase:(NSString *)phase

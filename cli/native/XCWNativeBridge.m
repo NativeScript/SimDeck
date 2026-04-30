@@ -668,6 +668,12 @@ void xcw_native_session_request_refresh(void *handle) {
     }
 }
 
+void xcw_native_session_request_keyframe(void *handle) {
+    @autoreleasepool {
+        [XCWNativeSessionFromHandle(handle) requestKeyFrame];
+    }
+}
+
 bool xcw_native_session_send_touch(void *handle, double x, double y, const char *phase, char **error_message) {
     @autoreleasepool {
         NSError *error = nil;

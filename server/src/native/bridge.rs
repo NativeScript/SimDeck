@@ -624,6 +624,12 @@ impl NativeSession {
         }
     }
 
+    pub fn request_keyframe(&self) {
+        unsafe {
+            ffi::xcw_native_session_request_keyframe(self.handle);
+        }
+    }
+
     pub unsafe fn set_frame_callback(
         &self,
         callback: Option<ffi::xcw_native_frame_callback>,
