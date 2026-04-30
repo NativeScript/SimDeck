@@ -173,6 +173,11 @@ class WebRtcStreamClient implements StreamClientBackend {
       const transceiver = peerConnection.addTransceiver("video", {
         direction: "recvonly",
       });
+      const health = await fetchHealth();
+      if (generation !== this.connectGeneration) {
+        return;
+      }
+      configureReceiverCodecPreferences(transceiver, health.videoCodec);
       configureLowLatencyReceiver(transceiver.receiver);
       const controlChannel = peerConnection.createDataChannel(
         WEBRTC_CONTROL_CHANNEL_LABEL,
@@ -606,6 +611,44 @@ function configureLowLatencyReceiver(receiver: RTCRtpReceiver) {
   if ("playoutDelayHint" in lowLatencyReceiver) {
     lowLatencyReceiver.playoutDelayHint = 0.001;
   }
+}
+
+function configureReceiverCodecPreferences(
+  transceiver: RTCRtpTransceiver,
+  videoCodec?: string | null,
+) {
+  if (!transceiver.setCodecPreferences) {
+    return;
+  }
+  const preferredMimeType = preferredWebRtcMimeType(videoCodec);
+  if (!preferredMimeType) {
+    return;
+  }
+  const capabilities = RTCRtpReceiver.getCapabilities("video");
+  const codecs = capabilities?.codecs ?? [];
+  const preferred = codecs.filter(
+    (codec) => codec.mimeType.toLowerCase() === preferredMimeType,
+  );
+  if (preferred.length === 0) {
+    return;
+  }
+  transceiver.setCodecPreferences([
+    ...preferred,
+    ...codecs.filter(
+      (codec) => codec.mimeType.toLowerCase() !== preferredMimeType,
+    ),
+  ]);
+}
+
+function preferredWebRtcMimeType(videoCodec?: string | null): string | null {
+  const normalized = videoCodec?.toLowerCase();
+  if (normalized === "hevc") {
+    return "video/h265";
+  }
+  if (normalized === "h264" || normalized === "h264-software") {
+    return "video/h264";
+  }
+  return null;
 }
 
 export function initialStreamTransportMode(): StreamTransportMode {

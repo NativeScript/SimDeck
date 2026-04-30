@@ -1249,10 +1249,6 @@ export function AppShell() {
     }
     const udid = selectedSimulator.udid;
     setVideoCodec(codec);
-    if (codec === "hevc" && streamTransportMode !== "webtransport") {
-      setStreamTransportMode("webtransport");
-      setStreamSettingsRevision((current) => current + 1);
-    }
     void (async () => {
       codecSwitchInFlightRef.current = true;
       setStreamPaused(true);

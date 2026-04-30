@@ -20,7 +20,10 @@ use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::rtp::header::Header;
+use webrtc::rtp::packet::Packet;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 
@@ -32,6 +35,10 @@ const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 8;
 const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
 const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
+const BROWSER_HEVC_RTPMAP: &str = "H265/90000";
+const RUST_HEVC_RTPMAP: &str = "HEVC/90000";
+const WEBRTC_RTP_MTU: usize = 1200;
+const HEVC_FRAGMENTATION_UNIT_PAYLOAD_HEADER: [u8; 2] = [0x62, 0x01];
 
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, broadcast::Sender<()>>>> =
     OnceLock::new();
@@ -123,7 +130,8 @@ pub async fn create_answer(
     register_diagnostics(&peer_connection, &udid);
     register_control_data_channel(&peer_connection, session.clone(), udid.clone());
 
-    let video_track = Arc::new(TrackLocalStaticSample::new(
+    let video_track = WebRtcVideoTrack::new(
+        media_codec,
         RTCRtpCodecCapability {
             mime_type: media_codec.mime_type().to_owned(),
             clock_rate: 90_000,
@@ -131,12 +139,10 @@ pub async fn create_answer(
             sdp_fmtp_line: media_codec.sdp_fmtp_line(&codec),
             rtcp_feedback: vec![],
         },
-        "simdeck-video".to_owned(),
-        "simdeck".to_owned(),
-    ));
+    );
 
     let rtp_sender = peer_connection
-        .add_track(video_track.clone() as Arc<dyn TrackLocal + Send + Sync>)
+        .add_track(video_track.track_local())
         .await
         .map_err(|error| AppError::internal(format!("add WebRTC video track: {error}")))?;
     tokio::spawn(async move {
@@ -144,7 +150,8 @@ pub async fn create_answer(
         while rtp_sender.read(&mut buffer).await.is_ok() {}
     });
 
-    let offer = RTCSessionDescription::offer(payload.sdp)
+    let (offer_sdp, browser_uses_h265_rtpmap) = normalize_hevc_offer_sdp(&payload.sdp);
+    let offer = RTCSessionDescription::offer(offer_sdp)
         .map_err(|error| AppError::bad_request(format!("invalid WebRTC offer: {error}")))?;
     peer_connection
         .set_remote_description(offer)
@@ -165,10 +172,11 @@ pub async fn create_answer(
         .local_description()
         .await
         .ok_or_else(|| AppError::internal("WebRTC local description was not set."))?;
+    let answer_sdp = restore_hevc_answer_sdp(&local_description.sdp, browser_uses_h265_rtpmap);
     info!(
         "WebRTC answer for {udid}: local_candidates={} local_candidate_types={}",
-        count_sdp_candidates(&local_description.sdp),
-        summarize_sdp_candidate_types(&local_description.sdp)
+        count_sdp_candidates(&answer_sdp),
+        summarize_sdp_candidate_types(&answer_sdp)
     );
 
     let (cancellation_token, cancellation) = replace_webrtc_media_stream(&udid);
@@ -188,7 +196,7 @@ pub async fn create_answer(
     );
 
     Ok(WebRtcAnswerPayload {
-        sdp: local_description.sdp,
+        sdp: answer_sdp,
         kind: "answer".to_owned(),
     })
 }
@@ -387,6 +395,26 @@ fn h264_sdp_fmtp_line(codec: &str) -> String {
     format!("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id={profile_level_id}")
 }
 
+fn normalize_hevc_offer_sdp(sdp: &str) -> (String, bool) {
+    rewrite_hevc_rtpmap(sdp, BROWSER_HEVC_RTPMAP, RUST_HEVC_RTPMAP)
+}
+
+fn restore_hevc_answer_sdp(sdp: &str, browser_uses_h265_rtpmap: bool) -> String {
+    if !browser_uses_h265_rtpmap {
+        return sdp.to_owned();
+    }
+    rewrite_hevc_rtpmap(sdp, RUST_HEVC_RTPMAP, BROWSER_HEVC_RTPMAP).0
+}
+
+fn rewrite_hevc_rtpmap(sdp: &str, from: &str, to: &str) -> (String, bool) {
+    let rewritten = sdp.replace(&format!(" {from}"), &format!(" {to}")).replace(
+        &format!(" {}", from.to_ascii_lowercase()),
+        &format!(" {to}"),
+    );
+    let changed = rewritten != sdp;
+    (rewritten, changed)
+}
+
 fn replace_webrtc_media_stream(udid: &str) -> (broadcast::Sender<()>, broadcast::Receiver<()>) {
     let (tx, rx) = broadcast::channel(1);
     let streams = WEBRTC_MEDIA_STREAMS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -450,7 +478,7 @@ struct WebRtcMediaStream {
     udid: String,
     first_frame: crate::transport::packet::SharedFrame,
     peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
-    video_track: Arc<TrackLocalStaticSample>,
+    video_track: WebRtcVideoTrack,
     media_codec: WebRtcMediaCodec,
     cancellation_token: broadcast::Sender<()>,
     cancellation: broadcast::Receiver<()>,
@@ -478,6 +506,7 @@ impl WebRtcMediaStream {
         let mut adaptive_refresh_interval = WEBRTC_MIN_REFRESH_INTERVAL;
         let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
         let mut waiting_for_keyframe = false;
+        let mut rtp_sequence_number = 1u16;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
         match write_frame_sample_with_timeout(
@@ -485,6 +514,7 @@ impl WebRtcMediaStream {
             &first_frame,
             media_codec,
             WEBRTC_MIN_REFRESH_INTERVAL,
+            &mut rtp_sequence_number,
         )
         .await
         {
@@ -524,6 +554,7 @@ impl WebRtcMediaStream {
                         &latest_keyframe,
                         media_codec,
                         WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL,
+                        &mut rtp_sequence_number,
                     ).await {
                         Ok(true) => {
                             state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
@@ -578,7 +609,7 @@ impl WebRtcMediaStream {
                     }
                     let duration = send_timing.duration_for(&frame);
                     let started_at = time::Instant::now();
-                    let write_result = write_frame_sample_with_timeout(&video_track, &frame, media_codec, duration).await;
+                    let write_result = write_frame_sample_with_timeout(&video_track, &frame, media_codec, duration, &mut rtp_sequence_number).await;
                     adaptive_refresh_interval = adaptive_interval_for_write(started_at.elapsed());
                     match write_result {
                         Ok(true) => {
@@ -617,37 +648,112 @@ fn adaptive_interval_for_write(write_elapsed: Duration) -> Duration {
 }
 
 async fn write_frame_sample(
-    video_track: &TrackLocalStaticSample,
+    video_track: &WebRtcVideoTrack,
     frame: &crate::transport::packet::SharedFrame,
     media_codec: WebRtcMediaCodec,
     duration: Duration,
+    rtp_sequence_number: &mut u16,
 ) -> anyhow::Result<()> {
-    let data = annex_b_sample(frame, media_codec)?;
-    video_track
-        .write_sample(&Sample {
-            data: Bytes::from(data),
-            duration,
-            ..Default::default()
-        })
-        .await?;
+    match (video_track, media_codec) {
+        (WebRtcVideoTrack::Sample(video_track), WebRtcMediaCodec::H264) => {
+            let data = annex_b_sample(frame, media_codec)?;
+            video_track
+                .write_sample(&Sample {
+                    data: Bytes::from(data),
+                    duration,
+                    ..Default::default()
+                })
+                .await?;
+        }
+        (WebRtcVideoTrack::Rtp(video_track), WebRtcMediaCodec::Hevc) => {
+            write_hevc_rtp_frame(video_track, frame, rtp_sequence_number).await?;
+        }
+        _ => anyhow::bail!("WebRTC track type does not match negotiated media codec"),
+    }
     Ok(())
 }
 
 async fn write_frame_sample_with_timeout(
-    video_track: &TrackLocalStaticSample,
+    video_track: &WebRtcVideoTrack,
     frame: &crate::transport::packet::SharedFrame,
     media_codec: WebRtcMediaCodec,
     duration: Duration,
+    rtp_sequence_number: &mut u16,
 ) -> anyhow::Result<bool> {
     match time::timeout(
         WEBRTC_WRITE_TIMEOUT,
-        write_frame_sample(video_track, frame, media_codec, duration),
+        write_frame_sample(
+            video_track,
+            frame,
+            media_codec,
+            duration,
+            rtp_sequence_number,
+        ),
     )
     .await
     {
         Ok(result) => result.map(|()| true),
         Err(_) => Ok(false),
     }
+}
+
+#[derive(Clone)]
+enum WebRtcVideoTrack {
+    Sample(Arc<TrackLocalStaticSample>),
+    Rtp(Arc<TrackLocalStaticRTP>),
+}
+
+impl WebRtcVideoTrack {
+    fn new(media_codec: WebRtcMediaCodec, capability: RTCRtpCodecCapability) -> Self {
+        match media_codec {
+            WebRtcMediaCodec::H264 => Self::Sample(Arc::new(TrackLocalStaticSample::new(
+                capability,
+                "simdeck-video".to_owned(),
+                "simdeck".to_owned(),
+            ))),
+            WebRtcMediaCodec::Hevc => Self::Rtp(Arc::new(TrackLocalStaticRTP::new(
+                capability,
+                "simdeck-video".to_owned(),
+                "simdeck".to_owned(),
+            ))),
+        }
+    }
+
+    fn track_local(&self) -> Arc<dyn TrackLocal + Send + Sync> {
+        match self {
+            Self::Sample(track) => track.clone(),
+            Self::Rtp(track) => track.clone(),
+        }
+    }
+}
+
+async fn write_hevc_rtp_frame(
+    video_track: &TrackLocalStaticRTP,
+    frame: &crate::transport::packet::FramePacket,
+    sequence_number: &mut u16,
+) -> anyhow::Result<()> {
+    let payloads = hevc_rtp_payloads(frame)?;
+    let timestamp = rtp_timestamp_90khz(frame.timestamp_us);
+    let payload_count = payloads.len();
+    for (index, payload) in payloads.into_iter().enumerate() {
+        let packet = Packet {
+            header: Header {
+                version: 2,
+                marker: index + 1 == payload_count,
+                sequence_number: *sequence_number,
+                timestamp,
+                ..Default::default()
+            },
+            payload: Bytes::from(payload),
+        };
+        video_track.write_rtp_with_extensions(&packet, &[]).await?;
+        *sequence_number = sequence_number.wrapping_add(1);
+    }
+    Ok(())
+}
+
+fn rtp_timestamp_90khz(timestamp_us: u64) -> u32 {
+    timestamp_us.wrapping_mul(90) as u32
 }
 
 fn annex_b_sample(
@@ -700,6 +806,94 @@ fn hevc_annex_b_sample(frame: &crate::transport::packet::FramePacket) -> anyhow:
     let nal_length_size = description.and_then(hvcc_nal_length_size).unwrap_or(4);
     append_length_prefixed_nalus(data, nal_length_size, &mut sample)?;
     Ok(sample)
+}
+
+fn hevc_rtp_payloads(
+    frame: &crate::transport::packet::FramePacket,
+) -> anyhow::Result<Vec<Vec<u8>>> {
+    let annex_b = hevc_annex_b_sample(frame)?;
+    let nalus = annex_b_nalus(&annex_b);
+    let mut payloads = Vec::new();
+    for nalu in nalus {
+        append_hevc_rtp_payloads_for_nalu(nalu, &mut payloads)?;
+    }
+    Ok(payloads)
+}
+
+fn append_hevc_rtp_payloads_for_nalu(
+    nalu: &[u8],
+    payloads: &mut Vec<Vec<u8>>,
+) -> anyhow::Result<()> {
+    if nalu.is_empty() {
+        return Ok(());
+    }
+    if nalu.len() < 2 {
+        anyhow::bail!("truncated HEVC NAL unit");
+    }
+    if nalu.len() <= WEBRTC_RTP_MTU {
+        payloads.push(nalu.to_vec());
+        return Ok(());
+    }
+
+    let nalu_type = (nalu[0] >> 1) & 0x3f;
+    let max_fragment_payload = WEBRTC_RTP_MTU.saturating_sub(3);
+    if max_fragment_payload == 0 {
+        anyhow::bail!("invalid HEVC RTP MTU");
+    }
+    let mut offset = 2usize;
+    while offset < nalu.len() {
+        let remaining = nalu.len() - offset;
+        let fragment_size = remaining.min(max_fragment_payload);
+        let is_first = offset == 2;
+        let is_last = offset + fragment_size >= nalu.len();
+        let mut payload = Vec::with_capacity(3 + fragment_size);
+        payload.extend_from_slice(&HEVC_FRAGMENTATION_UNIT_PAYLOAD_HEADER);
+        payload
+            .push((if is_first { 0x80 } else { 0 }) | (if is_last { 0x40 } else { 0 }) | nalu_type);
+        payload.extend_from_slice(&nalu[offset..offset + fragment_size]);
+        payloads.push(payload);
+        offset += fragment_size;
+    }
+    Ok(())
+}
+
+fn annex_b_nalus(data: &[u8]) -> Vec<&[u8]> {
+    let Some((mut start, mut code_len)) = find_annex_b_start_code(data, 0) else {
+        return if data.is_empty() {
+            Vec::new()
+        } else {
+            vec![data]
+        };
+    };
+    let mut nalus = Vec::new();
+    loop {
+        let nalu_start = start + code_len;
+        let next = find_annex_b_start_code(data, nalu_start);
+        let nalu_end = next.map(|(index, _)| index).unwrap_or(data.len());
+        if nalu_end > nalu_start {
+            nalus.push(&data[nalu_start..nalu_end]);
+        }
+        let Some((next_start, next_code_len)) = next else {
+            break;
+        };
+        start = next_start;
+        code_len = next_code_len;
+    }
+    nalus
+}
+
+fn find_annex_b_start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
+    let mut index = from;
+    while index + 3 <= data.len() {
+        if index + 4 <= data.len() && data[index..index + 4] == [0, 0, 0, 1] {
+            return Some((index, 4));
+        }
+        if data[index..index + 3] == [0, 0, 1] {
+            return Some((index, 3));
+        }
+        index += 1;
+    }
+    None
 }
 
 fn is_annex_b(data: &[u8]) -> bool {
@@ -889,9 +1083,11 @@ impl Drop for WebRtcMetricsGuard {
 mod tests {
     use super::{
         append_avcc_parameter_sets, append_hvcc_parameter_sets, append_length_prefixed_nalus,
-        h264_sdp_fmtp_line, hvcc_nal_length_size, is_annex_b, is_h264_codec, is_hevc_codec,
-        ANNEX_B_START_CODE,
+        h264_sdp_fmtp_line, hevc_rtp_payloads, hvcc_nal_length_size, is_annex_b, is_h264_codec,
+        is_hevc_codec, normalize_hevc_offer_sdp, restore_hevc_answer_sdp, ANNEX_B_START_CODE,
     };
+    use crate::transport::packet::FramePacket;
+    use bytes::Bytes;
 
     #[test]
     fn accepts_browser_h264_codec_strings() {
@@ -915,6 +1111,27 @@ mod tests {
     fn uses_h264_profile_level_id_when_available() {
         assert!(h264_sdp_fmtp_line("avc1.42e01f").contains("profile-level-id=42e01f"));
         assert!(h264_sdp_fmtp_line("h264").contains("profile-level-id=42e01f"));
+    }
+
+    #[test]
+    fn rewrites_browser_h265_rtpmap_for_rust_webrtc() {
+        let sdp = "m=video 9 UDP/TLS/RTP/SAVPF 126\r\na=rtpmap:126 H265/90000\r\na=fmtp:126 profile-id=1\r\n";
+
+        let (rewritten, changed) = normalize_hevc_offer_sdp(sdp);
+
+        assert!(changed);
+        assert!(rewritten.contains("a=rtpmap:126 HEVC/90000"));
+        assert!(!rewritten.contains("H265/90000"));
+    }
+
+    #[test]
+    fn restores_h265_rtpmap_for_browser_answer() {
+        let sdp = "m=video 9 UDP/TLS/RTP/SAVPF 126\r\na=rtpmap:126 HEVC/90000\r\n";
+
+        let rewritten = restore_hevc_answer_sdp(sdp, true);
+
+        assert!(rewritten.contains("a=rtpmap:126 H265/90000"));
+        assert!(!rewritten.contains("HEVC/90000"));
     }
 
     #[test]
@@ -983,5 +1200,29 @@ mod tests {
             .concat()
         );
         assert_eq!(hvcc_nal_length_size(&hvcc), Some(4));
+    }
+
+    #[test]
+    fn packetizes_large_hevc_nal_as_fragmentation_units() {
+        let mut data = vec![0, 0, 0, 1, 0x26, 0x01];
+        data.extend(std::iter::repeat_n(0xab, 2500));
+        let frame = FramePacket {
+            frame_sequence: 1,
+            timestamp_us: 123,
+            is_keyframe: true,
+            width: 100,
+            height: 100,
+            codec: Some("hvc1.1.6.L123.B0".to_owned()),
+            description: None,
+            data: Bytes::from(data),
+        };
+
+        let payloads = hevc_rtp_payloads(&frame).unwrap();
+
+        assert!(payloads.len() > 1);
+        assert_eq!(&payloads[0][0..2], &[0x62, 0x01]);
+        assert_eq!(payloads[0][2], 0x80 | 19);
+        assert_eq!(&payloads.last().unwrap()[0..2], &[0x62, 0x01]);
+        assert_eq!(payloads.last().unwrap()[2], 0x40 | 19);
     }
 }
