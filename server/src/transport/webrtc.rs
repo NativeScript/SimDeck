@@ -27,6 +27,8 @@ use webrtc::track::track_local::TrackLocal;
 const ANNEX_B_START_CODE: &[u8] = &[0, 0, 0, 1];
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
+const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(150);
+const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 8;
 const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
 const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
@@ -454,11 +456,14 @@ impl WebRtcMediaStream {
             mut cancellation,
         } = self;
         let mut rx = session.subscribe();
+        let mut latest_keyframe = first_frame.clone();
         let mut last_sequence = 0u64;
         let mut send_timing = WebRtcSendTiming::new();
         let mut peer_state_interval = time::interval(Duration::from_millis(250));
+        let mut bootstrap_sleep = Box::pin(time::sleep(WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL));
         let mut refresh_sleep = Box::pin(time::sleep(WEBRTC_MIN_REFRESH_INTERVAL));
         let mut adaptive_refresh_interval = WEBRTC_MIN_REFRESH_INTERVAL;
+        let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
         let mut waiting_for_keyframe = false;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
@@ -485,6 +490,21 @@ impl WebRtcMediaStream {
                     ) {
                         break;
                     }
+                }
+                _ = &mut bootstrap_sleep, if bootstrap_frames_remaining > 0 => {
+                    if let Err(error) = write_frame_sample(
+                        &video_track,
+                        &latest_keyframe,
+                        WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL,
+                    ).await {
+                        warn!("WebRTC bootstrap keyframe write failed for {udid}: {error}");
+                        break;
+                    }
+                    bootstrap_frames_remaining = bootstrap_frames_remaining.saturating_sub(1);
+                    bootstrap_sleep
+                        .as_mut()
+                        .reset(time::Instant::now() + WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL);
+                    state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
                 }
                 _ = &mut refresh_sleep => {
                     session.request_refresh();
@@ -520,6 +540,7 @@ impl WebRtcMediaStream {
                         continue;
                     }
                     if frame.is_keyframe {
+                        latest_keyframe = frame.clone();
                         waiting_for_keyframe = false;
                     }
                     let duration = send_timing.duration_for(&frame);
