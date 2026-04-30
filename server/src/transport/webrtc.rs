@@ -180,6 +180,7 @@ pub async fn create_answer(
             first_frame,
             peer_connection,
             video_track,
+            media_codec,
             cancellation_token,
             cancellation,
         }
@@ -360,12 +361,6 @@ impl WebRtcMediaCodec {
         }
     }
 
-    fn from_frame(frame: &crate::transport::packet::FramePacket) -> anyhow::Result<Self> {
-        let codec = frame.codec.as_deref().unwrap_or_default();
-        Self::from_codec_string(codec)
-            .ok_or_else(|| anyhow::anyhow!("unsupported WebRTC video codec `{codec}`"))
-    }
-
     fn mime_type(self) -> &'static str {
         match self {
             Self::H264 => MIME_TYPE_H264,
@@ -439,6 +434,7 @@ struct WebRtcMediaStream {
     first_frame: crate::transport::packet::SharedFrame,
     peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
     video_track: Arc<TrackLocalStaticSample>,
+    media_codec: WebRtcMediaCodec,
     cancellation_token: broadcast::Sender<()>,
     cancellation: broadcast::Receiver<()>,
 }
@@ -452,12 +448,12 @@ impl WebRtcMediaStream {
             first_frame,
             peer_connection,
             video_track,
+            media_codec,
             cancellation_token,
             mut cancellation,
         } = self;
         let mut rx = session.subscribe();
         let mut latest_keyframe = first_frame.clone();
-        let mut last_sequence = 0u64;
         let mut send_timing = WebRtcSendTiming::new();
         let mut peer_state_interval = time::interval(Duration::from_millis(250));
         let mut bootstrap_sleep = Box::pin(time::sleep(WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL));
@@ -467,44 +463,70 @@ impl WebRtcMediaStream {
         let mut waiting_for_keyframe = false;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
-        if let Err(error) =
-            write_frame_sample(&video_track, &first_frame, WEBRTC_MIN_REFRESH_INTERVAL).await
+        match write_frame_sample_with_timeout(
+            &video_track,
+            &first_frame,
+            media_codec,
+            WEBRTC_MIN_REFRESH_INTERVAL,
+        )
+        .await
         {
-            warn!("WebRTC initial keyframe write failed for {udid}: {error}");
-            let _ = peer_connection.close().await;
-            return;
+            Ok(true) => {
+                state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(false) => {
+                state
+                    .metrics
+                    .frames_dropped_server
+                    .fetch_add(1, Ordering::Relaxed);
+                session.request_keyframe();
+            }
+            Err(error) => {
+                warn!("WebRTC initial keyframe write failed for {udid}: {error}");
+                let _ = peer_connection.close().await;
+                return;
+            }
         }
-        state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
 
         loop {
             tokio::select! {
                 _ = cancellation.recv() => {
+                    warn!("WebRTC media stream replaced for {udid}");
                     break;
                 }
                 _ = peer_state_interval.tick() => {
-                    if matches!(
-                        peer_connection.connection_state(),
-                        RTCPeerConnectionState::Closed
-                            | RTCPeerConnectionState::Disconnected
-                            | RTCPeerConnectionState::Failed
-                    ) {
+                    let peer_state = peer_connection.connection_state();
+                    if matches!(peer_state, RTCPeerConnectionState::Closed | RTCPeerConnectionState::Failed) {
+                        warn!("WebRTC media stream closing for {udid}: peer state {peer_state}");
                         break;
                     }
                 }
                 _ = &mut bootstrap_sleep, if bootstrap_frames_remaining > 0 => {
-                    if let Err(error) = write_frame_sample(
+                    match write_frame_sample_with_timeout(
                         &video_track,
                         &latest_keyframe,
+                        media_codec,
                         WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL,
                     ).await {
-                        warn!("WebRTC bootstrap keyframe write failed for {udid}: {error}");
-                        break;
+                        Ok(true) => {
+                            state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Ok(false) => {
+                            state
+                                .metrics
+                                .frames_dropped_server
+                                .fetch_add(1, Ordering::Relaxed);
+                            session.request_keyframe();
+                        }
+                        Err(error) => {
+                            warn!("WebRTC bootstrap keyframe write failed for {udid}: {error}");
+                            break;
+                        }
                     }
                     bootstrap_frames_remaining = bootstrap_frames_remaining.saturating_sub(1);
                     bootstrap_sleep
                         .as_mut()
                         .reset(time::Instant::now() + WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL);
-                    state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
                 }
                 _ = &mut refresh_sleep => {
                     session.request_refresh();
@@ -524,17 +546,11 @@ impl WebRtcMediaStream {
                             session.request_keyframe();
                             continue;
                         }
-                        Err(broadcast::error::RecvError::Closed) => break,
+                        Err(broadcast::error::RecvError::Closed) => {
+                            warn!("WebRTC media stream closing for {udid}: frame channel closed");
+                            break;
+                        }
                     };
-                    if last_sequence != 0 && frame.frame_sequence > last_sequence + 1 && !frame.is_keyframe {
-                        state
-                            .metrics
-                            .frames_dropped_server
-                            .fetch_add(frame.frame_sequence - last_sequence - 1, Ordering::Relaxed);
-                        waiting_for_keyframe = true;
-                        session.request_keyframe();
-                        continue;
-                    }
                     if waiting_for_keyframe && !frame.is_keyframe {
                         state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
                         continue;
@@ -545,27 +561,31 @@ impl WebRtcMediaStream {
                     }
                     let duration = send_timing.duration_for(&frame);
                     let started_at = time::Instant::now();
-                    let write_result = time::timeout(
-                        WEBRTC_WRITE_TIMEOUT,
-                        write_frame_sample(&video_track, &frame, duration),
-                    ).await;
+                    let write_result = write_frame_sample_with_timeout(&video_track, &frame, media_codec, duration).await;
                     adaptive_refresh_interval = adaptive_interval_for_write(started_at.elapsed());
-                    if let Err(error) = write_result
-                        .map_err(|_| anyhow::anyhow!(
-                            "timed out writing WebRTC frame after {}ms",
-                            WEBRTC_WRITE_TIMEOUT.as_millis()
-                        ))
-                        .and_then(|result| result)
-                    {
-                        warn!("WebRTC frame write failed for {udid}: {error}");
-                        break;
+                    match write_result {
+                        Ok(true) => {
+                            state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Ok(false) => {
+                            state
+                                .metrics
+                                .frames_dropped_server
+                                .fetch_add(1, Ordering::Relaxed);
+                            waiting_for_keyframe = true;
+                            adaptive_refresh_interval = WEBRTC_MAX_REFRESH_INTERVAL;
+                            session.request_keyframe();
+                        }
+                        Err(error) => {
+                            warn!("WebRTC frame write failed for {udid}: {error}");
+                            break;
+                        }
                     }
-                    last_sequence = frame.frame_sequence;
-                    state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
 
+        warn!("WebRTC media stream ended for {udid}");
         clear_webrtc_media_stream(&udid, &cancellation_token);
         let _ = peer_connection.close().await;
     }
@@ -582,9 +602,10 @@ fn adaptive_interval_for_write(write_elapsed: Duration) -> Duration {
 async fn write_frame_sample(
     video_track: &TrackLocalStaticSample,
     frame: &crate::transport::packet::SharedFrame,
+    media_codec: WebRtcMediaCodec,
     duration: Duration,
 ) -> anyhow::Result<()> {
-    let data = annex_b_sample(frame)?;
+    let data = annex_b_sample(frame, media_codec)?;
     video_track
         .write_sample(&Sample {
             data: Bytes::from(data),
@@ -595,8 +616,28 @@ async fn write_frame_sample(
     Ok(())
 }
 
-fn annex_b_sample(frame: &crate::transport::packet::FramePacket) -> anyhow::Result<Vec<u8>> {
-    match WebRtcMediaCodec::from_frame(frame)? {
+async fn write_frame_sample_with_timeout(
+    video_track: &TrackLocalStaticSample,
+    frame: &crate::transport::packet::SharedFrame,
+    media_codec: WebRtcMediaCodec,
+    duration: Duration,
+) -> anyhow::Result<bool> {
+    match time::timeout(
+        WEBRTC_WRITE_TIMEOUT,
+        write_frame_sample(video_track, frame, media_codec, duration),
+    )
+    .await
+    {
+        Ok(result) => result.map(|()| true),
+        Err(_) => Ok(false),
+    }
+}
+
+fn annex_b_sample(
+    frame: &crate::transport::packet::FramePacket,
+    media_codec: WebRtcMediaCodec,
+) -> anyhow::Result<Vec<u8>> {
+    match media_codec {
         WebRtcMediaCodec::H264 => h264_annex_b_sample(frame),
         WebRtcMediaCodec::Hevc => hevc_annex_b_sample(frame),
     }
