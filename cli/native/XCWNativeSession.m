@@ -91,7 +91,7 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
 }
 
 - (void)requestRefresh {
-    [self.session requestKeyFrameRefresh];
+    [self.session requestFrameRefresh];
 }
 
 - (BOOL)sendTouchAtX:(double)x

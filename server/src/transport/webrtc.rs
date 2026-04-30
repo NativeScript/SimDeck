@@ -27,7 +27,7 @@ const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
 const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 12;
-const WEBRTC_REFRESH_INTERVAL: Duration = Duration::from_millis(33);
+const WEBRTC_REFRESH_INTERVAL: Duration = Duration::from_millis(66);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -15,7 +15,7 @@ use tokio::time::{timeout, Instant};
 use tracing::debug;
 
 const FRAME_BROADCAST_CAPACITY: usize = 240;
-const MIN_REFRESH_INTERVAL_MS: u64 = 33;
+const MIN_REFRESH_INTERVAL_MS: u64 = 66;
 
 pub struct SimulatorSession {
     inner: Arc<SimulatorSessionInner>,
