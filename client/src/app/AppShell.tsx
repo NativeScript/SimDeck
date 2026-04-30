@@ -5,9 +5,10 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type FormEvent,
 } from "react";
 
-import { accessTokenFromLocation } from "../api/client";
+import { ApiError, accessTokenFromLocation, pairBrowser } from "../api/client";
 import {
   bootSimulator,
   dismissKeyboard,
@@ -86,6 +87,7 @@ const ACCESSIBILITY_REFRESH_MS = 1500;
 const REACT_NATIVE_ACCESSIBILITY_REFRESH_MS = 500;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
+const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
 
 clearLegacyVolatileUiState();
 
@@ -192,6 +194,9 @@ export function AppShell() {
   );
   const [menuOpen, setMenuOpen] = useState(false);
   const [localError, setLocalError] = useState("");
+  const [pairingCode, setPairingCode] = useState("");
+  const [pairingError, setPairingError] = useState("");
+  const [pairingBusy, setPairingBusy] = useState(false);
   const [simulatorTransition, setSimulatorTransition] =
     useState<SimulatorTransition | null>(null);
   const [rotationQuarterTurns, setRotationQuarterTurns] = useState(
@@ -325,6 +330,8 @@ export function AppShell() {
     runtimeInfo,
     stats,
     status: streamStatus,
+    streamBackend,
+    streamCanvasKey,
   } = useLiveStream({
     canvasElement: streamCanvasElement,
     simulator: selectedSimulator,
@@ -749,7 +756,11 @@ export function AppShell() {
     setPan,
   });
 
-  const error = localError || streamError || listError;
+  const pairingRequired =
+    listError === AUTH_REQUIRED_MESSAGE && !accessTokenFromLocation();
+  const error = pairingRequired
+    ? localError || streamError
+    : localError || streamError || listError;
   const deviceTransform = `translate(${pan.x}px, ${pan.y + autoViewportOffsetY}px) scale(${effectiveZoom})`;
   const chromeScreenRect = computeChromeScreenRect(
     viewportChromeProfile,
@@ -898,7 +909,11 @@ export function AppShell() {
   }
 
   useEffect(() => {
-    if (selectedSimulator?.isBooted && !isWebRtcStreamMode()) {
+    if (
+      selectedSimulator?.isBooted &&
+      !isWebRtcStreamMode() &&
+      streamBackend !== "webrtc"
+    ) {
       ensureControlSocket(selectedSimulator.udid);
     } else {
       closeControlSocket();
@@ -908,6 +923,7 @@ export function AppShell() {
     ensureControlSocket,
     selectedSimulator?.isBooted,
     selectedSimulator?.udid,
+    streamBackend,
   ]);
 
   useEffect(() => closeControlSocket, [closeControlSocket]);
@@ -1117,8 +1133,58 @@ export function AppShell() {
     );
   }
 
+  async function submitPairing(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const code = pairingCode.trim();
+    if (!code) {
+      setPairingError("Enter the pairing code from the SimDeck terminal.");
+      return;
+    }
+    setPairingBusy(true);
+    setPairingError("");
+    try {
+      await pairBrowser(code);
+      setPairingCode("");
+      await refresh();
+    } catch (error) {
+      setPairingError(
+        error instanceof ApiError && error.status === 401
+          ? "Pairing code did not match."
+          : error instanceof Error
+            ? error.message
+            : "Pairing failed.",
+      );
+    } finally {
+      setPairingBusy(false);
+    }
+  }
+
   return (
     <div className="app">
+      {pairingRequired ? (
+        <div className="pairing-gate" role="dialog" aria-modal="true">
+          <form className="pairing-panel" onSubmit={submitPairing}>
+            <h2>Pair SimDeck</h2>
+            <p>Enter the pairing code shown in the SimDeck terminal.</p>
+            <input
+              autoComplete="one-time-code"
+              autoFocus
+              inputMode="numeric"
+              onChange={(event) => setPairingCode(event.target.value)}
+              placeholder="000 000"
+              value={pairingCode}
+            />
+            {pairingError ? <span>{pairingError}</span> : null}
+            <button
+              className="tbtn accent"
+              disabled={pairingBusy}
+              type="submit"
+            >
+              Pair
+            </button>
+          </form>
+        </div>
+      ) : null}
       <Toolbar
         closeMenu={() => setMenuOpen(false)}
         debugVisible={debugVisible}
@@ -1314,6 +1380,8 @@ export function AppShell() {
         selectedSimulator={selectedSimulator}
         shellStyle={shellStyle}
         streamCanvasRef={handleStreamCanvasRef}
+        streamBackend={streamBackend}
+        streamCanvasKey={streamCanvasKey}
         statusOverlayLabel={simulatorStatusOverlayLabel}
         touchIndicators={touchIndicators}
         touchOverlayVisible={touchOverlayVisible}

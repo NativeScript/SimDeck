@@ -49,7 +49,9 @@ interface SimulatorViewportProps {
   screenAspect: string;
   selectedSimulator: SimulatorMetadata | null;
   shellStyle: CSSProperties | null;
+  streamBackend: string;
   streamCanvasRef: Ref<HTMLCanvasElement | null>;
+  streamCanvasKey: string;
   statusOverlayLabel: string;
   touchIndicators: TouchIndicator[];
   touchOverlayVisible: boolean;
@@ -99,7 +101,9 @@ export function SimulatorViewport({
   screenAspect,
   selectedSimulator,
   shellStyle,
+  streamBackend,
   streamCanvasRef,
+  streamCanvasKey,
   statusOverlayLabel,
   touchIndicators,
   touchOverlayVisible,
@@ -168,7 +172,9 @@ export function SimulatorViewport({
                   screenAspect={screenAspect}
                   shellStyle={shellStyle}
                   simulatorName={selectedSimulator.name}
+                  streamBackend={streamBackend}
                   streamCanvasRef={streamCanvasRef}
+                  streamCanvasKey={streamCanvasKey}
                   statusOverlayLabel={statusOverlayLabel}
                   touchIndicators={touchIndicators}
                   touchOverlayVisible={touchOverlayVisible}

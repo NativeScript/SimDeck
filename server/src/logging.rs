@@ -1,7 +1,11 @@
 use tracing_subscriber::EnvFilter;
 
 pub fn init() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,wtransport=warn,quinn=warn"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    let filter = EnvFilter::try_from_env("SIMDECK_LOG").unwrap_or_else(|_| {
+        EnvFilter::new("error,wtransport=error,quinn=error,webrtc=error,webrtc_ice=error")
+    });
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
 }

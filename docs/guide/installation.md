@@ -29,7 +29,7 @@ This installs the launcher and bundled native binary to your global `node_module
 simdeck
 ```
 
-The foreground command prints local and LAN browser URLs and stops its workspace daemon when you press Ctrl-C. You can select a simulator by name or UDID with `simdeck "iPhone 17 Pro Max"`.
+The foreground command prints local and LAN HTTP URLs and stops its workspace daemon when you press `q` or Ctrl-C. You can select a simulator by name or UDID with `simdeck "iPhone 17 Pro Max"`.
 
 The global install prints the next setup steps:
 

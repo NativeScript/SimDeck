@@ -1,5 +1,15 @@
 import { API_ROOT } from "../shared/constants";
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export function accessTokenFromLocation(): string {
   if (typeof window === "undefined") {
     return "";
@@ -35,7 +45,7 @@ export async function apiRequest<T>(
     } else {
       message = await response.text();
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
 
   if (response.status === 204) {
@@ -47,4 +57,11 @@ export async function apiRequest<T>(
   }
 
   return (await response.text()) as T;
+}
+
+export async function pairBrowser(code: string): Promise<void> {
+  await apiRequest<{ ok: boolean }>("/api/pair", {
+    body: JSON.stringify({ code }),
+    method: "POST",
+  });
 }

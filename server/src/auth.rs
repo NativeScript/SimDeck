@@ -28,6 +28,23 @@ pub fn generate_access_token() -> String {
     hex::encode(bytes)
 }
 
+pub fn generate_pairing_code() -> String {
+    let token = generate_access_token();
+    let value = u32::from_str_radix(&token[..8], 16).unwrap_or_default() % 1_000_000;
+    format!("{value:06}")
+}
+
+pub fn pairing_code_matches(config: &Config, value: &str) -> bool {
+    let Some(pairing_code) = config.pairing_code.as_deref() else {
+        return false;
+    };
+    normalize_pairing_code(value) == normalize_pairing_code(pairing_code)
+}
+
+fn normalize_pairing_code(value: &str) -> String {
+    value.chars().filter(|ch| ch.is_ascii_digit()).collect()
+}
+
 pub fn access_cookie_value(token: &str) -> String {
     format!("{ACCESS_TOKEN_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict")
 }
@@ -246,6 +263,7 @@ mod tests {
             None,
             "hevc".to_owned(),
             Some("secret-token".to_owned()),
+            Some("123456".to_owned()),
         )
     }
 
@@ -292,6 +310,36 @@ mod tests {
         headers.insert(
             header::ORIGIN,
             HeaderValue::from_static("http://127.0.0.1:4310"),
+        );
+
+        assert!(api_request_authorized(
+            &config,
+            &Method::POST,
+            &headers,
+            false,
+            None
+        ));
+    }
+
+    #[test]
+    fn accepts_lan_cookie_for_browser_ui() {
+        let config = Config::new(
+            4310,
+            PathBuf::from("client/dist"),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            Some("10.0.0.245".to_owned()),
+            "hevc".to_owned(),
+            Some("secret-token".to_owned()),
+            Some("123456".to_owned()),
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("simdeck_token=secret-token"),
+        );
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://10.0.0.245:4310"),
         );
 
         assert!(api_request_authorized(

@@ -11,10 +11,10 @@ const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
 
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
 
+export type StreamBackend = "webtransport" | "webrtc";
+
 export function isWebRtcStreamMode(): boolean {
-  return (
-    streamTransportMode() === "webrtc" && Boolean(accessTokenFromLocation())
-  );
+  return streamTransportMode() === "webrtc";
 }
 
 export function sendWebRtcControlMessage(encoded: string): boolean {
@@ -27,6 +27,28 @@ export function sendWebRtcControlMessage(encoded: string): boolean {
 
 export function buildStreamTarget(udid: string): StreamConnectTarget {
   return { udid };
+}
+
+export function initialStreamBackend(): StreamBackend {
+  const mode = streamTransportMode();
+  if (mode === "webrtc") {
+    return "webrtc";
+  }
+  if (mode === "webtransport") {
+    return "webtransport";
+  }
+  if (canUseWebTransport()) {
+    return "webtransport";
+  }
+  return canUseWebRtc() ? "webrtc" : "webtransport";
+}
+
+export function streamModeIsForcedWebTransport(): boolean {
+  return streamTransportMode() === "webtransport";
+}
+
+export function canUseWebRtc(): boolean {
+  return typeof RTCPeerConnection === "function";
 }
 
 interface StreamClientBackend {
@@ -84,6 +106,8 @@ class WebRtcStreamClient implements StreamClientBackend {
   private context: CanvasRenderingContext2D | null = null;
   private controlChannel: RTCDataChannel | null = null;
   private peerConnection: RTCPeerConnection | null = null;
+  private reconnectTimeout = 0;
+  private shouldReconnect = false;
   private stats: StreamStats = createEmptyStreamStats();
   private video: HTMLVideoElement | null = null;
   private videoFrameCallback = 0;
@@ -116,118 +140,136 @@ class WebRtcStreamClient implements StreamClientBackend {
       return;
     }
     const generation = ++this.connectGeneration;
+    this.shouldReconnect = true;
     this.stats = createEmptyStreamStats();
     this.onMessage({
       type: "status",
       status: { detail: "Creating WebRTC offer", state: "connecting" },
     });
 
-    const peerConnection = new RTCPeerConnection({
-      iceServers: iceServers(),
-    });
-    this.peerConnection = peerConnection;
-    const transceiver = peerConnection.addTransceiver("video", {
-      direction: "recvonly",
-    });
-    configureLowLatencyReceiver(transceiver.receiver);
-    const controlChannel = peerConnection.createDataChannel(
-      WEBRTC_CONTROL_CHANNEL_LABEL,
-      {
-        ordered: true,
-      },
-    );
-    this.controlChannel = controlChannel;
-    activeWebRtcControlChannel = controlChannel;
-    controlChannel.addEventListener("close", () => {
-      if (activeWebRtcControlChannel === controlChannel) {
-        activeWebRtcControlChannel = null;
-      }
-    });
+    try {
+      const peerConnection = new RTCPeerConnection({
+        iceServers: iceServers(),
+      });
+      this.peerConnection = peerConnection;
+      const transceiver = peerConnection.addTransceiver("video", {
+        direction: "recvonly",
+      });
+      configureLowLatencyReceiver(transceiver.receiver);
+      const controlChannel = peerConnection.createDataChannel(
+        WEBRTC_CONTROL_CHANNEL_LABEL,
+        {
+          ordered: true,
+        },
+      );
+      this.controlChannel = controlChannel;
+      activeWebRtcControlChannel = controlChannel;
+      controlChannel.addEventListener("close", () => {
+        if (activeWebRtcControlChannel === controlChannel) {
+          activeWebRtcControlChannel = null;
+        }
+      });
 
-    peerConnection.ontrack = (event) => {
-      if (generation !== this.connectGeneration) {
-        return;
-      }
-      for (const receiver of peerConnection.getReceivers()) {
-        configureLowLatencyReceiver(receiver);
-      }
-      const stream = event.streams[0] ?? new MediaStream([event.track]);
-      const video = document.createElement("video");
-      video.autoplay = true;
-      video.muted = true;
-      video.playsInline = true;
-      video.preload = "auto";
-      video.srcObject = stream;
-      this.video = video;
-      video.onloadedmetadata = () => {
+      peerConnection.ontrack = (event) => {
         if (generation !== this.connectGeneration) {
           return;
         }
-        void video.play().catch(() => {
-          // The media stream can be detached during reconnect; retry on the next track.
-        });
-        this.syncCanvasSize(video.videoWidth, video.videoHeight);
-        this.onMessage({
-          type: "video-config",
-          size: { height: video.videoHeight, width: video.videoWidth },
-        });
-        this.onMessage({
-          type: "status",
-          status: { detail: "WebRTC media connected", state: "streaming" },
-        });
-        this.scheduleVideoFrame();
+        for (const receiver of peerConnection.getReceivers()) {
+          configureLowLatencyReceiver(receiver);
+        }
+        const stream = event.streams[0] ?? new MediaStream([event.track]);
+        const video = document.createElement("video");
+        video.autoplay = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = "auto";
+        video.srcObject = stream;
+        this.video = video;
+        video.onloadedmetadata = () => {
+          if (generation !== this.connectGeneration) {
+            return;
+          }
+          void video.play().catch(() => {
+            // The media stream can be detached during reconnect; retry on the next track.
+          });
+          this.syncCanvasSize(video.videoWidth, video.videoHeight);
+          this.onMessage({
+            type: "video-config",
+            size: { height: video.videoHeight, width: video.videoWidth },
+          });
+          this.onMessage({
+            type: "status",
+            status: { detail: "WebRTC media connected", state: "streaming" },
+          });
+          this.scheduleVideoFrame();
+        };
       };
-    };
 
-    peerConnection.onconnectionstatechange = () => {
-      if (peerConnection.connectionState === "failed") {
-        this.onMessage({
-          type: "status",
-          status: {
-            error: "WebRTC connection failed.",
-            state: "error",
-          },
-        });
+      peerConnection.onconnectionstatechange = () => {
+        if (
+          generation === this.connectGeneration &&
+          (peerConnection.connectionState === "failed" ||
+            peerConnection.connectionState === "disconnected")
+        ) {
+          this.handleConnectionError(
+            target,
+            generation,
+            new Error(`WebRTC connection ${peerConnection.connectionState}.`),
+          );
+        }
+      };
+
+      const offer = await peerConnection.createOffer();
+      if (generation !== this.connectGeneration) {
+        return;
       }
-    };
+      await peerConnection.setLocalDescription(offer);
+      await waitForIceGathering(peerConnection);
+      if (generation !== this.connectGeneration) {
+        return;
+      }
+      const localDescription = peerConnection.localDescription;
+      if (!localDescription) {
+        throw new Error("WebRTC local offer was not created.");
+      }
 
-    const offer = await peerConnection.createOffer();
-    if (generation !== this.connectGeneration) {
-      return;
+      const response = await fetch(
+        `/api/simulators/${encodeURIComponent(target.udid)}/webrtc/offer`,
+        {
+          body: JSON.stringify({
+            sdp: localDescription.sdp,
+            type: localDescription.type,
+          }),
+          headers: apiHeaders(),
+          method: "POST",
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const answer = (await response.json()) as RTCSessionDescriptionInit;
+      if (generation !== this.connectGeneration) {
+        return;
+      }
+      await peerConnection.setRemoteDescription(answer);
+    } catch (error) {
+      this.handleConnectionError(target, generation, error);
     }
-    await peerConnection.setLocalDescription(offer);
-    await waitForIceGathering(peerConnection);
-    if (generation !== this.connectGeneration) {
-      return;
-    }
-    const localDescription = peerConnection.localDescription;
-    if (!localDescription) {
-      throw new Error("WebRTC local offer was not created.");
-    }
-
-    const response = await fetch(
-      `/api/simulators/${encodeURIComponent(target.udid)}/webrtc/offer`,
-      {
-        body: JSON.stringify({
-          sdp: localDescription.sdp,
-          type: localDescription.type,
-        }),
-        headers: apiHeaders(),
-        method: "POST",
-      },
-    );
-    if (!response.ok) {
-      throw new Error(await response.text());
-    }
-    const answer = (await response.json()) as RTCSessionDescriptionInit;
-    if (generation !== this.connectGeneration) {
-      return;
-    }
-    await peerConnection.setRemoteDescription(answer);
   }
 
   disconnect() {
+    this.shouldReconnect = false;
     this.connectGeneration += 1;
+    this.clearReconnectTimeout();
+    this.closeActiveConnection();
+    this.onMessage({ type: "status", status: { state: "idle" } });
+  }
+
+  destroy() {
+    this.disconnect();
+  }
+
+  private closeActiveConnection() {
     window.cancelAnimationFrame(this.animationFrame);
     this.animationFrame = 0;
     this.cancelVideoFrameCallback();
@@ -243,11 +285,49 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.controlChannel = null;
     this.peerConnection?.close();
     this.peerConnection = null;
-    this.onMessage({ type: "status", status: { state: "idle" } });
   }
 
-  destroy() {
-    this.disconnect();
+  private handleConnectionError(
+    target: StreamConnectTarget,
+    generation: number,
+    error: unknown,
+  ) {
+    if (generation !== this.connectGeneration || !this.shouldReconnect) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    this.closeActiveConnection();
+    this.onMessage({
+      type: "status",
+      status: { error: message, state: "error" },
+    });
+    this.scheduleReconnect(target, generation);
+  }
+
+  private scheduleReconnect(target: StreamConnectTarget, generation: number) {
+    if (
+      this.reconnectTimeout ||
+      generation !== this.connectGeneration ||
+      !this.shouldReconnect
+    ) {
+      return;
+    }
+    this.stats.reconnects += 1;
+    this.onMessage({ type: "stats", stats: { ...this.stats } });
+    this.reconnectTimeout = window.setTimeout(() => {
+      this.reconnectTimeout = 0;
+      if (generation === this.connectGeneration && this.shouldReconnect) {
+        void this.connect(target);
+      }
+    }, 750);
+  }
+
+  private clearReconnectTimeout() {
+    if (!this.reconnectTimeout) {
+      return;
+    }
+    window.clearTimeout(this.reconnectTimeout);
+    this.reconnectTimeout = 0;
   }
 
   private drawVideoFrame = () => {
@@ -339,12 +419,9 @@ function configureLowLatencyReceiver(receiver: RTCRtpReceiver) {
 
 function streamTransportMode(): string {
   if (typeof window === "undefined") {
-    return "webtransport";
+    return "auto";
   }
-  return (
-    new URLSearchParams(window.location.search).get("transport") ??
-    "webtransport"
-  );
+  return new URLSearchParams(window.location.search).get("transport") ?? "auto";
 }
 
 function iceServers(): RTCIceServer[] {
@@ -381,7 +458,10 @@ export class StreamWorkerClient {
   private attachedCanvas = false;
   private disposed = false;
 
-  constructor(onMessage: (message: WorkerToMainMessage) => void) {
+  constructor(
+    onMessage: (message: WorkerToMainMessage) => void,
+    private readonly backendMode: StreamBackend,
+  ) {
     this.onMessage = onMessage;
   }
 
@@ -438,10 +518,14 @@ export class StreamWorkerClient {
   }
 
   private createBackend(canvasElement: HTMLCanvasElement): StreamClientBackend {
-    if (isWebRtcStreamMode()) {
+    if (this.backendMode === "webrtc") {
       return new WebRtcStreamClient(this.onMessage);
     }
     void canvasElement;
     return new WorkerStreamClient(this.onMessage);
   }
+}
+
+function canUseWebTransport(): boolean {
+  return typeof WebTransport === "function" && window.isSecureContext;
 }

@@ -1,11 +1,13 @@
+use crate::auth;
 use axum::body::Body;
-use axum::http::{header, HeaderName, Method, Response, StatusCode, Uri};
+use axum::http::{header, HeaderName, HeaderValue, Method, Response, StatusCode, Uri};
 use std::path::{Component, Path, PathBuf};
 
 pub async fn serve_static(
     root: PathBuf,
     method: Method,
     uri: Uri,
+    access_token: Option<String>,
 ) -> Result<Response<Body>, StatusCode> {
     if method != Method::GET && method != Method::HEAD {
         return Err(StatusCode::METHOD_NOT_ALLOWED);
@@ -54,6 +56,11 @@ pub async fn serve_static(
                 .parse()
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
         );
+    }
+    if let Some(access_token) = access_token {
+        let cookie = HeaderValue::from_str(&auth::access_cookie_value(&access_token))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        response.headers_mut().insert(header::SET_COOKIE, cookie);
     }
     Ok(response)
 }

@@ -10,7 +10,7 @@ Use `--bind` to listen on a non-loopback address:
 simdeck ui --port 4310 --bind 0.0.0.0 --open
 ```
 
-Both the HTTP server and the WebTransport server bind to the requested address. The HTTP server is plain HTTP, so any browser on the LAN can reach it through `http://<your-mac-ip>:4310`.
+Both the HTTP server and the WebTransport server bind to the requested address. The HTTP server is plain HTTP, so any browser on the LAN can reach it through `http://<your-mac-ip>:4310`. LAN browsers must enter the pairing code printed by the foreground command or returned by `daemon start` before the API cookie is issued.
 
 ## Advertise the right host
 
@@ -55,7 +55,7 @@ The server generates a fresh self-signed certificate every time it starts. The c
   "ok": true,
   "httpPort": 4310,
   "wtPort": 4311,
-  "videoCodec": "hevc",
+  "videoCodec": "h264-software",
   "webTransport": {
     "urlTemplate": "https://192.168.1.50:4311/wt/simulators/{udid}?simdeckToken=...",
     "certificateHash": {
@@ -73,7 +73,7 @@ Restarting the server invalidates the previous certificate. Open clients reconne
 
 ## Authentication and security
 
-SimDeck generates an API access token when it starts the project daemon. The served browser UI receives the token automatically through a strict same-site cookie, so opening `http://<advertise-host>:<port>` remains seamless.
+SimDeck generates an API access token when it starts the project daemon. Loopback browser UI loads receive the token automatically through a strict same-site cookie, so opening `http://127.0.0.1:<port>` remains seamless. Non-loopback LAN browsers do not receive that cookie from the static page; they must submit the six-digit pairing code shown by the CLI before the server sets the cookie.
 
 Direct API callers must send one of:
 
@@ -82,7 +82,19 @@ X-SimDeck-Token: <token>
 Authorization: Bearer <token>
 ```
 
-The WebTransport URL template returned by authenticated `GET /api/health` includes a `simdeckToken` query parameter for the browser stream worker.
+The foreground `simdeck` command prints an HTTP network URL and a pairing code:
+
+```text
+🚀 SimDeck is ready
+
+      Local:   http://127.0.0.1:4310
+    Network:   http://192.168.1.50:4310
+       Pair:   123 456
+
+q or ^C to stop server
+```
+
+On LAN HTTP, browsers that cannot use WebTransport fall back to WebRTC. The WebTransport URL template returned by authenticated `GET /api/health` includes a `simdeckToken` query parameter for the browser stream worker.
 
 Get the token for scripts with:
 

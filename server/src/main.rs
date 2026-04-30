@@ -15,6 +15,7 @@ mod transport;
 
 use anyhow::Context;
 use api::routes::{router, AppState};
+use axum::Router;
 use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
 use inspector::InspectorHub;
@@ -29,7 +30,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
@@ -77,7 +78,7 @@ enum Command {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         open: bool,
@@ -96,10 +97,12 @@ enum Command {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         access_token: Option<String>,
+        #[arg(long)]
+        pairing_code: Option<String>,
     },
     Service {
         #[command(subcommand)]
@@ -364,7 +367,7 @@ enum DaemonCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
         video_codec: VideoCodecMode,
     },
     Stop,
@@ -383,10 +386,12 @@ enum DaemonCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         access_token: String,
+        #[arg(long)]
+        pairing_code: Option<String>,
     },
 }
 
@@ -401,7 +406,7 @@ enum ServiceCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         access_token: Option<String>,
@@ -415,7 +420,7 @@ enum ServiceCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::Hevc)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         access_token: Option<String>,
@@ -475,6 +480,8 @@ struct DaemonMetadata {
     pid: u32,
     http_url: String,
     access_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pairing_code: Option<String>,
     binary_path: PathBuf,
     started_at: u64,
 }
@@ -515,7 +522,7 @@ impl Default for DaemonLaunchOptions {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             advertise_host: None,
             client_root: None,
-            video_codec: VideoCodecMode::Hevc,
+            video_codec: VideoCodecMode::H264Software,
         }
     }
 }
@@ -540,6 +547,7 @@ fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMe
     let metadata_path = daemon_metadata_path_for_root(&project_root)?;
     let port = choose_daemon_port(options.port)?;
     let access_token = auth::generate_access_token();
+    let pairing_code = auth::generate_pairing_code();
     let executable = env::current_exe().context("resolve simdeck executable")?;
     let mut args = vec![
         "daemon".to_owned(),
@@ -554,6 +562,8 @@ fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMe
         options.bind.to_string(),
         "--access-token".to_owned(),
         access_token.clone(),
+        "--pairing-code".to_owned(),
+        pairing_code.clone(),
         "--video-codec".to_owned(),
         options.video_codec.as_env_value().to_owned(),
     ];
@@ -579,6 +589,7 @@ fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMe
         pid: child.id(),
         http_url: format!("http://127.0.0.1:{port}"),
         access_token,
+        pairing_code: Some(pairing_code),
         binary_path: executable,
         started_at: now_secs(),
     };
@@ -656,6 +667,7 @@ fn print_daemon_start_result(metadata: &DaemonMetadata, started: bool) -> anyhow
         "projectRoot": metadata.project_root,
         "pid": metadata.pid,
         "url": metadata.http_url,
+        "pairingCode": metadata.pairing_code,
         "started": started
     }))
 }
@@ -842,35 +854,43 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
     let project_root = project_root()?;
     let port = choose_daemon_port(4310)?;
     let bind = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+    let video_codec = VideoCodecMode::H264Software;
     let advertise_host = detect_lan_ip()
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
         .to_string();
     let access_token = auth::generate_access_token();
+    let pairing_code = auth::generate_pairing_code();
     let executable = env::current_exe().context("resolve simdeck executable")?;
     let metadata = DaemonMetadata {
         project_root: project_root.clone(),
         pid: std::process::id(),
         http_url: format!("http://127.0.0.1:{port}"),
         access_token: access_token.clone(),
+        pairing_code: Some(pairing_code.clone()),
         binary_path: executable,
         started_at: now_secs(),
     };
     write_daemon_metadata(&metadata)?;
 
-    let local_url = ui_url("127.0.0.1", port, &access_token, selector.as_deref());
-    let network_url = ui_url(&advertise_host, port, &access_token, selector.as_deref());
-    println!("SimDeck is running for {}", project_root.display());
-    println!("Local:   {local_url}");
-    println!("Network: {network_url}");
-    println!("Press Ctrl-C to stop.");
+    let local_url = ui_url("127.0.0.1", port, selector.as_deref());
+    let network_url = ui_url(&advertise_host, port, selector.as_deref());
+    println!("🚀 SimDeck is ready");
+    println!();
+    println!("{:>12}   {local_url}", "Local:");
+    println!("{:>12}   {network_url}", "Network:");
+    println!("{:>12}   {}", "Pair:", format_pairing_code(&pairing_code));
+    println!();
+    println!("q or ^C to stop server");
+    let _ = io::stdout().flush();
 
     let result = serve_with_appkit(
         port,
         bind,
         Some(advertise_host),
         None,
-        VideoCodecMode::Hevc,
+        video_codec,
         Some(access_token),
+        Some(pairing_code),
     );
     let _ = remove_daemon_metadata_if_current(&project_root, std::process::id());
     result
@@ -890,12 +910,20 @@ fn detect_lan_ip() -> Option<IpAddr> {
     None
 }
 
-fn ui_url(host: &str, port: u16, access_token: &str, selector: Option<&str>) -> String {
-    let mut query = vec![format!("simdeckToken={}", percent_encode(access_token))];
+fn ui_url(host: &str, port: u16, selector: Option<&str>) -> String {
+    let mut url = format!("http://{host}:{port}");
     if let Some(selector) = selector.filter(|value| !value.trim().is_empty()) {
-        query.push(format!("device={}", percent_encode(selector.trim())));
+        url.push_str(&format!("/?device={}", percent_encode(selector.trim())));
     }
-    format!("http://{host}:{port}/?{}", query.join("&"))
+    url
+}
+
+fn format_pairing_code(pairing_code: &str) -> String {
+    if pairing_code.len() == 6 {
+        format!("{} {}", &pairing_code[..3], &pairing_code[3..])
+    } else {
+        pairing_code.to_owned()
+    }
 }
 
 fn percent_encode(value: &str) -> String {
@@ -975,6 +1003,7 @@ fn main() -> anyhow::Result<()> {
                 client_root,
                 video_codec,
                 access_token,
+                pairing_code,
             } => {
                 env::set_current_dir(&project_root).with_context(|| {
                     format!("set daemon project root to {}", project_root.display())
@@ -984,6 +1013,7 @@ fn main() -> anyhow::Result<()> {
                     pid: std::process::id(),
                     http_url: format!("http://127.0.0.1:{port}"),
                     access_token: access_token.clone(),
+                    pairing_code: pairing_code.clone(),
                     binary_path: env::current_exe().context("resolve daemon executable")?,
                     started_at: now_secs(),
                 })?;
@@ -994,6 +1024,7 @@ fn main() -> anyhow::Result<()> {
                     client_root,
                     video_codec,
                     Some(access_token),
+                    pairing_code,
                 );
                 let _ = fs::remove_file(metadata_path);
                 result
@@ -1006,6 +1037,7 @@ fn main() -> anyhow::Result<()> {
             client_root,
             video_codec,
             access_token,
+            pairing_code,
         } => serve_with_appkit(
             port,
             bind,
@@ -1013,6 +1045,7 @@ fn main() -> anyhow::Result<()> {
             client_root,
             video_codec,
             access_token,
+            pairing_code,
         ),
         Command::Service { command } => match command {
             ServiceCommand::On {
@@ -1029,6 +1062,7 @@ fn main() -> anyhow::Result<()> {
                 client_root,
                 video_codec,
                 access_token,
+                pairing_code: None,
             }),
             ServiceCommand::Restart {
                 port,
@@ -1044,6 +1078,7 @@ fn main() -> anyhow::Result<()> {
                 client_root,
                 video_codec,
                 access_token,
+                pairing_code: None,
             }),
             ServiceCommand::Off => service::disable(),
         },
@@ -1738,6 +1773,7 @@ struct ServiceOptions {
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
     access_token: Option<String>,
+    pairing_code: Option<String>,
 }
 
 fn serve_with_appkit(
@@ -1747,6 +1783,7 @@ fn serve_with_appkit(
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
     access_token: Option<String>,
+    pairing_code: Option<String>,
 ) -> anyhow::Result<()> {
     std::env::set_var("SIMDECK_VIDEO_CODEC", video_codec.as_env_value());
     std::env::set_var(RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV, "1");
@@ -1769,6 +1806,7 @@ fn serve_with_appkit(
                 client_root,
                 video_codec,
                 access_token,
+                pairing_code,
             )),
             Err(error) => Err(error),
         };
@@ -3905,6 +3943,7 @@ async fn serve(
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
     access_token: Option<String>,
+    pairing_code: Option<String>,
 ) -> anyhow::Result<()> {
     let root = match client_root {
         Some(root) => root,
@@ -3917,6 +3956,7 @@ async fn serve(
         advertise_host,
         video_codec.as_env_value().to_owned(),
         access_token,
+        pairing_code,
     );
     let metrics = Arc::new(Metrics::default());
     let bridge = NativeBridge;
@@ -3933,9 +3973,11 @@ async fn serve(
         certificate_hash_hex: wt_runtime.certificate_hash_hex.clone(),
     };
 
-    let client_root = config.client_root.clone();
-    let http_router = router(state.clone())
-        .fallback(move |method, uri| static_files::serve_static(client_root.clone(), method, uri));
+    let http_router = app_router(
+        state.clone(),
+        config.client_root.clone(),
+        config.access_token.clone(),
+    );
     let http_listener = tokio::net::TcpListener::bind(config.http_addr())
         .await
         .with_context(|| format!("bind HTTP listener on {}", config.http_addr()))?;
@@ -3973,14 +4015,112 @@ Use --advertise-host <LAN-IP-or-DNS-name> for remote browser access."
     let wt_task =
         tokio::spawn(async move { transport::webtransport::serve(wt_endpoint, state).await });
 
+    let (_terminal_mode, quit_key) = start_quit_key_listener();
+    let quit_key_signal = async move {
+        match quit_key {
+            Some(receiver) => {
+                let _ = receiver.await;
+            }
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::pin!(quit_key_signal);
+
     tokio::select! {
         result = http_task => result??,
         result = health_task => result.context("server health heartbeat task panicked")?,
         result = wt_task => result??,
         _ = tokio::signal::ctrl_c() => {}
+        _ = &mut quit_key_signal => {}
     }
 
     Ok(())
+}
+
+fn app_router(state: AppState, client_root: PathBuf, access_token: String) -> Router {
+    router(state).fallback(
+        move |axum::extract::ConnectInfo(address): axum::extract::ConnectInfo<SocketAddr>,
+              method,
+              uri| {
+            let access_token = address.ip().is_loopback().then(|| access_token.clone());
+            static_files::serve_static(client_root.clone(), method, uri, access_token)
+        },
+    )
+}
+
+#[cfg(unix)]
+struct TerminalInputMode {
+    fd: libc::c_int,
+    original: libc::termios,
+}
+
+#[cfg(unix)]
+impl TerminalInputMode {
+    fn enable_quit_key_mode() -> io::Result<Self> {
+        let fd = libc::STDIN_FILENO;
+        let mut original = unsafe { std::mem::zeroed::<libc::termios>() };
+        if unsafe { libc::tcgetattr(fd, &mut original) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut raw = original;
+        raw.c_lflag &= !(libc::ICANON | libc::ECHO);
+        raw.c_cc[libc::VMIN] = 1;
+        raw.c_cc[libc::VTIME] = 0;
+        if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(Self { fd, original })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for TerminalInputMode {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &self.original) };
+    }
+}
+
+#[cfg(not(unix))]
+struct TerminalInputMode;
+
+fn start_quit_key_listener() -> (
+    Option<TerminalInputMode>,
+    Option<tokio::sync::oneshot::Receiver<()>>,
+) {
+    if !io::stdin().is_terminal() {
+        return (None, None);
+    }
+
+    #[cfg(unix)]
+    let terminal_mode = match TerminalInputMode::enable_quit_key_mode() {
+        Ok(mode) => mode,
+        Err(_) => return (None, None),
+    };
+
+    #[cfg(not(unix))]
+    let terminal_mode = TerminalInputMode;
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut stdin = stdin.lock();
+        let mut byte = [0u8; 1];
+        loop {
+            match stdin.read(&mut byte) {
+                Ok(0) => return,
+                Ok(_) if byte[0] == b'q' || byte[0] == b'Q' => {
+                    let _ = sender.send(());
+                    return;
+                }
+                Ok(_) => {}
+                Err(_) => return,
+            }
+        }
+    });
+
+    (Some(terminal_mode), Some(receiver))
 }
 
 fn default_client_root() -> anyhow::Result<PathBuf> {

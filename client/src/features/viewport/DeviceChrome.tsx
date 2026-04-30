@@ -31,7 +31,9 @@ interface DeviceChromeProps {
   screenAspect: string;
   shellStyle: CSSProperties | null;
   simulatorName: string;
+  streamBackend: string;
   streamCanvasRef: Ref<HTMLCanvasElement | null>;
+  streamCanvasKey: string;
   statusOverlayLabel: string;
   touchIndicators: TouchIndicator[];
   touchOverlayVisible: boolean;
@@ -63,7 +65,9 @@ export function DeviceChrome({
   screenAspect,
   shellStyle,
   simulatorName,
+  streamBackend,
   streamCanvasRef,
+  streamCanvasKey,
   statusOverlayLabel,
   touchIndicators,
   touchOverlayVisible,
@@ -104,7 +108,9 @@ export function DeviceChrome({
           onPickerSelect={onPickerSelect}
           rotationQuarterTurns={rotationQuarterTurns}
           simulatorName={simulatorName}
+          streamBackend={streamBackend}
           streamCanvasRef={streamCanvasRef}
+          streamCanvasKey={streamCanvasKey}
           statusOverlayLabel={statusOverlayLabel}
           touchIndicators={touchIndicators}
           touchOverlayVisible={touchOverlayVisible}
@@ -142,7 +148,9 @@ export function DeviceChrome({
         onPickerSelect={onPickerSelect}
         rotationQuarterTurns={rotationQuarterTurns}
         simulatorName={simulatorName}
+        streamBackend={streamBackend}
         streamCanvasRef={streamCanvasRef}
+        streamCanvasKey={streamCanvasKey}
         statusOverlayLabel={statusOverlayLabel}
         touchIndicators={touchIndicators}
         touchOverlayVisible={touchOverlayVisible}
@@ -169,7 +177,9 @@ interface ScreenLayerProps {
   onPickerSelect: (id: string) => void;
   rotationQuarterTurns: number;
   simulatorName: string;
+  streamBackend: string;
   streamCanvasRef: Ref<HTMLCanvasElement | null>;
+  streamCanvasKey: string;
   statusOverlayLabel: string;
   touchIndicators: TouchIndicator[];
   touchOverlayVisible: boolean;
@@ -193,7 +203,9 @@ function ScreenLayer({
   onPickerSelect,
   rotationQuarterTurns,
   simulatorName,
+  streamBackend,
   streamCanvasRef,
+  streamCanvasKey,
   statusOverlayLabel,
   touchIndicators,
   touchOverlayVisible,
@@ -211,6 +223,8 @@ function ScreenLayer({
       <canvas
         aria-label={`${simulatorName} stream`}
         className="stream-canvas"
+        data-stream-backend={streamBackend}
+        key={streamCanvasKey}
         ref={streamCanvasRef}
       />
       <AccessibilityOverlay

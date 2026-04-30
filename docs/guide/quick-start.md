@@ -13,13 +13,16 @@ simdeck
 The command prints local and LAN URLs:
 
 ```text
-SimDeck is running for /path/to/app
-Local:   http://127.0.0.1:4310/?simdeckToken=...
-Network: http://192.168.1.50:4310/?simdeckToken=...
-Press Ctrl-C to stop.
+🚀 SimDeck is ready
+
+      Local:   http://127.0.0.1:4310
+    Network:   http://192.168.1.50:4310
+       Pair:   123 456
+
+q or ^C to stop server
 ```
 
-This foreground daemon is scoped to the current workspace and exits when the command exits. Use `simdeck ui --open` or `simdeck daemon start` when you want a reusable background daemon.
+This foreground daemon is scoped to the current workspace and exits when the command exits, when you press `q`, or when you press Ctrl-C. Local browsers open without a prompt. LAN browsers pair once with the printed code, then receive the API cookie. On LAN HTTP, browsers that cannot use WebTransport fall back to WebRTC. Use `simdeck ui --open` or `simdeck daemon start` when you want a reusable background daemon.
 
 For shorthand background lifecycle commands:
 
