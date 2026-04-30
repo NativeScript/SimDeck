@@ -20,7 +20,7 @@ Most commands automatically start or reuse the project daemon when that is the f
 
 | Command                                                 | Purpose                                                     |
 | ------------------------------------------------------- | ----------------------------------------------------------- |
-| _(none)_                                                | Start a foreground UI daemon until Ctrl-C.                  |
+| _(none)_                                                | Start a foreground UI daemon until `q` or Ctrl-C.           |
 | `ui`                                                    | Start or reuse the project daemon and serve the browser UI. |
 | `daemon start/status/stop`                              | Manage the project daemon explicitly.                       |
 | `core-simulator ...`                                    | Restart or manage Apple's CoreSimulator service layer.      |

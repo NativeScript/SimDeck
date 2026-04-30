@@ -7,10 +7,12 @@
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <mach-o/nlist.h>
+#import <limits.h>
 #import <math.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import <stdarg.h>
+#import <stdio.h>
 
 // PurpleWorkspacePort mach message IDs / GSEvent type constants.
 // Reverse-engineered from Simulator.app ARM64 (Xcode 26.2) — see idb's
@@ -20,7 +22,6 @@
 #define DFGSEventTypeDeviceOrientationChanged 50
 
 static NSString * const DFPrivateSimulatorErrorDomain = @"SimDeck.PrivateSimulator";
-static NSString * const DFSimulatorKitPath = @"/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit";
 static NSString * const DFCoreSimulatorPath = @"/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator";
 static NSString * const DFPrivateSimulatorLogPath = @"/tmp/simdeck-private-bridge.log";
 static const void *DFPrivateSimulatorCallbackQueueKey = &DFPrivateSimulatorCallbackQueueKey;
@@ -103,6 +104,29 @@ static const NSUInteger DFKeyboardModifierControl = 1 << 1;
 static const NSUInteger DFKeyboardModifierOption = 1 << 2;
 static const NSUInteger DFKeyboardModifierCommand = 1 << 3;
 static const NSUInteger DFKeyboardModifierCapsLock = 1 << 4;
+
+static NSString *DFSimulatorKitExecutablePath(void) {
+    const char *developerDir = getenv("DEVELOPER_DIR");
+    if (developerDir != NULL && developerDir[0] != '\0') {
+        return [[NSString stringWithUTF8String:developerDir] stringByAppendingPathComponent:@"Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
+    }
+
+    FILE *pipe = popen("/usr/bin/xcode-select -p 2>/dev/null", "r");
+    if (pipe != NULL) {
+        char buffer[PATH_MAX] = {0};
+        if (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+            NSString *selected = [[NSString stringWithUTF8String:buffer] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            pclose(pipe);
+            if (selected.length > 0) {
+                return [selected stringByAppendingPathComponent:@"Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
+            }
+        } else {
+            pclose(pipe);
+        }
+    }
+
+    return @"/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit";
+}
 
 typedef struct {
     __unsafe_unretained id unit;
@@ -298,6 +322,7 @@ static void *DFFindSwiftSymbol(const char *prefix, const char *suffix) {
     }
 
     const struct linkedit_data_command *exportsTrie = NULL;
+    const struct symtab_command *symtab = NULL;
     const struct segment_command_64 *linkedit = NULL;
     uint64_t dyldInfoExportOff = 0;
     uint64_t dyldInfoExportSize = 0;
@@ -315,6 +340,9 @@ static void *DFFindSwiftSymbol(const char *prefix, const char *suffix) {
                 dyldInfoExportSize = info->export_size;
                 break;
             }
+            case LC_SYMTAB:
+                symtab = (const struct symtab_command *)lc;
+                break;
             case LC_SEGMENT_64: {
                 const struct segment_command_64 *seg = (const struct segment_command_64 *)lc;
                 if (strcmp(seg->segname, "__LINKEDIT") == 0) {
@@ -356,20 +384,51 @@ static void *DFFindSwiftSymbol(const char *prefix, const char *suffix) {
         return NULL;
     }
 
-    DFTrieContext ctx = {0};
-    ctx.trie = trie;
-    ctx.trieEnd = trie + trieSize;
-    ctx.prefix = prefixedBuf;
-    ctx.prefixLen = (size_t)written;
-    ctx.suffix = suffix ?: "";
-    ctx.suffixLen = suffix ? strlen(suffix) : 0;
+    if (trieFileOff > 0 && trieSize > 0) {
+        DFTrieContext ctx = {0};
+        ctx.trie = trie;
+        ctx.trieEnd = trie + trieSize;
+        ctx.prefix = prefixedBuf;
+        ctx.prefixLen = (size_t)written;
+        ctx.suffix = suffix ?: "";
+        ctx.suffixLen = suffix ? strlen(suffix) : 0;
 
-    DFTrieDescend(&ctx, trie, 0);
+        DFTrieDescend(&ctx, trie, 0);
 
-    if (!ctx.found) {
-        return NULL;
+        if (ctx.found) {
+            return (void *)((uintptr_t)gSimulatorKitImage + (uintptr_t)ctx.address);
+        }
     }
-    return (void *)((uintptr_t)gSimulatorKitImage + (uintptr_t)ctx.address);
+
+    // Some SimulatorKit Swift accessors are global symbols but are absent from
+    // the dyld exports trie on GitHub's hosted Xcode images. Fall back to the
+    // symbol table so prefix lookups still find those private Swift getters.
+    if (symtab != NULL && symtab->nsyms > 0 && symtab->symoff > 0 && symtab->stroff > 0) {
+        const struct nlist_64 *symbols = (const struct nlist_64 *)(linkeditMapped + (uintptr_t)symtab->symoff);
+        const char *strings = (const char *)(linkeditMapped + (uintptr_t)symtab->stroff);
+        size_t prefixLen = (size_t)written;
+        size_t suffixLen = suffix ? strlen(suffix) : 0;
+        for (uint32_t i = 0; i < symtab->nsyms; i++) {
+            const struct nlist_64 *entry = &symbols[i];
+            if ((entry->n_type & N_STAB) != 0 || entry->n_un.n_strx == 0 || entry->n_value == 0) {
+                continue;
+            }
+            const char *name = strings + entry->n_un.n_strx;
+            size_t nameLen = strlen(name);
+            if (nameLen < prefixLen + suffixLen) {
+                continue;
+            }
+            if (memcmp(name, prefixedBuf, prefixLen) != 0) {
+                continue;
+            }
+            if (suffixLen > 0 && memcmp(name + nameLen - suffixLen, suffix, suffixLen) != 0) {
+                continue;
+            }
+            return (void *)((uintptr_t)entry->n_value + (uintptr_t)gSimulatorKitSlide);
+        }
+    }
+
+    return NULL;
 }
 
 // Cache resolved function pointers per (prefix, suffix). Logs once per missing
@@ -542,18 +601,34 @@ static id DFInitSimDeviceScreen(Class screenClass, id device, uint32_t screenID,
 }
 
 static NSDictionary<NSNumber *, id> * DFReadAdapterScreens(id adapter) {
+    if (adapter == nil || ![NSStringFromClass([adapter class]) containsString:@"SimDeviceScreenAdapter"]) {
+        return @{};
+    }
+
     // The full mangled tail of `SimDeviceScreenAdapter.screens.getter` drifts
     // across Xcode releases (Xcode 26.4 retyped it from
     // `[UInt32: SimScreen]` (ObjC) to `[UInt32: SimDeviceScreen]` (Swift)).
     // Resolve by stable prefix instead. If the values are now SimDeviceScreen
     // wrappers, unwrap each via `.screen` so callers keep talking to a
     // SimScreen-shaped object.
-    id screens = DFCallSwiftSelfGetterByPattern(
+    id screens = DFCallSwiftSelfGetter(
         adapter,
-        "$s12SimulatorKit22SimDeviceScreenAdapterC7screens",
-        "vg",
-        "SimDeviceScreenAdapter.screens.getter"
+        "$s12SimulatorKit22SimDeviceScreenAdapterC7screensSDys6UInt32VSo0cE0_pGvg"
     );
+    if (screens == nil) {
+        screens = DFCallSwiftSelfGetter(
+            adapter,
+            "$s12SimulatorKit22SimDeviceScreenAdapterC7screensSDys6UInt32VAA0cdE0CGvg"
+        );
+    }
+    if (screens == nil) {
+        screens = DFCallSwiftSelfGetterByPattern(
+            adapter,
+            "$s12SimulatorKit22SimDeviceScreenAdapterC7screens",
+            "vg",
+            "SimDeviceScreenAdapter.screens.getter"
+        );
+    }
     if (![screens isKindOfClass:[NSDictionary class]]) {
         return @{};
     }
@@ -2025,10 +2100,11 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
             return;
         }
 
-        if (!dlopen(DFSimulatorKitPath.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL)) {
+        NSString *simulatorKitPath = DFSimulatorKitExecutablePath();
+        if (!dlopen(simulatorKitPath.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL)) {
             loadError = DFMakeError(
                 DFPrivateSimulatorErrorCodeFrameworkLoadFailed,
-                [NSString stringWithFormat:@"Unable to load SimulatorKit from %@.", DFSimulatorKitPath]
+                [NSString stringWithFormat:@"Unable to load SimulatorKit from %@.", simulatorKitPath]
             );
         }
     });

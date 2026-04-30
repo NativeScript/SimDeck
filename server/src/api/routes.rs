@@ -321,6 +321,7 @@ const SOURCE_UIKIT: &str = "in-app-inspector";
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/api/pair", post(pair_browser))
         .route("/api/health", get(health))
         .route("/api/metrics", get(metrics))
         .route(
@@ -406,7 +407,9 @@ async fn require_api_auth(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if is_inspector_agent_transport_path(request.uri().path()) {
+    if is_inspector_agent_transport_path(request.uri().path())
+        || request.uri().path() == "/api/pair"
+    {
         return next.run(request).await;
     }
 
@@ -436,6 +439,26 @@ async fn require_api_auth(
     if peer_is_loopback {
         auth::append_access_cookie(response.headers_mut(), &state.config.access_token);
     }
+    response
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PairBrowserPayload {
+    code: String,
+}
+
+async fn pair_browser(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<PairBrowserPayload>,
+) -> Response {
+    if !auth::pairing_code_matches(&state.config, &payload.code) {
+        return auth::unauthorized_response(&state.config, &headers);
+    }
+    let mut response = Json(json_value!({ "ok": true })).into_response();
+    auth::append_cors_headers(&state.config, &headers, response.headers_mut());
+    auth::append_access_cookie(response.headers_mut(), &state.config.access_token);
     response
 }
 

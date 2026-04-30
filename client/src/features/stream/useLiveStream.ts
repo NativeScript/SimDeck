@@ -4,7 +4,14 @@ import { apiHeaders } from "../../api/client";
 import type { SimulatorMetadata } from "../../api/types";
 import type { Size } from "../viewport/types";
 import { createEmptyStreamStats } from "./stats";
-import { buildStreamTarget, StreamWorkerClient } from "./streamWorkerClient";
+import {
+  buildStreamTarget,
+  canUseWebRtc,
+  initialStreamBackend,
+  streamModeIsForcedWebTransport,
+  StreamWorkerClient,
+  type StreamBackend,
+} from "./streamWorkerClient";
 import type {
   StreamRuntimeInfo,
   StreamStats,
@@ -29,36 +36,28 @@ interface UseLiveStreamResult {
   runtimeInfo: StreamRuntimeInfo;
   status: StreamStatus;
   stats: StreamStats;
+  streamBackend: StreamBackend;
+  streamCanvasKey: string;
 }
 
-function createDefaultRuntimeInfo(): StreamRuntimeInfo {
+function createDefaultRuntimeInfo(
+  backend: StreamBackend = initialStreamBackend(),
+): StreamRuntimeInfo {
   return {
     gpuLikelyHardware: null,
     gpuRenderer: "",
     gpuVendor: "",
     renderBackend: "Unavailable",
     streamBackend:
-      streamTransportMode() === "webrtc"
-        ? "Browser WebRTC"
-        : "Worker / WebTransport",
+      backend === "webrtc" ? "Browser WebRTC" : "Worker / WebTransport",
     webCodecs: false,
     webGL2: false,
     webTransport: false,
   };
 }
 
-function streamTransportMode(): string {
-  if (typeof window === "undefined") {
-    return "webtransport";
-  }
-  return (
-    new URLSearchParams(window.location.search).get("transport") ??
-    "webtransport"
-  );
-}
-
-function detectRuntimeInfo(): StreamRuntimeInfo {
-  const runtimeInfo = createDefaultRuntimeInfo();
+function detectRuntimeInfo(backend: StreamBackend): StreamRuntimeInfo {
+  const runtimeInfo = createDefaultRuntimeInfo(backend);
   runtimeInfo.webCodecs = typeof VideoDecoder === "function";
   runtimeInfo.webTransport = typeof WebTransport === "function";
 
@@ -78,7 +77,7 @@ function detectRuntimeInfo(): StreamRuntimeInfo {
 
     runtimeInfo.webGL2 = true;
     runtimeInfo.renderBackend =
-      streamTransportMode() === "webrtc" ? "Canvas 2D / Video" : "WebGL2";
+      backend === "webrtc" ? "Canvas 2D / Video" : "WebGL2";
 
     const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
     if (debugInfo) {
@@ -127,13 +126,19 @@ export function useLiveStream({
   const latestStatsRef = useRef<StreamStats>(createEmptyStreamStats());
   const latestStatusRef = useRef<StreamStatus>({ state: "idle" });
   const pageFpsRef = useRef(0);
+  const transportBackendRef = useRef<StreamBackend>(initialStreamBackend());
+  const fallbackTriedRef = useRef(false);
   const [deviceNaturalSize, setDeviceNaturalSize] = useState<Size | null>(null);
   const [stats, setStats] = useState<StreamStats>(createEmptyStreamStats);
   const [status, setStatus] = useState<StreamStatus>({ state: "idle" });
   const [error, setError] = useState("");
   const [fps, setFps] = useState(0);
-  const [runtimeInfo, setRuntimeInfo] = useState<StreamRuntimeInfo>(
-    createDefaultRuntimeInfo,
+  const [transportBackend, setTransportBackend] = useState<StreamBackend>(
+    () => transportBackendRef.current,
+  );
+  const [streamCanvasRevision, setStreamCanvasRevision] = useState(0);
+  const [runtimeInfo, setRuntimeInfo] = useState<StreamRuntimeInfo>(() =>
+    createDefaultRuntimeInfo(transportBackendRef.current),
   );
 
   if (!clientTelemetryIdRef.current) {
@@ -141,8 +146,9 @@ export function useLiveStream({
   }
 
   useEffect(() => {
-    setRuntimeInfo(detectRuntimeInfo());
-  }, []);
+    transportBackendRef.current = transportBackend;
+    setRuntimeInfo(detectRuntimeInfo(transportBackend));
+  }, [transportBackend]);
 
   useEffect(() => {
     let frameCount = 0;
@@ -169,7 +175,11 @@ export function useLiveStream({
   }, []);
 
   useEffect(() => {
-    if (!canvasElement || workerClientRef.current) {
+    if (
+      !canvasElement ||
+      workerClientRef.current ||
+      canvasElement.dataset.streamBackend !== transportBackend
+    ) {
       return;
     }
 
@@ -181,6 +191,28 @@ export function useLiveStream({
         }
 
         if (message.type === "status") {
+          if (
+            shouldFallbackToWebRtc(
+              message.status,
+              transportBackendRef.current,
+              fallbackTriedRef.current,
+              latestStatsRef.current,
+            )
+          ) {
+            fallbackTriedRef.current = true;
+            workerClientRef.current?.destroy();
+            workerClientRef.current = null;
+            setTransportBackend("webrtc");
+            setStreamCanvasRevision((current) => current + 1);
+            setStats(createEmptyStreamStats());
+            setDeviceNaturalSize(null);
+            setStatus({
+              detail: "WebTransport unavailable. Falling back to WebRTC…",
+              state: "connecting",
+            });
+            setError("");
+            return;
+          }
           setStatus(message.status);
           if (message.status.error) {
             setError(message.status.error);
@@ -195,6 +227,7 @@ export function useLiveStream({
 
         setDeviceNaturalSize(message.size);
       },
+      transportBackend,
     );
 
     try {
@@ -221,7 +254,7 @@ export function useLiveStream({
       workerClient.destroy();
       workerClientRef.current = null;
     };
-  }, [canvasElement]);
+  }, [canvasElement, transportBackend]);
 
   useEffect(() => {
     latestDecodedFramesRef.current = stats.decodedFrames;
@@ -258,6 +291,14 @@ export function useLiveStream({
     return () => {
       clearInterval(intervalId);
     };
+  }, [simulator?.udid]);
+
+  useEffect(() => {
+    fallbackTriedRef.current = false;
+    const nextBackend = initialStreamBackend();
+    transportBackendRef.current = nextBackend;
+    setTransportBackend(nextBackend);
+    setStreamCanvasRevision((current) => current + 1);
   }, [simulator?.udid]);
 
   useEffect(() => {
@@ -333,5 +374,24 @@ export function useLiveStream({
     runtimeInfo,
     stats,
     status,
+    streamBackend: transportBackend,
+    streamCanvasKey: `${transportBackend}-${streamCanvasRevision}`,
   };
+}
+
+function shouldFallbackToWebRtc(
+  status: StreamStatus,
+  backend: StreamBackend,
+  fallbackTried: boolean,
+  stats: StreamStats,
+): boolean {
+  return Boolean(
+    backend === "webtransport" &&
+    !fallbackTried &&
+    !streamModeIsForcedWebTransport() &&
+    canUseWebRtc() &&
+    status.state === "error" &&
+    status.error &&
+    stats.decodedFrames === 0,
+  );
 }

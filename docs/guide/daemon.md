@@ -4,7 +4,7 @@ SimDeck runs one warm native host per project. The daemon owns the HTTP API, the
 
 Normal CLI commands start the daemon automatically when they need it. Use `simdeck daemon` only when you want to manage it explicitly.
 
-Running `simdeck` with no subcommand starts a foreground workspace daemon, prints local and LAN browser URLs, and stops when the command exits. Pass a simulator name or UDID as the only argument to select it by default:
+Running `simdeck` with no subcommand starts a foreground workspace daemon, prints local and LAN HTTP URLs, prints a six-digit pairing code for LAN browsers, and stops when the command exits, when you press `q`, or when you press Ctrl-C. Pass a simulator name or UDID as the only argument to select it by default:
 
 ```sh
 simdeck
@@ -32,6 +32,7 @@ The command starts the daemon for the current project root and prints JSON:
   "ok": true,
   "projectRoot": "/path/to/app",
   "pid": 12345,
+  "pairingCode": "123456",
   "url": "http://127.0.0.1:4310",
   "started": true
 }
@@ -59,7 +60,7 @@ This starts or reuses the project daemon, serves the bundled browser client, and
 | `--bind <ip>`      | `127.0.0.1`           | Bind address. Use `0.0.0.0` for [LAN access](/guide/lan-access).   |
 | `--advertise-host` | matches local host    | Hostname or IP advertised to browser clients.                      |
 | `--client-root`    | bundled `client/dist` | Override the static browser client directory.                      |
-| `--video-codec`    | `hevc`                | One of `hevc`, `h264`, `h264-software`. See [Video](/guide/video). |
+| `--video-codec`    | `h264-software`       | One of `hevc`, `h264`, `h264-software`. See [Video](/guide/video). |
 | `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.             |
 
 Example:

@@ -7,6 +7,7 @@ pub struct Config {
     pub advertise_host: String,
     pub bind_ip: IpAddr,
     pub http_port: u16,
+    pub pairing_code: Option<String>,
     pub wt_port: u16,
     pub client_root: PathBuf,
     pub video_codec: String,
@@ -20,6 +21,7 @@ impl Config {
         advertise_host: Option<String>,
         video_codec: String,
         access_token: Option<String>,
+        pairing_code: Option<String>,
     ) -> Self {
         let wt_port = http_port.saturating_add(1);
         let advertise_host = advertise_host.unwrap_or_else(|| match bind_ip {
@@ -32,6 +34,7 @@ impl Config {
             advertise_host,
             bind_ip,
             http_port,
+            pairing_code,
             wt_port,
             client_root,
             video_codec,

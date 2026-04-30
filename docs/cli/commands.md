@@ -6,7 +6,7 @@ Every public subcommand exposed by `simdeck`. Replace `simdeck` with `./build/si
 
 ### No Subcommand
 
-Start a foreground workspace daemon and print tokenized local and LAN browser URLs:
+Start a foreground workspace daemon and print clean local and LAN browser URLs:
 
 ```sh
 simdeck
@@ -17,7 +17,7 @@ simdeck --kill
 simdeck --restart
 ```
 
-The single optional argument is a simulator name or UDID to select by default in the UI. The foreground daemon binds to all interfaces, advertises the detected LAN address when available, and stops when the command exits.
+The single optional argument is a simulator name or UDID to select by default in the UI. The foreground daemon binds to all interfaces, advertises the detected LAN address when available, prints the LAN HTTP URL plus a six-digit LAN pairing code, and stops when the command exits, when you press `q`, or when you press Ctrl-C.
 
 Shorthand lifecycle flags are available without a subcommand:
 
@@ -54,6 +54,7 @@ Output:
   "ok": true,
   "projectRoot": "/path/to/app",
   "pid": 12345,
+  "pairingCode": "123456",
   "url": "http://127.0.0.1:4310",
   "started": true
 }

@@ -37,7 +37,7 @@ Full documentation lives at [simdeck.nativescript.org](https://simdeck.nativescr
 simdeck
 ```
 
-This starts a workspace-local foreground daemon, prints local and LAN browser URLs, and stops when you press Ctrl-C.
+This starts a workspace-local foreground daemon, prints local and LAN HTTP URLs plus a pairing code for LAN browsers, and stops when you press `q` or Ctrl-C.
 To focus a specific simulator by name or UDID, pass it as the only argument:
 
 ```sh
@@ -46,6 +46,7 @@ simdeck "iPhone 17 Pro Max"
 
 Use `simdeck ui --open` or `simdeck daemon start` when you want a reusable background daemon instead.
 The no-subcommand lifecycle shortcuts are `simdeck -d` for detached start, `simdeck -k` to kill the background daemon, and `simdeck -r` to restart it.
+The served loopback browser UI receives the generated API access token automatically. LAN browsers pair with the printed code before receiving the API cookie.
 
 CLI commands automatically use the same warm daemon:
 

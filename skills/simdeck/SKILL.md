@@ -24,11 +24,11 @@ simdeck daemon start --video-codec h264-software
 simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 ```
 
-`simdeck` without a subcommand starts a foreground workspace daemon, prints local and LAN browser URLs, and stops on Ctrl-C. The optional single argument is a simulator name or UDID to select by default. Use `-d` for detached start, `-k` to kill the background daemon, and `-r` to restart it.
+`simdeck` without a subcommand starts a foreground workspace daemon, prints local and LAN HTTP URLs, prints a six-digit pairing code for LAN browsers, and stops on `q` or Ctrl-C. The optional single argument is a simulator name or UDID to select by default. Use `-d` for detached start, `-k` to kill the background daemon, and `-r` to restart it.
 
 Viewer: `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
 
-The viewer gets the API token automatically. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
+The local viewer gets the API token automatically. LAN browsers pair with the printed code before receiving the API cookie. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
 
 For fastest agent loops against a known daemon, export:
 

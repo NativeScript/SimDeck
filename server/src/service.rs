@@ -189,6 +189,10 @@ fn plist_contents(
         program_arguments.push("--access-token".to_string());
         program_arguments.push(access_token.clone());
     }
+    if let Some(pairing_code) = options.pairing_code.as_ref() {
+        program_arguments.push("--pairing-code".to_string());
+        program_arguments.push(pairing_code.clone());
+    }
 
     let program_arguments_xml = program_arguments
         .into_iter()
