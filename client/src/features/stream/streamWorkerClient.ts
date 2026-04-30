@@ -1,4 +1,8 @@
-import { accessTokenFromLocation, apiHeaders } from "../../api/client";
+import {
+  accessTokenFromLocation,
+  apiHeaders,
+  fetchHealth,
+} from "../../api/client";
 import { createEmptyStreamStats } from "./stats";
 import type {
   StreamConnectTarget,
@@ -262,20 +266,10 @@ class WebRtcStreamClient implements StreamClientBackend {
       );
       this.postDiagnostics(target, "local-offer");
 
-      const response = await fetch(
-        `/api/simulators/${encodeURIComponent(target.udid)}/webrtc/offer`,
-        {
-          body: JSON.stringify({
-            sdp: localDescription.sdp,
-            type: localDescription.type,
-          }),
-          headers: apiHeaders(),
-          method: "POST",
-        },
+      const response = await postWebRtcOfferWithAuthRetry(
+        target.udid,
+        localDescription,
       );
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
       const answer = (await response.json()) as RTCSessionDescriptionInit;
       if (generation !== this.connectGeneration) {
         return;
@@ -566,6 +560,39 @@ class WebRtcStreamClient implements StreamClientBackend {
       this.canvas.height = nextHeight;
     }
   }
+}
+
+async function postWebRtcOfferWithAuthRetry(
+  udid: string,
+  localDescription: RTCSessionDescription,
+): Promise<Response> {
+  const response = await postWebRtcOffer(udid, localDescription);
+  if (response.status !== 401) {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response;
+  }
+  await fetchHealth();
+  const retry = await postWebRtcOffer(udid, localDescription);
+  if (!retry.ok) {
+    throw new Error(await retry.text());
+  }
+  return retry;
+}
+
+function postWebRtcOffer(
+  udid: string,
+  localDescription: RTCSessionDescription,
+): Promise<Response> {
+  return fetch(`/api/simulators/${encodeURIComponent(udid)}/webrtc/offer`, {
+    body: JSON.stringify({
+      sdp: localDescription.sdp,
+      type: localDescription.type,
+    }),
+    headers: apiHeaders(),
+    method: "POST",
+  });
 }
 
 function configureLowLatencyReceiver(receiver: RTCRtpReceiver) {

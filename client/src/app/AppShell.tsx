@@ -99,6 +99,8 @@ const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
 const STREAM_TRANSPORT_STORAGE_KEY = "simdeck.streamTransport";
 const VIDEO_CODEC_STORAGE_KEY = "simdeck.videoCodec";
 const CODEC_SWITCH_SETTLE_MS = 180;
+const CODEC_SWITCH_RETRY_MS = 120;
+const CODEC_SWITCH_RETRY_LIMIT = 18;
 
 clearLegacyVolatileUiState();
 
@@ -205,6 +207,27 @@ function readStoredVideoCodec(): VideoCodecMode {
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function setSimulatorVideoCodecWhenIdle(
+  udid: string,
+  codec: VideoCodecMode,
+) {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < CODEC_SWITCH_RETRY_LIMIT; attempt += 1) {
+    try {
+      return await setSimulatorVideoCodec(udid, codec);
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof ApiError) || error.status !== 409) {
+        throw error;
+      }
+      await sleep(CODEC_SWITCH_RETRY_MS);
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Timed out waiting for the stream to disconnect.");
 }
 
 export function AppShell() {
@@ -1226,6 +1249,9 @@ export function AppShell() {
     }
     const udid = selectedSimulator.udid;
     setVideoCodec(codec);
+    if (codec === "hevc" && streamTransportMode === "webrtc") {
+      setStreamTransportMode("auto");
+    }
     void (async () => {
       codecSwitchInFlightRef.current = true;
       setStreamPaused(true);
@@ -1233,7 +1259,7 @@ export function AppShell() {
       try {
         await sleep(CODEC_SWITCH_SETTLE_MS);
         const ok = await runAction(async () => {
-          const response = await setSimulatorVideoCodec(udid, codec);
+          const response = await setSimulatorVideoCodecWhenIdle(udid, codec);
           setVideoCodec(response.videoCodec);
         }, false);
         await sleep(CODEC_SWITCH_SETTLE_MS);
