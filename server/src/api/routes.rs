@@ -31,7 +31,7 @@ use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::task;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use tower_http::trace::TraceLayer;
 
 #[derive(Clone)]
@@ -741,18 +741,37 @@ async fn set_video_codec(
     let codec = normalize_video_codec(&payload.codec).ok_or_else(|| {
         AppError::bad_request("Request body must include codec: hevc, h264, or h264-software.")
     })?;
-    let active_streams = state.metrics.active_streams.load(Ordering::Relaxed);
-    if active_streams > 0 {
-        return Err(AppError::conflict(format!(
-            "Cannot switch codec while {active_streams} stream(s) are active."
-        )));
-    }
+    wait_for_streams_to_drain(&state, &udid).await?;
     std::env::set_var("SIMDECK_VIDEO_CODEC", codec);
     state.registry.remove(&udid);
     Ok(json(json_value!({
         "ok": true,
         "videoCodec": codec,
     })))
+}
+
+async fn wait_for_streams_to_drain(state: &AppState, udid: &str) -> Result<(), AppError> {
+    const DRAIN_ATTEMPTS: usize = 40;
+    const DRAIN_INTERVAL: Duration = Duration::from_millis(100);
+
+    for attempt in 0..DRAIN_ATTEMPTS {
+        let active_streams = state.metrics.active_streams.load(Ordering::Relaxed);
+        if active_streams == 0 {
+            return Ok(());
+        }
+        if attempt == 0 {
+            crate::transport::webrtc::cancel_media_stream(udid);
+        }
+        sleep(DRAIN_INTERVAL).await;
+    }
+
+    let active_streams = state.metrics.active_streams.load(Ordering::Relaxed);
+    if active_streams == 0 {
+        return Ok(());
+    }
+    Err(AppError::conflict(format!(
+        "Timed out waiting for {active_streams} active stream(s) to close before switching codec."
+    )))
 }
 
 async fn open_url(
