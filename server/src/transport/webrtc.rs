@@ -408,6 +408,17 @@ fn clear_webrtc_media_stream(udid: &str, token: &broadcast::Sender<()>) {
     }
 }
 
+pub fn cancel_media_stream(udid: &str) -> bool {
+    let Some(streams) = WEBRTC_MEDIA_STREAMS.get() else {
+        return false;
+    };
+    let Some(stream) = streams.lock().unwrap().get(udid).cloned() else {
+        return false;
+    };
+    let _ = stream.send(());
+    true
+}
+
 fn ice_servers() -> Vec<RTCIceServer> {
     let mut urls = std::env::var("SIMDECK_WEBRTC_ICE_SERVERS")
         .ok()
