@@ -2015,6 +2015,67 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     return NO;
 }
 
+static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
+    if (hidClient == nil) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit did not provide a headless HID client for App Switcher."
+            );
+        }
+        return NO;
+    }
+
+    static const DFHomeButtonHIDStrategy strategies[] = {
+        { "IndigoHIDMessageForHIDArbitrary page=0x0c usage=0x40 (Menu) target=0x32", NO, 0, DFConsumerControlUsagePage, 0x40, DFIndigoTouchTarget },
+        { "IndigoHIDMessageForHIDArbitrary page=0x0c usage=0x65 (Home) target=0x32", NO, 0, DFConsumerControlUsagePage, DFHomeConsumerUsage, DFIndigoTouchTarget },
+        { "IndigoHIDMessageForButton code=0x191 target=0x2",  YES, DFHomeButtonCode, 0, 0, 0x2 },
+        { "IndigoHIDMessageForButton code=0x191 target=0x32", YES, DFHomeButtonCode, 0, 0, DFIndigoTouchTarget },
+    };
+
+    NSError *lastError = nil;
+    for (size_t index = 0; index < sizeof(strategies) / sizeof(strategies[0]); index++) {
+        const DFHomeButtonHIDStrategy *strategy = &strategies[index];
+        BOOL dispatched = YES;
+        for (NSUInteger pressIndex = 0; pressIndex < 2; pressIndex += 1) {
+            NSError *downError = nil;
+            if (!DFSendHomeStrategyEdge(hidClient, strategy, DFButtonDirectionDown, &downError)) {
+                DFLog(@"App Switcher strategy rejected (down): %s — %@", strategy->label, downError.localizedDescription ?: @"no error");
+                lastError = downError;
+                dispatched = NO;
+                break;
+            }
+
+            [NSThread sleepForTimeInterval:0.06];
+
+            NSError *upError = nil;
+            if (!DFSendHomeStrategyEdge(hidClient, strategy, DFButtonDirectionUp, &upError)) {
+                DFLog(@"App Switcher strategy rejected (up): %s — %@", strategy->label, upError.localizedDescription ?: @"no error");
+                lastError = upError;
+                dispatched = NO;
+                break;
+            }
+
+            if (pressIndex == 0) {
+                [NSThread sleepForTimeInterval:0.12];
+            }
+        }
+
+        if (dispatched) {
+            DFLog(@"App Switcher dispatched via %s", strategy->label);
+            return YES;
+        }
+    }
+
+    if (error != NULL) {
+        *error = lastError ?: DFMakeError(
+            DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+            @"SimulatorKit rejected every App Switcher HID strategy."
+        );
+    }
+    return NO;
+}
+
 @interface DFPrivateSimulatorDisplayBridge ()
 
 @property (nonatomic, strong) NSView *displayView;
@@ -2897,6 +2958,37 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
             @"No Home path succeeded (no chrome Home control, HID strategies rejected)."
         );
         return;
+    };
+
+    if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {
+        work();
+    } else {
+        dispatch_sync(_callbackQueue, work);
+    }
+
+    if (!success && error != NULL) {
+        *error = dispatchError;
+    }
+
+    return success;
+}
+
+- (BOOL)openAppSwitcher:(NSError * _Nullable __autoreleasing *)error {
+    __block BOOL success = NO;
+    __block NSError *dispatchError = nil;
+
+    dispatch_block_t work = ^{
+        NSError *hidError = nil;
+        if (DFOpenAppSwitcherViaHIDClient(self->_hidClient, &hidError)) {
+            success = YES;
+            return;
+        }
+
+        DFLog(@"HID App Switcher path failed: %@", hidError.localizedDescription ?: @"unknown error");
+        dispatchError = hidError ?: DFMakeError(
+            DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+            @"No App Switcher path succeeded."
+        );
     };
 
     if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {

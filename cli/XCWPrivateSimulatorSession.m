@@ -302,6 +302,10 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
     return [_displayBridge pressHomeButton:error];
 }
 
+- (BOOL)openAppSwitcher:(NSError * _Nullable __autoreleasing *)error {
+    return [_displayBridge openAppSwitcher:error];
+}
+
 - (BOOL)rotateRight:(NSError * _Nullable __autoreleasing *)error {
     return [_displayBridge rotateRight:error];
 }

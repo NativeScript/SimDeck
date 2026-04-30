@@ -28,6 +28,7 @@ NS_ASSUME_NONNULL_BEGIN
           modifiers:(uint32_t)modifiers
               error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)pressHome:(NSError * _Nullable * _Nullable)error;
+- (BOOL)openAppSwitcher:(NSError * _Nullable * _Nullable)error;
 - (BOOL)rotateRight:(NSError * _Nullable * _Nullable)error;
 - (BOOL)rotateLeft:(NSError * _Nullable * _Nullable)error;
 - (void)setFrameCallback:(xcw_native_frame_callback _Nullable)callback

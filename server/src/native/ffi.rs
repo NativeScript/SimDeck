@@ -98,6 +98,10 @@ unsafe extern "C" {
         error_message: *mut *mut c_char,
     ) -> bool;
     pub fn xcw_native_press_home(udid: *const c_char, error_message: *mut *mut c_char) -> bool;
+    pub fn xcw_native_open_app_switcher(
+        udid: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> bool;
     pub fn xcw_native_press_button(
         udid: *const c_char,
         button_name: *const c_char,

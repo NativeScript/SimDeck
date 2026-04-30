@@ -24,6 +24,10 @@ export interface SimulatorsResponse {
 export interface HealthResponse {
   ok: boolean;
   videoCodec?: string;
+  webRtc?: {
+    iceServers?: RTCIceServer[];
+    iceTransportPolicy?: RTCIceTransportPolicy;
+  };
 }
 
 export interface SimulatorResponse {

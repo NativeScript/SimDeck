@@ -1,4 +1,5 @@
 import { apiHeaders, fetchHealth } from "../../api/client";
+import type { HealthResponse } from "../../api/types";
 import { createEmptyStreamStats } from "./stats";
 import type {
   StreamConnectTarget,
@@ -87,9 +88,13 @@ class WebRtcStreamClient implements StreamClientBackend {
     });
 
     try {
+      const health = await fetchHealth().catch(() => null);
+      if (generation !== this.connectGeneration) {
+        return;
+      }
       const peerConnection = new RTCPeerConnection({
-        iceServers: iceServers(),
-        iceTransportPolicy: iceTransportPolicy(),
+        iceServers: iceServers(health),
+        iceTransportPolicy: iceTransportPolicy(health),
       });
       this.peerConnection = peerConnection;
       this.attachDiagnostics(peerConnection, target, generation);
@@ -619,27 +624,47 @@ function configureReceiverCodecPreferences(transceiver: RTCRtpTransceiver) {
   ]);
 }
 
-function iceServers(): RTCIceServer[] {
+function iceServers(health?: HealthResponse | null): RTCIceServer[] {
   const params = new URLSearchParams(window.location.search);
-  const raw = params.get("iceServers") ?? "stun:stun.l.google.com:19302";
+  const queryValue = params.get("iceServers");
+  const raw = queryValue ?? "";
   if (raw === "none") {
     return [];
   }
-  return [
-    {
+  if (raw.trim()) {
+    const server: RTCIceServer = {
       urls: raw
         .split(",")
         .map((value) => value.trim())
         .filter(Boolean),
-    },
-  ];
+    };
+    const username = params.get("iceUsername");
+    const credential = params.get("iceCredential");
+    if (username) {
+      server.username = username;
+    }
+    if (credential) {
+      server.credential = credential;
+    }
+    return [server];
+  }
+  if (health?.webRtc?.iceServers?.length) {
+    return health.webRtc.iceServers;
+  }
+  return [{ urls: ["stun:stun.l.google.com:19302"] }];
 }
 
-function iceTransportPolicy(): RTCIceTransportPolicy {
+function iceTransportPolicy(
+  health?: HealthResponse | null,
+): RTCIceTransportPolicy {
   const value = new URLSearchParams(window.location.search).get(
     "iceTransportPolicy",
   );
-  return value === "relay" || value === "all" ? value : "all";
+  if (value === "relay" || value === "all") {
+    return value;
+  }
+  const healthValue = health?.webRtc?.iceTransportPolicy;
+  return healthValue === "relay" || healthValue === "all" ? healthValue : "all";
 }
 
 interface WebRtcDiagnostics {

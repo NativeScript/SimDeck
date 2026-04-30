@@ -129,6 +129,10 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
     return [self.session pressHomeButton:error];
 }
 
+- (BOOL)openAppSwitcher:(NSError * _Nullable __autoreleasing *)error {
+    return [self.session openAppSwitcher:error];
+}
+
 - (BOOL)rotateRight:(NSError * _Nullable __autoreleasing *)error {
     return [self.session rotateRight:error];
 }

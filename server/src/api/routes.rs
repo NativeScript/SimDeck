@@ -475,7 +475,11 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "httpPort": state.config.http_port,
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64(),
         "videoCodec": active_video_codec(&state.config),
-        "lowLatency": state.config.low_latency
+        "lowLatency": state.config.low_latency,
+        "webRtc": {
+            "iceServers": crate::transport::webrtc::client_ice_servers(),
+            "iceTransportPolicy": crate::transport::webrtc::ice_transport_policy_label()
+        }
     }))
 }
 
@@ -1135,12 +1139,7 @@ async fn open_app_switcher(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    run_bridge_action(state, move |bridge| {
-        bridge.press_home(&udid)?;
-        std::thread::sleep(Duration::from_millis(140));
-        bridge.press_home(&udid)
-    })
-    .await?;
+    run_bridge_action(state, move |bridge| bridge.open_app_switcher(&udid)).await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -1698,12 +1697,7 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
             Ok(json_value!({ "action": "dismissKeyboard" }))
         }
         BatchStep::AppSwitcher => {
-            run_bridge_action(state, move |bridge| {
-                bridge.press_home(&udid)?;
-                std::thread::sleep(Duration::from_millis(140));
-                bridge.press_home(&udid)
-            })
-            .await?;
+            run_bridge_action(state, move |bridge| bridge.open_app_switcher(&udid)).await?;
             Ok(json_value!({ "action": "appSwitcher" }))
         }
         BatchStep::RotateLeft => {

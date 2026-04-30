@@ -49,6 +49,7 @@ bool xcw_native_send_touch(const char * _Nonnull udid, double x, double y, const
 bool xcw_native_send_key(const char * _Nonnull udid, uint16_t key_code, uint32_t modifiers, char * _Nullable * _Nullable error_message);
 bool xcw_native_send_key_event(const char * _Nonnull udid, uint16_t key_code, bool down, char * _Nullable * _Nullable error_message);
 bool xcw_native_press_home(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
+bool xcw_native_open_app_switcher(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 bool xcw_native_press_button(const char * _Nonnull udid, const char * _Nonnull button_name, uint32_t duration_ms, char * _Nullable * _Nullable error_message);
 bool xcw_native_rotate_right(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 bool xcw_native_rotate_left(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
@@ -75,6 +76,7 @@ bool xcw_native_session_send_touch(void * _Nonnull handle, double x, double y, c
 bool xcw_native_session_send_multitouch(void * _Nonnull handle, double x1, double y1, double x2, double y2, const char * _Nonnull phase, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_send_key(void * _Nonnull handle, uint16_t key_code, uint32_t modifiers, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_press_home(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
+bool xcw_native_session_open_app_switcher(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_rotate_right(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_rotate_left(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 void xcw_native_session_set_frame_callback(void * _Nonnull handle, xcw_native_frame_callback _Nullable callback, void * _Nullable user_data);
