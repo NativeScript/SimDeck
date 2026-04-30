@@ -1,5 +1,6 @@
 #import "XCWH264Encoder.h"
 
+#import <Accelerate/Accelerate.h>
 #import <CoreMedia/CoreMedia.h>
 #import <os/lock.h>
 #import <QuartzCore/QuartzCore.h>
@@ -307,6 +308,18 @@ static BOOL XCWCompressionSessionUsesHardwareEncoder(VTCompressionSessionRef ses
     return isHardware;
 }
 
+static BOOL XCWPixelFormatSupportsSoftwareScaling(OSType pixelFormat) {
+    switch (pixelFormat) {
+        case kCVPixelFormatType_32ARGB:
+        case kCVPixelFormatType_32BGRA:
+        case kCVPixelFormatType_32ABGR:
+        case kCVPixelFormatType_32RGBA:
+            return YES;
+        default:
+            return NO;
+    }
+}
+
 static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
                                          void *sourceFrameRefCon,
                                          OSStatus status,
@@ -316,6 +329,10 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 @interface XCWH264Encoder ()
 
 @property (nonatomic, copy, readonly) XCWH264EncoderOutputHandler outputHandler;
+
+- (nullable CVPixelBufferRef)copySoftwareScaledPixelBuffer:(CVPixelBufferRef)pixelBuffer
+                                               targetWidth:(int32_t)targetWidth
+                                              targetHeight:(int32_t)targetHeight;
 
 @end
 
@@ -772,6 +789,12 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         return pixelBuffer;
     }
 
+    if (_encoderMode == XCWVideoEncoderModeH264Software) {
+        return [self copySoftwareScaledPixelBuffer:pixelBuffer
+                                       targetWidth:targetWidth
+                                      targetHeight:targetHeight];
+    }
+
     if (_pixelTransferSession == NULL) {
         OSStatus sessionStatus = VTPixelTransferSessionCreate(kCFAllocatorDefault, &_pixelTransferSession);
         if (sessionStatus != noErr || _pixelTransferSession == NULL) {
@@ -822,6 +845,83 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
                                                                   _scaledPixelBuffer);
     _lastScaleStatus = transferStatus;
     if (transferStatus != noErr) {
+        return NULL;
+    }
+
+    CVPixelBufferRetain(_scaledPixelBuffer);
+    return _scaledPixelBuffer;
+}
+
+- (nullable CVPixelBufferRef)copySoftwareScaledPixelBuffer:(CVPixelBufferRef)pixelBuffer
+                                               targetWidth:(int32_t)targetWidth
+                                              targetHeight:(int32_t)targetHeight {
+    OSType sourcePixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
+    if (!XCWPixelFormatSupportsSoftwareScaling(sourcePixelFormat)) {
+        _lastScaleStatus = -1;
+        return NULL;
+    }
+
+    BOOL needsNewBuffer = (_scaledPixelBuffer == NULL)
+        || ((int32_t)CVPixelBufferGetWidth(_scaledPixelBuffer) != targetWidth)
+        || ((int32_t)CVPixelBufferGetHeight(_scaledPixelBuffer) != targetHeight)
+        || (_scaledPixelFormat != sourcePixelFormat);
+    if (needsNewBuffer) {
+        if (_scaledPixelBuffer != NULL) {
+            CVPixelBufferRelease(_scaledPixelBuffer);
+            _scaledPixelBuffer = NULL;
+        }
+
+        NSDictionary *attributes = @{
+            (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
+        };
+        CVPixelBufferRef scaledPixelBuffer = NULL;
+        OSStatus bufferStatus = CVPixelBufferCreate(kCFAllocatorDefault,
+                                                    targetWidth,
+                                                    targetHeight,
+                                                    sourcePixelFormat,
+                                                    (__bridge CFDictionaryRef)attributes,
+                                                    &scaledPixelBuffer);
+        if (bufferStatus != noErr || scaledPixelBuffer == NULL) {
+            _lastScaleStatus = bufferStatus;
+            return NULL;
+        }
+        _scaledPixelBuffer = scaledPixelBuffer;
+        _scaledPixelFormat = sourcePixelFormat;
+    }
+
+    CVReturn sourceLockStatus = CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    if (sourceLockStatus != kCVReturnSuccess) {
+        _lastScaleStatus = sourceLockStatus;
+        return NULL;
+    }
+
+    CVReturn targetLockStatus = CVPixelBufferLockBaseAddress(_scaledPixelBuffer, 0);
+    if (targetLockStatus != kCVReturnSuccess) {
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+        _lastScaleStatus = targetLockStatus;
+        return NULL;
+    }
+
+    vImage_Buffer sourceBuffer = {
+        .data = CVPixelBufferGetBaseAddress(pixelBuffer),
+        .height = (vImagePixelCount)CVPixelBufferGetHeight(pixelBuffer),
+        .width = (vImagePixelCount)CVPixelBufferGetWidth(pixelBuffer),
+        .rowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer),
+    };
+    vImage_Buffer targetBuffer = {
+        .data = CVPixelBufferGetBaseAddress(_scaledPixelBuffer),
+        .height = (vImagePixelCount)CVPixelBufferGetHeight(_scaledPixelBuffer),
+        .width = (vImagePixelCount)CVPixelBufferGetWidth(_scaledPixelBuffer),
+        .rowBytes = CVPixelBufferGetBytesPerRow(_scaledPixelBuffer),
+    };
+    vImage_Error scaleStatus = vImageScale_ARGB8888(&sourceBuffer,
+                                                    &targetBuffer,
+                                                    NULL,
+                                                    kvImageHighQualityResampling);
+    CVPixelBufferUnlockBaseAddress(_scaledPixelBuffer, 0);
+    CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    _lastScaleStatus = scaleStatus;
+    if (scaleStatus != kvImageNoError) {
         return NULL;
     }
 

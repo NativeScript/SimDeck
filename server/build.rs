@@ -75,6 +75,7 @@ fn main() {
 
     for framework in [
         "Foundation",
+        "Accelerate",
         "AppKit",
         "CoreImage",
         "CoreGraphics",
