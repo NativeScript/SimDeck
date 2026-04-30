@@ -54,7 +54,7 @@ Inside the bridge:
 
 ### `client/` — React browser UI
 
-The React app served at `/` is a thin shell that calls the REST API and consumes live video over WebTransport by default. Runner preview URLs can opt into WebRTC with `?transport=webrtc`.
+The React app served at `/` is a thin shell that calls the REST API and consumes live video over WebTransport by default. It automatically selects WebRTC media for `h264-software`; URLs can still force a transport with `?transport=webtransport` or `?transport=webrtc`.
 
 Layout under `client/src/`:
 

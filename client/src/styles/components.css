@@ -1112,6 +1112,18 @@
   pointer-events: none;
 }
 
+.stream-video {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #000000;
+  object-fit: fill;
+  pointer-events: none;
+}
+
 .accessibility-picker-layer {
   position: absolute;
   inset: 0;
@@ -1207,6 +1219,10 @@
   font-size: 13px;
   padding: 24px;
   text-align: center;
+}
+
+.screen-loading {
+  background: color-mix(in srgb, #000000 32%, transparent);
 }
 
 .canvas-empty {

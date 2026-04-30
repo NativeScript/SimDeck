@@ -179,8 +179,6 @@ fn plist_contents(
         client_root.to_string_lossy().into_owned(),
         "--video-codec".to_string(),
         options.video_codec.as_env_value().to_string(),
-        "--jpeg-quality".to_string(),
-        crate::format_jpeg_quality(options.jpeg_quality),
     ];
 
     if let Some(advertise_host) = options.advertise_host.as_ref() {

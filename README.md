@@ -19,7 +19,7 @@ view inside the editor.
 
 ## Features
 
-- WebTransport streaming server in Rust, plus experimental WebRTC for runner previews, using HEVC/H.264 video or full-resolution JPEG on CI runners
+- WebTransport streaming server in Rust, plus experimental WebRTC media previews, using HEVC or H.264 video
 - Simulator control & inspection using private accessibility APIs
 - CoreSimulator chrome asset rendering for device bezels
 - NativeScript and React Native runtime inspector plugins, plus a native UIKit inspector framework for other apps
@@ -84,13 +84,8 @@ Use software H.264 when macOS screen recording starves the hardware encoder:
 simdeck daemon start --video-codec h264-software
 ```
 
-On GitHub Actions macOS runners where VideoToolbox hardware encode is not
-available, use the experimental full-resolution JPEG data-channel stream:
-
-```sh
-simdeck daemon start --video-codec jpeg
-# open http://127.0.0.1:4310?transport=webrtc-data
-```
+The browser reads `/api/health` and automatically selects the WebRTC media
+transport for software H.264.
 
 For LAN browser access:
 

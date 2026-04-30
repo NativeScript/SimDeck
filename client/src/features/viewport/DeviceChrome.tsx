@@ -15,6 +15,7 @@ interface DeviceChromeProps {
   chromeUrl: string;
   hasFrame: boolean;
   isBooted: boolean;
+  isLoadingStream: boolean;
   isStreamError: boolean;
   onChromeLoad: () => void;
   onPanPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
@@ -49,6 +50,7 @@ export function DeviceChrome({
   chromeUrl,
   hasFrame,
   isBooted,
+  isLoadingStream,
   isStreamError,
   onChromeLoad,
   onPanPointerCancel,
@@ -99,6 +101,7 @@ export function DeviceChrome({
           chromeScreenStyle={chromeScreenStyle}
           hasFrame={hasFrame}
           isBooted={isBooted}
+          isLoadingStream={isLoadingStream}
           isStreamError={isStreamError}
           onScreenPointerCancel={onScreenPointerCancel}
           onScreenPointerDown={onScreenPointerDown}
@@ -139,6 +142,7 @@ export function DeviceChrome({
         }}
         hasFrame={hasFrame}
         isBooted={isBooted}
+        isLoadingStream={isLoadingStream}
         isStreamError={isStreamError}
         onScreenPointerCancel={onScreenPointerCancel}
         onScreenPointerDown={onScreenPointerDown}
@@ -168,6 +172,7 @@ interface ScreenLayerProps {
   chromeScreenStyle: CSSProperties | null;
   hasFrame: boolean;
   isBooted: boolean;
+  isLoadingStream: boolean;
   isStreamError: boolean;
   onScreenPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
   onScreenPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
@@ -194,6 +199,7 @@ function ScreenLayer({
   chromeScreenStyle,
   hasFrame,
   isBooted,
+  isLoadingStream,
   isStreamError,
   onScreenPointerCancel,
   onScreenPointerDown,
@@ -271,8 +277,21 @@ function ScreenLayer({
       {statusOverlayLabel ? (
         <div className="screen-overlay">{statusOverlayLabel}</div>
       ) : null}
-      {isBooted && !hasFrame && !isStreamError && !statusOverlayLabel ? (
-        <div className="screen-overlay">Waiting for first frame…</div>
+      {isLoadingStream && !statusOverlayLabel ? (
+        <div
+          aria-label="Loading simulator"
+          className="screen-overlay screen-loading"
+          role="status"
+        >
+          <div className="loading-spinner" />
+        </div>
+      ) : null}
+      {isBooted &&
+      !hasFrame &&
+      !isStreamError &&
+      !isLoadingStream &&
+      !statusOverlayLabel ? (
+        <div className="screen-overlay">Waiting for first frame...</div>
       ) : null}
       {!isBooted && !statusOverlayLabel ? (
         <div className="screen-overlay">Boot simulator to start streaming</div>

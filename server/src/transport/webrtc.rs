@@ -2,17 +2,17 @@ use crate::api::routes::{run_control_message, AppState, ControlMessage};
 use crate::error::AppError;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-use tokio::sync::broadcast::{self, error::TryRecvError};
+use tokio::sync::broadcast;
 use tokio::time;
 use tracing::{info, warn};
 use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_HEVC};
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
-use webrtc::data_channel::data_channel_state::RTCDataChannelState;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
@@ -27,18 +27,12 @@ use webrtc::track::track_local::TrackLocal;
 const ANNEX_B_START_CODE: &[u8] = &[0, 0, 0, 1];
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
-const WEBRTC_JPEG_CHANNEL_LABEL: &str = "simdeck-video-jpeg";
-const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(250);
-const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 4;
 const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
 const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
-const JPEG_CHUNK_MAGIC: &[u8; 4] = b"SDJF";
-const JPEG_CHUNK_VERSION: u8 = 1;
-const JPEG_CHUNK_HEADER_BYTES: usize = 40;
-const JPEG_CHUNK_PAYLOAD_BYTES: usize = 60 * 1024;
-const JPEG_CHANNEL_MIN_BUFFERED_BYTES: usize = 2 * 1024 * 1024;
-const JPEG_CHANNEL_BUFFERED_FRAME_MULTIPLIER: usize = 2;
+
+static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, broadcast::Sender<()>>>> =
+    OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +67,11 @@ pub async fn create_answer(
         state.registry.remove(&udid);
         return Err(error);
     }
+    if payload.transport.is_some() {
+        return Err(AppError::bad_request(
+            "WebRTC preview supports media tracks only.",
+        ));
+    }
     session.request_keyframe();
     info!(
         "WebRTC offer for {udid}: remote_candidates={} remote_candidate_types={} ice_servers={}",
@@ -88,20 +87,16 @@ pub async fn create_answer(
         .wait_for_keyframe(Duration::from_secs(3))
         .await
         .ok_or_else(|| AppError::native("Timed out waiting for a simulator keyframe."))?;
-    if payload.transport.as_deref() == Some("data-channel") {
-        return create_data_channel_answer(state, udid, session, first_frame, payload).await;
-    }
-
     let codec = first_frame
         .codec
         .as_deref()
         .unwrap_or_default()
         .to_lowercase();
-    if !is_h264_codec(&codec) {
-        return Err(AppError::bad_request(
-            "WebRTC preview requires H.264. Restart SimDeck with `--video-codec h264-software`.",
-        ));
-    }
+    let media_codec = WebRtcMediaCodec::from_codec_string(&codec).ok_or_else(|| {
+        AppError::bad_request(
+            "WebRTC preview requires H.264 or HEVC. Restart SimDeck with `--video-codec h264-software`, `h264`, or `hevc`.",
+        )
+    })?;
 
     let mut media_engine = MediaEngine::default();
     media_engine
@@ -128,10 +123,10 @@ pub async fn create_answer(
 
     let video_track = Arc::new(TrackLocalStaticSample::new(
         RTCRtpCodecCapability {
-            mime_type: MIME_TYPE_H264.to_owned(),
+            mime_type: media_codec.mime_type().to_owned(),
             clock_rate: 90_000,
             channels: 0,
-            sdp_fmtp_line: h264_sdp_fmtp_line(&codec),
+            sdp_fmtp_line: media_codec.sdp_fmtp_line(&codec),
             rtcp_feedback: vec![],
         },
         "simdeck-video".to_owned(),
@@ -174,14 +169,20 @@ pub async fn create_answer(
         summarize_sdp_candidate_types(&local_description.sdp)
     );
 
-    tokio::spawn(stream_h264_frames(
-        state,
-        udid,
-        session,
-        first_frame,
-        peer_connection,
-        video_track,
-    ));
+    let (cancellation_token, cancellation) = replace_webrtc_media_stream(&udid);
+    tokio::spawn(
+        WebRtcMediaStream {
+            state,
+            udid,
+            session,
+            first_frame,
+            peer_connection,
+            video_track,
+            cancellation_token,
+            cancellation,
+        }
+        .run(),
+    );
 
     Ok(WebRtcAnswerPayload {
         sdp: local_description.sdp,
@@ -286,141 +287,6 @@ fn redact_candidate_address(address: &str) -> String {
     "<host>".to_owned()
 }
 
-async fn create_data_channel_answer(
-    state: AppState,
-    udid: String,
-    session: crate::simulators::session::SimulatorSession,
-    first_frame: crate::transport::packet::SharedFrame,
-    payload: WebRtcOfferPayload,
-) -> Result<WebRtcAnswerPayload, AppError> {
-    let codec = first_frame
-        .codec
-        .as_deref()
-        .unwrap_or_default()
-        .to_lowercase();
-    if codec != "jpeg" {
-        return Err(AppError::bad_request(
-            "WebRTC data-channel preview requires `--video-codec jpeg`.",
-        ));
-    }
-
-    let mut media_engine = MediaEngine::default();
-    media_engine
-        .register_default_codecs()
-        .map_err(|error| AppError::internal(format!("register WebRTC codecs: {error}")))?;
-    let mut registry = Registry::new();
-    registry = register_default_interceptors(registry, &mut media_engine)
-        .map_err(|error| AppError::internal(format!("register WebRTC interceptors: {error}")))?;
-    let api = APIBuilder::new()
-        .with_media_engine(media_engine)
-        .with_interceptor_registry(registry)
-        .build();
-
-    let peer_connection = Arc::new(
-        api.new_peer_connection(RTCConfiguration {
-            ice_servers: ice_servers(),
-            ..Default::default()
-        })
-        .await
-        .map_err(|error| AppError::internal(format!("create WebRTC peer connection: {error}")))?,
-    );
-    register_diagnostics(&peer_connection, &udid);
-    register_data_channel_streams(
-        &peer_connection,
-        state.clone(),
-        session.clone(),
-        udid.clone(),
-        first_frame,
-    );
-
-    let offer = RTCSessionDescription::offer(payload.sdp)
-        .map_err(|error| AppError::bad_request(format!("invalid WebRTC offer: {error}")))?;
-    peer_connection
-        .set_remote_description(offer)
-        .await
-        .map_err(|error| AppError::bad_request(format!("set remote WebRTC offer: {error}")))?;
-
-    let answer = peer_connection
-        .create_answer(None)
-        .await
-        .map_err(|error| AppError::internal(format!("create WebRTC answer: {error}")))?;
-    let mut gather_complete = peer_connection.gathering_complete_promise().await;
-    peer_connection
-        .set_local_description(answer)
-        .await
-        .map_err(|error| AppError::internal(format!("set WebRTC answer: {error}")))?;
-    let _ = gather_complete.recv().await;
-    let local_description = peer_connection
-        .local_description()
-        .await
-        .ok_or_else(|| AppError::internal("WebRTC local description was not set."))?;
-    tokio::spawn(hold_peer_connection_until_closed(peer_connection));
-
-    Ok(WebRtcAnswerPayload {
-        sdp: local_description.sdp,
-        kind: "answer".to_owned(),
-    })
-}
-
-async fn hold_peer_connection_until_closed(
-    peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
-) {
-    loop {
-        if matches!(
-            peer_connection.connection_state(),
-            RTCPeerConnectionState::Closed | RTCPeerConnectionState::Failed
-        ) {
-            break;
-        }
-        time::sleep(Duration::from_secs(5)).await;
-    }
-}
-
-fn register_data_channel_streams(
-    peer_connection: &Arc<webrtc::peer_connection::RTCPeerConnection>,
-    state: AppState,
-    session: crate::simulators::session::SimulatorSession,
-    udid: String,
-    first_frame: crate::transport::packet::SharedFrame,
-) {
-    peer_connection.on_data_channel(Box::new(move |channel: Arc<RTCDataChannel>| {
-        let state = state.clone();
-        let session = session.clone();
-        let udid = udid.clone();
-        let first_frame = first_frame.clone();
-        Box::pin(async move {
-            match channel.label() {
-                WEBRTC_CONTROL_CHANNEL_LABEL => {
-                    attach_control_data_channel(channel, session, udid);
-                }
-                WEBRTC_JPEG_CHANNEL_LABEL => {
-                    let state_for_stream = state.clone();
-                    let session_for_stream = session.clone();
-                    let udid_for_stream = udid.clone();
-                    let stream_channel = channel.clone();
-                    channel.on_open(Box::new(move || {
-                        let channel = stream_channel.clone();
-                        let state = state_for_stream.clone();
-                        let session = session_for_stream.clone();
-                        let udid = udid_for_stream.clone();
-                        let first_frame = first_frame.clone();
-                        Box::pin(async move {
-                            tokio::spawn(stream_jpeg_data_channel_frames(
-                                state,
-                                udid,
-                                session,
-                                first_frame,
-                                channel,
-                            ));
-                        })
-                    }));
-                }
-                _ => {}
-            }
-        })
-    }));
-}
-
 fn register_control_data_channel(
     peer_connection: &Arc<webrtc::peer_connection::RTCPeerConnection>,
     session: crate::simulators::session::SimulatorSession,
@@ -470,6 +336,49 @@ fn is_h264_codec(codec: &str) -> bool {
     codec.contains("h264") || codec.starts_with("avc1.") || codec.starts_with("avc3.")
 }
 
+fn is_hevc_codec(codec: &str) -> bool {
+    let codec = codec.trim().to_ascii_lowercase();
+    codec.contains("hevc") || codec.starts_with("hvc1.") || codec.starts_with("hev1.")
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WebRtcMediaCodec {
+    H264,
+    Hevc,
+}
+
+impl WebRtcMediaCodec {
+    fn from_codec_string(codec: &str) -> Option<Self> {
+        if is_h264_codec(codec) {
+            Some(Self::H264)
+        } else if is_hevc_codec(codec) {
+            Some(Self::Hevc)
+        } else {
+            None
+        }
+    }
+
+    fn from_frame(frame: &crate::transport::packet::FramePacket) -> anyhow::Result<Self> {
+        let codec = frame.codec.as_deref().unwrap_or_default();
+        Self::from_codec_string(codec)
+            .ok_or_else(|| anyhow::anyhow!("unsupported WebRTC video codec `{codec}`"))
+    }
+
+    fn mime_type(self) -> &'static str {
+        match self {
+            Self::H264 => MIME_TYPE_H264,
+            Self::Hevc => MIME_TYPE_HEVC,
+        }
+    }
+
+    fn sdp_fmtp_line(self, codec: &str) -> String {
+        match self {
+            Self::H264 => h264_sdp_fmtp_line(codec),
+            Self::Hevc => String::new(),
+        }
+    }
+}
+
 fn h264_sdp_fmtp_line(codec: &str) -> String {
     let profile_level_id = codec
         .split_once('.')
@@ -479,6 +388,27 @@ fn h264_sdp_fmtp_line(codec: &str) -> String {
         .filter(|value| value.chars().all(|ch| ch.is_ascii_hexdigit()))
         .unwrap_or("42e01f");
     format!("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id={profile_level_id}")
+}
+
+fn replace_webrtc_media_stream(udid: &str) -> (broadcast::Sender<()>, broadcast::Receiver<()>) {
+    let (tx, rx) = broadcast::channel(1);
+    let streams = WEBRTC_MEDIA_STREAMS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(previous) = streams.lock().unwrap().insert(udid.to_owned(), tx.clone()) {
+        let _ = previous.send(());
+    }
+    (tx, rx)
+}
+
+fn clear_webrtc_media_stream(udid: &str, token: &broadcast::Sender<()>) {
+    if let Some(streams) = WEBRTC_MEDIA_STREAMS.get() {
+        let mut streams = streams.lock().unwrap();
+        if streams
+            .get(udid)
+            .is_some_and(|current| current.same_channel(token))
+        {
+            streams.remove(udid);
+        }
+    }
 }
 
 fn ice_servers() -> Vec<RTCIceServer> {
@@ -500,112 +430,124 @@ fn ice_servers() -> Vec<RTCIceServer> {
     }]
 }
 
-async fn stream_h264_frames(
+struct WebRtcMediaStream {
     state: AppState,
-    udid: String,
     session: crate::simulators::session::SimulatorSession,
+    udid: String,
     first_frame: crate::transport::packet::SharedFrame,
     peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
     video_track: Arc<TrackLocalStaticSample>,
-) {
-    let mut rx = session.subscribe();
-    let mut latest_keyframe = first_frame;
-    let mut last_sequence = 0u64;
-    let mut send_timing = WebRtcSendTiming::new();
-    let mut bootstrap_interval = time::interval(WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL);
-    let mut refresh_sleep = Box::pin(time::sleep(WEBRTC_MIN_REFRESH_INTERVAL));
-    let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
-    let mut adaptive_refresh_interval = WEBRTC_MIN_REFRESH_INTERVAL;
-    let mut waiting_for_keyframe = false;
-    let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
+    cancellation_token: broadcast::Sender<()>,
+    cancellation: broadcast::Receiver<()>,
+}
 
-    loop {
-        tokio::select! {
-            _ = &mut refresh_sleep => {
-                session.request_refresh();
-                refresh_sleep
-                    .as_mut()
-                    .reset(time::Instant::now() + adaptive_refresh_interval);
-            }
-            _ = bootstrap_interval.tick(), if bootstrap_frames_remaining > 0 => {
-                if let Err(error) = write_frame_sample(
-                    &video_track,
-                    &latest_keyframe,
-                    WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL,
-                ).await {
-                    warn!("WebRTC bootstrap keyframe write failed for {udid}: {error}");
+impl WebRtcMediaStream {
+    async fn run(self) {
+        let Self {
+            state,
+            session,
+            udid,
+            first_frame,
+            peer_connection,
+            video_track,
+            cancellation_token,
+            mut cancellation,
+        } = self;
+        let mut rx = session.subscribe();
+        let mut last_sequence = 0u64;
+        let mut send_timing = WebRtcSendTiming::new();
+        let mut peer_state_interval = time::interval(Duration::from_millis(250));
+        let mut refresh_sleep = Box::pin(time::sleep(WEBRTC_MIN_REFRESH_INTERVAL));
+        let mut adaptive_refresh_interval = WEBRTC_MIN_REFRESH_INTERVAL;
+        let mut waiting_for_keyframe = false;
+        let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
+
+        if let Err(error) =
+            write_frame_sample(&video_track, &first_frame, WEBRTC_MIN_REFRESH_INTERVAL).await
+        {
+            warn!("WebRTC initial keyframe write failed for {udid}: {error}");
+            let _ = peer_connection.close().await;
+            return;
+        }
+        state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
+
+        loop {
+            tokio::select! {
+                _ = cancellation.recv() => {
                     break;
                 }
-                state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
-                bootstrap_frames_remaining = bootstrap_frames_remaining.saturating_sub(1);
-            }
-            frame = rx.recv() => {
-                let frame = match frame {
-                    Ok(frame) => frame,
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                _ = peer_state_interval.tick() => {
+                    if matches!(
+                        peer_connection.connection_state(),
+                        RTCPeerConnectionState::Closed
+                            | RTCPeerConnectionState::Disconnected
+                            | RTCPeerConnectionState::Failed
+                    ) {
+                        break;
+                    }
+                }
+                _ = &mut refresh_sleep => {
+                    session.request_refresh();
+                    refresh_sleep
+                        .as_mut()
+                        .reset(time::Instant::now() + adaptive_refresh_interval);
+                }
+                frame = rx.recv() => {
+                    let frame = match frame {
+                        Ok(frame) => frame,
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            state
+                                .metrics
+                                .frames_dropped_server
+                                .fetch_add(skipped, Ordering::Relaxed);
+                            waiting_for_keyframe = true;
+                            session.request_keyframe();
+                            continue;
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    };
+                    if last_sequence != 0 && frame.frame_sequence > last_sequence + 1 && !frame.is_keyframe {
                         state
                             .metrics
                             .frames_dropped_server
-                            .fetch_add(skipped, Ordering::Relaxed);
+                            .fetch_add(frame.frame_sequence - last_sequence - 1, Ordering::Relaxed);
                         waiting_for_keyframe = true;
                         session.request_keyframe();
                         continue;
                     }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                };
-                let (frame, skipped) = freshest_available_frame(frame, &mut rx);
-                if skipped > 0 {
-                    state
-                        .metrics
-                        .frames_dropped_server
-                        .fetch_add(skipped, Ordering::Relaxed);
-                    if !frame.is_keyframe {
-                        waiting_for_keyframe = true;
-                        session.request_keyframe();
+                    if waiting_for_keyframe && !frame.is_keyframe {
+                        state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
+                    if frame.is_keyframe {
+                        waiting_for_keyframe = false;
+                    }
+                    let duration = send_timing.duration_for(&frame);
+                    let started_at = time::Instant::now();
+                    let write_result = time::timeout(
+                        WEBRTC_WRITE_TIMEOUT,
+                        write_frame_sample(&video_track, &frame, duration),
+                    ).await;
+                    adaptive_refresh_interval = adaptive_interval_for_write(started_at.elapsed());
+                    if let Err(error) = write_result
+                        .map_err(|_| anyhow::anyhow!(
+                            "timed out writing WebRTC frame after {}ms",
+                            WEBRTC_WRITE_TIMEOUT.as_millis()
+                        ))
+                        .and_then(|result| result)
+                    {
+                        warn!("WebRTC frame write failed for {udid}: {error}");
+                        break;
+                    }
+                    last_sequence = frame.frame_sequence;
+                    state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
                 }
-                if last_sequence != 0 && frame.frame_sequence > last_sequence + 1 && !frame.is_keyframe {
-                    state
-                        .metrics
-                        .frames_dropped_server
-                        .fetch_add(frame.frame_sequence - last_sequence - 1, Ordering::Relaxed);
-                    waiting_for_keyframe = true;
-                    session.request_keyframe();
-                    continue;
-                }
-                if waiting_for_keyframe && !frame.is_keyframe {
-                    state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
-                    continue;
-                }
-                if frame.is_keyframe {
-                    latest_keyframe = frame.clone();
-                    waiting_for_keyframe = false;
-                }
-                let duration = send_timing.duration_for(&frame);
-                let started_at = time::Instant::now();
-                let write_result = time::timeout(
-                    WEBRTC_WRITE_TIMEOUT,
-                    write_frame_sample(&video_track, &frame, duration),
-                ).await;
-                adaptive_refresh_interval = adaptive_interval_for_write(started_at.elapsed());
-                if let Err(error) = write_result
-                    .map_err(|_| anyhow::anyhow!(
-                        "timed out writing WebRTC frame after {}ms",
-                        WEBRTC_WRITE_TIMEOUT.as_millis()
-                    ))
-                    .and_then(|result| result)
-                {
-                    warn!("WebRTC frame write failed for {udid}: {error}");
-                    break;
-                }
-                last_sequence = frame.frame_sequence;
-                state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
             }
         }
-    }
 
-    let _ = peer_connection.close().await;
+        clear_webrtc_media_stream(&udid, &cancellation_token);
+        let _ = peer_connection.close().await;
+    }
 }
 
 fn adaptive_interval_for_write(write_elapsed: Duration) -> Duration {
@@ -616,120 +558,12 @@ fn adaptive_interval_for_write(write_elapsed: Duration) -> Duration {
     Duration::from_millis(target_ms)
 }
 
-async fn stream_jpeg_data_channel_frames(
-    state: AppState,
-    udid: String,
-    session: crate::simulators::session::SimulatorSession,
-    first_frame: crate::transport::packet::SharedFrame,
-    channel: Arc<RTCDataChannel>,
-) {
-    let mut rx = session.subscribe();
-    let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
-
-    if let Err(error) = write_jpeg_frame_chunks(&channel, &first_frame).await {
-        warn!("WebRTC JPEG first frame write failed for {udid}: {error}");
-        return;
-    }
-    let mut last_sequence = first_frame.frame_sequence;
-    state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
-
-    loop {
-        if channel.ready_state() != RTCDataChannelState::Open {
-            break;
-        }
-
-        let frame = match rx.recv().await {
-            Ok(frame) => frame,
-            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                state
-                    .metrics
-                    .frames_dropped_server
-                    .fetch_add(skipped, Ordering::Relaxed);
-                continue;
-            }
-            Err(broadcast::error::RecvError::Closed) => break,
-        };
-        let (frame, skipped) = freshest_available_frame(frame, &mut rx);
-        if skipped > 0 {
-            state
-                .metrics
-                .frames_dropped_server
-                .fetch_add(skipped, Ordering::Relaxed);
-        }
-        if frame
-            .codec
-            .as_deref()
-            .is_some_and(|codec| !codec.eq_ignore_ascii_case("jpeg"))
-        {
-            warn!("WebRTC JPEG channel received non-JPEG frame for {udid}");
-            break;
-        }
-
-        let buffered = channel.buffered_amount().await;
-        let max_buffered = (frame.data.len() * JPEG_CHANNEL_BUFFERED_FRAME_MULTIPLIER)
-            .max(JPEG_CHANNEL_MIN_BUFFERED_BYTES);
-        if buffered > max_buffered {
-            state
-                .metrics
-                .frames_dropped_server
-                .fetch_add(1 + skipped, Ordering::Relaxed);
-            continue;
-        }
-
-        if last_sequence != 0 && frame.frame_sequence > last_sequence + 1 {
-            state
-                .metrics
-                .frames_dropped_server
-                .fetch_add(frame.frame_sequence - last_sequence - 1, Ordering::Relaxed);
-        }
-
-        if let Err(error) = write_jpeg_frame_chunks(&channel, &frame).await {
-            warn!("WebRTC JPEG frame write failed for {udid}: {error}");
-            break;
-        }
-        last_sequence = frame.frame_sequence;
-        state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-async fn write_jpeg_frame_chunks(
-    channel: &RTCDataChannel,
-    frame: &crate::transport::packet::FramePacket,
-) -> anyhow::Result<()> {
-    let payload = frame.data.as_ref();
-    let chunk_count = payload.len().div_ceil(JPEG_CHUNK_PAYLOAD_BYTES);
-    if chunk_count == 0 || chunk_count > u16::MAX as usize {
-        anyhow::bail!("invalid JPEG frame chunk count {chunk_count}");
-    }
-
-    for chunk_index in 0..chunk_count {
-        let start = chunk_index * JPEG_CHUNK_PAYLOAD_BYTES;
-        let end = (start + JPEG_CHUNK_PAYLOAD_BYTES).min(payload.len());
-        let chunk_payload = &payload[start..end];
-        let mut message = Vec::with_capacity(JPEG_CHUNK_HEADER_BYTES + chunk_payload.len());
-        message.extend_from_slice(JPEG_CHUNK_MAGIC);
-        message.push(JPEG_CHUNK_VERSION);
-        message.push(if frame.is_keyframe { 1 } else { 0 });
-        message.extend_from_slice(&(chunk_index as u16).to_be_bytes());
-        message.extend_from_slice(&(chunk_count as u16).to_be_bytes());
-        message.extend_from_slice(&0u16.to_be_bytes());
-        message.extend_from_slice(&frame.frame_sequence.to_be_bytes());
-        message.extend_from_slice(&frame.timestamp_us.to_be_bytes());
-        message.extend_from_slice(&frame.width.to_be_bytes());
-        message.extend_from_slice(&frame.height.to_be_bytes());
-        message.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-        message.extend_from_slice(chunk_payload);
-        channel.send(&Bytes::from(message)).await?;
-    }
-    Ok(())
-}
-
 async fn write_frame_sample(
     video_track: &TrackLocalStaticSample,
     frame: &crate::transport::packet::SharedFrame,
     duration: Duration,
 ) -> anyhow::Result<()> {
-    let data = h264_annex_b_sample(frame)?;
+    let data = annex_b_sample(frame)?;
     video_track
         .write_sample(&Sample {
             data: Bytes::from(data),
@@ -738,6 +572,13 @@ async fn write_frame_sample(
         })
         .await?;
     Ok(())
+}
+
+fn annex_b_sample(frame: &crate::transport::packet::FramePacket) -> anyhow::Result<Vec<u8>> {
+    match WebRtcMediaCodec::from_frame(frame)? {
+        WebRtcMediaCodec::H264 => h264_annex_b_sample(frame),
+        WebRtcMediaCodec::Hevc => hevc_annex_b_sample(frame),
+    }
 }
 
 fn h264_annex_b_sample(frame: &crate::transport::packet::FramePacket) -> anyhow::Result<Vec<u8>> {
@@ -761,6 +602,27 @@ fn h264_annex_b_sample(frame: &crate::transport::packet::FramePacket) -> anyhow:
     Ok(sample)
 }
 
+fn hevc_annex_b_sample(frame: &crate::transport::packet::FramePacket) -> anyhow::Result<Vec<u8>> {
+    let data = frame.data.as_ref();
+    let description = frame.description.as_ref().map(bytes::Bytes::as_ref);
+    let mut sample = Vec::with_capacity(data.len() + description.map_or(0, |bytes| bytes.len()));
+
+    if frame.is_keyframe {
+        if let Some(hvcc) = description {
+            append_hvcc_parameter_sets(hvcc, &mut sample)?;
+        }
+    }
+
+    if is_annex_b(data) {
+        sample.extend_from_slice(data);
+        return Ok(sample);
+    }
+
+    let nal_length_size = description.and_then(hvcc_nal_length_size).unwrap_or(4);
+    append_length_prefixed_nalus(data, nal_length_size, &mut sample)?;
+    Ok(sample)
+}
+
 fn is_annex_b(data: &[u8]) -> bool {
     data.starts_with(&[0, 0, 1]) || data.starts_with(ANNEX_B_START_CODE)
 }
@@ -770,6 +632,13 @@ fn avcc_nal_length_size(avcc: &[u8]) -> Option<usize> {
         return None;
     }
     Some(((avcc[4] & 0x03) + 1) as usize)
+}
+
+fn hvcc_nal_length_size(hvcc: &[u8]) -> Option<usize> {
+    if hvcc.len() < 22 {
+        return None;
+    }
+    Some(((hvcc[21] & 0x03) + 1) as usize)
 }
 
 fn append_avcc_parameter_sets(avcc: &[u8], output: &mut Vec<u8>) -> anyhow::Result<()> {
@@ -812,19 +681,57 @@ fn append_avcc_nal(avcc: &[u8], offset: &mut usize, output: &mut Vec<u8>) -> any
     Ok(())
 }
 
+fn append_hvcc_parameter_sets(hvcc: &[u8], output: &mut Vec<u8>) -> anyhow::Result<()> {
+    if hvcc.len() < 23 {
+        return Ok(());
+    }
+
+    let array_count = hvcc[22] as usize;
+    let mut offset = 23usize;
+    for _ in 0..array_count {
+        if offset + 3 > hvcc.len() {
+            anyhow::bail!("truncated HEVC decoder configuration array");
+        }
+        offset += 1;
+        let nal_count = u16::from_be_bytes([hvcc[offset], hvcc[offset + 1]]) as usize;
+        offset += 2;
+        for _ in 0..nal_count {
+            append_hvcc_nal(hvcc, &mut offset, output)?;
+        }
+    }
+    Ok(())
+}
+
+fn append_hvcc_nal(hvcc: &[u8], offset: &mut usize, output: &mut Vec<u8>) -> anyhow::Result<()> {
+    if *offset + 2 > hvcc.len() {
+        anyhow::bail!("truncated HEVC decoder configuration record");
+    }
+    let length = u16::from_be_bytes([hvcc[*offset], hvcc[*offset + 1]]) as usize;
+    *offset += 2;
+    if *offset + length > hvcc.len() {
+        anyhow::bail!("truncated HEVC decoder configuration NAL unit");
+    }
+    if length > 0 {
+        output.extend_from_slice(ANNEX_B_START_CODE);
+        output.extend_from_slice(&hvcc[*offset..*offset + length]);
+    }
+    *offset += length;
+    Ok(())
+}
+
 fn append_length_prefixed_nalus(
     data: &[u8],
     nal_length_size: usize,
     output: &mut Vec<u8>,
 ) -> anyhow::Result<()> {
     if !(1..=4).contains(&nal_length_size) {
-        anyhow::bail!("invalid H.264 NAL length size {nal_length_size}");
+        anyhow::bail!("invalid NAL length size {nal_length_size}");
     }
 
     let mut offset = 0usize;
     while offset < data.len() {
         if offset + nal_length_size > data.len() {
-            anyhow::bail!("truncated H.264 NAL length prefix");
+            anyhow::bail!("truncated NAL length prefix");
         }
 
         let mut length = 0usize;
@@ -836,32 +743,13 @@ fn append_length_prefixed_nalus(
             continue;
         }
         if offset + length > data.len() {
-            anyhow::bail!("truncated H.264 NAL unit");
+            anyhow::bail!("truncated NAL unit");
         }
         output.extend_from_slice(ANNEX_B_START_CODE);
         output.extend_from_slice(&data[offset..offset + length]);
         offset += length;
     }
     Ok(())
-}
-
-fn freshest_available_frame(
-    mut frame: crate::transport::packet::SharedFrame,
-    rx: &mut broadcast::Receiver<crate::transport::packet::SharedFrame>,
-) -> (crate::transport::packet::SharedFrame, u64) {
-    let mut skipped = 0u64;
-    loop {
-        match rx.try_recv() {
-            Ok(next) => {
-                skipped += 1;
-                frame = next;
-            }
-            Err(TryRecvError::Lagged(count)) => {
-                skipped += count;
-            }
-            Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => return (frame, skipped),
-        }
-    }
 }
 
 struct WebRtcSendTiming {
@@ -921,8 +809,9 @@ impl Drop for WebRtcMetricsGuard {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_avcc_parameter_sets, append_length_prefixed_nalus, h264_sdp_fmtp_line, is_annex_b,
-        is_h264_codec, ANNEX_B_START_CODE,
+        append_avcc_parameter_sets, append_hvcc_parameter_sets, append_length_prefixed_nalus,
+        h264_sdp_fmtp_line, hvcc_nal_length_size, is_annex_b, is_h264_codec, is_hevc_codec,
+        ANNEX_B_START_CODE,
     };
 
     #[test]
@@ -932,6 +821,15 @@ mod tests {
         assert!(is_h264_codec("avc3.640028"));
         assert!(!is_h264_codec("hvc1.1.6.L123.B0"));
         assert!(!is_h264_codec(""));
+    }
+
+    #[test]
+    fn accepts_browser_hevc_codec_strings() {
+        assert!(is_hevc_codec("hevc"));
+        assert!(is_hevc_codec("hvc1.1.6.L123.B0"));
+        assert!(is_hevc_codec("hev1.1.6.L123.B0"));
+        assert!(!is_hevc_codec("avc1.42e01f"));
+        assert!(!is_hevc_codec(""));
     }
 
     #[test]
@@ -979,5 +877,32 @@ mod tests {
             .concat()
         );
         assert!(is_annex_b(&output));
+    }
+
+    #[test]
+    fn converts_hvcc_parameter_sets_to_annex_b() {
+        let mut hvcc = vec![0; 23];
+        hvcc[21] = 0xff;
+        hvcc[22] = 3;
+        hvcc.extend_from_slice(&[0xa0, 0, 1, 0, 2, 0x40, 0x01]);
+        hvcc.extend_from_slice(&[0xa1, 0, 1, 0, 2, 0x42, 0x01]);
+        hvcc.extend_from_slice(&[0xa2, 0, 1, 0, 2, 0x44, 0x01]);
+        let mut output = Vec::new();
+
+        append_hvcc_parameter_sets(&hvcc, &mut output).unwrap();
+
+        assert_eq!(
+            output,
+            [
+                ANNEX_B_START_CODE,
+                &[0x40, 0x01],
+                ANNEX_B_START_CODE,
+                &[0x42, 0x01],
+                ANNEX_B_START_CODE,
+                &[0x44, 0x01],
+            ]
+            .concat()
+        );
+        assert_eq!(hvcc_nal_length_size(&hvcc), Some(4));
     }
 }

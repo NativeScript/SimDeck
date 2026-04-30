@@ -476,7 +476,6 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "wtPort": state.config.wt_port,
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64(),
         "videoCodec": state.config.video_codec,
-        "jpegQuality": state.config.jpeg_quality,
         "webTransport": {
             "urlTemplate": auth::tokenized_webtransport_template(&state.config),
             "certificateHash": {

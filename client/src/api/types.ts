@@ -21,6 +21,11 @@ export interface SimulatorsResponse {
   simulators: SimulatorMetadata[];
 }
 
+export interface HealthResponse {
+  ok: boolean;
+  videoCodec?: string;
+}
+
 export interface SimulatorResponse {
   simulator: SimulatorMetadata;
 }

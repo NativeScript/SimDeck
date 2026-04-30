@@ -8,11 +8,9 @@ import type {
 
 const HAVE_CURRENT_DATA = 2;
 const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
-const WEBRTC_JPEG_CHANNEL_LABEL = "simdeck-video-jpeg";
-const JPEG_CHUNK_HEADER_BYTES = 40;
-const JPEG_CHUNK_MAGIC = "SDJF";
 
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
+let activeStreamClient: StreamWorkerClient | null = null;
 
 export type StreamBackend = "webtransport" | "webrtc";
 
@@ -35,13 +33,18 @@ export function buildStreamTarget(udid: string): StreamConnectTarget {
   return { udid };
 }
 
-export function initialStreamBackend(): StreamBackend {
+export function initialStreamBackend(
+  videoCodec?: string | null,
+): StreamBackend {
   const mode = streamTransportMode();
-  if (mode.startsWith("webrtc")) {
+  if (mode === "webrtc") {
     return "webrtc";
   }
   if (mode === "webtransport") {
     return "webtransport";
+  }
+  if (videoCodec?.toLowerCase() === "h264-software" && canUseWebRtc()) {
+    return "webrtc";
   }
   if (canUseWebTransport()) {
     return "webtransport";
@@ -51,6 +54,11 @@ export function initialStreamBackend(): StreamBackend {
 
 export function streamModeIsForcedWebTransport(): boolean {
   return streamTransportMode() === "webtransport";
+}
+
+export function streamModeIsForced(): boolean {
+  const mode = streamTransportMode();
+  return mode === "webtransport" || mode === "webrtc";
 }
 
 export function canUseWebRtc(): boolean {
@@ -109,9 +117,9 @@ class WebRtcStreamClient implements StreamClientBackend {
   private animationFrame = 0;
   private canvas: HTMLCanvasElement | null = null;
   private connectGeneration = 0;
-  private context: CanvasRenderingContext2D | null = null;
   private controlChannel: RTCDataChannel | null = null;
   private diagnostics = createWebRtcDiagnostics();
+  private lastVideoFrameAt = 0;
   private peerConnection: RTCPeerConnection | null = null;
   private reconnectTimeout = 0;
   private shouldReconnect = false;
@@ -125,27 +133,20 @@ class WebRtcStreamClient implements StreamClientBackend {
 
   attachCanvas(canvasElement: HTMLCanvasElement) {
     this.canvas = canvasElement;
-    this.context = canvasElement.getContext("2d", {
-      alpha: false,
-      desynchronized: true,
-    } as CanvasRenderingContext2DSettings & { desynchronized: boolean });
-    if (!this.context) {
-      throw new Error("Unable to create a 2D canvas renderer for WebRTC.");
-    }
   }
 
   clear() {
-    if (!this.canvas || !this.context) {
-      return;
-    }
-    this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.canvas
+      ?.getContext("2d")
+      ?.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
   async connect(target: StreamConnectTarget) {
     this.disconnect();
-    if (!this.canvas || !this.context) {
+    if (!this.canvas) {
       return;
     }
+    const canvasElement = this.canvas;
     const generation = ++this.connectGeneration;
     this.shouldReconnect = true;
     this.diagnostics = createWebRtcDiagnostics();
@@ -191,10 +192,15 @@ class WebRtcStreamClient implements StreamClientBackend {
         const stream = event.streams[0] ?? new MediaStream([event.track]);
         const video = document.createElement("video");
         video.autoplay = true;
+        video.className = "stream-video";
+        video.disablePictureInPicture = true;
         video.muted = true;
         video.playsInline = true;
         video.preload = "auto";
+        (video as HTMLVideoElement & { latencyHint?: string }).latencyHint =
+          "interactive";
         video.srcObject = stream;
+        canvasElement.after(video);
         this.video = video;
         video.onloadedmetadata = () => {
           if (generation !== this.connectGeneration) {
@@ -300,6 +306,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.video?.pause();
     if (this.video) {
       this.video.srcObject = null;
+      this.video.remove();
     }
     this.video = null;
     this.controlChannel?.close();
@@ -489,7 +496,7 @@ class WebRtcStreamClient implements StreamClientBackend {
 
   private drawVideoFrame = () => {
     this.videoFrameCallback = 0;
-    if (!this.canvas || !this.context || !this.video) {
+    if (!this.canvas || !this.video) {
       return;
     }
     if (
@@ -498,24 +505,17 @@ class WebRtcStreamClient implements StreamClientBackend {
       this.video.videoHeight > 0
     ) {
       this.syncCanvasSize(this.video.videoWidth, this.video.videoHeight);
-      try {
-        this.context.drawImage(
-          this.video,
-          0,
-          0,
-          this.canvas.width,
-          this.canvas.height,
-        );
-      } catch {
-        this.scheduleVideoFrame();
-        return;
-      }
+      const now = performance.now();
       this.stats.decodedFrames += 1;
       this.stats.renderedFrames += 1;
       this.stats.receivedPackets += 1;
       this.stats.width = this.canvas.width;
       this.stats.height = this.canvas.height;
       this.stats.codec = "webrtc";
+      if (this.lastVideoFrameAt > 0) {
+        this.stats.latestFrameGapMs = now - this.lastVideoFrameAt;
+      }
+      this.lastVideoFrameAt = now;
       this.onMessage({ type: "stats", stats: { ...this.stats } });
     }
     this.scheduleVideoFrame();
@@ -565,464 +565,16 @@ class WebRtcStreamClient implements StreamClientBackend {
   }
 }
 
-class WebRtcJpegDataStreamClient implements StreamClientBackend {
-  private canvas: HTMLCanvasElement | null = null;
-  private connectGeneration = 0;
-  private context: CanvasRenderingContext2D | null = null;
-  private controlChannel: RTCDataChannel | null = null;
-  private frameAssembly: JpegFrameAssembly | null = null;
-  private hasReportedStreaming = false;
-  private latestAcceptedSequence = 0;
-  private lastConfigHeight = 0;
-  private lastConfigWidth = 0;
-  private lastRenderAt = 0;
-  private lastStatsReportAt = 0;
-  private peerConnection: RTCPeerConnection | null = null;
-  private rendering = false;
-  private stats: StreamStats = createEmptyStreamStats();
-  private videoChannel: RTCDataChannel | null = null;
-
-  constructor(
-    private readonly onMessage: (message: WorkerToMainMessage) => void,
-  ) {}
-
-  attachCanvas(canvasElement: HTMLCanvasElement) {
-    this.canvas = canvasElement;
-    this.context = canvasElement.getContext("2d", {
-      alpha: false,
-      desynchronized: true,
-    } as CanvasRenderingContext2DSettings & { desynchronized: boolean });
-    if (!this.context) {
-      throw new Error("Unable to create a 2D canvas renderer for WebRTC JPEG.");
-    }
-  }
-
-  clear() {
-    if (!this.canvas || !this.context) {
-      return;
-    }
-    this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
-  }
-
-  async connect(target: StreamConnectTarget) {
-    this.disconnect();
-    if (!this.canvas || !this.context) {
-      return;
-    }
-    const generation = ++this.connectGeneration;
-    this.frameAssembly = null;
-    this.hasReportedStreaming = false;
-    this.latestAcceptedSequence = 0;
-    this.lastConfigHeight = 0;
-    this.lastConfigWidth = 0;
-    this.lastRenderAt = 0;
-    this.lastStatsReportAt = 0;
-    this.stats = createEmptyStreamStats();
-    this.onMessage({
-      type: "status",
-      status: { detail: "Creating WebRTC data channel", state: "connecting" },
-    });
-
-    const peerConnection = new RTCPeerConnection({
-      iceServers: iceServers(),
-    });
-    this.peerConnection = peerConnection;
-
-    const controlChannel = peerConnection.createDataChannel(
-      WEBRTC_CONTROL_CHANNEL_LABEL,
-      { ordered: true },
-    );
-    this.controlChannel = controlChannel;
-    activeWebRtcControlChannel = controlChannel;
-    controlChannel.addEventListener("close", () => {
-      if (activeWebRtcControlChannel === controlChannel) {
-        activeWebRtcControlChannel = null;
-      }
-    });
-
-    const videoChannel = peerConnection.createDataChannel(
-      WEBRTC_JPEG_CHANNEL_LABEL,
-      {
-        maxRetransmits: 0,
-        ordered: false,
-      },
-    );
-    videoChannel.binaryType = "arraybuffer";
-    this.videoChannel = videoChannel;
-    videoChannel.addEventListener("open", () => {
-      if (generation !== this.connectGeneration) {
-        return;
-      }
-      this.onMessage({
-        type: "status",
-        status: {
-          detail: "WebRTC JPEG channel connected",
-          state: "connecting",
-        },
-      });
-    });
-    videoChannel.addEventListener("message", (event) => {
-      if (generation !== this.connectGeneration) {
-        return;
-      }
-      const bytes = dataChannelBytes(event.data);
-      if (!bytes) {
-        return;
-      }
-      void this.consumeJpegChunk(bytes, generation);
-    });
-    videoChannel.addEventListener("close", () => {
-      if (generation !== this.connectGeneration) {
-        return;
-      }
-      this.onMessage({
-        type: "status",
-        status: { detail: "WebRTC JPEG channel closed", state: "idle" },
-      });
-    });
-
-    peerConnection.onconnectionstatechange = () => {
-      if (peerConnection.connectionState === "failed") {
-        this.onMessage({
-          type: "status",
-          status: {
-            error: "WebRTC data-channel connection failed.",
-            state: "error",
-          },
-        });
-      }
-    };
-
-    const offer = await peerConnection.createOffer();
-    if (generation !== this.connectGeneration) {
-      return;
-    }
-    await peerConnection.setLocalDescription(offer);
-    await waitForIceGathering(peerConnection);
-    if (generation !== this.connectGeneration) {
-      return;
-    }
-    const localDescription = peerConnection.localDescription;
-    if (!localDescription) {
-      throw new Error("WebRTC data-channel offer was not created.");
-    }
-
-    const response = await fetch(
-      `/api/simulators/${encodeURIComponent(target.udid)}/webrtc/offer`,
-      {
-        body: JSON.stringify({
-          sdp: localDescription.sdp,
-          transport: "data-channel",
-          type: localDescription.type,
-        }),
-        headers: apiHeaders(),
-        method: "POST",
-      },
-    );
-    if (!response.ok) {
-      throw new Error(await response.text());
-    }
-    const answer = (await response.json()) as RTCSessionDescriptionInit;
-    if (generation !== this.connectGeneration) {
-      return;
-    }
-    await peerConnection.setRemoteDescription(answer);
-  }
-
-  disconnect() {
-    this.connectGeneration += 1;
-    this.frameAssembly = null;
-    this.hasReportedStreaming = false;
-    this.controlChannel?.close();
-    if (activeWebRtcControlChannel === this.controlChannel) {
-      activeWebRtcControlChannel = null;
-    }
-    this.controlChannel = null;
-    this.videoChannel?.close();
-    this.videoChannel = null;
-    this.peerConnection?.close();
-    this.peerConnection = null;
-    this.onMessage({ type: "status", status: { state: "idle" } });
-  }
-
-  destroy() {
-    this.disconnect();
-  }
-
-  private async consumeJpegChunk(
-    bytes: Uint8Array<ArrayBufferLike>,
-    generation: number,
-  ) {
-    const chunk = parseJpegChunk(bytes);
-    if (!chunk || chunk.frameSequence < this.latestAcceptedSequence) {
-      return;
-    }
-    if (
-      !this.frameAssembly ||
-      this.frameAssembly.frameSequence !== chunk.frameSequence
-    ) {
-      this.frameAssembly = {
-        chunkCount: chunk.chunkCount,
-        chunks: new Array<Uint8Array<ArrayBufferLike> | null>(
-          chunk.chunkCount,
-        ).fill(null),
-        frameSequence: chunk.frameSequence,
-        height: chunk.height,
-        received: 0,
-        timestampUs: chunk.timestampUs,
-        totalLength: chunk.totalLength,
-        width: chunk.width,
-      };
-    }
-    const assembly = this.frameAssembly;
-    if (
-      chunk.chunkIndex >= assembly.chunkCount ||
-      chunk.chunkCount !== assembly.chunkCount ||
-      chunk.totalLength !== assembly.totalLength
-    ) {
-      return;
-    }
-    if (!assembly.chunks[chunk.chunkIndex]) {
-      assembly.chunks[chunk.chunkIndex] = chunk.payload;
-      assembly.received += 1;
-    }
-    if (assembly.received !== assembly.chunkCount) {
-      return;
-    }
-
-    const frame = new Uint8Array(assembly.totalLength);
-    let offset = 0;
-    for (const part of assembly.chunks) {
-      if (!part) {
-        return;
-      }
-      frame.set(part, offset);
-      offset += part.byteLength;
-    }
-    this.frameAssembly = null;
-    this.latestAcceptedSequence = assembly.frameSequence;
-    await this.renderJpegFrame(frame, assembly, generation);
-  }
-
-  private async renderJpegFrame(
-    payload: Uint8Array<ArrayBufferLike>,
-    metadata: JpegFrameAssembly,
-    generation: number,
-  ) {
-    if (!this.canvas || !this.context || this.rendering) {
-      this.stats.droppedFrames += 1;
-      return;
-    }
-    this.rendering = true;
-    const startedAt = performance.now();
-    try {
-      const decoded = await decodeJpegFrame(payload);
-      if (generation !== this.connectGeneration) {
-        decoded.close();
-        return;
-      }
-      this.syncCanvasSize(metadata.width, metadata.height);
-      this.context.drawImage(
-        decoded.image,
-        0,
-        0,
-        this.canvas.width,
-        this.canvas.height,
-      );
-      decoded.close();
-      const now = performance.now();
-      const renderMs = performance.now() - startedAt;
-      this.stats.latestFrameGapMs =
-        this.lastRenderAt > 0 ? now - this.lastRenderAt : 0;
-      this.lastRenderAt = now;
-      this.stats.averageRenderMs =
-        this.stats.renderedFrames === 0
-          ? renderMs
-          : this.stats.averageRenderMs * 0.85 + renderMs * 0.15;
-      this.stats.codec = "jpeg/webrtc-data";
-      this.stats.decodeQueueSize = this.videoChannel?.bufferedAmount ?? 0;
-      this.stats.decodedFrames += 1;
-      this.stats.frameSequence = metadata.frameSequence;
-      this.stats.height = metadata.height;
-      this.stats.latestRenderMs = renderMs;
-      this.stats.maxRenderMs = Math.max(this.stats.maxRenderMs, renderMs);
-      this.stats.receivedPackets += 1;
-      this.stats.renderedFrames += 1;
-      this.stats.waitingForKeyFrame = false;
-      this.stats.width = metadata.width;
-      if (
-        metadata.width !== this.lastConfigWidth ||
-        metadata.height !== this.lastConfigHeight
-      ) {
-        this.lastConfigWidth = metadata.width;
-        this.lastConfigHeight = metadata.height;
-        this.onMessage({
-          type: "video-config",
-          size: { height: metadata.height, width: metadata.width },
-        });
-      }
-      if (!this.hasReportedStreaming) {
-        this.hasReportedStreaming = true;
-        this.onMessage({
-          type: "status",
-          status: {
-            detail: "WebRTC JPEG stream connected",
-            state: "streaming",
-          },
-        });
-      }
-      if (now - this.lastStatsReportAt >= 250) {
-        this.lastStatsReportAt = now;
-        this.onMessage({ type: "stats", stats: { ...this.stats } });
-      }
-    } finally {
-      this.rendering = false;
-    }
-  }
-
-  private syncCanvasSize(width: number, height: number) {
-    if (!this.canvas) {
-      return;
-    }
-    const nextWidth = Math.max(1, Math.round(width));
-    const nextHeight = Math.max(1, Math.round(height));
-    if (this.canvas.width !== nextWidth) {
-      this.canvas.width = nextWidth;
-    }
-    if (this.canvas.height !== nextHeight) {
-      this.canvas.height = nextHeight;
-    }
-  }
-}
-
-interface JpegChunk {
-  chunkCount: number;
-  chunkIndex: number;
-  frameSequence: number;
-  height: number;
-  payload: Uint8Array<ArrayBufferLike>;
-  timestampUs: number;
-  totalLength: number;
-  width: number;
-}
-
-interface JpegFrameAssembly {
-  chunkCount: number;
-  chunks: Array<Uint8Array<ArrayBufferLike> | null>;
-  frameSequence: number;
-  height: number;
-  received: number;
-  timestampUs: number;
-  totalLength: number;
-  width: number;
-}
-
-interface DecodedJpegFrame {
-  image: CanvasImageSource;
-  close(): void;
-}
-
-interface ImageDecoderConstructor {
-  new (init: { data: BufferSource; preferAnimation?: boolean; type: string }): {
-    close(): void;
-    decode(options?: { frameIndex?: number }): Promise<{
-      image: { close(): void };
-    }>;
-  };
-}
-
-async function decodeJpegFrame(
-  payload: Uint8Array<ArrayBufferLike>,
-): Promise<DecodedJpegFrame> {
-  const imageDecoder = (
-    globalThis as typeof globalThis & {
-      ImageDecoder?: ImageDecoderConstructor;
-    }
-  ).ImageDecoder;
-  if (imageDecoder) {
-    const decoder = new imageDecoder({
-      data: payload as BufferSource,
-      preferAnimation: false,
-      type: "image/jpeg",
-    });
-    try {
-      const result = await decoder.decode({ frameIndex: 0 });
-      return {
-        image: result.image as unknown as CanvasImageSource,
-        close() {
-          result.image.close();
-          decoder.close();
-        },
-      };
-    } catch (error) {
-      decoder.close();
-      throw error;
-    }
-  }
-
-  const blob = new Blob([payload as unknown as BlobPart], {
-    type: "image/jpeg",
-  });
-  const image = await createImageBitmap(blob);
-  return {
-    image,
-    close() {
-      image.close();
-    },
-  };
-}
-
-function parseJpegChunk(bytes: Uint8Array<ArrayBufferLike>): JpegChunk | null {
-  if (bytes.byteLength < JPEG_CHUNK_HEADER_BYTES) {
-    return null;
-  }
-  const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
-  if (magic !== JPEG_CHUNK_MAGIC || bytes[4] !== 1) {
-    return null;
-  }
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const chunkIndex = view.getUint16(6, false);
-  const chunkCount = view.getUint16(8, false);
-  const frameSequence = Number(view.getBigUint64(12, false));
-  const timestampUs = Number(view.getBigUint64(20, false));
-  const width = view.getUint32(28, false);
-  const height = view.getUint32(32, false);
-  const totalLength = view.getUint32(36, false);
-  if (chunkCount === 0 || chunkIndex >= chunkCount || totalLength === 0) {
-    return null;
-  }
-  return {
-    chunkCount,
-    chunkIndex,
-    frameSequence,
-    height,
-    payload: bytes.subarray(JPEG_CHUNK_HEADER_BYTES),
-    timestampUs,
-    totalLength,
-    width,
-  };
-}
-
-function dataChannelBytes(value: unknown): Uint8Array<ArrayBufferLike> | null {
-  if (value instanceof ArrayBuffer) {
-    return new Uint8Array(value);
-  }
-  if (value instanceof Blob) {
-    return null;
-  }
-  if (!ArrayBuffer.isView(value)) {
-    return null;
-  }
-  const view = value as ArrayBufferView;
-  return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
-}
-
 function configureLowLatencyReceiver(receiver: RTCRtpReceiver) {
   const lowLatencyReceiver = receiver as RTCRtpReceiver & {
     jitterBufferTarget?: number;
+    playoutDelayHint?: number;
   };
   if ("jitterBufferTarget" in lowLatencyReceiver) {
     lowLatencyReceiver.jitterBufferTarget = 0.001;
+  }
+  if ("playoutDelayHint" in lowLatencyReceiver) {
+    lowLatencyReceiver.playoutDelayHint = 0.001;
   }
 }
 
@@ -1155,6 +707,10 @@ export class StreamWorkerClient {
     private readonly backendMode: StreamBackend,
   ) {
     this.onMessage = onMessage;
+    if (activeStreamClient && activeStreamClient !== this) {
+      activeStreamClient.destroy();
+    }
+    activeStreamClient = this;
   }
 
   attachCanvas(canvasElement: HTMLCanvasElement) {
@@ -1207,14 +763,13 @@ export class StreamWorkerClient {
     this.disposed = true;
     this.backend?.destroy();
     this.backend = null;
+    if (activeStreamClient === this) {
+      activeStreamClient = null;
+    }
   }
 
   private createBackend(canvasElement: HTMLCanvasElement): StreamClientBackend {
     const mode = streamTransportMode();
-    if (mode === "webrtc-data") {
-      void canvasElement;
-      return new WebRtcJpegDataStreamClient(this.onMessage);
-    }
     if (this.backendMode === "webrtc" || mode === "webrtc") {
       return new WebRtcStreamClient(this.onMessage);
     }

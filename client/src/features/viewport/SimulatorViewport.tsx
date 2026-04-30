@@ -17,6 +17,8 @@ interface SimulatorViewportProps {
   accessibilityRoots: AccessibilityNode[];
   accessibilitySelectedId: string;
   chromeProfile: ChromeProfile | null;
+  chromeLoaded: boolean;
+  chromeRequired: boolean;
   chromeScreenStyle: CSSProperties | null;
   chromeUrl: string;
   deviceFrameStyle: CSSProperties;
@@ -58,7 +60,6 @@ interface SimulatorViewportProps {
   viewMode: ViewMode;
   zoomDockRef: Ref<HTMLDivElement | null>;
   zoomAnimating: boolean;
-  viewportReady: boolean;
 }
 
 export function SimulatorViewport({
@@ -69,6 +70,8 @@ export function SimulatorViewport({
   accessibilitySelectedId,
   debugPanel,
   chromeProfile,
+  chromeLoaded,
+  chromeRequired,
   chromeScreenStyle,
   chromeUrl,
   deviceFrameStyle,
@@ -110,13 +113,22 @@ export function SimulatorViewport({
   viewMode,
   zoomDockRef,
   zoomAnimating,
-  viewportReady,
 }: SimulatorViewportProps) {
   const showDeviceLoading = Boolean(
-    selectedSimulator?.isBooted && !viewportReady && !isStreamError,
+    selectedSimulator?.isBooted &&
+    !hasFrame &&
+    !isStreamError &&
+    chromeRequired &&
+    !chromeLoaded,
   );
   const hideDeviceWhileLoading = Boolean(
-    selectedSimulator?.isBooted && !viewportReady,
+    selectedSimulator?.isBooted && chromeRequired && !chromeLoaded,
+  );
+  const showScreenLoading = Boolean(
+    selectedSimulator?.isBooted &&
+    !hasFrame &&
+    !isStreamError &&
+    (!chromeRequired || chromeLoaded),
   );
 
   return (
@@ -156,6 +168,7 @@ export function SimulatorViewport({
                   chromeUrl={chromeUrl}
                   hasFrame={hasFrame}
                   isBooted={selectedSimulator.isBooted}
+                  isLoadingStream={showScreenLoading}
                   isStreamError={isStreamError}
                   onChromeLoad={onChromeLoad}
                   onPanPointerCancel={onPanPointerUp}
@@ -189,9 +202,12 @@ export function SimulatorViewport({
           </div>
         )}
         {showDeviceLoading ? (
-          <div className="canvas-loading" role="status">
+          <div
+            aria-label="Loading simulator"
+            className="canvas-loading"
+            role="status"
+          >
             <div className="loading-spinner" />
-            <p>Loading simulator…</p>
           </div>
         ) : null}
         {debugPanel ? <div className="debug-overlay">{debugPanel}</div> : null}

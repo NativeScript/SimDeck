@@ -11,7 +11,6 @@ pub struct Config {
     pub wt_port: u16,
     pub client_root: PathBuf,
     pub video_codec: String,
-    pub jpeg_quality: f64,
 }
 
 impl Config {
@@ -22,7 +21,6 @@ impl Config {
         bind_ip: IpAddr,
         advertise_host: Option<String>,
         video_codec: String,
-        jpeg_quality: f64,
         access_token: Option<String>,
         pairing_code: Option<String>,
     ) -> Self {
@@ -41,7 +39,6 @@ impl Config {
             wt_port,
             client_root,
             video_codec,
-            jpeg_quality,
         }
     }
 

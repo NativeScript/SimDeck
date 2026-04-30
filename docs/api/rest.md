@@ -24,7 +24,6 @@ Returns server health, the WebTransport URL template, and the certificate hash t
   "wtPort": 4311,
   "timestamp": 1714094761.234,
   "videoCodec": "h264-software",
-  "jpegQuality": 1.0,
   "webTransport": {
     "urlTemplate": "https://127.0.0.1:4311/wt/simulators/{udid}?simdeckToken=...",
     "certificateHash": {
@@ -135,7 +134,7 @@ Forces the encoder to emit a fresh keyframe. Useful after a discontinuity or whe
 
 Experimental WebRTC transport for runner-hosted previews. The browser sends an
 SDP offer and the server responds with an SDP answer for a receive-only H.264
-video track:
+or HEVC video track:
 
 ```json
 {
@@ -151,11 +150,9 @@ video track:
 }
 ```
 
-By default this endpoint creates an H.264 WebRTC media track, so the simulator
-stream must be H.264. For GitHub Actions provider runs that need full
-resolution without hardware H.264/HEVC, post the offer with
-`"transport": "data-channel"`, start the runner host with `--video-codec jpeg`,
-and open the browser UI with `?transport=webrtc-data`.
+The endpoint accepts the active simulator stream codec when it is `h264`,
+`h264-software`, or `hevc`. Software H.264 is selected automatically by the
+bundled browser client because Chromium can use native WebRTC playout.
 
 ### `POST /api/simulators/{udid}/open-url`
 

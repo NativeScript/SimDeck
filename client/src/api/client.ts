@@ -1,4 +1,5 @@
 import { API_ROOT } from "../shared/constants";
+import type { HealthResponse } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -64,4 +65,8 @@ export async function pairBrowser(code: string): Promise<void> {
     body: JSON.stringify({ code }),
     method: "POST",
   });
+}
+
+export async function fetchHealth(): Promise<HealthResponse> {
+  return apiRequest<HealthResponse>("/api/health");
 }

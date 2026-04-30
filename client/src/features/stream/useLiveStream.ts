@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { apiHeaders } from "../../api/client";
+import { apiHeaders, fetchHealth } from "../../api/client";
 import type { SimulatorMetadata } from "../../api/types";
 import type { Size } from "../viewport/types";
 import { createEmptyStreamStats } from "./stats";
@@ -8,6 +8,7 @@ import {
   buildStreamTarget,
   canUseWebRtc,
   initialStreamBackend,
+  streamModeIsForced,
   streamModeIsForcedWebTransport,
   StreamWorkerClient,
   type StreamBackend,
@@ -40,6 +41,10 @@ interface UseLiveStreamResult {
   streamCanvasKey: string;
 }
 
+function streamBackendCanResolveSynchronously(): boolean {
+  return streamModeIsForced();
+}
+
 function createDefaultRuntimeInfo(
   backend: StreamBackend = initialStreamBackend(),
 ): StreamRuntimeInfo {
@@ -48,8 +53,7 @@ function createDefaultRuntimeInfo(
     gpuRenderer: "",
     gpuVendor: "",
     renderBackend: "Unavailable",
-    streamBackend:
-      backend === "webrtc" ? "Browser WebRTC" : "Worker / WebTransport",
+    streamBackend: formatStreamBackendLabel(backend),
     webCodecs: false,
     webGL2: false,
     webTransport: false,
@@ -77,7 +81,7 @@ function detectRuntimeInfo(backend: StreamBackend): StreamRuntimeInfo {
 
     runtimeInfo.webGL2 = true;
     runtimeInfo.renderBackend =
-      backend === "webrtc" ? "Canvas 2D / Video" : "WebGL2";
+      backend === "webtransport" ? "WebGL2" : "Canvas 2D / Video";
 
     const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
     if (debugInfo) {
@@ -128,6 +132,7 @@ export function useLiveStream({
   const pageFpsRef = useRef(0);
   const transportBackendRef = useRef<StreamBackend>(initialStreamBackend());
   const fallbackTriedRef = useRef(false);
+  const serverVideoCodecRef = useRef<string | null>(null);
   const [deviceNaturalSize, setDeviceNaturalSize] = useState<Size | null>(null);
   const [stats, setStats] = useState<StreamStats>(createEmptyStreamStats);
   const [status, setStatus] = useState<StreamStatus>({ state: "idle" });
@@ -135,6 +140,9 @@ export function useLiveStream({
   const [fps, setFps] = useState(0);
   const [transportBackend, setTransportBackend] = useState<StreamBackend>(
     () => transportBackendRef.current,
+  );
+  const [streamBackendResolved, setStreamBackendResolved] = useState(
+    streamBackendCanResolveSynchronously,
   );
   const [streamCanvasRevision, setStreamCanvasRevision] = useState(0);
   const [runtimeInfo, setRuntimeInfo] = useState<StreamRuntimeInfo>(() =>
@@ -176,6 +184,7 @@ export function useLiveStream({
 
   useEffect(() => {
     if (
+      !streamBackendResolved ||
       !canvasElement ||
       workerClientRef.current ||
       canvasElement.dataset.streamBackend !== transportBackend
@@ -250,11 +259,20 @@ export function useLiveStream({
       return;
     }
 
+    const destroyOnPageHide = () => {
+      workerClient.destroy();
+      if (workerClientRef.current === workerClient) {
+        workerClientRef.current = null;
+      }
+    };
+    window.addEventListener("pagehide", destroyOnPageHide);
+
     return () => {
+      window.removeEventListener("pagehide", destroyOnPageHide);
       workerClient.destroy();
       workerClientRef.current = null;
     };
-  }, [canvasElement, transportBackend]);
+  }, [canvasElement, streamBackendResolved, transportBackend]);
 
   useEffect(() => {
     latestDecodedFramesRef.current = stats.decodedFrames;
@@ -295,15 +313,66 @@ export function useLiveStream({
 
   useEffect(() => {
     fallbackTriedRef.current = false;
-    const nextBackend = initialStreamBackend();
+    setStreamBackendResolved(streamBackendCanResolveSynchronously());
+    const nextBackend = initialStreamBackend(serverVideoCodecRef.current);
     transportBackendRef.current = nextBackend;
     setTransportBackend(nextBackend);
     setStreamCanvasRevision((current) => current + 1);
   }, [simulator?.udid]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function resolveStreamBackend() {
+      if (!simulator?.udid) {
+        return;
+      }
+      if (streamModeIsForcedWebTransport()) {
+        serverVideoCodecRef.current = null;
+        setStreamBackendResolved(true);
+        return;
+      }
+      try {
+        const health = await fetchHealth();
+        if (cancelled) {
+          return;
+        }
+        serverVideoCodecRef.current = health.videoCodec ?? null;
+        const nextBackend = initialStreamBackend(health.videoCodec);
+        if (nextBackend !== transportBackendRef.current) {
+          fallbackTriedRef.current = false;
+          transportBackendRef.current = nextBackend;
+          setTransportBackend(nextBackend);
+          setStreamCanvasRevision((current) => current + 1);
+          setStats(createEmptyStreamStats());
+          setDeviceNaturalSize(null);
+          if (simulator.isBooted) {
+            setStatus({
+              detail:
+                nextBackend === "webrtc"
+                  ? "Opening WebRTC media stream..."
+                  : "Opening live stream...",
+              state: "connecting",
+            });
+          }
+          setError("");
+        }
+        setStreamBackendResolved(true);
+      } catch {
+        // The worker still has its own health fetch for WebTransport details.
+        setStreamBackendResolved(true);
+      }
+    }
+
+    void resolveStreamBackend();
+    return () => {
+      cancelled = true;
+    };
+  }, [simulator?.isBooted, simulator?.udid]);
+
+  useEffect(() => {
     const workerClient = workerClientRef.current;
-    if (!workerClient) {
+    if (!streamBackendResolved || !workerClient) {
       return;
     }
 
@@ -323,7 +392,13 @@ export function useLiveStream({
     return () => {
       workerClient.disconnect();
     };
-  }, [canvasElement, simulator?.isBooted, simulator?.udid]);
+  }, [
+    canvasElement,
+    simulator?.isBooted,
+    simulator?.udid,
+    streamBackendResolved,
+    transportBackend,
+  ]);
 
   useEffect(() => {
     if (!simulator?.udid) {
@@ -377,6 +452,10 @@ export function useLiveStream({
     streamBackend: transportBackend,
     streamCanvasKey: `${transportBackend}-${streamCanvasRevision}`,
   };
+}
+
+function formatStreamBackendLabel(backend: StreamBackend): string {
+  return backend === "webrtc" ? "Browser WebRTC" : "Worker / WebTransport";
 }
 
 function shouldFallbackToWebRtc(

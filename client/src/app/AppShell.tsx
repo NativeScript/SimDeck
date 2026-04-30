@@ -38,10 +38,7 @@ import { useKeyboardInput } from "../features/input/useKeyboardInput";
 import { usePointerInput } from "../features/input/usePointerInput";
 import { simulatorRuntimeLabel } from "../features/simulators/simulatorDisplay";
 import { useSimulatorList } from "../features/simulators/useSimulatorList";
-import {
-  isWebRtcStreamMode,
-  sendWebRtcControlMessage,
-} from "../features/stream/streamWorkerClient";
+import { sendWebRtcControlMessage } from "../features/stream/streamWorkerClient";
 import { useLiveStream } from "../features/stream/useLiveStream";
 import { DebugPanel } from "../features/toolbar/DebugPanel";
 import { Toolbar } from "../features/toolbar/Toolbar";
@@ -211,6 +208,7 @@ export function AppShell() {
   const [chromeProfile, setChromeProfile] = useState<ChromeProfile | null>(
     null,
   );
+  const [chromeProfileReady, setChromeProfileReady] = useState(false);
   const [chromeLoaded, setChromeLoaded] = useState(false);
   const [accessibilityRoots, setAccessibilityRoots] = useState<
     AccessibilityNode[]
@@ -377,8 +375,10 @@ export function AppShell() {
   const chromeUrl = selectedSimulator
     ? buildChromeUrl(selectedSimulator.udid, streamStamp)
     : "";
-  const chromeRequired = Boolean(viewportChromeProfile && chromeUrl);
-  const viewportReady = hasFrame && (!chromeRequired || chromeLoaded);
+  const chromeRequired = Boolean(
+    (shouldRenderChrome && !chromeProfileReady) ||
+    (viewportChromeProfile && chromeUrl),
+  );
 
   useEffect(() => {
     writeStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY, hierarchyVisible);
@@ -466,6 +466,7 @@ export function AppShell() {
       : DEFAULT_VIEWPORT_STATE;
     setStreamStamp(Date.now());
     setChromeProfile(null);
+    setChromeProfileReady(false);
     setViewMode(nextViewportState.viewMode);
     setZoom(nextViewportState.zoom);
     setPan(nextViewportState.pan);
@@ -638,16 +639,19 @@ export function AppShell() {
     async function loadChromeProfile() {
       if (!selectedSimulator) {
         setChromeProfile(null);
+        setChromeProfileReady(true);
         return;
       }
       try {
         const profile = await fetchChromeProfile(selectedSimulator.udid);
         if (!cancelled) {
           setChromeProfile(profile);
+          setChromeProfileReady(true);
         }
       } catch {
         if (!cancelled) {
           setChromeProfile(null);
+          setChromeProfileReady(true);
         }
       }
     }
@@ -909,11 +913,7 @@ export function AppShell() {
   }
 
   useEffect(() => {
-    if (
-      selectedSimulator?.isBooted &&
-      !isWebRtcStreamMode() &&
-      streamBackend !== "webrtc"
-    ) {
+    if (selectedSimulator?.isBooted && streamBackend === "webtransport") {
       ensureControlSocket(selectedSimulator.udid);
     } else {
       closeControlSocket();
@@ -1321,7 +1321,9 @@ export function AppShell() {
         accessibilityPickerActive={accessibilityPickerActive}
         accessibilityRoots={accessibilityRoots}
         accessibilitySelectedId={accessibilitySelectedId}
+        chromeLoaded={chromeLoaded}
         chromeProfile={viewportChromeProfile}
+        chromeRequired={chromeRequired}
         chromeScreenStyle={viewportScreenStyle}
         chromeUrl={chromeUrl}
         debugPanel={
@@ -1388,7 +1390,6 @@ export function AppShell() {
         viewMode={viewMode}
         zoomDockRef={handleZoomDockRef}
         zoomAnimating={zoomAnimating}
-        viewportReady={viewportReady}
       />
     </div>
   );

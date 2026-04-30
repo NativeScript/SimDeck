@@ -31,8 +31,8 @@ Start or reuse the project daemon and serve the browser UI.
 
 ```sh
 simdeck ui [--port 4310] [--bind 127.0.0.1] [--advertise-host <host>]
-           [--client-root <path>] [--video-codec hevc|h264|h264-software|jpeg]
-           [--jpeg-quality 1.0] [--open]
+           [--client-root <path>] [--video-codec hevc|h264|h264-software]
+           [--open]
 ```
 
 `--open` opens the authenticated local URL after the daemon is ready.
@@ -44,8 +44,7 @@ Start or reuse the project daemon without opening the browser:
 ```sh
 simdeck daemon start [--port 4310] [--bind 127.0.0.1]
                      [--advertise-host <host>] [--client-root <path>]
-                     [--video-codec hevc|h264|h264-software|jpeg]
-                     [--jpeg-quality 1.0]
+                     [--video-codec hevc|h264|h264-software]
 ```
 
 Output:
@@ -86,8 +85,8 @@ that starts after login and stays available.
 ```sh
 simdeck service on [--port 4310] [--bind 127.0.0.1]
                    [--advertise-host <host>] [--client-root <path>]
-                   [--video-codec hevc|h264|h264-software|jpeg]
-                   [--jpeg-quality 1.0] [--access-token <token>]
+                   [--video-codec hevc|h264|h264-software]
+                   [--access-token <token>]
 simdeck service restart [same options as service on]
 simdeck service off
 ```

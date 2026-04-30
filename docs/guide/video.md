@@ -1,17 +1,16 @@
 # Video Pipeline
 
-SimDeck streams the iOS Simulator over WebTransport using a binary frame protocol. It also has an experimental WebRTC data-channel path for CI hosts that cannot hardware-encode H.264 or HEVC. This page walks through the encoder choices, the keyframe handshake, and the metrics you can use to tune them.
+SimDeck streams the iOS Simulator over WebTransport using a binary frame protocol. It also has an experimental WebRTC media path for browser-native video playout. This page walks through the encoder choices, the keyframe handshake, and the metrics you can use to tune them.
 
 ## Codec selection
 
-The server can encode the simulator display in four modes, picked at startup with `--video-codec`:
+The server can encode the simulator display in three modes, picked at startup with `--video-codec`:
 
-| Value                       | Encoder                         | When to use it                                                                                       |
-| --------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `hevc`                      | Hardware HEVC via VideoToolbox  | Best quality and bandwidth on modern Apple Silicon when hardware encode is available.                |
-| `h264`                      | Hardware H.264 via VideoToolbox | Use when a downstream client cannot decode HEVC and hardware H.264 is available.                     |
-| `h264-software` _(default)_ | Software H.264 via VideoToolbox | Compatibility fallback when hardware encode is unavailable, but full-resolution latency may be high. |
-| `jpeg`                      | Software JPEG via ImageIO       | Experimental full-resolution CI path. Use with browser query `?transport=webrtc-data`.               |
+| Value                       | Encoder                         | When to use it                                                                                              |
+| --------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `hevc`                      | Hardware HEVC via VideoToolbox  | Best quality and bandwidth on modern Apple Silicon when hardware encode is available.                       |
+| `h264`                      | Hardware H.264 via VideoToolbox | Use when a downstream client cannot decode HEVC and hardware H.264 is available.                            |
+| `h264-software` _(default)_ | Software H.264 via VideoToolbox | Compatibility fallback when hardware encode is unavailable. The browser automatically selects WebRTC media. |
 
 You can switch at any time by restarting the server with a different flag:
 
@@ -20,18 +19,10 @@ simdeck daemon stop
 simdeck daemon start --video-codec h264-software
 ```
 
-For GitHub Actions `macos-latest` runners, prefer the experimental JPEG path:
-
-```sh
-simdeck daemon stop
-simdeck daemon start --video-codec jpeg
-# open the UI with ?transport=webrtc-data
-```
-
 The chosen codec is reported to clients in two places:
 
 - The JSON `videoCodec` field on `GET /api/health`.
-- The `codec` field of the [`ControlHello`](/api/webtransport#control-hello) message that the WebTransport hub sends as soon as a session attaches. The JPEG WebRTC data-channel path does not use `ControlHello`; its frame chunks carry width, height, timestamp, and frame sequence metadata.
+- The `codec` field of the [`ControlHello`](/api/webtransport#control-hello) message that the WebTransport hub sends as soon as a session attaches.
 
 ## Keyframe handshake
 
@@ -61,20 +52,8 @@ A few practical guidelines:
 - **Start on the default for compatibility.** `h264-software` works without requiring the hardware encoder, but full-resolution latency can be high.
 - **Switch to `hevc` on local Apple Silicon when hardware encode is available.** HEVC delivers the best quality-per-bit and the lowest CPU on M-series Macs.
 - **Switch to `h264` when a remote client cannot decode HEVC.** Some browsers on older Apple devices are H.264-only.
-- **Switch to `h264-software` when the hardware encoder stalls and you can tolerate extra latency.** macOS screen recording can monopolise the VideoToolbox HEVC encoder. If you see "encoder unavailable" errors in the server log while QuickTime or `screencapture` is active, switch to `h264-software`.
-- **Switch to `jpeg` plus `?transport=webrtc-data` on virtualized CI Macs.** GitHub Actions macOS runners commonly fail hardware-required H.264/HEVC session creation, and software H.264 can be too latent at full simulator resolution. The JPEG path is stateless, full resolution, and drops stale frames instead of waiting for inter-frame video dependencies.
-
-## JPEG tuning
-
-`--jpeg-quality` accepts values from `0.1` to `1.0` and defaults to full quality, `1.0`. It only affects `--video-codec jpeg`.
-
-For full quality on a CI runner, start with:
-
-```sh
-simdeck daemon start --video-codec jpeg
-```
-
-Lower it only if `/api/metrics` shows server drops or the browser diagnostics show non-zero data-channel backlog.
+- **Switch to `h264-software` when the hardware encoder stalls and you can tolerate extra latency.** macOS screen recording can monopolise the VideoToolbox HEVC encoder. If you see "encoder unavailable" errors in the server log while QuickTime or `screencapture` is active, switch to `h264-software`. The browser automatically selects the WebRTC media transport for software H.264 so Chromium can use native video playout. The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off toward 20 fps under encode latency.
+- **Use `h264-software` on virtualized CI Macs when hardware encode is unavailable.** The encoder scales the longest edge to 1600 pixels, starts near 60 fps, and backs off dynamically when encode latency rises.
 
 ## Tuning with metrics
 

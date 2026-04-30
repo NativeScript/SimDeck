@@ -80,8 +80,6 @@ enum Command {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
         video_codec: VideoCodecMode,
-        #[arg(long, default_value_t = 1.0, value_parser = parse_jpeg_quality)]
-        jpeg_quality: f64,
         #[arg(long)]
         open: bool,
     },
@@ -101,8 +99,6 @@ enum Command {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
         video_codec: VideoCodecMode,
-        #[arg(long, default_value_t = 1.0, value_parser = parse_jpeg_quality)]
-        jpeg_quality: f64,
         #[arg(long)]
         access_token: Option<String>,
         #[arg(long)]
@@ -373,8 +369,6 @@ enum DaemonCommand {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
         video_codec: VideoCodecMode,
-        #[arg(long, default_value_t = 1.0, value_parser = parse_jpeg_quality)]
-        jpeg_quality: f64,
     },
     Stop,
     Status,
@@ -394,8 +388,6 @@ enum DaemonCommand {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
         video_codec: VideoCodecMode,
-        #[arg(long, default_value_t = 1.0, value_parser = parse_jpeg_quality)]
-        jpeg_quality: f64,
         #[arg(long)]
         access_token: String,
         #[arg(long)]
@@ -416,8 +408,6 @@ enum ServiceCommand {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
         video_codec: VideoCodecMode,
-        #[arg(long, default_value_t = 1.0, value_parser = parse_jpeg_quality)]
-        jpeg_quality: f64,
         #[arg(long)]
         access_token: Option<String>,
     },
@@ -432,8 +422,6 @@ enum ServiceCommand {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
         video_codec: VideoCodecMode,
-        #[arg(long, default_value_t = 1.0, value_parser = parse_jpeg_quality)]
-        jpeg_quality: f64,
         #[arg(long)]
         access_token: Option<String>,
     },
@@ -467,7 +455,6 @@ enum VideoCodecMode {
     Hevc,
     H264,
     H264Software,
-    Jpeg,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -506,7 +493,6 @@ struct DaemonLaunchOptions {
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
-    jpeg_quality: f64,
 }
 
 impl VideoCodecMode {
@@ -515,24 +501,8 @@ impl VideoCodecMode {
             Self::Hevc => "hevc",
             Self::H264 => "h264",
             Self::H264Software => "h264-software",
-            Self::Jpeg => "jpeg",
         }
     }
-}
-
-fn parse_jpeg_quality(value: &str) -> Result<f64, String> {
-    let quality = value
-        .parse::<f64>()
-        .map_err(|error| format!("invalid JPEG quality `{value}`: {error}"))?;
-    if (0.1..=1.0).contains(&quality) {
-        Ok(quality)
-    } else {
-        Err("JPEG quality must be between 0.1 and 1.0".to_owned())
-    }
-}
-
-fn format_jpeg_quality(value: f64) -> String {
-    format!("{value:.3}")
 }
 
 fn command_service_url(explicit: Option<String>) -> anyhow::Result<String> {
@@ -553,7 +523,6 @@ impl Default for DaemonLaunchOptions {
             advertise_host: None,
             client_root: None,
             video_codec: VideoCodecMode::H264Software,
-            jpeg_quality: 1.0,
         }
     }
 }
@@ -597,8 +566,6 @@ fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMe
         pairing_code.clone(),
         "--video-codec".to_owned(),
         options.video_codec.as_env_value().to_owned(),
-        "--jpeg-quality".to_owned(),
-        format_jpeg_quality(options.jpeg_quality),
     ];
     if let Some(advertise_host) = options.advertise_host {
         args.push("--advertise-host".to_owned());
@@ -922,7 +889,6 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
         Some(advertise_host),
         None,
         video_codec,
-        1.0,
         Some(access_token),
         Some(pairing_code),
     );
@@ -994,7 +960,6 @@ fn main() -> anyhow::Result<()> {
             advertise_host,
             client_root,
             video_codec,
-            jpeg_quality,
             open,
         } => {
             let (metadata, started) = ensure_project_daemon_with_status(DaemonLaunchOptions {
@@ -1003,7 +968,6 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
-                jpeg_quality,
             })?;
             if open {
                 open_browser(&metadata.http_url)?;
@@ -1018,7 +982,6 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
-                jpeg_quality,
             } => {
                 let (metadata, started) = ensure_project_daemon_with_status(DaemonLaunchOptions {
                     port,
@@ -1026,7 +989,6 @@ fn main() -> anyhow::Result<()> {
                     advertise_host,
                     client_root,
                     video_codec,
-                    jpeg_quality,
                 })?;
                 print_daemon_start_result(&metadata, started)
             }
@@ -1040,7 +1002,6 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
-                jpeg_quality,
                 access_token,
                 pairing_code,
             } => {
@@ -1062,7 +1023,6 @@ fn main() -> anyhow::Result<()> {
                     advertise_host,
                     client_root,
                     video_codec,
-                    jpeg_quality,
                     Some(access_token),
                     pairing_code,
                 );
@@ -1076,7 +1036,6 @@ fn main() -> anyhow::Result<()> {
             advertise_host,
             client_root,
             video_codec,
-            jpeg_quality,
             access_token,
             pairing_code,
         } => serve_with_appkit(
@@ -1085,7 +1044,6 @@ fn main() -> anyhow::Result<()> {
             advertise_host,
             client_root,
             video_codec,
-            jpeg_quality,
             access_token,
             pairing_code,
         ),
@@ -1096,7 +1054,6 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
-                jpeg_quality,
                 access_token,
             } => service::enable(ServiceOptions {
                 port,
@@ -1104,7 +1061,6 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
-                jpeg_quality,
                 access_token,
                 pairing_code: None,
             }),
@@ -1114,7 +1070,6 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
-                jpeg_quality,
                 access_token,
             } => service::restart(ServiceOptions {
                 port,
@@ -1122,7 +1077,6 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
-                jpeg_quality,
                 access_token,
                 pairing_code: None,
             }),
@@ -1818,7 +1772,6 @@ struct ServiceOptions {
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
-    jpeg_quality: f64,
     access_token: Option<String>,
     pairing_code: Option<String>,
 }
@@ -1830,12 +1783,10 @@ fn serve_with_appkit(
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
-    jpeg_quality: f64,
     access_token: Option<String>,
     pairing_code: Option<String>,
 ) -> anyhow::Result<()> {
     std::env::set_var("SIMDECK_VIDEO_CODEC", video_codec.as_env_value());
-    std::env::set_var("SIMDECK_JPEG_QUALITY", format_jpeg_quality(jpeg_quality));
     std::env::set_var(RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV, "1");
     start_fd_pressure_watchdog();
     unsafe {
@@ -1855,7 +1806,6 @@ fn serve_with_appkit(
                 advertise_host,
                 client_root,
                 video_codec,
-                jpeg_quality,
                 access_token,
                 pairing_code,
             )),
@@ -3994,7 +3944,6 @@ async fn serve(
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
-    jpeg_quality: f64,
     access_token: Option<String>,
     pairing_code: Option<String>,
 ) -> anyhow::Result<()> {
@@ -4008,7 +3957,6 @@ async fn serve(
         bind,
         advertise_host,
         video_codec.as_env_value().to_owned(),
-        jpeg_quality,
         access_token,
         pairing_code,
     );
