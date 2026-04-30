@@ -70,8 +70,8 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write    # commit + tag + GitHub release
-  id-token: write    # OIDC trusted publishing + npm provenance
+  contents: write # commit + tag + GitHub release
+  id-token: write # OIDC trusted publishing + npm provenance
 
 jobs:
   release:

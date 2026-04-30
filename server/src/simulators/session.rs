@@ -280,7 +280,8 @@ unsafe fn copy_ffi_bytes(bytes: ffi::xcw_native_shared_bytes) -> Option<Bytes> {
         return None;
     }
 
-    let copied = unsafe { Bytes::copy_from_slice(std::slice::from_raw_parts(bytes.data, bytes.length)) };
+    let copied =
+        unsafe { Bytes::copy_from_slice(std::slice::from_raw_parts(bytes.data, bytes.length)) };
     unsafe {
         ffi::xcw_native_release_shared_bytes(bytes);
     }

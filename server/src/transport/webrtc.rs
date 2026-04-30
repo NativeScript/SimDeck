@@ -241,13 +241,17 @@ fn summarize_sdp_candidate_types(sdp: &str) -> String {
     let mut relay = 0usize;
     let mut other = 0usize;
     for line in sdp.lines().filter(|line| line.starts_with("a=candidate:")) {
-        match line.split_whitespace().collect::<Vec<_>>().windows(2).find_map(|pair| {
-            if pair[0] == "typ" {
-                Some(pair[1])
-            } else {
-                None
-            }
-        }) {
+        match line
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .find_map(|pair| {
+                if pair[0] == "typ" {
+                    Some(pair[1])
+                } else {
+                    None
+                }
+            }) {
             Some("host") => host += 1,
             Some("srflx") => srflx += 1,
             Some("prflx") => prflx += 1,

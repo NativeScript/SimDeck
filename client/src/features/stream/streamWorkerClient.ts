@@ -441,8 +441,7 @@ class WebRtcStreamClient implements StreamClientBackend {
       const remote = pair.remoteCandidateId
         ? stats.get(pair.remoteCandidateId)
         : undefined;
-      this.diagnostics.selectedCandidatePair =
-        `state=${pair.state ?? "?"},rtt=${pair.currentRoundTripTime ?? "?"},local=${candidateStatsSummary(local)},remote=${candidateStatsSummary(remote)}`;
+      this.diagnostics.selectedCandidatePair = `state=${pair.state ?? "?"},rtt=${pair.currentRoundTripTime ?? "?"},local=${candidateStatsSummary(local)},remote=${candidateStatsSummary(remote)}`;
       this.postDiagnostics(target, "candidate-pair-selected");
     } catch (error) {
       this.diagnostics.selectedCandidatePair = `stats-error:${error instanceof Error ? error.message : String(error)}`;
