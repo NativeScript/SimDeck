@@ -24,6 +24,7 @@ Returns server health, the WebTransport URL template, and the certificate hash t
   "wtPort": 4311,
   "timestamp": 1714094761.234,
   "videoCodec": "h264-software",
+  "lowLatency": false,
   "webTransport": {
     "urlTemplate": "https://127.0.0.1:4311/wt/simulators/{udid}?simdeckToken=...",
     "certificateHash": {
@@ -124,7 +125,8 @@ Toggles between light and dark appearance via `simctl ui appearance`.
 
 ### `POST /api/simulators/{udid}/video-codec`
 
-Switches the active encoder mode for new native simulator sessions and drops the cached session for `{udid}` so the next stream reconnect uses it:
+Switches the active encoder mode for new native simulator sessions and
+reconfigures the selected simulator session after active streams drain:
 
 ```http
 POST /api/simulators/{udid}/video-codec
@@ -133,10 +135,13 @@ Content-Type: application/json
 { "codec": "h264-software" }
 ```
 
-Accepted codecs are `hevc`, `h264`, and `h264-software`. The setting is process-wide; the UDID scopes which cached session is recreated immediately.
+Accepted codecs are `hevc`, `h264`, and `h264-software`. The setting is
+process-wide; the UDID scopes which attached session is reconfigured
+immediately. Posting the already-active codec is a no-op and returns
+`"changed": false`.
 
 ```json
-{ "ok": true, "videoCodec": "h264-software" }
+{ "ok": true, "changed": true, "videoCodec": "h264-software" }
 ```
 
 ### `POST /api/simulators/{udid}/refresh`

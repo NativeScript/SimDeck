@@ -4,13 +4,17 @@ use crate::metrics::counters::Metrics;
 use crate::simulators::session::SimulatorSession;
 use crate::transport::packet::{ControlHello, SharedFrame, PACKET_VERSION};
 use anyhow::Context;
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tracing::warn;
 use wtransport::endpoint::endpoint_side::Server;
-use wtransport::{Endpoint, Identity, ServerConfig};
+use wtransport::{Endpoint, Identity, ServerConfig, VarInt};
+
+static WEBTRANSPORT_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, broadcast::Sender<()>>>> =
+    OnceLock::new();
 
 pub struct WebTransportRuntime {
     pub endpoint_url_template: String,
@@ -70,6 +74,9 @@ async fn handle_session(
     };
     let session = started_session(&state, udid).await?;
     session.request_refresh();
+    let (cancellation_token, mut cancellation) = replace_webtransport_media_stream(udid);
+    let _stream_cancellation =
+        WebTransportMediaStreamGuard::new(udid.to_owned(), cancellation_token);
 
     let hello_frame = session.wait_for_keyframe(Duration::from_secs(3)).await;
     let Some(hello_frame_ref) = hello_frame.as_ref() else {
@@ -123,19 +130,25 @@ async fn handle_session(
     }
 
     loop {
-        let frame = match rx.recv().await {
-            Ok(frame) => frame,
-            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                state
-                    .metrics
-                    .frames_dropped_server
-                    .fetch_add(skipped, Ordering::Relaxed);
-                waiting_for_keyframe = true;
-                last_sequence = 0;
-                session.request_refresh();
-                continue;
+        let frame = tokio::select! {
+            _ = cancellation.recv() => {
+                connection.close(VarInt::from_u32(0), b"stream replaced");
+                return Ok(());
             }
-            Err(broadcast::error::RecvError::Closed) => anyhow::bail!("frame stream closed"),
+            result = rx.recv() => match result {
+                Ok(frame) => frame,
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    state
+                        .metrics
+                        .frames_dropped_server
+                        .fetch_add(skipped, Ordering::Relaxed);
+                    waiting_for_keyframe = true;
+                    last_sequence = 0;
+                    session.request_refresh();
+                    continue;
+                }
+                Err(broadcast::error::RecvError::Closed) => anyhow::bail!("frame stream closed"),
+            },
         };
 
         if waiting_for_keyframe && !frame.is_keyframe {
@@ -170,6 +183,63 @@ async fn handle_session(
                 .latest_first_frame_ms
                 .store(started_at.elapsed().as_millis() as u64, Ordering::Relaxed);
         }
+    }
+}
+
+fn replace_webtransport_media_stream(
+    udid: &str,
+) -> (broadcast::Sender<()>, broadcast::Receiver<()>) {
+    let (tx, rx) = broadcast::channel(1);
+    let streams = WEBTRANSPORT_MEDIA_STREAMS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(previous) = streams.lock().unwrap().insert(udid.to_owned(), tx.clone()) {
+        let _ = previous.send(());
+    }
+    (tx, rx)
+}
+
+fn clear_webtransport_media_stream(udid: &str, token: &broadcast::Sender<()>) {
+    if let Some(streams) = WEBTRANSPORT_MEDIA_STREAMS.get() {
+        let mut streams = streams.lock().unwrap();
+        if streams
+            .get(udid)
+            .is_some_and(|current| current.same_channel(token))
+        {
+            streams.remove(udid);
+        }
+    }
+}
+
+pub fn cancel_media_stream(udid: &str) -> bool {
+    let Some(streams) = WEBTRANSPORT_MEDIA_STREAMS.get() else {
+        return false;
+    };
+    let Some(stream) = streams.lock().unwrap().get(udid).cloned() else {
+        return false;
+    };
+    let _ = stream.send(());
+    true
+}
+
+pub fn has_media_stream(udid: &str) -> bool {
+    WEBTRANSPORT_MEDIA_STREAMS
+        .get()
+        .is_some_and(|streams| streams.lock().unwrap().contains_key(udid))
+}
+
+struct WebTransportMediaStreamGuard {
+    udid: String,
+    token: broadcast::Sender<()>,
+}
+
+impl WebTransportMediaStreamGuard {
+    fn new(udid: String, token: broadcast::Sender<()>) -> Self {
+        Self { udid, token }
+    }
+}
+
+impl Drop for WebTransportMediaStreamGuard {
+    fn drop(&mut self) {
+        clear_webtransport_media_stream(&self.udid, &self.token);
     }
 }
 

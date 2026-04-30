@@ -618,6 +618,16 @@ impl NativeSession {
         }
     }
 
+    pub fn reconfigure_video_encoder(&self) -> Result<(), AppError> {
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_reconfigure_video_encoder(self.handle, &mut error),
+                error,
+            )
+        }
+    }
+
     pub fn request_refresh(&self) {
         unsafe {
             ffi::xcw_native_session_request_refresh(self.handle);

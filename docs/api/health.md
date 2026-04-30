@@ -13,6 +13,7 @@ Returns the static bootstrap information the browser client needs to open a WebT
   "wtPort": 4311,
   "timestamp": 1714094761.234,
   "videoCodec": "h264-software",
+  "lowLatency": false,
   "webTransport": {
     "urlTemplate": "https://127.0.0.1:4311/wt/simulators/{udid}?simdeckToken=...",
     "certificateHash": {
@@ -30,6 +31,7 @@ Returns the static bootstrap information the browser client needs to open a WebT
 | `httpPort` / `wtPort`                | Numeric ports for the HTTP and WebTransport servers. WebTransport is always `httpPort + 1`.    |
 | `timestamp`                          | Server-side `time.now()` as a fractional Unix epoch in seconds.                                |
 | `videoCodec`                         | Active encoder. One of `hevc`, `h264`, or `h264-software`. See [Video Pipeline](/guide/video). |
+| `lowLatency`                         | `true` when software H.264 low-latency mode was enabled at daemon startup.                     |
 | `webTransport.urlTemplate`           | URL with a `{udid}` placeholder and access token query for the simulator stream.               |
 | `webTransport.certificateHash.value` | SHA-256 of the server's self-signed cert. Pin via `serverCertificateHashes` in the WT client.  |
 | `webTransport.packetVersion`         | The current binary packet protocol version. Clients should refuse to parse unknown versions.   |

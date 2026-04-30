@@ -109,6 +109,10 @@ impl<T: Clone + Send + 'static> SessionRegistry<T> {
             })?
     }
 
+    pub fn get(&self, udid: &str) -> Option<T> {
+        self.store.get(udid)
+    }
+
     pub fn remove(&self, udid: &str) {
         self.store.remove(udid);
     }

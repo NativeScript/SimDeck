@@ -83,6 +83,13 @@ simdeck daemon stop
 
 `simdeck daemon` manages the normal per-project warm process.
 
+Use software H.264's low-latency profile on slower runners where freshness is
+more important than full-resolution smoothness:
+
+```sh
+simdeck daemon start --video-codec h264-software --low-latency
+```
+
 Restart the CoreSimulator service layer when `simctl` reports a stale service
 version or the live display gets stuck before the first frame:
 

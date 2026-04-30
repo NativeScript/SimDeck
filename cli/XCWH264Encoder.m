@@ -8,18 +8,27 @@
 
 static const int32_t XCWMaximumEncodedDimension = 1920;
 static const int32_t XCWMaximumSoftwareEncodedDimension = 1600;
+static const int32_t XCWMaximumLowLatencySoftwareEncodedDimension = 1472;
 static const int32_t XCWTargetRealTimeFrameRate = 60;
 static const int32_t XCWTargetSoftwareFrameRate = 60;
+static const int32_t XCWTargetLowLatencySoftwareFrameRate = 45;
 static const NSUInteger XCWMaximumInFlightFrames = 2;
 static const int32_t XCWMinimumAverageBitRate = 18000000;
 static const int32_t XCWMinimumSoftwareAverageBitRate = 3000000;
+static const int32_t XCWMinimumLowLatencySoftwareAverageBitRate = 2500000;
 static const int64_t XCWBitsPerPixelBudget = 10;
 static const int64_t XCWSoftwareBitsPerPixelBudget = 6;
+static const int64_t XCWLowLatencySoftwareBitsPerPixelBudget = 4;
 static const uint64_t XCWSoftwareMinimumFrameIntervalUs = 16667;
 static const uint64_t XCWSoftwareInitialFrameIntervalUs = 16667;
 static const uint64_t XCWSoftwareMaximumFrameIntervalUs = 50000;
 static const uint64_t XCWSoftwareFrameIntervalStepUs = 5556;
 static const NSUInteger XCWSoftwareHealthyFrameWindow = 4;
+static const uint64_t XCWLowLatencySoftwareMinimumFrameIntervalUs = 22222;
+static const uint64_t XCWLowLatencySoftwareInitialFrameIntervalUs = 22222;
+static const uint64_t XCWLowLatencySoftwareMaximumFrameIntervalUs = 100000;
+static const uint64_t XCWLowLatencySoftwareFrameIntervalStepUs = 11111;
+static const NSUInteger XCWLowLatencySoftwareHealthyFrameWindow = 8;
 
 typedef NS_ENUM(NSUInteger, XCWVideoEncoderMode) {
     XCWVideoEncoderModeHEVCHardware,
@@ -37,6 +46,15 @@ static XCWVideoEncoderMode XCWVideoEncoderModeFromEnvironment(void) {
         return XCWVideoEncoderModeH264Software;
     }
     return XCWVideoEncoderModeHEVCHardware;
+}
+
+static BOOL XCWLowLatencyModeFromEnvironment(void) {
+    const char *rawValue = getenv("SIMDECK_LOW_LATENCY");
+    NSString *value = rawValue != NULL ? [[[NSString alloc] initWithUTF8String:rawValue] lowercaseString] : @"";
+    return [value isEqualToString:@"1"] ||
+        [value isEqualToString:@"true"] ||
+        [value isEqualToString:@"yes"] ||
+        [value isEqualToString:@"on"];
 }
 
 static CMVideoCodecType XCWVideoCodecTypeForMode(XCWVideoEncoderMode mode) {
@@ -242,14 +260,17 @@ static int32_t XCWRoundToEvenDimension(double value) {
     return rounded;
 }
 
-static CGSize XCWScaledDimensionsForSourceSize(int32_t width, int32_t height, XCWVideoEncoderMode mode) {
+static CGSize XCWScaledDimensionsForSourceSize(int32_t width, int32_t height, XCWVideoEncoderMode mode, BOOL lowLatencyMode) {
     if (width <= 0 || height <= 0) {
         return CGSizeZero;
     }
 
-    int32_t maximumDimension = mode == XCWVideoEncoderModeH264Software
-        ? XCWMaximumSoftwareEncodedDimension
-        : XCWMaximumEncodedDimension;
+    int32_t maximumDimension = XCWMaximumEncodedDimension;
+    if (mode == XCWVideoEncoderModeH264Software) {
+        maximumDimension = lowLatencyMode
+            ? XCWMaximumLowLatencySoftwareEncodedDimension
+            : XCWMaximumSoftwareEncodedDimension;
+    }
     int32_t longestEdge = MAX(width, height);
     if (longestEdge <= maximumDimension) {
         return CGSizeMake(width, height);
@@ -260,13 +281,17 @@ static CGSize XCWScaledDimensionsForSourceSize(int32_t width, int32_t height, XC
                       XCWRoundToEvenDimension(height * scale));
 }
 
-static int32_t XCWAverageBitRateForDimensions(int32_t width, int32_t height, XCWVideoEncoderMode mode) {
-    int64_t bitsPerPixelBudget = mode == XCWVideoEncoderModeH264Software
-        ? XCWSoftwareBitsPerPixelBudget
-        : XCWBitsPerPixelBudget;
-    int64_t minimumAverageBitRate = mode == XCWVideoEncoderModeH264Software
-        ? XCWMinimumSoftwareAverageBitRate
-        : XCWMinimumAverageBitRate;
+static int32_t XCWAverageBitRateForDimensions(int32_t width, int32_t height, XCWVideoEncoderMode mode, BOOL lowLatencyMode) {
+    int64_t bitsPerPixelBudget = XCWBitsPerPixelBudget;
+    int64_t minimumAverageBitRate = XCWMinimumAverageBitRate;
+    if (mode == XCWVideoEncoderModeH264Software) {
+        bitsPerPixelBudget = lowLatencyMode
+            ? XCWLowLatencySoftwareBitsPerPixelBudget
+            : XCWSoftwareBitsPerPixelBudget;
+        minimumAverageBitRate = lowLatencyMode
+            ? XCWMinimumLowLatencySoftwareAverageBitRate
+            : XCWMinimumSoftwareAverageBitRate;
+    }
     int64_t computedBitRate = (int64_t)width * (int64_t)height * bitsPerPixelBudget;
     if (computedBitRate < minimumAverageBitRate) {
         computedBitRate = minimumAverageBitRate;
@@ -364,6 +389,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     CVPixelBufferRef _scaledPixelBuffer;
     OSType _scaledPixelFormat;
     XCWVideoEncoderMode _encoderMode;
+    BOOL _lowLatencyMode;
     CMVideoCodecType _codecType;
     BOOL _hardwareAccelerated;
     NSUInteger _inputFrameCount;
@@ -397,8 +423,9 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _pendingLock = OS_UNFAIR_LOCK_INIT;
     _needsKeyFrame = YES;
     _encoderMode = XCWVideoEncoderModeFromEnvironment();
+    _lowLatencyMode = XCWLowLatencyModeFromEnvironment();
     _codecType = XCWVideoCodecTypeForMode(_encoderMode);
-    _softwareFrameIntervalUs = XCWSoftwareInitialFrameIntervalUs;
+    _softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
     return self;
 }
 
@@ -441,6 +468,28 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     });
 }
 
+- (void)reconfigureWithCurrentEnvironment {
+    os_unfair_lock_lock(&_pendingLock);
+    if (_pendingPixelBuffer != NULL) {
+        CVPixelBufferRelease(_pendingPixelBuffer);
+        _pendingPixelBuffer = NULL;
+    }
+    _drainScheduled = NO;
+    os_unfair_lock_unlock(&_pendingLock);
+
+    dispatch_sync(_queue, ^{
+        [self invalidateCompressionSessionLocked];
+        self->_encoderMode = XCWVideoEncoderModeFromEnvironment();
+        self->_lowLatencyMode = XCWLowLatencyModeFromEnvironment();
+        self->_codecType = XCWVideoCodecTypeForMode(self->_encoderMode);
+        self->_softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
+        self->_lastSoftwareSubmissionUs = 0;
+        self->_softwarePacedFrameCount = 0;
+        self->_softwareHealthyFrameCount = 0;
+        self->_needsKeyFrame = YES;
+    });
+}
+
 - (NSDictionary *)statsRepresentation {
     __block NSUInteger inputFrameCount = 0;
     __block NSUInteger pendingReplacementCount = 0;
@@ -466,6 +515,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
             @"softwarePacedFrames": @(self->_softwarePacedFrameCount),
             @"transportCodec": XCWCodecName(self->_codecType),
             @"encoderMode": XCWVideoEncoderModeName(self->_encoderMode),
+            @"lowLatencyMode": @(self->_lowLatencyMode),
             @"encoderId": XCWVideoEncoderIDForMode(self->_encoderMode) ?: @"automatic",
             @"hardwareAccelerated": @(self->_hardwareAccelerated),
             @"lastSessionStatus": @(self->_lastSessionStatus),
@@ -492,12 +542,43 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     os_unfair_lock_unlock(&_pendingLock);
 }
 
+- (NSUInteger)maximumInFlightFrameCountLocked {
+    return (_encoderMode == XCWVideoEncoderModeH264Software && _lowLatencyMode) ? 1 : XCWMaximumInFlightFrames;
+}
+
+- (uint64_t)minimumSoftwareFrameIntervalUsLocked {
+    return _lowLatencyMode ? XCWLowLatencySoftwareMinimumFrameIntervalUs : XCWSoftwareMinimumFrameIntervalUs;
+}
+
+- (uint64_t)initialSoftwareFrameIntervalUsLocked {
+    return _lowLatencyMode ? XCWLowLatencySoftwareInitialFrameIntervalUs : XCWSoftwareInitialFrameIntervalUs;
+}
+
+- (uint64_t)maximumSoftwareFrameIntervalUsLocked {
+    return _lowLatencyMode ? XCWLowLatencySoftwareMaximumFrameIntervalUs : XCWSoftwareMaximumFrameIntervalUs;
+}
+
+- (uint64_t)softwareFrameIntervalStepUsLocked {
+    return _lowLatencyMode ? XCWLowLatencySoftwareFrameIntervalStepUs : XCWSoftwareFrameIntervalStepUs;
+}
+
+- (NSUInteger)softwareHealthyFrameWindowLocked {
+    return _lowLatencyMode ? XCWLowLatencySoftwareHealthyFrameWindow : XCWSoftwareHealthyFrameWindow;
+}
+
+- (int32_t)expectedFrameRateLocked {
+    if (_encoderMode == XCWVideoEncoderModeH264Software) {
+        return _lowLatencyMode ? XCWTargetLowLatencySoftwareFrameRate : XCWTargetSoftwareFrameRate;
+    }
+    return XCWTargetRealTimeFrameRate;
+}
+
 - (BOOL)shouldPaceSoftwareFrameAtTimeUs:(uint64_t)nowUs {
     if (_encoderMode != XCWVideoEncoderModeH264Software || _needsKeyFrame) {
         return NO;
     }
     if (_softwareFrameIntervalUs == 0) {
-        _softwareFrameIntervalUs = XCWSoftwareInitialFrameIntervalUs;
+        _softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
     }
     if (_lastSoftwareSubmissionUs == 0) {
         return NO;
@@ -515,29 +596,32 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         return;
     }
     if (_softwareFrameIntervalUs == 0) {
-        _softwareFrameIntervalUs = XCWSoftwareInitialFrameIntervalUs;
+        _softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
     }
 
-    uint64_t highLatencyBudgetUs = (_softwareFrameIntervalUs * 3) / 2;
+    uint64_t highLatencyBudgetUs = _lowLatencyMode ? _softwareFrameIntervalUs : ((_softwareFrameIntervalUs * 3) / 2);
     if (latencyUs > highLatencyBudgetUs) {
-        uint64_t nextIntervalUs = _softwareFrameIntervalUs + XCWSoftwareFrameIntervalStepUs;
-        uint64_t latencyBoundIntervalUs = latencyUs + XCWSoftwareFrameIntervalStepUs;
+        uint64_t stepUs = [self softwareFrameIntervalStepUsLocked];
+        uint64_t nextIntervalUs = _softwareFrameIntervalUs + stepUs;
+        uint64_t latencyBoundIntervalUs = latencyUs + stepUs;
         if (nextIntervalUs < latencyBoundIntervalUs) {
             nextIntervalUs = latencyBoundIntervalUs;
         }
-        _softwareFrameIntervalUs = MIN(nextIntervalUs, XCWSoftwareMaximumFrameIntervalUs);
+        _softwareFrameIntervalUs = MIN(nextIntervalUs, [self maximumSoftwareFrameIntervalUsLocked]);
         _softwareHealthyFrameCount = 0;
         return;
     }
 
     if (latencyUs < _softwareFrameIntervalUs &&
-        _softwareFrameIntervalUs > XCWSoftwareMinimumFrameIntervalUs) {
+        _softwareFrameIntervalUs > [self minimumSoftwareFrameIntervalUsLocked]) {
         _softwareHealthyFrameCount += 1;
-        if (_softwareHealthyFrameCount >= XCWSoftwareHealthyFrameWindow) {
-            uint64_t nextIntervalUs = _softwareFrameIntervalUs > XCWSoftwareFrameIntervalStepUs
-                ? _softwareFrameIntervalUs - XCWSoftwareFrameIntervalStepUs
-                : XCWSoftwareMinimumFrameIntervalUs;
-            _softwareFrameIntervalUs = MAX(nextIntervalUs, XCWSoftwareMinimumFrameIntervalUs);
+        if (_softwareHealthyFrameCount >= [self softwareHealthyFrameWindowLocked]) {
+            uint64_t stepUs = [self softwareFrameIntervalStepUsLocked];
+            uint64_t minimumIntervalUs = [self minimumSoftwareFrameIntervalUsLocked];
+            uint64_t nextIntervalUs = _softwareFrameIntervalUs > stepUs
+                ? _softwareFrameIntervalUs - stepUs
+                : minimumIntervalUs;
+            _softwareFrameIntervalUs = MAX(nextIntervalUs, minimumIntervalUs);
             _softwareHealthyFrameCount = 0;
         }
         return;
@@ -548,7 +632,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 
 - (void)drainPendingFramesLocked {
     while (YES) {
-        if (_inFlightFrameCount >= XCWMaximumInFlightFrames) {
+        if (_inFlightFrameCount >= [self maximumInFlightFrameCountLocked]) {
             _drainScheduled = NO;
             return;
         }
@@ -576,7 +660,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         return NO;
     }
 
-    CGSize targetSize = XCWScaledDimensionsForSourceSize(sourceWidth, sourceHeight, _encoderMode);
+    CGSize targetSize = XCWScaledDimensionsForSourceSize(sourceWidth, sourceHeight, _encoderMode, _lowLatencyMode);
     int32_t targetWidth = (int32_t)targetSize.width;
     int32_t targetHeight = (int32_t)targetSize.height;
     if (targetWidth <= 0 || targetHeight <= 0) {
@@ -683,10 +767,8 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _timestampOriginUs = 0;
     _needsKeyFrame = YES;
 
-    int expectedFrameRate = _encoderMode == XCWVideoEncoderModeH264Software
-        ? XCWTargetSoftwareFrameRate
-        : XCWTargetRealTimeFrameRate;
-    int averageBitRate = XCWAverageBitRateForDimensions(width, height, _encoderMode);
+    int expectedFrameRate = [self expectedFrameRateLocked];
+    int averageBitRate = XCWAverageBitRateForDimensions(width, height, _encoderMode, _lowLatencyMode);
 
     VTSessionSetProperty(session, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
     if (@available(macOS 10.14, *)) {
@@ -713,8 +795,8 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         VTSessionSetProperty(session, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);
     }
     VTSessionSetProperty(session, kVTCompressionPropertyKey_ExpectedFrameRate, (__bridge CFTypeRef)@(expectedFrameRate));
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(expectedFrameRate * 2));
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, (__bridge CFTypeRef)@2.0);
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(_lowLatencyMode ? expectedFrameRate : expectedFrameRate * 2));
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, (__bridge CFTypeRef)@(_lowLatencyMode ? 1.0 : 2.0));
     VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@(averageBitRate));
     if (@available(macOS 11.0, *)) {
         VTSessionSetProperty(session,

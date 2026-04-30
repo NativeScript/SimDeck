@@ -180,6 +180,9 @@ fn plist_contents(
         "--video-codec".to_string(),
         options.video_codec.as_env_value().to_string(),
     ];
+    if options.low_latency {
+        program_arguments.push("--low-latency".to_string());
+    }
 
     if let Some(advertise_host) = options.advertise_host.as_ref() {
         program_arguments.push("--advertise-host".to_string());

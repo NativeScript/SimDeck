@@ -12,12 +12,27 @@ The server can encode the simulator display in three modes, picked at startup wi
 | `h264`                      | Hardware H.264 via VideoToolbox | Use when a downstream client cannot decode HEVC and hardware H.264 is available.                            |
 | `h264-software` _(default)_ | Software H.264 via VideoToolbox | Compatibility fallback when hardware encode is unavailable. The browser automatically selects WebRTC media. |
 
-You can switch from the browser menu next to the simulator list. That updates the process codec setting, drops the cached native session for the selected simulator, and reconnects the stream. You can also restart the server with a different flag:
+You can switch from the browser menu next to the simulator list. That updates
+the process codec setting, waits for active streams on the selected simulator to
+drain, reconfigures the native encoder, and reconnects the stream. Posting the
+already-active codec is a no-op. You can also restart the server with a
+different flag:
 
 ```sh
 simdeck daemon stop
 simdeck daemon start --video-codec h264-software
 ```
+
+For slower runners, add `--low-latency` with software H.264:
+
+```sh
+simdeck daemon start --video-codec h264-software --low-latency
+```
+
+Low-latency mode caps software H.264 at 45 fps, keeps a single in-flight frame,
+scales the longest edge to 1472 pixels, and backs off FPS more aggressively when
+encode pressure rises. It is CLI-only because it is meant for less capable
+machines where freshness matters more than maximum smoothness.
 
 The chosen codec is reported to clients in two places:
 
@@ -52,8 +67,8 @@ A few practical guidelines:
 - **Start on the default for compatibility.** `h264-software` works without requiring the hardware encoder, but full-resolution latency can be high.
 - **Switch to `hevc` on local Apple Silicon when hardware encode is available.** HEVC delivers the best quality-per-bit and the lowest CPU on M-series Macs.
 - **Switch to `h264` when a remote client cannot decode HEVC.** Some browsers on older Apple devices are H.264-only.
-- **Switch to `h264-software` when the hardware encoder stalls and you can tolerate extra latency.** macOS screen recording can monopolise the VideoToolbox HEVC encoder. If you see "encoder unavailable" errors in the server log while QuickTime or `screencapture` is active, switch to `h264-software`. The browser automatically selects the WebRTC media transport for software H.264 so Chromium can use native video playout. The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off toward 20 fps under encode latency.
-- **Use `h264-software` on virtualized CI Macs when hardware encode is unavailable.** The encoder scales the longest edge to 1600 pixels, starts near 60 fps, and backs off dynamically when encode latency rises.
+- **Switch to `h264-software` when the hardware encoder stalls and you can tolerate extra latency.** macOS screen recording can monopolise the VideoToolbox HEVC encoder. If you see "encoder unavailable" errors in the server log while QuickTime or `screencapture` is active, switch to `h264-software`. The browser automatically selects the WebRTC media transport for software H.264 so Chromium can use native video playout. The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
+- **Use `h264-software --low-latency` on virtualized CI Macs when hardware encode is unavailable.** This profile caps at 45 fps, uses a single pending frame, reduces the longest edge to 1472 pixels, and backs off before software encode latency turns into seconds of stream delay.
 
 ## Tuning with metrics
 

@@ -419,6 +419,12 @@ pub fn cancel_media_stream(udid: &str) -> bool {
     true
 }
 
+pub fn has_media_stream(udid: &str) -> bool {
+    WEBRTC_MEDIA_STREAMS
+        .get()
+        .is_some_and(|streams| streams.lock().unwrap().contains_key(udid))
+}
+
 fn ice_servers() -> Vec<RTCIceServer> {
     let mut urls = std::env::var("SIMDECK_WEBRTC_ICE_SERVERS")
         .ok()

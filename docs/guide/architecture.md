@@ -54,7 +54,7 @@ Inside the bridge:
 
 ### `client/` — React browser UI
 
-The React app served at `/` is a thin shell that calls the REST API and consumes live video over WebTransport by default. It automatically selects WebRTC media for `h264-software`; the simulator menu can switch codec and transport at runtime, and URLs can still seed a transport with `?transport=webtransport` or `?transport=webrtc`.
+The React app served at `/` is a thin shell that calls the REST API and consumes live video over WebTransport by default. It automatically selects WebRTC media for `h264-software`, forces HEVC back to WebTransport, and exposes runtime codec and transport controls in the simulator menu. URLs can still seed a transport with `?transport=webtransport` or `?transport=webrtc`.
 
 Layout under `client/src/`:
 

@@ -168,6 +168,24 @@ impl SimulatorSession {
         self.inner.native.request_keyframe();
     }
 
+    pub fn reconfigure_video_codec(&self) -> Result<(), AppError> {
+        *self.inner.latest_keyframe.write().unwrap() = None;
+        self.inner.native.reconfigure_video_encoder()?;
+        self.request_keyframe();
+        Ok(())
+    }
+
+    pub async fn reconfigure_video_codec_async(&self) -> Result<(), AppError> {
+        let session = self.clone();
+        task::spawn_blocking(move || session.reconfigure_video_codec())
+            .await
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "Failed to join codec reconfiguration task: {error}"
+                ))
+            })?
+    }
+
     pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
         self.inner.native.send_touch(x, y, phase)
     }

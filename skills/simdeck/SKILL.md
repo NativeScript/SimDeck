@@ -21,6 +21,7 @@ simdeck daemon start
 simdeck ui --open
 npm run build:cli && ./build/simdeck ui --open
 simdeck daemon start --video-codec h264-software
+simdeck daemon start --video-codec h264-software --low-latency
 simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 ```
 
@@ -29,6 +30,9 @@ simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 Viewer: `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
 With `--video-codec h264-software`, the browser automatically selects the
 WebRTC media stream so Chromium handles native video playout.
+Add `--low-latency` on less capable runners to cap software H.264 at 45 fps,
+drop stale pending frames more aggressively, and reduce resolution slightly
+before latency piles up.
 
 The local viewer gets the API token automatically. LAN browsers pair with the printed code before receiving the API cookie. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
 

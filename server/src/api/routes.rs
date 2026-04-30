@@ -23,7 +23,6 @@ use serde_json::Map;
 use serde_json::{json as json_value, Value};
 use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -485,6 +484,7 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "wtPort": state.config.wt_port,
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64(),
         "videoCodec": active_video_codec(&state.config),
+        "lowLatency": state.config.low_latency,
         "webTransport": {
             "urlTemplate": auth::tokenized_webtransport_template(&state.config),
             "certificateHash": {
@@ -741,37 +741,55 @@ async fn set_video_codec(
     let codec = normalize_video_codec(&payload.codec).ok_or_else(|| {
         AppError::bad_request("Request body must include codec: hevc, h264, or h264-software.")
     })?;
-    wait_for_streams_to_drain(&state, &udid).await?;
+    let current_codec = active_video_codec(&state.config);
+    if current_codec == codec {
+        return Ok(json(json_value!({
+            "ok": true,
+            "changed": false,
+            "videoCodec": codec,
+        })));
+    }
+    wait_for_streams_to_drain(&udid).await?;
     std::env::set_var("SIMDECK_VIDEO_CODEC", codec);
-    state.registry.remove(&udid);
+    if let Some(session) = state.registry.get(&udid) {
+        if let Err(error) = session.reconfigure_video_codec_async().await {
+            std::env::set_var("SIMDECK_VIDEO_CODEC", current_codec);
+            return Err(error);
+        }
+    }
     Ok(json(json_value!({
         "ok": true,
+        "changed": true,
         "videoCodec": codec,
     })))
 }
 
-async fn wait_for_streams_to_drain(state: &AppState, udid: &str) -> Result<(), AppError> {
+async fn wait_for_streams_to_drain(udid: &str) -> Result<(), AppError> {
     const DRAIN_ATTEMPTS: usize = 40;
     const DRAIN_INTERVAL: Duration = Duration::from_millis(100);
 
     for attempt in 0..DRAIN_ATTEMPTS {
-        let active_streams = state.metrics.active_streams.load(Ordering::Relaxed);
-        if active_streams == 0 {
+        if !has_media_stream_for_udid(udid) {
             return Ok(());
         }
         if attempt == 0 {
             crate::transport::webrtc::cancel_media_stream(udid);
+            crate::transport::webtransport::cancel_media_stream(udid);
         }
         sleep(DRAIN_INTERVAL).await;
     }
 
-    let active_streams = state.metrics.active_streams.load(Ordering::Relaxed);
-    if active_streams == 0 {
+    if !has_media_stream_for_udid(udid) {
         return Ok(());
     }
-    Err(AppError::conflict(format!(
-        "Timed out waiting for {active_streams} active stream(s) to close before switching codec."
-    )))
+    Err(AppError::conflict(
+        "Timed out waiting for the active stream to close before switching codec.",
+    ))
+}
+
+fn has_media_stream_for_udid(udid: &str) -> bool {
+    crate::transport::webrtc::has_media_stream(udid)
+        || crate::transport::webtransport::has_media_stream(udid)
 }
 
 async fn open_url(

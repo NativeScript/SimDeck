@@ -28,14 +28,15 @@ Targets a specific running SimDeck daemon for commands that support the HTTP fas
 
 `ui` and `daemon start` accept the same server options. `ui` also accepts `--open`.
 
-| Flag               | Default               | Description                                                                    |
-| ------------------ | --------------------- | ------------------------------------------------------------------------------ |
-| `--port <u16>`     | `4310`                | HTTP port. WebTransport listens on `port + 1`.                                 |
-| `--bind <ip>`      | `127.0.0.1`           | Bind address (`0.0.0.0` for [LAN access](/guide/lan-access), `::` for IPv6).   |
-| `--advertise-host` | matches local host    | Hostname or IP advertised in the WebTransport URL template and certificate.    |
-| `--client-root`    | bundled `client/dist` | Override the static browser client directory.                                  |
-| `--video-codec`    | `h264-software`       | One of `hevc`, `h264`, or `h264-software`. See [Video Pipeline](/guide/video). |
-| `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                         |
+| Flag               | Default               | Description                                                                     |
+| ------------------ | --------------------- | ------------------------------------------------------------------------------- |
+| `--port <u16>`     | `4310`                | HTTP port. WebTransport listens on `port + 1`.                                  |
+| `--bind <ip>`      | `127.0.0.1`           | Bind address (`0.0.0.0` for [LAN access](/guide/lan-access), `::` for IPv6).    |
+| `--advertise-host` | matches local host    | Hostname or IP advertised in the WebTransport URL template and certificate.     |
+| `--client-root`    | bundled `client/dist` | Override the static browser client directory.                                   |
+| `--video-codec`    | `h264-software`       | One of `hevc`, `h264`, or `h264-software`. See [Video Pipeline](/guide/video).  |
+| `--low-latency`    | `false`               | Software H.264 profile for slower runners: caps at 45 fps and favors freshness. |
+| `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                          |
 
 The public commands generate an access token automatically. Use `simdeck daemon status` to read it for direct API callers.
 

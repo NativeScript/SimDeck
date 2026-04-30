@@ -167,6 +167,19 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
     [_videoEncoder requestKeyFrame];
 }
 
+- (void)reconfigureVideoEncoder {
+    dispatch_sync(_stateQueue, ^{
+        self->_latestKeyFrameData = nil;
+        self->_latestKeyFrameTimestampUs = 0;
+        self->_latestKeyFrameCodec = nil;
+        self->_latestKeyFrameDecoderConfig = nil;
+        self->_latestKeyFrameDimensions = CGSizeZero;
+        self->_latestKeyFrameSequenceValue = 0;
+    });
+    [_videoEncoder reconfigureWithCurrentEnvironment];
+    [self requestKeyFrameRefresh];
+}
+
 - (void)requestFrameRefresh {
     [self refreshCurrentFrame];
 }

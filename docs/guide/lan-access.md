@@ -56,6 +56,7 @@ The server generates a fresh self-signed certificate every time it starts. The c
   "httpPort": 4310,
   "wtPort": 4311,
   "videoCodec": "h264-software",
+  "lowLatency": false,
   "webTransport": {
     "urlTemplate": "https://192.168.1.50:4311/wt/simulators/{udid}?simdeckToken=...",
     "certificateHash": {
