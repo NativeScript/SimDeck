@@ -80,7 +80,8 @@ session, prints a unique `https://simdeck.djdev.me/simulator/...` URL, and keeps
 the outbound bridge alive until you press Ctrl-C. It uses hardware H.264 by
 default with realtime stream settings for remote viewing; pass `--low-latency`
 to switch to software H.264's low-latency profile for slower Macs or shared
-runners.
+runners. Pass `--software-h264` to keep the same realtime Studio stream profile
+but use the software H.264 encoder.
 
 CLI commands automatically use the same warm daemon:
 

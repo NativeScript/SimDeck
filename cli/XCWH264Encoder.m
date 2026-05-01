@@ -229,13 +229,13 @@ static CGSize XCWScaledDimensionsForSourceSize(int32_t width, int32_t height, XC
         return CGSizeZero;
     }
 
-    int32_t maximumDimension = XCWMaximumEncodedDimension;
-    if (mode == XCWVideoEncoderModeH264Hardware && realtimeStreamMode) {
-        maximumDimension = XCWMaximumRealtimeHardwareEncodedDimension;
-    } else if (mode == XCWVideoEncoderModeH264Software) {
-        maximumDimension = lowLatencyMode
-            ? XCWMaximumLowLatencySoftwareEncodedDimension
-            : XCWMaximumSoftwareEncodedDimension;
+    int32_t maximumDimension = realtimeStreamMode
+        ? XCWMaximumRealtimeHardwareEncodedDimension
+        : XCWMaximumEncodedDimension;
+    if (mode == XCWVideoEncoderModeH264Software && lowLatencyMode) {
+        maximumDimension = XCWMaximumLowLatencySoftwareEncodedDimension;
+    } else if (mode == XCWVideoEncoderModeH264Software && !realtimeStreamMode) {
+        maximumDimension = XCWMaximumSoftwareEncodedDimension;
     }
     int32_t longestEdge = MAX(width, height);
     if (longestEdge <= maximumDimension) {
@@ -250,7 +250,7 @@ static CGSize XCWScaledDimensionsForSourceSize(int32_t width, int32_t height, XC
 static int32_t XCWAverageBitRateForDimensions(int32_t width, int32_t height, XCWVideoEncoderMode mode, BOOL lowLatencyMode, BOOL realtimeStreamMode) {
     int64_t bitsPerPixelBudget = XCWBitsPerPixelBudget;
     int64_t minimumAverageBitRate = XCWMinimumAverageBitRate;
-    if (mode == XCWVideoEncoderModeH264Hardware && realtimeStreamMode) {
+    if (realtimeStreamMode && !lowLatencyMode) {
         bitsPerPixelBudget = XCWRealtimeBitsPerPixelBudget;
         minimumAverageBitRate = XCWMinimumRealtimeAverageBitRate;
     } else if (mode == XCWVideoEncoderModeH264Software) {
@@ -521,14 +521,23 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 }
 
 - (uint64_t)minimumSoftwareFrameIntervalUsLocked {
+    if (_realtimeStreamMode && !_lowLatencyMode) {
+        return XCWRealtimeHardwareMinimumFrameIntervalUs;
+    }
     return _lowLatencyMode ? XCWLowLatencySoftwareMinimumFrameIntervalUs : XCWSoftwareMinimumFrameIntervalUs;
 }
 
 - (uint64_t)initialSoftwareFrameIntervalUsLocked {
+    if (_realtimeStreamMode && !_lowLatencyMode) {
+        return XCWRealtimeHardwareInitialFrameIntervalUs;
+    }
     return _lowLatencyMode ? XCWLowLatencySoftwareInitialFrameIntervalUs : XCWSoftwareInitialFrameIntervalUs;
 }
 
 - (uint64_t)maximumSoftwareFrameIntervalUsLocked {
+    if (_realtimeStreamMode && !_lowLatencyMode) {
+        return XCWRealtimeHardwareMaximumFrameIntervalUs;
+    }
     return _lowLatencyMode ? XCWLowLatencySoftwareMaximumFrameIntervalUs : XCWSoftwareMaximumFrameIntervalUs;
 }
 
@@ -542,7 +551,10 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 
 - (int32_t)expectedFrameRateLocked {
     if (_encoderMode == XCWVideoEncoderModeH264Software) {
-        return _lowLatencyMode ? XCWTargetLowLatencySoftwareFrameRate : XCWTargetSoftwareFrameRate;
+        if (_lowLatencyMode) {
+            return XCWTargetLowLatencySoftwareFrameRate;
+        }
+        return _realtimeStreamMode ? XCWTargetRealtimeHardwareFrameRate : XCWTargetSoftwareFrameRate;
     }
     if (_realtimeStreamMode) {
         return XCWTargetRealtimeHardwareFrameRate;

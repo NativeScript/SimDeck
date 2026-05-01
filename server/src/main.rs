@@ -435,6 +435,8 @@ enum StudioCommand {
         bind: IpAddr,
         #[arg(long)]
         low_latency: bool,
+        #[arg(long, conflicts_with = "low_latency")]
+        software_h264: bool,
     },
 }
 
@@ -1403,12 +1405,13 @@ fn main() -> anyhow::Result<()> {
                 port,
                 bind,
                 low_latency,
+                software_h264,
             } => expose_to_studio(StudioExposeOptions {
                 simulator,
                 studio_url,
                 port,
                 bind,
-                video_codec: if low_latency {
+                video_codec: if low_latency || software_h264 {
                     VideoCodecMode::H264Software
                 } else {
                     VideoCodecMode::H264
