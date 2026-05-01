@@ -4,23 +4,24 @@ SimDeck streams the iOS Simulator over WebRTC using browser-native H.264 video p
 
 ## Codec selection
 
-The server can encode the simulator display in two modes, picked at startup with `--video-codec`:
+The server can encode the simulator display in three modes, picked at startup with `--video-codec`:
 
-| Value              | Encoder                         | When to use it                                                 |
-| ------------------ | ------------------------------- | -------------------------------------------------------------- |
-| `h264` _(default)_ | Hardware H.264 via VideoToolbox | Best local performance when the hardware encoder is available. |
-| `h264-software`    | Software H.264 via VideoToolbox | Compatibility fallback when hardware encode is unavailable.    |
+| Value              | Encoder                              | When to use it                                                       |
+| ------------------ | ------------------------------------ | -------------------------------------------------------------------- |
+| `auto` _(default)_ | VideoToolbox chooses the encoder     | Normal local and remote preview. Does not require hardware encoding. |
+| `hardware`         | Required hardware H.264              | Use only when the hardware encoder is known to be available.         |
+| `software`         | Software-only H.264 via VideoToolbox | Use when hardware encode stalls, is unavailable, or must be avoided. |
 
 Restart the daemon to change encoder mode:
 
 ```sh
-simdeck daemon restart --video-codec h264-software
+simdeck daemon restart --video-codec software
 ```
 
 For slower runners, add `--low-latency` with software H.264:
 
 ```sh
-simdeck daemon start --video-codec h264-software --low-latency
+simdeck daemon start --video-codec software --low-latency
 ```
 
 Low-latency mode caps software H.264 at 15 fps, keeps a single in-flight frame,
@@ -30,7 +31,7 @@ server does not keep waking capture/encode faster than the stream can consume.
 It is CLI-only because it is meant for less capable machines where freshness
 matters more than maximum smoothness.
 
-The chosen codec is reported to clients in the JSON `videoCodec` field on `GET /api/health`.
+The requested encoder mode is reported to clients in the JSON `videoCodec` field on `GET /api/health`.
 
 ## Remote WebRTC ICE
 
@@ -43,7 +44,7 @@ SIMDECK_WEBRTC_ICE_SERVERS=turns:turn.example.com:5349?transport=tcp \
 SIMDECK_WEBRTC_ICE_USERNAME=simdeck \
 SIMDECK_WEBRTC_ICE_CREDENTIAL=secret \
 SIMDECK_WEBRTC_ICE_TRANSPORT_POLICY=relay \
-simdeck daemon start --video-codec h264-software --low-latency
+simdeck daemon start --video-codec software --low-latency
 ```
 
 The browser reads these settings from `GET /api/health` before creating its
@@ -76,10 +77,10 @@ The WebRTC path favors freshness: stale frames are dropped and the sender reques
 
 A few practical guidelines:
 
-- **Start on the default for local preview.** `h264` gives the smoothest preview when VideoToolbox can provide a hardware encoder.
-- **Switch to `h264-software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
+- **Start on the default for local preview.** `auto` lets VideoToolbox choose without requiring the shared hardware encoder.
+- **Switch to `software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
 - **Use `--stream-quality ci-software` for Studio providers on virtualized CI Macs when hardware encode is unavailable.** This profile uses software H.264 at a 960-pixel longest edge, targets 24 fps, lowers bitrate pressure, and favors fresh frames over full-resolution sharpness.
-- **Use `h264-software --low-latency` only when you need the older extra-conservative software profile.** It caps at 15 fps, uses a single pending frame, reduces the longest edge to 1170 pixels, and backs off before software encode latency turns into seconds of stream delay.
+- **Use `software --low-latency` only when you need the older extra-conservative software profile.** It caps at 15 fps, uses a single pending frame, reduces the longest edge to 1170 pixels, and backs off before software encode latency turns into seconds of stream delay.
 
 ## Tuning with metrics
 

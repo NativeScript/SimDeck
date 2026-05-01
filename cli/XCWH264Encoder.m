@@ -38,6 +38,7 @@ static const uint64_t XCWRealtimeHardwareFrameIntervalStepUs = 5556;
 static const NSUInteger XCWRealtimeHardwareHealthyFrameWindow = 6;
 
 typedef NS_ENUM(NSUInteger, XCWVideoEncoderMode) {
+    XCWVideoEncoderModeAuto,
     XCWVideoEncoderModeH264Hardware,
     XCWVideoEncoderModeH264Software,
 };
@@ -45,13 +46,16 @@ typedef NS_ENUM(NSUInteger, XCWVideoEncoderMode) {
 static XCWVideoEncoderMode XCWVideoEncoderModeFromEnvironment(void) {
     const char *rawValue = getenv("SIMDECK_VIDEO_CODEC");
     NSString *value = rawValue != NULL ? [[[NSString alloc] initWithUTF8String:rawValue] lowercaseString] : @"";
-    if ([value isEqualToString:@"h264"] || [value isEqualToString:@"h264-hardware"] || [value isEqualToString:@"avc"]) {
+    if (value.length == 0 || [value isEqualToString:@"auto"]) {
+        return XCWVideoEncoderModeAuto;
+    }
+    if ([value isEqualToString:@"hardware"]) {
         return XCWVideoEncoderModeH264Hardware;
     }
-    if ([value isEqualToString:@"h264-software"] || [value isEqualToString:@"software-h264"]) {
+    if ([value isEqualToString:@"software"]) {
         return XCWVideoEncoderModeH264Software;
     }
-    return XCWVideoEncoderModeH264Software;
+    return XCWVideoEncoderModeAuto;
 }
 
 static BOOL XCWLowLatencyModeFromEnvironment(void) {
@@ -149,6 +153,7 @@ static int32_t XCWRealtimeMinimumAverageBitRate(void) {
 
 static CMVideoCodecType XCWVideoCodecTypeForMode(XCWVideoEncoderMode mode) {
     switch (mode) {
+        case XCWVideoEncoderModeAuto:
         case XCWVideoEncoderModeH264Hardware:
         case XCWVideoEncoderModeH264Software:
         default:
@@ -158,16 +163,19 @@ static CMVideoCodecType XCWVideoCodecTypeForMode(XCWVideoEncoderMode mode) {
 
 static NSString *XCWVideoEncoderModeName(XCWVideoEncoderMode mode) {
     switch (mode) {
+        case XCWVideoEncoderModeAuto:
+            return @"auto";
         case XCWVideoEncoderModeH264Hardware:
-            return @"h264";
+            return @"hardware";
         case XCWVideoEncoderModeH264Software:
         default:
-            return @"h264-software";
+            return @"software";
     }
 }
 
 static NSString *XCWVideoEncoderIDForMode(XCWVideoEncoderMode mode) {
     switch (mode) {
+        case XCWVideoEncoderModeAuto:
         case XCWVideoEncoderModeH264Hardware:
             return nil;
         case XCWVideoEncoderModeH264Software:
@@ -648,7 +656,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 }
 
 - (BOOL)shouldPaceRealtimeHardwareFrameAtTimeUs:(uint64_t)nowUs {
-    if (_encoderMode != XCWVideoEncoderModeH264Hardware || !_realtimeStreamMode || _needsKeyFrame) {
+    if ((_encoderMode != XCWVideoEncoderModeAuto && _encoderMode != XCWVideoEncoderModeH264Hardware) || !_realtimeStreamMode || _needsKeyFrame) {
         return NO;
     }
     if (_realtimeHardwareFrameIntervalUs == 0) {
@@ -723,7 +731,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 }
 
 - (void)adaptRealtimeHardwarePacingForLatencyUs:(uint64_t)latencyUs {
-    if (_encoderMode != XCWVideoEncoderModeH264Hardware || !_realtimeStreamMode || latencyUs == 0) {
+    if ((_encoderMode != XCWVideoEncoderModeAuto && _encoderMode != XCWVideoEncoderModeH264Hardware) || !_realtimeStreamMode || latencyUs == 0) {
         return;
     }
     if (_realtimeHardwareFrameIntervalUs == 0) {
@@ -843,7 +851,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _submittedFrameCount += 1;
     if (_encoderMode == XCWVideoEncoderModeH264Software) {
         _lastSoftwareSubmissionUs = nowUs;
-    } else if (_encoderMode == XCWVideoEncoderModeH264Hardware && _realtimeStreamMode) {
+    } else if ((_encoderMode == XCWVideoEncoderModeAuto || _encoderMode == XCWVideoEncoderModeH264Hardware) && _realtimeStreamMode) {
         _lastRealtimeHardwareSubmissionUs = nowUs;
     }
     _maxInFlightFrameCount = MAX(_maxInFlightFrameCount, _inFlightFrameCount);
@@ -872,7 +880,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     }
     if (_encoderMode == XCWVideoEncoderModeH264Software) {
         encoderSpecification[(__bridge NSString *)kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder] = @NO;
-    } else {
+    } else if (_encoderMode == XCWVideoEncoderModeH264Hardware) {
         encoderSpecification[(__bridge NSString *)kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder] = @YES;
     }
 

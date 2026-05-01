@@ -48,7 +48,7 @@ Whatever you advertise must be resolvable from the remote client.
 {
   "ok": true,
   "httpPort": 4310,
-  "videoCodec": "h264",
+  "videoCodec": "auto",
   "lowLatency": false,
   "webRtc": {
     "iceServers": [{ "urls": ["stun:stun.l.google.com:19302"] }],

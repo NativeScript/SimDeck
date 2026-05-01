@@ -79,7 +79,7 @@ enum Command {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -106,7 +106,7 @@ enum Command {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -380,7 +380,7 @@ enum DaemonCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -396,7 +396,7 @@ enum DaemonCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -420,7 +420,7 @@ enum DaemonCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -445,8 +445,8 @@ enum StudioCommand {
         bind: IpAddr,
         #[arg(long)]
         low_latency: bool,
-        #[arg(long, conflicts_with = "low_latency")]
-        software_h264: bool,
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
+        video_codec: VideoCodecMode,
         #[arg(long, value_enum, conflicts_with = "low_latency")]
         stream_quality: Option<StreamQualityProfileArg>,
     },
@@ -463,7 +463,7 @@ enum ServiceCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -481,7 +481,7 @@ enum ServiceCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -517,8 +517,9 @@ enum PasteboardCommand {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum VideoCodecMode {
-    H264,
-    H264Software,
+    Auto,
+    Hardware,
+    Software,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -606,8 +607,9 @@ struct StudioExposeOptions {
 impl VideoCodecMode {
     fn as_env_value(self) -> &'static str {
         match self {
-            Self::H264 => "h264",
-            Self::H264Software => "h264-software",
+            Self::Auto => "auto",
+            Self::Hardware => "hardware",
+            Self::Software => "software",
         }
     }
 }
@@ -688,7 +690,7 @@ fn studio_stream_quality_profile(
     requested
         .map(|profile| profile.as_profile_id().to_owned())
         .or_else(|| {
-            (video_codec == VideoCodecMode::H264Software && !low_latency)
+            (video_codec == VideoCodecMode::Software && !low_latency)
                 .then_some("ci-software".to_owned())
         })
 }
@@ -710,7 +712,7 @@ impl Default for DaemonLaunchOptions {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             advertise_host: None,
             client_root: None,
-            video_codec: VideoCodecMode::H264,
+            video_codec: VideoCodecMode::Auto,
             low_latency: false,
             realtime_stream: false,
             stream_quality_profile: None,
@@ -1193,7 +1195,7 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
     let project_root = project_root()?;
     let bind = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
     let port = choose_daemon_port_for_bind(4310, bind)?;
-    let video_codec = VideoCodecMode::H264;
+    let video_codec = VideoCodecMode::Auto;
     let low_latency = false;
     let advertise_host = detect_lan_ip()
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
@@ -1594,17 +1596,17 @@ fn main() -> anyhow::Result<()> {
                 port,
                 bind,
                 low_latency,
-                software_h264,
+                video_codec,
                 stream_quality,
             } => expose_to_studio(StudioExposeOptions {
                 simulator,
                 studio_url,
                 port,
                 bind,
-                video_codec: if low_latency || software_h264 {
-                    VideoCodecMode::H264Software
+                video_codec: if low_latency {
+                    VideoCodecMode::Software
                 } else {
-                    VideoCodecMode::H264
+                    video_codec
                 },
                 low_latency,
                 stream_quality,
@@ -4737,7 +4739,56 @@ fn default_client_root() -> anyhow::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_accessibility_point_for_display;
+    use super::{
+        normalize_accessibility_point_for_display, Cli, Command, DaemonCommand, VideoCodecMode,
+    };
+    use clap::Parser;
+
+    #[test]
+    fn local_daemon_start_defaults_to_auto_video_codec() {
+        let cli = Cli::parse_from(["simdeck", "daemon", "start"]);
+
+        let Command::Daemon {
+            command: DaemonCommand::Start { video_codec, .. },
+        } = cli.command
+        else {
+            panic!("expected daemon start command");
+        };
+        assert_eq!(video_codec, VideoCodecMode::Auto);
+    }
+
+    #[test]
+    fn local_daemon_start_accepts_named_video_codec_modes() {
+        for (mode, expected) in [
+            ("auto", VideoCodecMode::Auto),
+            ("hardware", VideoCodecMode::Hardware),
+            ("software", VideoCodecMode::Software),
+        ] {
+            let cli = Cli::parse_from(["simdeck", "daemon", "start", "--video-codec", mode]);
+            let Command::Daemon {
+                command: DaemonCommand::Start { video_codec, .. },
+            } = cli.command
+            else {
+                panic!("expected daemon start command");
+            };
+            assert_eq!(video_codec, expected);
+        }
+    }
+
+    #[test]
+    fn legacy_h264_video_codec_modes_are_rejected() {
+        assert!(
+            Cli::try_parse_from(["simdeck", "daemon", "start", "--video-codec", "h264"]).is_err()
+        );
+        assert!(Cli::try_parse_from([
+            "simdeck",
+            "daemon",
+            "start",
+            "--video-codec",
+            "h264-software"
+        ])
+        .is_err());
+    }
 
     #[test]
     fn selector_tap_keeps_matching_orientation_coordinates() {

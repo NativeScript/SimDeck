@@ -77,9 +77,9 @@ simdeck studio expose "iPhone 17 Pro"
 
 The command starts or reuses the local daemon, creates an ephemeral Studio
 session, prints a unique `https://simdeck.djdev.me/simulator/...` URL, and keeps
-the outbound bridge alive until you press Ctrl-C. It uses hardware H.264 by
-default with realtime stream settings for remote viewing. Pass `--software-h264`
-when hardware encode is unavailable; Studio then defaults to the `ci-software`
+the outbound bridge alive until you press Ctrl-C. It uses `auto` mode by default,
+letting VideoToolbox choose the encoder. Pass `--video-codec software` when you
+need to force software encoding; Studio then defaults to the `ci-software`
 stream quality profile (`960` longest edge at `24` fps). Use
 `--stream-quality quality|balanced|smooth|economy|ci-software` to override it.
 
@@ -110,7 +110,7 @@ Use software H.264's low-latency profile on slower runners where freshness is
 more important than full-resolution smoothness:
 
 ```sh
-simdeck daemon start --video-codec h264-software --low-latency
+simdeck daemon start --video-codec software --low-latency
 ```
 
 Restart the CoreSimulator service layer when `simctl` reports a stale service

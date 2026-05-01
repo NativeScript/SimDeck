@@ -22,7 +22,7 @@ Returns server health and the active video encoder mode.
   "ok": true,
   "httpPort": 4310,
   "timestamp": 1714094761.234,
-  "videoCodec": "h264",
+  "videoCodec": "auto",
   "lowLatency": false,
   "webRtc": {
     "iceServers": [{ "urls": ["stun:stun.l.google.com:19302"] }],
@@ -146,8 +146,8 @@ and the server responds with an SDP answer for a receive-only H.264 video track:
 }
 ```
 
-The endpoint requires the active simulator stream codec to be `h264` or
-`h264-software`. The bundled browser client always uses this endpoint.
+The endpoint requires the active simulator stream to produce H.264-compatible
+samples. The bundled browser client always uses this endpoint.
 
 ### `POST /api/simulators/{udid}/open-url`
 

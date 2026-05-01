@@ -82,11 +82,11 @@ The encoder did not produce a keyframe within 3 seconds. The most common causes:
 
   ```sh
   simdeck daemon stop
-  simdeck daemon start --video-codec h264-software
+  simdeck daemon start --video-codec software
   ```
 
   On virtualized CI Macs where hardware H.264 is unavailable, use
-  `--video-codec h264-software --stream-quality ci-software`. That profile
+  `--video-codec software --stream-quality ci-software`. That profile
   targets a 960-pixel longest edge at 24 fps and lowers bitrate/CPU pressure
   before backlog turns into visible stream delay.
 

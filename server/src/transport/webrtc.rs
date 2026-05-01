@@ -119,7 +119,7 @@ pub async fn create_answer(
         .to_lowercase();
     if !is_h264_codec(&codec) {
         return Err(AppError::bad_request(
-            "WebRTC preview requires H.264. Restart SimDeck with `--video-codec h264-software` or `h264`.",
+            "WebRTC preview requires H.264. Restart SimDeck with `--video-codec auto`, `hardware`, or `software`.",
         ));
     }
 

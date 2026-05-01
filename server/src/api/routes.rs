@@ -562,8 +562,9 @@ fn active_video_codec(config: &Config) -> String {
 
 fn normalize_video_codec(codec: &str) -> Option<&'static str> {
     match codec.trim().to_ascii_lowercase().as_str() {
-        "h264" | "h264-hardware" | "avc" => Some("h264"),
-        "h264-software" | "software-h264" => Some("h264-software"),
+        "auto" => Some("auto"),
+        "hardware" => Some("hardware"),
+        "software" => Some("software"),
         _ => None,
     }
 }

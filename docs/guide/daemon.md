@@ -60,7 +60,7 @@ This starts or reuses the project daemon, serves the bundled browser client, and
 | `--bind <ip>`      | `127.0.0.1`           | Bind address. Use `0.0.0.0` for [LAN access](/guide/lan-access).                    |
 | `--advertise-host` | matches local host    | Hostname or IP advertised to browser clients.                                       |
 | `--client-root`    | bundled `client/dist` | Override the static browser client directory.                                       |
-| `--video-codec`    | `h264`                | One of `h264` or `h264-software`. See [Video](/guide/video).                        |
+| `--video-codec`    | `auto`                | One of `auto`, `hardware`, or `software`. See [Video](/guide/video).                |
 | `--low-latency`    | `false`               | Software H.264 profile for slower runners; caps at 15 fps and drops stale frames.   |
 | `--stream-quality` | auto/default          | Optional realtime stream quality profile, including `ci-software` for CI providers. |
 | `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                              |
@@ -122,7 +122,7 @@ default and serves the bundled browser client.
 Restart it after changing options:
 
 ```sh
-simdeck service restart --port 4310 --video-codec h264-software --low-latency
+simdeck service restart --port 4310 --video-codec software --low-latency
 ```
 
 Disable it when you do not want a persistent daemon:

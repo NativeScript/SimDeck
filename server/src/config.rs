@@ -59,7 +59,7 @@ mod tests {
             PathBuf::from("client/dist"),
             bind_ip,
             advertise_host,
-            "h264-software".to_owned(),
+            "auto".to_owned(),
             false,
             Some("token".to_owned()),
             None,

@@ -222,7 +222,7 @@ jobs:
               --bind 127.0.0.1 \
               --access-token "$PROVIDER_TOKEN" \
               --client-root "$PWD/client/dist" \
-              --video-codec h264-software \
+              --video-codec software \
               --stream-quality "${SIMDECK_STREAM_QUALITY:-ci-software}" \
               >> simdeck.log 2>&1 &
             simdeck_pid="$!"

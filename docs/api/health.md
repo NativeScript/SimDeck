@@ -11,7 +11,7 @@ Returns the static bootstrap information the browser client needs, plus a freshn
   "ok": true,
   "httpPort": 4310,
   "timestamp": 1714094761.234,
-  "videoCodec": "h264",
+  "videoCodec": "auto",
   "lowLatency": false,
   "webRtc": {
     "iceServers": [{ "urls": ["stun:stun.l.google.com:19302"] }],
@@ -20,17 +20,17 @@ Returns the static bootstrap information the browser client needs, plus a freshn
 }
 ```
 
-| Field                       | Notes                                                                                     |
-| --------------------------- | ----------------------------------------------------------------------------------------- |
-| `ok`                        | Always `true` if the route is reachable. Network failures are signalled by HTTP errors.   |
-| `httpPort`                  | HTTP port for the REST API, browser UI, and WebRTC offer endpoint.                        |
-| `timestamp`                 | Server-side `time.now()` as a fractional Unix epoch in seconds.                           |
-| `videoCodec`                | Active encoder. One of `h264` or `h264-software`. See [Video Pipeline](/guide/video).     |
-| `lowLatency`                | `true` when software H.264 low-latency mode was enabled at daemon startup.                |
-| `realtimeStream`            | `true` when the WebRTC stream is configured to favor freshness and realtime pacing.       |
-| `streamQuality`             | Active realtime quality profile and encoder limits such as `maxEdge`, `fps`, and bitrate. |
-| `webRtc.iceServers`         | ICE servers the browser should use when creating the WebRTC peer connection.              |
-| `webRtc.iceTransportPolicy` | Browser ICE transport policy. One of `all` or `relay`.                                    |
+| Field                       | Notes                                                                                                 |
+| --------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `ok`                        | Always `true` if the route is reachable. Network failures are signalled by HTTP errors.               |
+| `httpPort`                  | HTTP port for the REST API, browser UI, and WebRTC offer endpoint.                                    |
+| `timestamp`                 | Server-side `time.now()` as a fractional Unix epoch in seconds.                                       |
+| `videoCodec`                | Requested encoder mode. One of `auto`, `hardware`, or `software`. See [Video Pipeline](/guide/video). |
+| `lowLatency`                | `true` when software H.264 low-latency mode was enabled at daemon startup.                            |
+| `realtimeStream`            | `true` when the WebRTC stream is configured to favor freshness and realtime pacing.                   |
+| `streamQuality`             | Active realtime quality profile and encoder limits such as `maxEdge`, `fps`, and bitrate.             |
+| `webRtc.iceServers`         | ICE servers the browser should use when creating the WebRTC peer connection.                          |
+| `webRtc.iceTransportPolicy` | Browser ICE transport policy. One of `all` or `relay`.                                                |
 
 The default access token is regenerated every time the server restarts. A client should refetch `/api/health` after any disconnection.
 

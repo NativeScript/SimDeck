@@ -22,8 +22,8 @@ simdeck daemon restart
 simdeck daemon killall
 simdeck ui --open
 npm run build:cli && ./build/simdeck ui --open
-simdeck daemon start --video-codec h264-software
-simdeck daemon start --video-codec h264-software --low-latency
+simdeck daemon start --video-codec software
+simdeck daemon start --video-codec software --low-latency
 simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 ```
 
@@ -45,8 +45,9 @@ and proxies REST requests through that bridge while WebRTC media negotiates
 directly with the runner.
 For an ad-hoc local provider that can be opened from another browser or phone,
 run `simdeck studio expose "iPhone 17 Pro"` and keep that process running. It
-prints the unique Studio simulator URL. This defaults to hardware H.264; add
-`--software-h264` when hardware encode is unavailable. Studio expose uses
+prints the unique Studio simulator URL. This defaults to `auto`, letting
+VideoToolbox choose the encoder. Use `--video-codec software` to force software
+encoding. Studio expose uses
 realtime stream settings so remote viewers drop stale frames instead of building
 latency. Software H.264 Studio providers default to the `ci-software` stream
 quality profile; override with `--stream-quality quality|balanced|smooth|economy|ci-software`.
