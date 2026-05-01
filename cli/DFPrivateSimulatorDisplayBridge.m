@@ -2429,9 +2429,30 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         DFLog(@"Initialized bootstrap SimDeviceScreen for %@", udid);
     }
     [self updateStatus:@"Waiting for CoreSimulator screen adapter"];
-    DFSpinRunLoop(0.5);
+    NSDate *adapterDeadline = [NSDate dateWithTimeIntervalSinceNow:15.0];
+    while (_screenAdapter == nil && [adapterDeadline timeIntervalSinceNow] > 0) {
+        Ivar screenAdapterIvar = class_getInstanceVariable([_screenAdapterHost class], "_screenAdapter");
+        if (screenAdapterIvar != NULL) {
+            _screenAdapter = object_getIvar(_screenAdapterHost, screenAdapterIvar);
+        }
+        if (_screenAdapter != nil) {
+            break;
+        }
 
-    _screenAdapter = object_getIvar(_screenAdapterHost, class_getInstanceVariable([_screenAdapterHost class], "_screenAdapter"));
+        // On cold CoreSimulator boots the Swift screenAdapter host can exist
+        // before its private ROCK proxy is connected. Re-read the extension
+        // property while spinning the run loop instead of failing the attach.
+        id refreshedHost = DFCallSwiftSelfGetterByPattern(
+            _device,
+            "$sSo9SimDeviceC12SimulatorKitE13screenAdapter",
+            "vg",
+            "SimDevice.screenAdapter.getter (SimulatorKit extension)"
+        );
+        if (refreshedHost != nil) {
+            _screenAdapterHost = refreshedHost;
+        }
+        DFSpinRunLoop(0.2);
+    }
     if (_screenAdapter == nil) {
         DFLog(@"SimulatorKit screen adapter host did not expose _screenAdapter for %@; host class=%@", udid, NSStringFromClass([_screenAdapterHost class]));
         if (error != NULL) {
@@ -2475,7 +2496,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     // seconds (or only after Simulator.app primes the device). Poll instead of
     // relying on a fixed 0.5s sleep.
     NSDictionary<NSNumber *, id> *screens = DFReadAvailableAdapterScreens(_screenAdapterHost, _screenAdapter);
-    NSDate *screenDeadline = [NSDate dateWithTimeIntervalSinceNow:10.0];
+    NSDate *screenDeadline = [NSDate dateWithTimeIntervalSinceNow:20.0];
     while (screens.count == 0 && [screenDeadline timeIntervalSinceNow] > 0) {
         DFSpinRunLoop(0.1);
         screens = DFReadAvailableAdapterScreens(_screenAdapterHost, _screenAdapter);
