@@ -119,7 +119,7 @@ const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
         id: "quality",
         label: "Quality",
         max_edge: 1440,
-        fps: 30,
+        fps: 60,
         min_bitrate: 3_000_000,
         bits_per_pixel: 4,
     },
