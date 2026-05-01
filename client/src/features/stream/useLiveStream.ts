@@ -77,12 +77,29 @@ export function useLiveStream({
   const [status, setStatus] = useState<StreamStatus>({ state: "idle" });
   const [error, setError] = useState("");
   const [fps, setFps] = useState(0);
+  const [pageVisible, setPageVisible] = useState(
+    () => document.visibilityState !== "hidden",
+  );
   const [streamCanvasRevision, setStreamCanvasRevision] = useState(0);
   const [runtimeInfo] = useState<StreamRuntimeInfo>(detectRuntimeInfo);
+  const streamPaused = paused || !pageVisible;
 
   if (!clientTelemetryIdRef.current) {
     clientTelemetryIdRef.current = createClientTelemetryId();
   }
+
+  useEffect(() => {
+    const updatePageVisible = () => {
+      setPageVisible(document.visibilityState !== "hidden");
+    };
+    document.addEventListener("visibilitychange", updatePageVisible);
+    window.addEventListener("pageshow", updatePageVisible);
+    updatePageVisible();
+    return () => {
+      document.removeEventListener("visibilitychange", updatePageVisible);
+      window.removeEventListener("pageshow", updatePageVisible);
+    };
+  }, []);
 
   useEffect(() => {
     let frameCount = 0;
@@ -109,7 +126,7 @@ export function useLiveStream({
   }, []);
 
   useEffect(() => {
-    if (paused || !canvasElement || workerClientRef.current) {
+    if (streamPaused || !canvasElement || workerClientRef.current) {
       return;
     }
 
@@ -164,7 +181,7 @@ export function useLiveStream({
       workerClient.destroy();
       workerClientRef.current = null;
     };
-  }, [canvasElement, paused]);
+  }, [canvasElement, streamPaused]);
 
   useEffect(() => {
     latestDecodedFramesRef.current = stats.decodedFrames;
@@ -219,7 +236,7 @@ export function useLiveStream({
     setError("");
     setFps(0);
 
-    if (paused || !simulator?.isBooted) {
+    if (streamPaused || !simulator?.isBooted) {
       workerClient.disconnect();
       workerClient.clear();
       return;
@@ -237,7 +254,7 @@ export function useLiveStream({
     return () => {
       workerClient.disconnect();
     };
-  }, [canvasElement, simulator?.isBooted, simulator?.udid, paused]);
+  }, [canvasElement, simulator?.isBooted, simulator?.udid, streamPaused]);
 
   useEffect(() => {
     if (!simulator?.udid) {

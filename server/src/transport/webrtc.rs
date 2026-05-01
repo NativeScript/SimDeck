@@ -47,7 +47,7 @@ const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 const WEBRTC_DISCONNECTED_GRACE: Duration = Duration::from_secs(6);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
-const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 8;
+const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 3;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -160,7 +160,13 @@ pub async fn create_answer(
         .map_err(|error| AppError::internal(format!("create WebRTC peer connection: {error}")))?,
     );
     register_diagnostics(&peer_connection, &udid);
-    register_control_data_channel(&peer_connection, session.clone(), udid.clone());
+    let (viewer_closed_token, viewer_closed) = broadcast::channel(1);
+    register_control_data_channel(
+        &peer_connection,
+        session.clone(),
+        udid.clone(),
+        viewer_closed_token.clone(),
+    );
 
     let video_track = Arc::new(TrackLocalStaticRTP::new(
         RTCRtpCodecCapability {
@@ -221,6 +227,7 @@ pub async fn create_answer(
             video_track,
             cancellation_token,
             cancellation,
+            viewer_closed,
         }
         .run(),
     );
@@ -332,15 +339,17 @@ fn register_control_data_channel(
     peer_connection: &Arc<webrtc::peer_connection::RTCPeerConnection>,
     session: crate::simulators::session::SimulatorSession,
     udid: String,
+    viewer_closed_token: broadcast::Sender<()>,
 ) {
     peer_connection.on_data_channel(Box::new(move |channel: Arc<RTCDataChannel>| {
         let session = session.clone();
         let udid = udid.clone();
+        let viewer_closed_token = viewer_closed_token.clone();
         Box::pin(async move {
             if channel.label() != WEBRTC_CONTROL_CHANNEL_LABEL {
                 return;
             }
-            attach_control_data_channel(channel, session, udid);
+            attach_control_data_channel(channel, session, udid, viewer_closed_token);
         })
     }));
 }
@@ -349,7 +358,18 @@ fn attach_control_data_channel(
     channel: Arc<RTCDataChannel>,
     session: crate::simulators::session::SimulatorSession,
     udid: String,
+    viewer_closed_token: broadcast::Sender<()>,
 ) {
+    let close_udid = udid.clone();
+    channel.on_close(Box::new(move || {
+        let close_udid = close_udid.clone();
+        let viewer_closed_token = viewer_closed_token.clone();
+        Box::pin(async move {
+            info!("WebRTC control data channel closed for {close_udid}");
+            let _ = viewer_closed_token.send(());
+        })
+    }));
+
     channel.on_message(Box::new(move |message: DataChannelMessage| {
         let session = session.clone();
         let udid = udid.clone();
@@ -565,6 +585,7 @@ struct WebRtcMediaStream {
     video_track: Arc<TrackLocalStaticRTP>,
     cancellation_token: broadcast::Sender<()>,
     cancellation: broadcast::Receiver<()>,
+    viewer_closed: broadcast::Receiver<()>,
 }
 
 impl WebRtcMediaStream {
@@ -578,6 +599,7 @@ impl WebRtcMediaStream {
             video_track,
             cancellation_token,
             mut cancellation,
+            mut viewer_closed,
         } = self;
         let mut rx = session.subscribe();
         let mut latest_keyframe = first_frame.clone();
@@ -636,6 +658,10 @@ impl WebRtcMediaStream {
             tokio::select! {
                 _ = cancellation.recv() => {
                     warn!("WebRTC media stream replaced for {udid}");
+                    break;
+                }
+                _ = viewer_closed.recv() => {
+                    info!("WebRTC media stream closing for {udid}: control channel closed");
                     break;
                 }
                 _ = peer_state_interval.tick() => {
@@ -1026,7 +1052,10 @@ impl WebRtcSendTiming {
         frame: &crate::transport::packet::FramePacket,
         realtime_stream: bool,
     ) -> Duration {
-        let _ = realtime_stream;
+        if realtime_stream {
+            self.last_timestamp_us = Some(frame.timestamp_us);
+            return realtime_sample_duration();
+        }
 
         const MIN_FRAME_DURATION_US: u64 = 1_000;
         const DEFAULT_FRAME_DURATION_US: u64 = 16_667;

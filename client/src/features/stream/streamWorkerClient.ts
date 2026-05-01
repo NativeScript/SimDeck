@@ -170,7 +170,7 @@ class WebRtcStreamClient implements StreamClientBackend {
         if (
           generation === this.connectGeneration &&
           (peerConnection.connectionState === "failed" ||
-            peerConnection.connectionState === "closed")
+            peerConnection.connectionState === "disconnected")
         ) {
           if (peerConnection.connectionState === "failed") {
             void this.updateSelectedCandidatePair(peerConnection, target);
@@ -313,13 +313,12 @@ class WebRtcStreamClient implements StreamClientBackend {
           return;
         }
         if (frameAgeMs > WEBRTC_STALLED_FRAME_TIMEOUT_MS) {
-          this.onMessage({
-            type: "status",
-            status: {
-              detail: "Waiting for fresh WebRTC frames",
-              state: "streaming",
-            },
-          });
+          this.handleConnectionError(
+            target,
+            generation,
+            new Error("WebRTC video stalled before rendering fresh frames."),
+          );
+          return;
         }
         this.scheduleFrameWatchdog(target, generation);
       },
