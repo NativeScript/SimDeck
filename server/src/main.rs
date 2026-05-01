@@ -1073,17 +1073,26 @@ fn project_root() -> anyhow::Result<PathBuf> {
 }
 
 fn choose_daemon_port(preferred: u16) -> anyhow::Result<u16> {
+    choose_daemon_port_for_bind(preferred, IpAddr::V4(Ipv4Addr::LOCALHOST))
+}
+
+fn choose_daemon_port_for_bind(preferred: u16, bind: IpAddr) -> anyhow::Result<u16> {
     let start = preferred.max(1024);
     for port in start..start.saturating_add(200) {
-        if port_available(port) {
+        if port_available(bind, port) {
             return Ok(port);
         }
     }
     anyhow::bail!("No available SimDeck daemon port near {preferred}")
 }
 
-fn port_available(port: u16) -> bool {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
+fn port_available(bind: IpAddr, port: u16) -> bool {
+    if bind.is_unspecified() {
+        if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
+            return false;
+        }
+    }
+    TcpListener::bind((bind, port)).is_ok()
 }
 
 fn open_browser(url: &str) -> anyhow::Result<()> {
@@ -1186,8 +1195,8 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
     }
 
     let project_root = project_root()?;
-    let port = choose_daemon_port(4310)?;
     let bind = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+    let port = choose_daemon_port_for_bind(4310, bind)?;
     let video_codec = VideoCodecMode::H264;
     let low_latency = false;
     let advertise_host = detect_lan_ip()
