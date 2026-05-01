@@ -36,8 +36,8 @@ const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
 const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(150);
 const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 3;
-const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
-const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
+const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const WEBRTC_LOW_LATENCY_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
 const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(134);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
@@ -873,7 +873,7 @@ fn realtime_packet_pacing(
     packet_count: usize,
     realtime_stream: bool,
 ) -> Option<(usize, Duration)> {
-    if realtime_stream || packet_count <= 1 {
+    if !realtime_stream || packet_count <= 1 {
         return None;
     }
     let pacing_ticks = ((duration.as_millis() / 4).max(1) as usize).min(packet_count - 1);
@@ -1015,10 +1015,7 @@ impl WebRtcSendTiming {
         frame: &crate::transport::packet::FramePacket,
         realtime_stream: bool,
     ) -> Duration {
-        if realtime_stream {
-            self.last_timestamp_us = Some(frame.timestamp_us);
-            return realtime_sample_duration();
-        }
+        let _ = realtime_stream;
 
         const MIN_FRAME_DURATION_US: u64 = 1_000;
         const DEFAULT_FRAME_DURATION_US: u64 = 16_667;
@@ -1033,15 +1030,6 @@ impl WebRtcSendTiming {
         self.last_timestamp_us = Some(frame.timestamp_us);
         Duration::from_micros(duration_us)
     }
-}
-
-fn realtime_sample_duration() -> Duration {
-    let fps = std::env::var("SIMDECK_REALTIME_FPS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(30)
-        .clamp(15, 60);
-    Duration::from_micros(1_000_000 / fps)
 }
 
 struct WebRtcMetricsGuard {
