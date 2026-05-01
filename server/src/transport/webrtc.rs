@@ -36,13 +36,13 @@ const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
 const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(150);
 const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 3;
-const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
-const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
+const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
+const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_LOW_LATENCY_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
 const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(134);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
-const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
-const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(180);
+const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
+const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(90);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
@@ -873,7 +873,7 @@ fn realtime_packet_pacing(
     packet_count: usize,
     realtime_stream: bool,
 ) -> Option<(usize, Duration)> {
-    if !realtime_stream || packet_count <= 1 {
+    if realtime_stream || packet_count <= 1 {
         return None;
     }
     let pacing_ticks = ((duration.as_millis() / 4).max(1) as usize).min(packet_count - 1);

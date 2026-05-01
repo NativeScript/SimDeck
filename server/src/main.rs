@@ -627,7 +627,7 @@ fn stream_quality_env_for_profile(profile: &str) -> anyhow::Result<StreamQuality
         "quality" => Ok(StreamQualityEnvironment {
             profile: "quality",
             max_edge: 1440,
-            fps: 60,
+            fps: 30,
             min_bitrate: 3_000_000,
             bits_per_pixel: 4,
         }),
@@ -714,8 +714,8 @@ impl Default for DaemonLaunchOptions {
             client_root: None,
             video_codec: VideoCodecMode::H264,
             low_latency: false,
-            realtime_stream: true,
-            stream_quality_profile: Some("quality".to_owned()),
+            realtime_stream: false,
+            stream_quality_profile: None,
         }
     }
 }
@@ -1199,7 +1199,6 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
     let port = choose_daemon_port_for_bind(4310, bind)?;
     let video_codec = VideoCodecMode::H264;
     let low_latency = false;
-    let stream_quality_profile = Some("quality".to_owned());
     let advertise_host = detect_lan_ip()
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
         .to_string();
@@ -1217,8 +1216,8 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
         log_path: None,
         video_codec: Some(video_codec.as_env_value().to_owned()),
         low_latency,
-        realtime_stream: true,
-        stream_quality_profile: stream_quality_profile.clone(),
+        realtime_stream: false,
+        stream_quality_profile: None,
     };
     write_daemon_metadata(&metadata)?;
 
@@ -1240,7 +1239,7 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
         None,
         video_codec,
         low_latency,
-        stream_quality_profile,
+        None,
         Some(access_token),
         Some(pairing_code),
     );

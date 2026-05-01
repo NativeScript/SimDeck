@@ -10,7 +10,6 @@ import type {
 const HAVE_CURRENT_DATA = 2;
 const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 10000;
-const WEBRTC_STATS_REPORT_INTERVAL_MS = 250;
 const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 8000;
 
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
@@ -161,7 +160,6 @@ class WebRtcStreamClient implements StreamClientBackend {
   private controlChannel: RTCDataChannel | null = null;
   private diagnostics = createWebRtcDiagnostics();
   private frameWatchdogTimeout = 0;
-  private lastStatsReportAt = 0;
   private lastVideoFrameAt = 0;
   private peerConnection: RTCPeerConnection | null = null;
   private reconnectTimeout = 0;
@@ -194,7 +192,6 @@ class WebRtcStreamClient implements StreamClientBackend {
     const generation = ++this.connectGeneration;
     this.shouldReconnect = true;
     this.diagnostics = createWebRtcDiagnostics();
-    this.lastStatsReportAt = 0;
     this.reportedVideoConfig = false;
     this.stats = createEmptyStreamStats();
     this.onMessage({
@@ -616,21 +613,10 @@ class WebRtcStreamClient implements StreamClientBackend {
         this.stats.latestFrameGapMs = now - this.lastVideoFrameAt;
       }
       this.lastVideoFrameAt = now;
-      this.reportStats(now);
+      this.onMessage({ type: "stats", stats: { ...this.stats } });
     }
     this.scheduleVideoFrame();
   };
-
-  private reportStats(now = performance.now()) {
-    if (
-      this.lastStatsReportAt > 0 &&
-      now - this.lastStatsReportAt < WEBRTC_STATS_REPORT_INTERVAL_MS
-    ) {
-      return;
-    }
-    this.lastStatsReportAt = now;
-    this.onMessage({ type: "stats", stats: { ...this.stats } });
-  }
 
   private scheduleVideoFrame() {
     this.cancelVideoFrameCallback();
