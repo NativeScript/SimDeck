@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import { ApiError, accessTokenFromLocation, pairBrowser } from "../api/client";
+import { apiUrl, configureSimDeckClient } from "../api/config";
 import {
   bootSimulator,
   dismissKeyboard,
@@ -61,7 +62,6 @@ import {
 } from "../features/viewport/viewportMath";
 import {
   DEVICE_SCREEN_WIDTH,
-  STREAM_ORIGIN,
   ZOOM_ANIMATION_MS,
   ZOOM_STEP,
 } from "../shared/constants";
@@ -102,7 +102,7 @@ function buildScreenMaskUrl(udid: string, stamp: number): string {
 }
 
 function buildAuthenticatedAssetUrl(path: string, stamp: number): string {
-  const url = new URL(path, `${STREAM_ORIGIN || window.location.origin}/`);
+  const url = new URL(apiUrl(path), window.location.href);
   url.searchParams.set("stamp", String(stamp));
   const token = accessTokenFromLocation();
   if (token) {
@@ -172,10 +172,26 @@ type SimulatorTransition = {
   udid: string;
 };
 
-export function AppShell() {
+export interface AppShellProps {
+  apiRoot?: string;
+  fixedSimulatorUDID?: string | null;
+  hideSimulatorSelection?: boolean;
+  pairingEnabled?: boolean;
+}
+
+export function AppShell({
+  apiRoot = "",
+  fixedSimulatorUDID = null,
+  hideSimulatorSelection = false,
+  pairingEnabled = true,
+}: AppShellProps = {}) {
+  configureSimDeckClient({ apiRoot });
   const [initialUiState] = useState(readPersistedUiState);
   const [initialSelectedUDID] = useState(
-    () => readDeviceQueryParam() ?? initialUiState.selectedUDID,
+    () =>
+      fixedSimulatorUDID ??
+      readDeviceQueryParam() ??
+      initialUiState.selectedUDID,
   );
   const initialViewportState = initialSelectedUDID
     ? viewportStateForUDID(initialUiState, initialSelectedUDID)
@@ -301,6 +317,14 @@ export function AppShell() {
   });
 
   const selectedSimulator =
+    (fixedSimulatorUDID
+      ? (simulators.find(
+          (simulator) => simulator.udid === fixedSimulatorUDID,
+        ) ??
+        simulators.find((simulator) =>
+          simulatorMatchesIdentifier(simulator, fixedSimulatorUDID),
+        ))
+      : null) ??
     simulators.find((simulator) => simulator.udid === selectedUDID) ??
     simulators.find((simulator) =>
       simulatorMatchesIdentifier(simulator, selectedUDID),
@@ -354,6 +378,7 @@ export function AppShell() {
       !selectedSimulator ||
       !streamError ||
       readDeviceQueryParam() ||
+      fixedSimulatorUDID ||
       !isStreamAttachFailure(streamError)
     ) {
       return;
@@ -377,7 +402,13 @@ export function AppShell() {
         `${selectedSimulator.name} did not expose a live simulator screen. Switched to ${nextSimulator.name}.`,
       );
     }
-  }, [failedStreamUDIDs, selectedSimulator, simulators, streamError]);
+  }, [
+    failedStreamUDIDs,
+    fixedSimulatorUDID,
+    selectedSimulator,
+    simulators,
+    streamError,
+  ]);
   const shouldRenderChrome =
     selectedSimulator != null && shouldRenderNativeChrome(selectedSimulator);
   const viewportChromeProfile = shouldRenderChrome ? chromeProfile : null;
@@ -499,10 +530,14 @@ export function AppShell() {
   }, [accessibilitySelectedId, selectedSimulator?.udid]);
 
   useEffect(() => {
-    if (selectedSimulator && selectedSimulator.udid !== selectedUDID) {
+    if (
+      !fixedSimulatorUDID &&
+      selectedSimulator &&
+      selectedSimulator.udid !== selectedUDID
+    ) {
       setSelectedUDID(selectedSimulator.udid);
     }
-  }, [selectedSimulator, selectedUDID]);
+  }, [fixedSimulatorUDID, selectedSimulator, selectedUDID]);
 
   useEffect(() => {
     const nextViewportState = selectedSimulator
@@ -805,7 +840,9 @@ export function AppShell() {
   });
 
   const pairingRequired =
-    listError === AUTH_REQUIRED_MESSAGE && !accessTokenFromLocation();
+    pairingEnabled &&
+    listError === AUTH_REQUIRED_MESSAGE &&
+    !accessTokenFromLocation();
   const error = pairingRequired
     ? localError || streamError
     : localError || streamError || listError;
@@ -1221,6 +1258,7 @@ export function AppShell() {
         error={error}
         filteredSimulators={filteredSimulators}
         hierarchyVisible={hierarchyVisible}
+        hideSimulatorSelection={hideSimulatorSelection}
         isLoading={isLoading}
         menuOpen={menuOpen}
         menuRef={menuRef}

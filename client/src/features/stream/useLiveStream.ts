@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { apiHeaders } from "../../api/client";
+import { apiUrl } from "../../api/config";
 import type { SimulatorMetadata } from "../../api/types";
 import type { Size } from "../viewport/types";
 import { createEmptyStreamStats } from "./stats";
@@ -57,7 +58,10 @@ function createClientTelemetryId(): string {
 }
 
 function buildClientTelemetryUrl(): string {
-  return new URL("/api/client-stream-stats", window.location.href).toString();
+  return new URL(
+    apiUrl("/api/client-stream-stats"),
+    window.location.href,
+  ).toString();
 }
 
 export function useLiveStream({
