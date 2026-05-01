@@ -69,6 +69,9 @@ jobs:
       - name: Check Prettier formatting
         run: npx prettier --check .
 
+      - name: Test studio provider bridge
+        run: npm run test:studio-provider
+
       - name: Typecheck client
         run: npm run --prefix client typecheck
 
