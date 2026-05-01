@@ -24,10 +24,31 @@ on:
       simdeck_artifact_url:
         description: Optional URL to a prebuilt simdeck binary tarball
         required: false
+      simdeck_repository:
+        description: GitHub repository to clone when SimDeck is not present in the target repo
+        required: false
+        default: NativeScript/SimDeck
+      simdeck_ref:
+        description: Optional SimDeck branch, tag, or SHA to check out
+        required: false
       stream_quality:
         description: SimDeck realtime stream quality profile
         required: false
         default: ci-software
+      webrtc_ice_servers:
+        description: Comma-separated ICE server URLs for browser and provider WebRTC
+        required: false
+        default: stun:stun.l.google.com:19302
+      webrtc_ice_username:
+        description: Optional TURN username
+        required: false
+      webrtc_ice_credential:
+        description: Optional TURN credential
+        required: false
+      webrtc_ice_transport_policy:
+        description: Browser ICE transport policy
+        required: false
+        default: all
 
 permissions:
   actions: read
@@ -50,12 +71,6 @@ jobs:
           github-token: ${{ github.token }}
           path: simdeck-artifact
 
-      - name: Install cloudflared
-        shell: bash
-        run: |
-          set -euo pipefail
-          brew install cloudflare/cloudflare/cloudflared
-
       - name: Register provider workflow
         shell: bash
         env:
@@ -71,7 +86,7 @@ jobs:
               \"providerToken\":\"$PROVIDER_TOKEN\",
               \"providerRunId\":\"$GITHUB_RUN_ID\",
               \"providerRunUrl\":\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\",
-              \"status\":\"running\",
+              \"status\":\"building\",
               \"simulatorName\":\"GitHub Actions macOS runner\"
             }" \
             "$SIMDECK_CLOUD_URL/api/actions/providers/register"
@@ -80,6 +95,8 @@ jobs:
         shell: bash
         env:
           SIMDECK_ARTIFACT_URL: ${{ inputs.simdeck_artifact_url }}
+          SIMDECK_REPOSITORY: ${{ inputs.simdeck_repository || 'NativeScript/SimDeck' }}
+          SIMDECK_REF: ${{ inputs.simdeck_ref }}
         run: |
           set -euo pipefail
           if [[ -n "${SIMDECK_ARTIFACT_URL:-}" ]]; then
@@ -90,7 +107,16 @@ jobs:
             ./scripts/build-client.sh
             ./scripts/build-cli.sh
           else
-            git clone --depth 1 https://github.com/NativeScript/SimDeck.git simdeck-src
+            simdeck_repo="${SIMDECK_REPOSITORY:-NativeScript/SimDeck}"
+            if [[ ! "$simdeck_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+              echo "Invalid SimDeck repository: $simdeck_repo"
+              exit 1
+            fi
+            clone_args=(--depth 1)
+            if [[ -n "${SIMDECK_REF:-}" ]]; then
+              clone_args+=(--branch "$SIMDECK_REF")
+            fi
+            git clone "${clone_args[@]}" "https://github.com/$simdeck_repo.git" simdeck-src
             ./simdeck-src/scripts/build-client.sh
             ./simdeck-src/scripts/build-cli.sh
             mkdir -p build
@@ -110,10 +136,34 @@ jobs:
           PREVIEW_ID: ${{ inputs.preview_id }}
           PROVIDER_TOKEN: ${{ inputs.provider_token }}
           BUNDLE_ID: ${{ inputs.bundle_id }}
-          SIMDECK_ALLOWED_ORIGINS: ${{ inputs.simdeck_cloud_url }}
+          SIMDECK_ALLOWED_ORIGINS: "*"
+          SIMDECK_WEBRTC_ICE_SERVERS: ${{ inputs.webrtc_ice_servers }}
+          SIMDECK_WEBRTC_ICE_USERNAME: ${{ inputs.webrtc_ice_username }}
+          SIMDECK_WEBRTC_ICE_CREDENTIAL: ${{ inputs.webrtc_ice_credential }}
+          SIMDECK_WEBRTC_ICE_TRANSPORT_POLICY: ${{ inputs.webrtc_ice_transport_policy }}
           SIMDECK_STREAM_QUALITY: ${{ inputs.stream_quality || 'ci-software' }}
+          RUST_LOG: info,wtransport=warn,quinn=warn
+          RUST_BACKTRACE: full
+          NSUnbufferedIO: YES
         run: |
           set -euo pipefail
+          run_with_timeout() {
+            local limit="$1"
+            shift
+            "$@" &
+            local pid="$!"
+            local elapsed=0
+            while kill -0 "$pid" 2>/dev/null; do
+              if (( elapsed >= limit )); then
+                kill "$pid" 2>/dev/null || true
+                wait "$pid" 2>/dev/null || true
+                return 124
+              fi
+              sleep 1
+              elapsed=$((elapsed + 1))
+            done
+            wait "$pid"
+          }
 
           ios_udid="$(xcrun simctl list devices available --json | python3 -c '
           import json, sys
@@ -129,17 +179,10 @@ jobs:
           ')"
 
           xcrun simctl boot "$ios_udid" || true
-          xcrun simctl bootstatus "$ios_udid" -b
-
-          app_path=""
-          if [[ -d simdeck-artifact ]]; then
-            app_path="$(find simdeck-artifact -maxdepth 6 -type d -name '*.app' | head -n 1 || true)"
-          fi
-          if [[ -n "$app_path" ]]; then
-            xcrun simctl install "$ios_udid" "$app_path"
-          fi
-          if [[ -n "${BUNDLE_ID:-}" ]]; then
-            xcrun simctl launch "$ios_udid" "$BUNDLE_ID" || true
+          if ! run_with_timeout 180 xcrun simctl bootstatus "$ios_udid" -b; then
+            echo "simctl bootstatus timed out"
+            xcrun simctl list devices "$ios_udid" || true
+            exit 1
           fi
 
           ./build/simdeck serve \
@@ -152,11 +195,20 @@ jobs:
             > simdeck.log 2>&1 &
           simdeck_pid="$!"
 
+          dump_logs() {
+            echo "--- simdeck.log ---"
+            cat simdeck.log || true
+            echo "--- private bridge log ---"
+            cat /tmp/simdeck-private-bridge.log || true
+            echo "--- crash reports ---"
+            find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \( -name 'simdeck*.ips' -o -name 'simdeck*.crash' \) -print -exec cat {} \; || true
+          }
+
           healthy=0
           for _ in {1..120}; do
             if ! kill -0 "$simdeck_pid" 2>/dev/null; then
               echo "simdeck exited before health check passed"
-              cat simdeck.log || true
+              dump_logs
               exit 1
             fi
             if curl -fsS http://127.0.0.1:4310/api/health >/dev/null; then
@@ -167,28 +219,50 @@ jobs:
           done
           if [[ "$healthy" != "1" ]]; then
             echo "simdeck did not become healthy"
-            cat simdeck.log || true
+            dump_logs
             exit 1
           fi
 
-          cloudflared tunnel --url http://127.0.0.1:4310 \
-            > cloudflared.log 2>&1 &
-          cloudflared_pid="$!"
-
-          tunnel_url=""
-          for _ in {1..120}; do
-            tunnel_url="$(grep -Eo 'https://[-a-zA-Z0-9.]+\.trycloudflare\.com' cloudflared.log | head -n 1 || true)"
-            if [[ -n "$tunnel_url" ]]; then
-              break
-            fi
-            sleep 1
-          done
-
-          if [[ -z "$tunnel_url" ]]; then
-            echo "cloudflared did not print a trycloudflare.com URL"
-            cat cloudflared.log || true
+          echo "Prewarming private simulator stream"
+          if ! run_with_timeout 60 curl -fsS -X POST "http://127.0.0.1:4310/api/simulators/$ios_udid/refresh?simdeckToken=$PROVIDER_TOKEN"; then
+            echo "SimDeck private stream prewarm failed"
+            dump_logs
             exit 1
           fi
+          echo
+          echo "Private simulator stream prewarmed"
+
+          provider_base_url="$SIMDECK_CLOUD_URL/simulator/$PREVIEW_ID"
+          bridge_script="scripts/studio-provider-bridge.mjs"
+          if [[ ! -f "$bridge_script" && -f "simdeck-src/scripts/studio-provider-bridge.mjs" ]]; then
+            bridge_script="simdeck-src/scripts/studio-provider-bridge.mjs"
+          fi
+          if [[ ! -f "$bridge_script" ]]; then
+            echo "SimDeck Studio provider bridge script was not found"
+            exit 1
+          fi
+          SIMDECK_LOCAL_URL="http://127.0.0.1:4310" \
+          SIMDECK_STUDIO_URL="$provider_base_url" \
+          node "$bridge_script" \
+            > simdeck-provider-bridge.log 2>&1 &
+          bridge_pid="$!"
+
+          (
+            while true; do
+              sleep 15
+              echo "::group::SimDeck diagnostics $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              curl -fsS "http://127.0.0.1:4310/api/metrics" || true
+              echo
+              echo "--- simdeck webrtc log tail ---"
+              grep -E 'WebRTC|ICE|candidate|peer connection|H264|h264|frame write|bootstrap' simdeck.log | tail -n 120 || true
+              echo "--- private bridge log tail ---"
+              tail -n 80 /tmp/simdeck-private-bridge.log || true
+              echo "--- provider bridge log tail ---"
+              tail -n 40 simdeck-provider-bridge.log || true
+              echo "::endgroup::"
+            done
+          ) &
+          diagnostics_pid="$!"
 
           register() {
             curl -fsS \
@@ -198,7 +272,7 @@ jobs:
                 \"providerToken\":\"$PROVIDER_TOKEN\",
                 \"providerRunId\":\"$GITHUB_RUN_ID\",
                 \"providerRunUrl\":\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\",
-                \"baseUrl\":\"$tunnel_url/?simdeckToken=$PROVIDER_TOKEN&transport=webrtc&device=$ios_udid\",
+                \"baseUrl\":\"$provider_base_url\",
                 \"simulatorUdid\":\"$ios_udid\",
                 \"simulatorName\":\"GitHub Actions macOS runner\",
                 \"runtimeName\":\"$(xcrun simctl getenv "$ios_udid" SIMULATOR_RUNTIME_VERSION 2>/dev/null || true)\",
@@ -209,7 +283,22 @@ jobs:
           }
 
           register
-          echo "SimDeck tunnel: $tunnel_url"
+          echo "SimDeck Studio URL: $provider_base_url"
+
+          app_path=""
+          if [[ -d simdeck-artifact ]]; then
+            app_path="$(find simdeck-artifact -maxdepth 6 -type d -name '*.app' | head -n 1 || true)"
+          fi
+          if [[ -n "$app_path" ]]; then
+            echo "Installing simulator artifact from $app_path"
+            run_with_timeout 120 xcrun simctl install "$ios_udid" "$app_path" || echo "simctl install timed out or failed"
+          fi
+          if [[ -n "${BUNDLE_ID:-}" ]]; then
+            echo "Launching $BUNDLE_ID"
+            run_with_timeout 30 xcrun simctl launch "$ios_udid" "$BUNDLE_ID" || true
+            run_with_timeout 5 xcrun simctl io "$ios_udid" screenshot /tmp/simdeck-provider-app-screen.png >/tmp/simdeck-app-screenshot.log 2>&1 || cat /tmp/simdeck-app-screenshot.log || true
+          fi
+
           deadline=$((SECONDS + 1800))
           while true; do
             sleep 30
@@ -223,13 +312,16 @@ jobs:
             fi
             if ! kill -0 "$simdeck_pid" 2>/dev/null; then
               echo "simdeck exited"
-              cat simdeck.log || true
+              dump_logs
               exit 1
             fi
-            if ! kill -0 "$cloudflared_pid" 2>/dev/null; then
-              echo "cloudflared exited"
-              cat cloudflared.log || true
+            if ! kill -0 "$bridge_pid" 2>/dev/null; then
+              echo "provider bridge exited"
+              cat simdeck-provider-bridge.log || true
               exit 1
+            fi
+            if ! kill -0 "$diagnostics_pid" 2>/dev/null; then
+              echo "diagnostics loop exited"
             fi
             register
           done
