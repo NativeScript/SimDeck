@@ -41,8 +41,8 @@ const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_LOW_LATENCY_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
 const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(134);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
-const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(25);
-const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(60);
+const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
+const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(90);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
@@ -1040,7 +1040,7 @@ fn realtime_sample_duration() -> Duration {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(30)
-        .clamp(30, 60);
+        .clamp(15, 60);
     Duration::from_micros(1_000_000 / fps)
 }
 
