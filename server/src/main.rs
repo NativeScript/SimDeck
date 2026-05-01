@@ -519,6 +519,7 @@ enum PasteboardCommand {
 enum VideoCodecMode {
     H264,
     H264Software,
+    Jpeg,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -608,6 +609,7 @@ impl VideoCodecMode {
         match self {
             Self::H264 => "h264",
             Self::H264Software => "h264-software",
+            Self::Jpeg => "jpeg",
         }
     }
 }
