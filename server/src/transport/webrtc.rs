@@ -46,6 +46,7 @@ const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(9
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
+const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 3;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -420,13 +421,44 @@ fn h264_rtcp_feedback() -> Vec<RTCPFeedback> {
 fn register_webrtc_media_stream(udid: &str) -> (broadcast::Sender<()>, broadcast::Receiver<()>) {
     let (tx, rx) = broadcast::channel(1);
     let streams = WEBRTC_MEDIA_STREAMS.get_or_init(|| Mutex::new(HashMap::new()));
-    streams
-        .lock()
-        .unwrap()
-        .entry(udid.to_owned())
-        .or_default()
-        .push(tx.clone());
+    let mut streams = streams.lock().unwrap();
+    let active_streams = streams.entry(udid.to_owned()).or_default();
+    while active_streams.len() >= MAX_WEBRTC_MEDIA_STREAMS_PER_UDID {
+        if let Some(stale_stream) = active_streams.first().cloned() {
+            let _ = stale_stream.send(());
+        }
+        active_streams.remove(0);
+    }
+    active_streams.push(tx.clone());
+    drop(streams);
     (tx, rx)
+}
+
+#[cfg(test)]
+fn active_webrtc_media_stream_count(udid: &str) -> usize {
+    WEBRTC_MEDIA_STREAMS
+        .get()
+        .and_then(|streams| streams.lock().ok()?.get(udid).map(Vec::len))
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn register_webrtc_media_stream_for_test(
+    udid: &str,
+) -> (broadcast::Sender<()>, broadcast::Receiver<()>) {
+    register_webrtc_media_stream(udid)
+}
+
+#[cfg(test)]
+fn clear_webrtc_media_stream_for_test(udid: &str, token: &broadcast::Sender<()>) {
+    clear_webrtc_media_stream(udid, token);
+}
+
+#[cfg(test)]
+fn reset_webrtc_media_streams_for_test(udid: &str) {
+    if let Some(streams) = WEBRTC_MEDIA_STREAMS.get() {
+        streams.lock().unwrap().remove(udid);
+    }
 }
 
 fn clear_webrtc_media_stream(udid: &str, token: &broadcast::Sender<()>) {
@@ -1048,8 +1080,9 @@ mod tests {
     #[test]
     fn registering_second_webrtc_stream_does_not_cancel_first() {
         let udid = format!("test-{}", std::process::id());
-        let (first_token, mut first_rx) = super::register_webrtc_media_stream(&udid);
-        let (second_token, mut second_rx) = super::register_webrtc_media_stream(&udid);
+        super::reset_webrtc_media_streams_for_test(&udid);
+        let (first_token, mut first_rx) = super::register_webrtc_media_stream_for_test(&udid);
+        let (second_token, mut second_rx) = super::register_webrtc_media_stream_for_test(&udid);
 
         assert!(super::has_media_stream(&udid));
         assert!(first_rx.try_recv().is_err());
@@ -1059,8 +1092,29 @@ mod tests {
         assert!(first_rx.try_recv().is_ok());
         assert!(second_rx.try_recv().is_ok());
 
-        super::clear_webrtc_media_stream(&udid, &first_token);
-        super::clear_webrtc_media_stream(&udid, &second_token);
+        super::clear_webrtc_media_stream_for_test(&udid, &first_token);
+        super::clear_webrtc_media_stream_for_test(&udid, &second_token);
+        assert!(!super::has_media_stream(&udid));
+    }
+
+    #[test]
+    fn registering_fourth_webrtc_stream_cancels_oldest() {
+        let udid = format!("test-cap-{}", std::process::id());
+        super::reset_webrtc_media_streams_for_test(&udid);
+        let (_first_token, mut first_rx) = super::register_webrtc_media_stream_for_test(&udid);
+        let (second_token, mut second_rx) = super::register_webrtc_media_stream_for_test(&udid);
+        let (third_token, mut third_rx) = super::register_webrtc_media_stream_for_test(&udid);
+        let (fourth_token, mut fourth_rx) = super::register_webrtc_media_stream_for_test(&udid);
+
+        assert!(first_rx.try_recv().is_ok());
+        assert!(second_rx.try_recv().is_err());
+        assert!(third_rx.try_recv().is_err());
+        assert!(fourth_rx.try_recv().is_err());
+        assert_eq!(super::active_webrtc_media_stream_count(&udid), 3);
+
+        super::clear_webrtc_media_stream_for_test(&udid, &second_token);
+        super::clear_webrtc_media_stream_for_test(&udid, &third_token);
+        super::clear_webrtc_media_stream_for_test(&udid, &fourth_token);
         assert!(!super::has_media_stream(&udid));
     }
 

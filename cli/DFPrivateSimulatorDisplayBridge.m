@@ -175,6 +175,18 @@ static void DFLog(NSString *format, ...) {
     [handle closeFile];
 }
 
+static BOOL DFVerboseTouchLoggingEnabled(void) {
+    static BOOL enabled = NO;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSString *value = NSProcessInfo.processInfo.environment[@"SIMDECK_VERBOSE_TOUCH_LOGS"];
+        enabled = [value isEqualToString:@"1"] ||
+                  [value caseInsensitiveCompare:@"true"] == NSOrderedSame ||
+                  [value caseInsensitiveCompare:@"yes"] == NSOrderedSame;
+    });
+    return enabled;
+}
+
 #pragma mark - SimulatorKit Swift symbol resolver
 //
 // We call into SimulatorKit's private Swift API by dlsym'ing mangled symbol
@@ -3314,7 +3326,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             return;
         }
 
-        if (phase != DFPrivateSimulatorTouchPhaseMoved) {
+        if (DFVerboseTouchLoggingEnabled() && phase != DFPrivateSimulatorTouchPhaseMoved) {
             DFLog(@"Sending %@ Indigo HID touch at pixel (%.1f, %.1f) ratio (%.4f, %.4f) within %.0fx%.0f", phaseLabel, point.x, point.y, clampedX, clampedY, displaySize.width, displaySize.height);
         }
 

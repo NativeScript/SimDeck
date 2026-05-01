@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 const CLIENT_STREAM_STATS_LIMIT: usize = 48;
+const CLIENT_STREAM_STATS_TTL_MS: f64 = 15_000.0;
 
 #[derive(Default)]
 pub struct Metrics {
@@ -109,6 +110,7 @@ impl Metrics {
             .client_stream_stats
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_stale_client_stream_stats(&mut snapshots);
 
         if let Some(existing) = snapshots.iter_mut().find(|existing| {
             let (client_id, kind) = existing.key();
@@ -126,11 +128,27 @@ impl Metrics {
     }
 
     pub fn client_stream_stats_snapshot(&self) -> Vec<ClientStreamStats> {
-        self.client_stream_stats
+        let mut snapshots = self
+            .client_stream_stats
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .cloned()
-            .collect()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_stale_client_stream_stats(&mut snapshots);
+        snapshots.iter().cloned().collect()
     }
+}
+
+fn prune_stale_client_stream_stats(snapshots: &mut VecDeque<ClientStreamStats>) {
+    let now_ms = current_time_ms();
+    snapshots.retain(|stats| {
+        stats
+            .timestamp_ms
+            .is_some_and(|timestamp| now_ms - timestamp <= CLIENT_STREAM_STATS_TTL_MS)
+    });
+}
+
+fn current_time_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as f64)
+        .unwrap_or(0.0)
 }
