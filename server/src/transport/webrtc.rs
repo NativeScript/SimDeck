@@ -383,7 +383,7 @@ fn h264_sdp_fmtp_line(codec: &str) -> String {
 }
 
 fn h264_rtcp_feedback() -> Vec<RTCPFeedback> {
-    vec![
+    let mut feedback = vec![
         RTCPFeedback {
             typ: "goog-remb".to_owned(),
             parameter: String::new(),
@@ -398,13 +398,19 @@ fn h264_rtcp_feedback() -> Vec<RTCPFeedback> {
         },
         RTCPFeedback {
             typ: "nack".to_owned(),
-            parameter: String::new(),
-        },
-        RTCPFeedback {
-            typ: "nack".to_owned(),
             parameter: "pli".to_owned(),
         },
-    ]
+    ];
+    if !realtime_stream_enabled() {
+        feedback.insert(
+            3,
+            RTCPFeedback {
+                typ: "nack".to_owned(),
+                parameter: String::new(),
+            },
+        );
+    }
+    feedback
 }
 
 fn register_webrtc_media_stream(udid: &str) -> (broadcast::Sender<()>, broadcast::Receiver<()>) {
