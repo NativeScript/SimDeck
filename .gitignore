@@ -12,6 +12,7 @@ packages/react-native-inspector/dist/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
 cloud/
+.cache/
 .playwright-mcp/
 simdeck-snapshot.md
 

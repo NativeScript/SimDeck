@@ -1,4 +1,4 @@
-import { API_ROOT } from "../shared/constants";
+import { apiUrl } from "./config";
 import type { HealthResponse } from "./types";
 
 export class ApiError extends Error {
@@ -32,7 +32,7 @@ export async function apiRequest<T>(
   options: RequestInit = {},
 ): Promise<T> {
   const { headers, ...rest } = options;
-  const response = await fetch(`${API_ROOT}${path}`, {
+  const response = await fetch(apiUrl(path), {
     ...rest,
     headers: apiHeaders(headers),
   });

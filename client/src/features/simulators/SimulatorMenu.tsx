@@ -6,6 +6,7 @@ import { SimulatorRow } from "./SimulatorRow";
 interface SimulatorMenuProps {
   debugVisible: boolean;
   filteredSimulators: SimulatorMetadata[];
+  hideSimulatorSelection?: boolean;
   isLoading: boolean;
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
@@ -23,6 +24,7 @@ interface SimulatorMenuProps {
 export function SimulatorMenu({
   debugVisible,
   filteredSimulators,
+  hideSimulatorSelection = false,
   isLoading,
   menuOpen,
   menuRef,
@@ -53,29 +55,33 @@ export function SimulatorMenu({
           className="menu-popover"
           onPointerDown={(event) => event.stopPropagation()}
         >
-          <input
-            className="sidebar-search"
-            onChange={(event) => onChangeSearch(event.target.value)}
-            placeholder="Search simulators…"
-            value={search}
-          />
-          <div className="sim-list">
-            {isLoading ? <p className="list-empty">Loading…</p> : null}
-            {!isLoading && filteredSimulators.length === 0 ? (
-              <p className="list-empty">No matches</p>
-            ) : null}
-            {filteredSimulators.map((simulator) => (
-              <SimulatorRow
-                isSelected={simulator.udid === selectedSimulator?.udid}
-                key={simulator.udid}
-                onSelect={() => {
-                  setSelectedUDID(simulator.udid);
-                  onCloseMenu();
-                }}
-                simulator={simulator}
+          {!hideSimulatorSelection ? (
+            <>
+              <input
+                className="sidebar-search"
+                onChange={(event) => onChangeSearch(event.target.value)}
+                placeholder="Search simulators..."
+                value={search}
               />
-            ))}
-          </div>
+              <div className="sim-list">
+                {isLoading ? <p className="list-empty">Loading...</p> : null}
+                {!isLoading && filteredSimulators.length === 0 ? (
+                  <p className="list-empty">No matches</p>
+                ) : null}
+                {filteredSimulators.map((simulator) => (
+                  <SimulatorRow
+                    isSelected={simulator.udid === selectedSimulator?.udid}
+                    key={simulator.udid}
+                    onSelect={() => {
+                      setSelectedUDID(simulator.udid);
+                      onCloseMenu();
+                    }}
+                    simulator={simulator}
+                  />
+                ))}
+              </div>
+            </>
+          ) : null}
           {selectedSimulator ? (
             <>
               <div className="menu-divider" />

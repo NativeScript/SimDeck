@@ -1,4 +1,5 @@
 import { apiHeaders, fetchHealth } from "../../api/client";
+import { apiUrl } from "../../api/config";
 import type { HealthResponse } from "../../api/types";
 import { createEmptyStreamStats } from "./stats";
 import type {
@@ -138,7 +139,10 @@ class WebRtcStreamClient implements StreamClientBackend {
         (video as HTMLVideoElement & { latencyHint?: string }).latencyHint =
           "interactive";
         video.srcObject = stream;
-        canvasElement.after(video);
+        canvasElement.parentElement?.insertBefore(
+          video,
+          canvasElement.nextSibling,
+        );
         this.video = video;
         const startPlayback = () => {
           if (generation !== this.connectGeneration) {
@@ -459,12 +463,15 @@ class WebRtcStreamClient implements StreamClientBackend {
       url: window.location.href,
       userAgent: window.navigator.userAgent,
     };
-    void fetch(new URL("/api/client-stream-stats", window.location.href), {
-      body: JSON.stringify(payload),
-      cache: "no-store",
-      headers: apiHeaders(),
-      method: "POST",
-    }).catch(() => {
+    void fetch(
+      new URL(apiUrl("/api/client-stream-stats"), window.location.href),
+      {
+        body: JSON.stringify(payload),
+        cache: "no-store",
+        headers: apiHeaders(),
+        method: "POST",
+      },
+    ).catch(() => {
       // Diagnostics only.
     });
   }
@@ -583,14 +590,17 @@ function postWebRtcOffer(
   udid: string,
   localDescription: RTCSessionDescription,
 ): Promise<Response> {
-  return fetch(`/api/simulators/${encodeURIComponent(udid)}/webrtc/offer`, {
-    body: JSON.stringify({
-      sdp: localDescription.sdp,
-      type: localDescription.type,
-    }),
-    headers: apiHeaders(),
-    method: "POST",
-  });
+  return fetch(
+    apiUrl(`/api/simulators/${encodeURIComponent(udid)}/webrtc/offer`),
+    {
+      body: JSON.stringify({
+        sdp: localDescription.sdp,
+        type: localDescription.type,
+      }),
+      headers: apiHeaders(),
+      method: "POST",
+    },
+  );
 }
 
 function configureLowLatencyReceiver(receiver: RTCRtpReceiver) {

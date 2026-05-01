@@ -1,4 +1,5 @@
 import { accessTokenFromLocation, apiRequest } from "./client";
+import { apiUrl } from "./config";
 import type {
   KeyPayload,
   LaunchPayload,
@@ -58,7 +59,7 @@ export function sendKey(udid: string, payload: KeyPayload) {
 
 export function simulatorControlSocketUrl(udid: string) {
   const url = new URL(
-    `/api/simulators/${encodeURIComponent(udid)}/control`,
+    apiUrl(`/api/simulators/${encodeURIComponent(udid)}/control`),
     window.location.href,
   );
   const token = accessTokenFromLocation();

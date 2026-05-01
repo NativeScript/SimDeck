@@ -46,3 +46,62 @@ impl Config {
         SocketAddr::new(self.bind_ip, self.http_port)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::path::PathBuf;
+
+    fn config(bind_ip: IpAddr, advertise_host: Option<String>) -> Config {
+        Config::new(
+            4310,
+            PathBuf::from("client/dist"),
+            bind_ip,
+            advertise_host,
+            "h264-software".to_owned(),
+            false,
+            Some("token".to_owned()),
+            None,
+        )
+    }
+
+    #[test]
+    fn unspecified_bind_defaults_advertise_host_to_loopback() {
+        assert_eq!(
+            config(IpAddr::V4(Ipv4Addr::UNSPECIFIED), None).advertise_host,
+            "127.0.0.1"
+        );
+        assert_eq!(
+            config(IpAddr::V6(Ipv6Addr::UNSPECIFIED), None).advertise_host,
+            "127.0.0.1"
+        );
+    }
+
+    #[test]
+    fn explicit_advertise_host_overrides_bind_address() {
+        assert_eq!(
+            config(
+                IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+                Some("192.168.1.50".to_owned())
+            )
+            .advertise_host,
+            "192.168.1.50"
+        );
+    }
+
+    #[test]
+    fn concrete_bind_address_is_used_as_advertise_host() {
+        assert_eq!(
+            config(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 23)), None).advertise_host,
+            "192.168.1.23"
+        );
+    }
+
+    #[test]
+    fn http_addr_uses_configured_bind_ip_and_port() {
+        let config = config(IpAddr::V4(Ipv4Addr::LOCALHOST), None);
+
+        assert_eq!(config.http_addr().to_string(), "127.0.0.1:4310");
+    }
+}

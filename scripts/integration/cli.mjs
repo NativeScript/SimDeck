@@ -4,6 +4,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { buildCachedFixtureApp } from "./fixture.mjs";
 
 const root = path.resolve(new URL("../..", import.meta.url).pathname);
 const simdeck = path.join(root, "build", "simdeck");
@@ -697,117 +698,13 @@ function compareRuntimeVersions(left, right) {
 }
 
 function buildFixtureApp() {
-  const appPath = path.join(tempRoot, "SimDeckFixture.app");
-  fs.mkdirSync(appPath, { recursive: true });
-  const executable = "SimDeckFixture";
-  fs.writeFileSync(
-    path.join(appPath, "Info.plist"),
-    `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key><string>en</string>
-  <key>CFBundleExecutable</key><string>${executable}</string>
-  <key>CFBundleIdentifier</key><string>${fixtureBundleId}</string>
-  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleName</key><string>SimDeckFixture</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
-  <key>LSRequiresIPhoneOS</key><true/>
-  <key>MinimumOSVersion</key><string>15.0</string>
-  <key>UIDeviceFamily</key><array><integer>1</integer></array>
-  <key>CFBundleURLTypes</key>
-  <array>
-    <dict>
-      <key>CFBundleURLName</key><string>SimDeckFixture</string>
-      <key>CFBundleURLSchemes</key>
-      <array><string>simdeck-fixture</string></array>
-    </dict>
-  </array>
-</dict>
-</plist>
-`,
-  );
-  const main = path.join(tempRoot, "SimDeckFixture.swift");
-  fs.writeFileSync(
-    main,
-    `import SwiftUI
-
-struct FixtureView: View {
-  @State private var status = "Integration Ready"
-  @State private var tapCount = 0
-  @State private var message = ""
-  @FocusState private var messageFocused: Bool
-
-  var body: some View {
-    VStack(spacing: 24) {
-      Text("SimDeck Fixture")
-        .font(.title2)
-        .accessibilityIdentifier("fixture.title")
-
-      Text(status)
-        .accessibilityIdentifier("fixture.status")
-
-      Button("Continue") {
-        tapCount += 1
-        status = "Continue Tapped \\(tapCount)"
-      }
-        .buttonStyle(.borderedProminent)
-        .accessibilityIdentifier("fixture.continue")
-
-      TextField("Message", text: $message)
-        .textFieldStyle(.roundedBorder)
-        .accessibilityIdentifier("fixture.message")
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled(true)
-        .focused($messageFocused)
-        .frame(width: 240)
-    }
-    .padding()
-    .onOpenURL { url in
-      if url.host == "focus-message" {
-        status = "Message Focused"
-        messageFocused = true
-      } else {
-        status = "URL Opened"
-      }
-    }
-  }
-}
-
-@main
-struct SimDeckFixtureApp: App {
-  var body: some Scene {
-    WindowGroup {
-      FixtureView()
-    }
-  }
-}
-`,
-  );
-  const targetArch = process.arch === "arm64" ? "arm64" : "x86_64";
-  runText(
-    "xcrun",
-    [
-      "--sdk",
-      "iphonesimulator",
-      "swiftc",
-      "-target",
-      `${targetArch}-apple-ios15.0-simulator`,
-      "-parse-as-library",
-      "-Onone",
-      "-framework",
-      "SwiftUI",
-      "-framework",
-      "UIKit",
-      main,
-      "-o",
-      path.join(appPath, executable),
-    ],
-    { timeoutMs: 300_000 },
-  );
-  return { appPath };
+  return buildCachedFixtureApp({
+    root,
+    tempRoot,
+    bundleId: fixtureBundleId,
+    urlScheme: fixtureUrlScheme,
+    log: logStep,
+  });
 }
 
 function startServer() {

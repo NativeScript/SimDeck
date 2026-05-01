@@ -766,3 +766,97 @@ fn schedule_recoverable_restart_if_needed(message: &str) {
         std::process::exit(RECOVERABLE_RESTART_EXIT_CODE);
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_core_simulator_service_mismatch, log_entry_matches, LogEntry, LogFilters, Simulator,
+    };
+    use serde_json::json;
+
+    fn simulator_json(is_booted: serde_json::Value, is_available: serde_json::Value) -> String {
+        json!({
+            "udid": "SIM-1",
+            "name": "iPhone Test",
+            "state": "Booted",
+            "isBooted": is_booted,
+            "isAvailable": is_available,
+            "lastBootedAt": null,
+            "dataPath": null,
+            "logPath": null,
+            "deviceTypeIdentifier": null,
+            "deviceTypeName": "iPhone",
+            "runtimeIdentifier": null,
+            "runtimeName": "iOS"
+        })
+        .to_string()
+    }
+
+    fn log_entry(level: &str, process: &str, message: &str) -> LogEntry {
+        LogEntry {
+            timestamp: "2026-05-01T00:00:00Z".to_owned(),
+            level: level.to_owned(),
+            process: process.to_owned(),
+            pid: json!(123),
+            subsystem: "com.simdeck.test".to_owned(),
+            category: "unit".to_owned(),
+            message: message.to_owned(),
+        }
+    }
+
+    #[test]
+    fn simulator_boolish_fields_accept_native_json_variants() {
+        let true_bool: Simulator =
+            serde_json::from_str(&simulator_json(json!(true), json!(false))).unwrap();
+        let numeric: Simulator = serde_json::from_str(&simulator_json(json!(1), json!(0))).unwrap();
+        let string: Simulator =
+            serde_json::from_str(&simulator_json(json!("TRUE"), json!("false"))).unwrap();
+
+        assert!(true_bool.is_booted);
+        assert!(!true_bool.is_available);
+        assert!(numeric.is_booted);
+        assert!(!numeric.is_available);
+        assert!(string.is_booted);
+        assert!(!string.is_available);
+    }
+
+    #[test]
+    fn simulator_boolish_fields_reject_ambiguous_values() {
+        let result = serde_json::from_str::<Simulator>(&simulator_json(json!(2), json!(true)));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn log_filters_match_error_fault_aliases_and_query_text() {
+        let entry = log_entry("Fault", "SpringBoard", "launch failed for fixture");
+        let filters = LogFilters::new(
+            vec!["error".to_owned()],
+            vec!["springboard".to_owned()],
+            "fixture".to_owned(),
+        );
+
+        assert!(log_entry_matches(&entry, &filters));
+    }
+
+    #[test]
+    fn log_filters_reject_non_matching_processes() {
+        let entry = log_entry("Default", "backboardd", "touch delivered");
+        let filters = LogFilters::new(vec![], vec!["SpringBoard".to_owned()], String::new());
+
+        assert!(!log_entry_matches(&entry, &filters));
+    }
+
+    #[test]
+    fn core_simulator_mismatch_detection_covers_known_failure_strings() {
+        assert!(is_core_simulator_service_mismatch(
+            "CoreSimulator.framework was changed while the process was running"
+        ));
+        assert!(is_core_simulator_service_mismatch(
+            "Service version 987 does not match expected service version 654"
+        ));
+        assert!(!is_core_simulator_service_mismatch(
+            "Unable to initialize the private simulator display bridge."
+        ));
+    }
+}

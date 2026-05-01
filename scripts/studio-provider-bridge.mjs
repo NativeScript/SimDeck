@@ -2,6 +2,7 @@
 
 import crypto from "node:crypto";
 import os from "node:os";
+import { pathToFileURL } from "node:url";
 
 const cloudUrl = (
   process.env.SIMDECK_CLOUD_URL || "https://simdeck.djdev.me"
@@ -22,58 +23,62 @@ const providerId =
 let stopped = false;
 let lastRegisterAt = 0;
 let registered = false;
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  process.once(signal, () => {
-    stopped = true;
-  });
-}
 
-try {
-  if (!previewId || !providerToken) {
-    const session = await createLocalProviderSession();
-    previewId = session.sessionId;
-    providerToken = session.providerToken;
-    publicUrl = session.url;
+if (isMainModule()) {
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.once(signal, () => {
+      stopped = true;
+    });
   }
 
-  if (!publicUrl) {
-    publicUrl = `${cloudUrl}/simulator/${encodeURIComponent(previewId)}`;
-  }
-  if (!localToken) {
-    localToken = providerToken;
-  }
-
-  console.log(`[simdeck-provider-bridge] ${publicUrl}`);
-
-  await registerProvider();
-
-  while (!stopped) {
-    try {
-      if (Date.now() - lastRegisterAt > registerIntervalMs) {
-        await registerProvider();
-      }
-      const next = await fetchJson(
-        `${cloudUrl}/api/actions/providers/rpc/next`,
-        {
-          previewId,
-          providerToken,
-        },
-      );
-      if (!next || !next.request) {
-        await sleep(250);
-        continue;
-      }
-      await handleRequest(next.request);
-    } catch (error) {
-      console.error(
-        `[simdeck-provider-bridge] ${error instanceof Error ? error.message : String(error)}`,
-      );
-      await sleep(1000);
+  try {
+    if (!previewId || !providerToken) {
+      const session = await createLocalProviderSession();
+      previewId = session.sessionId;
+      providerToken = session.providerToken;
+      publicUrl = session.url;
     }
-  }
-} finally {
-  if (registered) {
-    await markProviderExpired();
+
+    if (!publicUrl) {
+      publicUrl = `${cloudUrl}/simulator/${encodeURIComponent(previewId)}`;
+    }
+    publicUrl = normalizeStudioPublicUrl(publicUrl);
+    if (!localToken) {
+      localToken = providerToken;
+    }
+
+    console.log(`[simdeck-provider-bridge] ${publicUrl}`);
+
+    await registerProvider();
+
+    while (!stopped) {
+      try {
+        if (Date.now() - lastRegisterAt > registerIntervalMs) {
+          await registerProvider();
+        }
+        const next = await fetchJson(
+          `${cloudUrl}/api/actions/providers/rpc/next`,
+          {
+            previewId,
+            providerToken,
+          },
+        );
+        if (!next || !next.request) {
+          await sleep(250);
+          continue;
+        }
+        await handleRequest(next.request);
+      } catch (error) {
+        console.error(
+          `[simdeck-provider-bridge] ${error instanceof Error ? error.message : String(error)}`,
+        );
+        await sleep(1000);
+      }
+    }
+  } finally {
+    if (registered) {
+      await markProviderExpired();
+    }
   }
 }
 
@@ -231,6 +236,36 @@ async function fetchJson(url, body) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeStudioPublicUrl(value) {
+  return normalizeStudioPublicUrlWithCloud(value, cloudUrl);
+}
+
+export function normalizeStudioPublicUrlWithCloud(value, baseCloudUrl) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const normalizedCloudUrl = baseCloudUrl.replace(/\/$/, "");
+  const cloudOrigin = new URL(normalizedCloudUrl).origin;
+  const collapsed = trimmed
+    .replace(repeatedPrefixPattern(normalizedCloudUrl), normalizedCloudUrl)
+    .replace(repeatedPrefixPattern(cloudOrigin), cloudOrigin);
+  return new URL(collapsed, `${normalizedCloudUrl}/`).toString();
+}
+
+function repeatedPrefixPattern(prefix) {
+  return new RegExp(`^(?:${escapeRegExp(prefix)}){2,}`);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isMainModule() {
+  return import.meta.url === pathToFileURL(process.argv[1] || "").href;
 }
 
 function stableLocalProviderId() {

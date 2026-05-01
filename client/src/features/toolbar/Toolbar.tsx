@@ -8,6 +8,7 @@ interface ToolbarProps {
   error: string;
   filteredSimulators: SimulatorMetadata[];
   hierarchyVisible: boolean;
+  hideSimulatorSelection?: boolean;
   isLoading: boolean;
   onBoot: () => void;
   onChangeSearch: (value: string) => void;
@@ -40,6 +41,7 @@ export function Toolbar({
   error,
   filteredSimulators,
   hierarchyVisible,
+  hideSimulatorSelection = false,
   isLoading,
   menuOpen,
   menuRef,
@@ -98,6 +100,7 @@ export function Toolbar({
         <SimulatorMenu
           debugVisible={debugVisible}
           filteredSimulators={filteredSimulators}
+          hideSimulatorSelection={hideSimulatorSelection}
           isLoading={isLoading}
           menuOpen={menuOpen}
           menuRef={menuRef}

@@ -6,8 +6,114 @@ on:
       - main
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
-  ci:
+  rust:
+    name: Rust lint and unit tests
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            server/target
+          key: rust-${{ runner.os }}-${{ hashFiles('server/Cargo.lock', 'server/Cargo.toml', 'server/build.rs', 'server/src/**/*.rs', 'cli/**/*.m') }}
+          restore-keys: |
+            rust-${{ runner.os }}-
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path server/Cargo.toml --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust unit tests
+        run: cargo test --manifest-path server/Cargo.toml
+
+  client:
+    name: Client lint, build, and tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            client/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts --force
+
+      - name: Install client dependencies
+        run: npm ci --prefix client
+
+      - name: Check Prettier formatting
+        run: npx prettier --check .
+
+      - name: Test studio provider bridge
+        run: npm run test:studio-provider
+
+      - name: Typecheck client
+        run: npm run --prefix client typecheck
+
+      - name: Test client
+        run: npm run --prefix client test
+
+      - name: Build client
+        run: npm run --prefix client build
+
+  packages:
+    name: Packages and VS Code extension
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/react-native-inspector/package-lock.json
+            packages/nativescript-inspector/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts --force
+
+      - name: Install NativeScript inspector dependencies
+        run: npm ci --prefix packages/nativescript-inspector
+
+      - name: Install React Native inspector dependencies
+        run: npm ci --prefix packages/react-native-inspector
+
+      - name: Build inspector and test packages
+        run: npm run build:packages
+
+      - name: Package VS Code extension
+        run: npm run package:vscode-extension
+
+  build-artifacts:
+    name: Build integration artifacts
     runs-on: macos-latest
 
     steps:
@@ -20,32 +126,101 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             client/package-lock.json
-            packages/react-native-inspector/package-lock.json
-            packages/nativescript-inspector/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs and fixture app
+        uses: actions/cache@v4
         with:
-          components: rustfmt, clippy
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            server/target
+            .cache/simdeck/fixture
+          key: rust-${{ runner.os }}-${{ hashFiles('server/Cargo.lock', 'server/Cargo.toml', 'server/build.rs', 'server/src/**/*.rs', 'cli/**/*.m', 'scripts/integration/fixture.mjs') }}
+          restore-keys: |
+            rust-${{ runner.os }}-
 
       - name: Install root dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Install client dependencies
         run: npm ci --prefix client
 
-      - name: Install NativeScript inspector dependencies
-        run: npm ci --prefix packages/nativescript-inspector
+      - name: Build CLI, client, and JS test API
+        run: |
+          npm run build:cli
+          npm run build:client
+          npm run build:simdeck-test
+          npm run test:integration:fixture
 
-      - name: Install React Native inspector dependencies
-        run: npm ci --prefix packages/react-native-inspector
+      - name: Upload integration artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: simdeck-integration-artifacts
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            build/simdeck
+            build/simdeck-bin
+            client/dist
+            packages/simdeck-test/dist
+            .cache/simdeck/fixture
 
-      - name: Lint, build, and test
-        run: npm run ci
+  integration-cli:
+    name: CLI simulator integration
+    runs-on: macos-latest
+    needs:
+      - rust
+      - client
+      - packages
+      - build-artifacts
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download integration artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: simdeck-integration-artifacts
+          path: .
+
+      - name: Make CLI executable
+        run: chmod +x build/simdeck build/simdeck-bin
 
       - name: CLI simulator integration tests
         run: npm run test:integration:cli
         env:
           SIMDECK_INTEGRATION_VERBOSE: "1"
+
+  integration-js-api:
+    name: JS API simulator integration
+    runs-on: macos-latest
+    needs:
+      - rust
+      - client
+      - packages
+      - build-artifacts
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download integration artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: simdeck-integration-artifacts
+          path: .
+
+      - name: Make CLI executable
+        run: chmod +x build/simdeck build/simdeck-bin
 
       - name: JS API simulator integration tests
         run: npm run test:integration:js-api
