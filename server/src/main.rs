@@ -1322,6 +1322,13 @@ fn expose_to_studio(options: StudioExposeOptions) -> anyhow::Result<()> {
                 .unwrap_or("Local Mac simulator"),
         )
         .env(
+            "SIMDECK_STUDIO_SIMULATOR_UDID",
+            selected
+                .as_ref()
+                .map(|simulator| simulator.udid.as_str())
+                .unwrap_or(""),
+        )
+        .env(
             "SIMDECK_STUDIO_RUNTIME_NAME",
             selected
                 .as_ref()
