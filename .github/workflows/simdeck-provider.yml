@@ -185,16 +185,6 @@ jobs:
             exit 1
           fi
 
-          ./build/simdeck serve \
-            --port 4310 \
-            --bind 127.0.0.1 \
-            --access-token "$PROVIDER_TOKEN" \
-            --client-root "$PWD/client/dist" \
-            --video-codec h264-software \
-            --stream-quality "${SIMDECK_STREAM_QUALITY:-ci-software}" \
-            > simdeck.log 2>&1 &
-          simdeck_pid="$!"
-
           dump_logs() {
             echo "--- simdeck.log ---"
             cat simdeck.log || true
@@ -204,33 +194,46 @@ jobs:
             find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f \( -name 'simdeck*.ips' -o -name 'simdeck*.crash' \) -print -exec cat {} \; || true
           }
 
-          healthy=0
-          for _ in {1..120}; do
-            if ! kill -0 "$simdeck_pid" 2>/dev/null; then
-              echo "simdeck exited before health check passed"
+          wait_for_simdeck_health() {
+            healthy=0
+            for _ in {1..120}; do
+              if ! kill -0 "$simdeck_pid" 2>/dev/null; then
+                echo "simdeck exited before health check passed"
+                dump_logs
+                return 1
+              fi
+              if curl -fsS http://127.0.0.1:4310/api/health >/dev/null; then
+                healthy=1
+                break
+              fi
+              sleep 1
+            done
+            if [[ "$healthy" != "1" ]]; then
+              echo "simdeck did not become healthy"
               dump_logs
-              exit 1
+              return 1
             fi
-            if curl -fsS http://127.0.0.1:4310/api/health >/dev/null; then
-              healthy=1
-              break
-            fi
-            sleep 1
-          done
-          if [[ "$healthy" != "1" ]]; then
-            echo "simdeck did not become healthy"
-            dump_logs
-            exit 1
-          fi
+          }
 
-          echo "Prewarming private simulator stream"
-          if ! run_with_timeout 60 curl -fsS -X POST "http://127.0.0.1:4310/api/simulators/$ios_udid/refresh?simdeckToken=$PROVIDER_TOKEN"; then
-            echo "SimDeck private stream prewarm failed"
-            dump_logs
-            exit 1
-          fi
-          echo
-          echo "Private simulator stream prewarmed"
+          start_simdeck_server() {
+            echo "Starting SimDeck server"
+            ./build/simdeck serve \
+              --port 4310 \
+              --bind 127.0.0.1 \
+              --access-token "$PROVIDER_TOKEN" \
+              --client-root "$PWD/client/dist" \
+              --video-codec h264-software \
+              --stream-quality "${SIMDECK_STREAM_QUALITY:-ci-software}" \
+              >> simdeck.log 2>&1 &
+            simdeck_pid="$!"
+            echo "SimDeck server pid: $simdeck_pid"
+            wait_for_simdeck_health
+          }
+
+          : > simdeck.log
+          simdeck_pid=""
+          start_simdeck_server
+          echo "Skipping private stream prewarm; the first browser WebRTC connection will attach the stream."
 
           provider_base_url="$SIMDECK_CLOUD_URL/simulator/$PREVIEW_ID"
           bridge_script="scripts/studio-provider-bridge.mjs"
@@ -300,6 +303,7 @@ jobs:
           fi
 
           deadline=$((SECONDS + 1800))
+          simdeck_restarts=0
           while true; do
             sleep 30
             if (( SECONDS >= deadline )); then
@@ -313,7 +317,15 @@ jobs:
             if ! kill -0 "$simdeck_pid" 2>/dev/null; then
               echo "simdeck exited"
               dump_logs
-              exit 1
+              if (( simdeck_restarts >= 2 )); then
+                echo "simdeck restart limit reached"
+                exit 1
+              fi
+              simdeck_restarts=$((simdeck_restarts + 1))
+              echo "Restarting SimDeck server ($simdeck_restarts/2)"
+              start_simdeck_server
+              register || true
+              continue
             fi
             if ! kill -0 "$bridge_pid" 2>/dev/null; then
               echo "provider bridge exited"
