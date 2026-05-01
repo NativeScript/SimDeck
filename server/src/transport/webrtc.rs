@@ -39,7 +39,7 @@ const WEBRTC_LOW_LATENCY_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
 const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
-const WEBRTC_REALTIME_SAMPLE_DURATION: Duration = Duration::from_micros(22_222);
+const WEBRTC_REALTIME_SAMPLE_DURATION: Duration = Duration::from_micros(33_333);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
 

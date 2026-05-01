@@ -8,20 +8,20 @@
 #include <stdlib.h>
 
 static const int32_t XCWMaximumEncodedDimension = 1920;
-static const int32_t XCWMaximumRealtimeHardwareEncodedDimension = 1440;
+static const int32_t XCWMaximumRealtimeHardwareEncodedDimension = 1280;
 static const int32_t XCWMaximumSoftwareEncodedDimension = 1600;
 static const int32_t XCWMaximumLowLatencySoftwareEncodedDimension = 1170;
 static const int32_t XCWTargetRealTimeFrameRate = 60;
-static const int32_t XCWTargetRealtimeHardwareFrameRate = 45;
+static const int32_t XCWTargetRealtimeHardwareFrameRate = 30;
 static const int32_t XCWTargetSoftwareFrameRate = 60;
 static const int32_t XCWTargetLowLatencySoftwareFrameRate = 15;
 static const NSUInteger XCWMaximumInFlightFrames = 2;
 static const int32_t XCWMinimumAverageBitRate = 18000000;
-static const int32_t XCWMinimumRealtimeAverageBitRate = 5000000;
+static const int32_t XCWMinimumRealtimeAverageBitRate = 3000000;
 static const int32_t XCWMinimumSoftwareAverageBitRate = 3000000;
 static const int32_t XCWMinimumLowLatencySoftwareAverageBitRate = 2000000;
 static const int64_t XCWBitsPerPixelBudget = 10;
-static const int64_t XCWRealtimeBitsPerPixelBudget = 5;
+static const int64_t XCWRealtimeBitsPerPixelBudget = 4;
 static const int64_t XCWSoftwareBitsPerPixelBudget = 6;
 static const int64_t XCWLowLatencySoftwareBitsPerPixelBudget = 3;
 static const uint64_t XCWSoftwareMinimumFrameIntervalUs = 16667;
@@ -34,9 +34,9 @@ static const uint64_t XCWLowLatencySoftwareInitialFrameIntervalUs = 66667;
 static const uint64_t XCWLowLatencySoftwareMaximumFrameIntervalUs = 133333;
 static const uint64_t XCWLowLatencySoftwareFrameIntervalStepUs = 11111;
 static const NSUInteger XCWLowLatencySoftwareHealthyFrameWindow = 8;
-static const uint64_t XCWRealtimeHardwareInitialFrameIntervalUs = 22222;
-static const uint64_t XCWRealtimeHardwareMinimumFrameIntervalUs = 22222;
-static const uint64_t XCWRealtimeHardwareMaximumFrameIntervalUs = 50000;
+static const uint64_t XCWRealtimeHardwareInitialFrameIntervalUs = 33333;
+static const uint64_t XCWRealtimeHardwareMinimumFrameIntervalUs = 33333;
+static const uint64_t XCWRealtimeHardwareMaximumFrameIntervalUs = 66667;
 static const uint64_t XCWRealtimeHardwareFrameIntervalStepUs = 5556;
 static const NSUInteger XCWRealtimeHardwareHealthyFrameWindow = 6;
 
