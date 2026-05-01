@@ -1085,10 +1085,8 @@ fn choose_daemon_port_for_bind(preferred: u16, bind: IpAddr) -> anyhow::Result<u
 }
 
 fn port_available(bind: IpAddr, port: u16) -> bool {
-    if bind.is_unspecified() {
-        if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
-            return false;
-        }
+    if bind.is_unspecified() && TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
+        return false;
     }
     TcpListener::bind((bind, port)).is_ok()
 }

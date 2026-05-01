@@ -6,10 +6,10 @@ SimDeck streams the iOS Simulator over WebRTC using browser-native H.264 video p
 
 The server can encode the simulator display in two modes, picked at startup with `--video-codec`:
 
-| Value                       | Encoder                         | When to use it                                                 |
-| --------------------------- | ------------------------------- | -------------------------------------------------------------- |
-| `h264` _(default)_          | Hardware H.264 via VideoToolbox | Best local performance when the hardware encoder is available. |
-| `h264-software`             | Software H.264 via VideoToolbox | Compatibility fallback when hardware encode is unavailable.    |
+| Value              | Encoder                         | When to use it                                                 |
+| ------------------ | ------------------------------- | -------------------------------------------------------------- |
+| `h264` _(default)_ | Hardware H.264 via VideoToolbox | Best local performance when the hardware encoder is available. |
+| `h264-software`    | Software H.264 via VideoToolbox | Compatibility fallback when hardware encode is unavailable.    |
 
 Restart the daemon to change encoder mode:
 

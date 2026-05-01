@@ -139,9 +139,9 @@ function simulatorDisplayReady(simulator: SimulatorMetadata): boolean {
   const display = simulator.privateDisplay;
   return Boolean(
     simulator.isBooted &&
-      display?.displayReady &&
-      display.displayWidth > 0 &&
-      display.displayHeight > 0,
+    display?.displayReady &&
+    display.displayWidth > 0 &&
+    display.displayHeight > 0,
   );
 }
 
