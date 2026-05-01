@@ -304,15 +304,7 @@ class WebRtcStreamClient implements StreamClientBackend {
         const hasRenderedFrame = this.stats.renderedFrames > 0;
         const frameAgeMs =
           this.lastVideoFrameAt > 0 ? now - this.lastVideoFrameAt : Infinity;
-        if (!hasRenderedFrame) {
-          this.handleConnectionError(
-            target,
-            generation,
-            new Error("WebRTC video stalled before rendering fresh frames."),
-          );
-          return;
-        }
-        if (frameAgeMs > WEBRTC_STALLED_FRAME_TIMEOUT_MS) {
+        if (!hasRenderedFrame || frameAgeMs > WEBRTC_STALLED_FRAME_TIMEOUT_MS) {
           this.handleConnectionError(
             target,
             generation,

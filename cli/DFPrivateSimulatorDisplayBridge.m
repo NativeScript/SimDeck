@@ -617,35 +617,16 @@ static NSDictionary<NSNumber *, id> * DFReadAdapterScreens(id adapter) {
         return @{};
     }
 
-    SEL screensSelector = sel_registerName("screens");
-    id screens = nil;
-    if ([adapter respondsToSelector:screensSelector]) {
-        @try {
-            screens = ((id(*)(id, SEL))objc_msgSend)(adapter, screensSelector);
-        } @catch (NSException *exception) {
-            DFLog(@"SimulatorKit screen adapter screens selector threw: %@", exception.reason ?: exception.name);
-            screens = nil;
-        }
-    }
-    if (screens == nil) {
-        Ivar screensIvar = class_getInstanceVariable([adapter class], "_screens");
-        if (screensIvar != NULL) {
-            screens = object_getIvar(adapter, screensIvar);
-        }
-    }
-
     // The full mangled tail of `SimDeviceScreenAdapter.screens.getter` drifts
     // across Xcode releases (Xcode 26.4 retyped it from
     // `[UInt32: SimScreen]` (ObjC) to `[UInt32: SimDeviceScreen]` (Swift)).
     // Resolve by stable prefix instead. If the values are now SimDeviceScreen
     // wrappers, unwrap each via `.screen` so callers keep talking to a
     // SimScreen-shaped object.
-    if (screens == nil) {
-        screens = DFCallSwiftSelfGetter(
-            adapter,
-            "$s12SimulatorKit22SimDeviceScreenAdapterC7screensSDys6UInt32VSo0cE0_pGvg"
-        );
-    }
+    id screens = DFCallSwiftSelfGetter(
+        adapter,
+        "$s12SimulatorKit22SimDeviceScreenAdapterC7screensSDys6UInt32VSo0cE0_pGvg"
+    );
     if (screens == nil) {
         screens = DFCallSwiftSelfGetter(
             adapter,
@@ -2448,34 +2429,9 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         DFLog(@"Initialized bootstrap SimDeviceScreen for %@", udid);
     }
     [self updateStatus:@"Waiting for CoreSimulator screen adapter"];
-    NSDate *adapterDeadline = [NSDate dateWithTimeIntervalSinceNow:15.0];
-    while (_screenAdapter == nil && [adapterDeadline timeIntervalSinceNow] > 0) {
-        if ([NSStringFromClass([_screenAdapterHost class]) containsString:@"SimDeviceScreenAdapter"]) {
-            _screenAdapter = _screenAdapterHost;
-        } else {
-            Ivar screenAdapterIvar = class_getInstanceVariable([_screenAdapterHost class], "_screenAdapter");
-            if (screenAdapterIvar != NULL) {
-                _screenAdapter = object_getIvar(_screenAdapterHost, screenAdapterIvar);
-            }
-        }
-        if (_screenAdapter != nil) {
-            break;
-        }
+    DFSpinRunLoop(0.5);
 
-        // On cold CoreSimulator boots the Swift screenAdapter host can exist
-        // before its private ROCK proxy is connected. Re-read the extension
-        // property while spinning the run loop instead of failing the attach.
-        id refreshedHost = DFCallSwiftSelfGetterByPattern(
-            _device,
-            "$sSo9SimDeviceC12SimulatorKitE13screenAdapter",
-            "vg",
-            "SimDevice.screenAdapter.getter (SimulatorKit extension)"
-        );
-        if (refreshedHost != nil) {
-            _screenAdapterHost = refreshedHost;
-        }
-        DFSpinRunLoop(0.2);
-    }
+    _screenAdapter = object_getIvar(_screenAdapterHost, class_getInstanceVariable([_screenAdapterHost class], "_screenAdapter"));
     if (_screenAdapter == nil) {
         DFLog(@"SimulatorKit screen adapter host did not expose _screenAdapter for %@; host class=%@", udid, NSStringFromClass([_screenAdapterHost class]));
         if (error != NULL) {
@@ -2489,33 +2445,28 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
 
     _screenAdapterCallbackUUID = [NSUUID UUID];
     __weak typeof(self) weakSelf = self;
-    SEL registerCallbacksSelector = sel_registerName("registerScreenAdapterCallbacksWithUUID:callbackQueue:screenConnectedCallback:screenWillDisconnectCallback:");
-    if ([_screenAdapter respondsToSelector:registerCallbacksSelector]) {
-        ((void(*)(id, SEL, id, id, id, id))objc_msgSend)(
-            _screenAdapter,
-            registerCallbacksSelector,
-            _screenAdapterCallbackUUID,
-            _callbackQueue,
-            ^(id simScreen) {
-                (void)simScreen;
-                __strong typeof(weakSelf) strongSelf = weakSelf;
-                if (strongSelf == nil) {
-                    return;
-                }
-                [strongSelf updateStatus:@"CoreSimulator screen proxy connected"];
-            },
-            ^(id simScreen) {
-                (void)simScreen;
-                __strong typeof(weakSelf) strongSelf = weakSelf;
-                if (strongSelf == nil) {
-                    return;
-                }
-                [strongSelf updateStatus:@"CoreSimulator screen proxy disconnected"];
+    ((void(*)(id, SEL, id, id, id, id))objc_msgSend)(
+        _screenAdapter,
+        sel_registerName("registerScreenAdapterCallbacksWithUUID:callbackQueue:screenConnectedCallback:screenWillDisconnectCallback:"),
+        _screenAdapterCallbackUUID,
+        _callbackQueue,
+        ^(id simScreen) {
+            (void)simScreen;
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (strongSelf == nil) {
+                return;
             }
-        );
-    } else {
-        DFLog(@"SimulatorKit screen adapter %@ does not expose callback registration; polling screens directly", NSStringFromClass([_screenAdapter class]));
-    }
+            [strongSelf updateStatus:@"CoreSimulator screen proxy connected"];
+        },
+        ^(id simScreen) {
+            (void)simScreen;
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (strongSelf == nil) {
+                return;
+            }
+            [strongSelf updateStatus:@"CoreSimulator screen proxy disconnected"];
+        }
+    );
 
     [self updateStatus:@"Waiting for headless simulator screens"];
 
@@ -2524,7 +2475,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     // seconds (or only after Simulator.app primes the device). Poll instead of
     // relying on a fixed 0.5s sleep.
     NSDictionary<NSNumber *, id> *screens = DFReadAvailableAdapterScreens(_screenAdapterHost, _screenAdapter);
-    NSDate *screenDeadline = [NSDate dateWithTimeIntervalSinceNow:20.0];
+    NSDate *screenDeadline = [NSDate dateWithTimeIntervalSinceNow:10.0];
     while (screens.count == 0 && [screenDeadline timeIntervalSinceNow] > 0) {
         DFSpinRunLoop(0.1);
         screens = DFReadAvailableAdapterScreens(_screenAdapterHost, _screenAdapter);

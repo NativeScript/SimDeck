@@ -80,12 +80,6 @@ impl SimulatorSession {
             if matches!(*state, SessionState::Ready | SessionState::Streaming) {
                 return Ok(());
             }
-            if matches!(*state, SessionState::Failed) {
-                return Err(AppError::native(format!(
-                    "Private simulator display attach previously failed for {}. Restart the simulator or daemon before retrying this UDID.",
-                    self.inner.udid
-                )));
-            }
             *state = SessionState::Attaching;
         }
 
