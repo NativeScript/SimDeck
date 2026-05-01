@@ -53,6 +53,7 @@ The repo includes a macOS-only integration runner that creates a temporary simul
 ```sh
 npm run build:cli
 npm run build:client
+npm run test:integration:fixture
 npm run test:integration:cli
 ```
 
@@ -72,3 +73,25 @@ Useful environment variables:
 | `SIMDECK_INTEGRATION_KEEP_SIMULATOR=1` | Leave the temporary simulator after exit.             |
 
 The integration suite is separate from `npm run test` because it boots and drives a real iOS simulator.
+The SwiftUI fixture app is cached under `.cache/simdeck/fixture` using a hash
+of its generated source, plist, simulator SDK, Swift compiler, and host
+architecture.
+
+## Stress and Leak Checks
+
+Use the stress runner against an already-running daemon when you want to shake out
+high-usage reliability issues without adding minutes to every PR:
+
+```sh
+npm run test:stress -- --server-url http://127.0.0.1:4310 --iterations 1000 --concurrency 12
+```
+
+To include simulator-specific refresh traffic and RSS growth checks:
+
+```sh
+npm run test:stress -- --udid <udid> --iterations 2000 --concurrency 16 --max-rss-growth-mb 256
+```
+
+The runner repeatedly calls health, metrics, simulator listing, stream-quality,
+and optional simulator refresh endpoints. It samples the daemon process RSS with
+`ps` and fails if the peak or growth limits are exceeded.

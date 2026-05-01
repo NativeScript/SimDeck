@@ -1074,9 +1074,16 @@ impl Drop for WebRtcMetricsGuard {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_avcc_parameter_sets, append_length_prefixed_nalus, h264_sdp_fmtp_line, is_annex_b,
-        is_h264_codec, ANNEX_B_START_CODE,
+        adaptive_interval_for_write, append_avcc_parameter_sets, append_length_prefixed_nalus,
+        h264_annex_b_sample, h264_sdp_fmtp_line, is_annex_b, is_h264_codec, realtime_packet_pacing,
+        WebRtcMetricsGuard, WebRtcSendTiming, ANNEX_B_START_CODE,
     };
+    use crate::metrics::counters::Metrics;
+    use crate::transport::packet::FramePacket;
+    use bytes::Bytes;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     #[test]
     fn accepts_browser_h264_codec_strings() {
@@ -1135,6 +1142,137 @@ mod tests {
     }
 
     #[test]
+    fn metrics_guard_balances_stream_connect_and_disconnect_counts() {
+        let metrics = Arc::new(Metrics::default());
+
+        {
+            let _guard = WebRtcMetricsGuard::new(metrics.clone());
+            assert_eq!(metrics.subscribers_connected.load(Ordering::Relaxed), 1);
+            assert_eq!(metrics.active_streams.load(Ordering::Relaxed), 1);
+        }
+
+        assert_eq!(metrics.subscribers_disconnected.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.active_streams.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn metrics_guard_does_not_underflow_active_streams() {
+        let metrics = Arc::new(Metrics::default());
+        let guard = WebRtcMetricsGuard::new(metrics.clone());
+        metrics.active_streams.store(0, Ordering::Relaxed);
+
+        drop(guard);
+
+        assert_eq!(metrics.active_streams.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.subscribers_disconnected.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn send_timing_uses_frame_timestamps_for_non_realtime_streams() {
+        let mut timing = WebRtcSendTiming::new();
+        let first = FramePacket {
+            frame_sequence: 1,
+            timestamp_us: 10_000,
+            is_keyframe: true,
+            width: 100,
+            height: 100,
+            codec: Some("h264".to_owned()),
+            description: None,
+            data: Bytes::from_static(&[0, 0, 1, 0x65]),
+        };
+        let second = FramePacket {
+            frame_sequence: 2,
+            timestamp_us: 43_333,
+            is_keyframe: false,
+            width: 100,
+            height: 100,
+            codec: Some("h264".to_owned()),
+            description: None,
+            data: Bytes::from_static(&[0, 0, 1, 0x41]),
+        };
+
+        assert_eq!(
+            timing.duration_for(&first, false),
+            Duration::from_micros(16_667)
+        );
+        assert_eq!(
+            timing.duration_for(&second, false),
+            Duration::from_micros(33_333)
+        );
+    }
+
+    #[test]
+    fn send_timing_clamps_non_realtime_timestamp_gaps() {
+        let mut timing = WebRtcSendTiming::new();
+        let first = FramePacket {
+            frame_sequence: 1,
+            timestamp_us: 100_000,
+            is_keyframe: true,
+            width: 100,
+            height: 100,
+            codec: Some("h264".to_owned()),
+            description: None,
+            data: Bytes::from_static(&[0, 0, 1, 0x65]),
+        };
+        let backwards = FramePacket {
+            timestamp_us: 90_000,
+            ..first.clone_for_test(2)
+        };
+        let huge_gap = FramePacket {
+            timestamp_us: 1_000_000,
+            ..first.clone_for_test(3)
+        };
+
+        assert_eq!(
+            timing.duration_for(&first, false),
+            Duration::from_micros(16_667)
+        );
+        assert_eq!(
+            timing.duration_for(&backwards, false),
+            Duration::from_micros(16_667)
+        );
+        assert_eq!(
+            timing.duration_for(&huge_gap, false),
+            Duration::from_micros(100_000)
+        );
+    }
+
+    #[test]
+    fn adaptive_refresh_interval_tracks_write_latency_with_bounds() {
+        let floor = Duration::from_millis(16);
+        let ceiling = Duration::from_millis(100);
+
+        assert_eq!(
+            adaptive_interval_for_write(Duration::from_millis(1), floor, ceiling),
+            floor
+        );
+        assert_eq!(
+            adaptive_interval_for_write(Duration::from_millis(30), floor, ceiling),
+            Duration::from_millis(60)
+        );
+        assert_eq!(
+            adaptive_interval_for_write(Duration::from_millis(500), floor, ceiling),
+            ceiling
+        );
+    }
+
+    #[test]
+    fn realtime_packet_pacing_batches_large_frames() {
+        assert_eq!(
+            realtime_packet_pacing(Duration::from_millis(20), 10, true),
+            Some((2, Duration::from_millis(4)))
+        );
+        assert_eq!(
+            realtime_packet_pacing(Duration::from_millis(20), 10, false),
+            None
+        );
+        assert_eq!(
+            realtime_packet_pacing(Duration::from_millis(20), 1, true),
+            None
+        );
+    }
+
+    #[test]
     fn converts_avcc_parameter_sets_to_annex_b() {
         let avcc = [
             1, 0x42, 0xe0, 0x1f, 0xff, 0xe1, 0, 3, 0x67, 0x42, 0x00, 1, 0, 2, 0x68, 0xce,
@@ -1173,5 +1311,74 @@ mod tests {
             .concat()
         );
         assert!(is_annex_b(&output));
+    }
+
+    #[test]
+    fn rejects_truncated_h264_decoder_config_records() {
+        let mut output = Vec::new();
+
+        let result =
+            append_avcc_parameter_sets(&[1, 0x42, 0xe0, 0x1f, 0xff, 0xe1, 0, 4, 0x67], &mut output);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_truncated_length_prefixed_h264_samples() {
+        let mut output = Vec::new();
+
+        let result = append_length_prefixed_nalus(&[0, 0, 0, 4, 0x65], 4, &mut output);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn keyframes_include_decoder_config_before_sample_nalus() {
+        let frame = FramePacket {
+            frame_sequence: 1,
+            timestamp_us: 0,
+            is_keyframe: true,
+            width: 100,
+            height: 100,
+            codec: Some("avc1.42e01f".to_owned()),
+            description: Some(Bytes::from_static(&[
+                1, 0x42, 0xe0, 0x1f, 0xff, 0xe1, 0, 3, 0x67, 0x42, 0x00, 1, 0, 2, 0x68, 0xce,
+            ])),
+            data: Bytes::from_static(&[0, 0, 0, 2, 0x65, 0x88]),
+        };
+
+        let sample = h264_annex_b_sample(&frame).unwrap();
+
+        assert_eq!(
+            sample,
+            [
+                ANNEX_B_START_CODE,
+                &[0x67, 0x42, 0x00],
+                ANNEX_B_START_CODE,
+                &[0x68, 0xce],
+                ANNEX_B_START_CODE,
+                &[0x65, 0x88],
+            ]
+            .concat()
+        );
+    }
+
+    trait CloneFrameForTest {
+        fn clone_for_test(&self, frame_sequence: u64) -> Self;
+    }
+
+    impl CloneFrameForTest for FramePacket {
+        fn clone_for_test(&self, frame_sequence: u64) -> Self {
+            Self {
+                frame_sequence,
+                timestamp_us: self.timestamp_us,
+                is_keyframe: self.is_keyframe,
+                width: self.width,
+                height: self.height,
+                codec: self.codec.clone(),
+                description: self.description.clone(),
+                data: self.data.clone(),
+            }
+        }
     }
 }

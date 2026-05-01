@@ -152,3 +152,114 @@ fn current_time_ms() -> f64 {
         .map(|duration| duration.as_millis() as f64)
         .unwrap_or(0.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{current_time_ms, ClientStreamStats, Metrics};
+
+    fn stats(client_id: &str, kind: &str, timestamp_ms: Option<f64>) -> ClientStreamStats {
+        ClientStreamStats {
+            client_id: client_id.to_owned(),
+            kind: kind.to_owned(),
+            timestamp_ms,
+            udid: None,
+            connection_id: None,
+            status: None,
+            detail: None,
+            error: None,
+            ice_connection_state: None,
+            peer_connection_state: None,
+            ice_gathering_state: None,
+            signaling_state: None,
+            local_candidate_summary: None,
+            remote_candidate_summary: None,
+            selected_candidate_pair: None,
+            url: None,
+            user_agent: None,
+            visibility_state: None,
+            focused: None,
+            codec: None,
+            width: None,
+            height: None,
+            received_packets: None,
+            decoded_frames: None,
+            rendered_frames: None,
+            dropped_frames: None,
+            reconnects: None,
+            frame_sequence: None,
+            decode_queue_size: None,
+            waiting_for_key_frame: None,
+            packet_fps: None,
+            decoded_fps: None,
+            dropped_fps: None,
+            page_fps: None,
+            app_fps: None,
+            latest_render_ms: None,
+            max_render_ms: None,
+            average_render_ms: None,
+            latest_frame_gap_ms: None,
+        }
+    }
+
+    #[test]
+    fn client_stream_stats_replace_matching_client_and_kind() {
+        let metrics = Metrics::default();
+        let now = current_time_ms();
+        let mut first = stats("client-1", "webrtc", Some(now));
+        first.status = Some("connecting".to_owned());
+        let mut second = stats("client-1", "webrtc", Some(now + 1.0));
+        second.status = Some("connected".to_owned());
+
+        metrics.record_client_stream_stats(first);
+        metrics.record_client_stream_stats(second);
+
+        let snapshots = metrics.client_stream_stats_snapshot();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].status.as_deref(), Some("connected"));
+    }
+
+    #[test]
+    fn client_stream_stats_keep_distinct_kinds_for_same_client() {
+        let metrics = Metrics::default();
+        let now = current_time_ms();
+
+        metrics.record_client_stream_stats(stats("client-1", "webrtc", Some(now)));
+        metrics.record_client_stream_stats(stats("client-1", "worker", Some(now)));
+
+        let snapshots = metrics.client_stream_stats_snapshot();
+        assert_eq!(snapshots.len(), 2);
+    }
+
+    #[test]
+    fn client_stream_stats_prune_missing_and_stale_timestamps() {
+        let metrics = Metrics::default();
+        let now = current_time_ms();
+
+        metrics.record_client_stream_stats(stats("missing", "webrtc", None));
+        metrics.record_client_stream_stats(stats("stale", "webrtc", Some(now - 20_000.0)));
+        metrics.record_client_stream_stats(stats("fresh", "webrtc", Some(now)));
+
+        let snapshots = metrics.client_stream_stats_snapshot();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].client_id, "fresh");
+    }
+
+    #[test]
+    fn client_stream_stats_keep_latest_limit() {
+        let metrics = Metrics::default();
+        let now = current_time_ms();
+
+        for index in 0..60 {
+            metrics.record_client_stream_stats(stats(
+                &format!("client-{index}"),
+                "webrtc",
+                Some(now + index as f64),
+            ));
+        }
+
+        let snapshots = metrics.client_stream_stats_snapshot();
+        assert_eq!(snapshots.len(), 48);
+        assert_eq!(snapshots[0].client_id, "client-12");
+        assert_eq!(snapshots[47].client_id, "client-59");
+    }
+}

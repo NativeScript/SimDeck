@@ -3330,3 +3330,247 @@ async fn simulator_payload(state: AppState, udid: String) -> Result<Json<Value>,
         .ok_or_else(|| AppError::not_found(format!("Unknown simulator {udid}")))?;
     Ok(json(json_value!({ "simulator": simulator })))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        attach_tree_metadata, available_sources_for_snapshot, best_inspector_session,
+        compact_accessibility_snapshot, element_matches_selector, first_matching_element,
+        inspector_available_sources, normalize_inspector_node,
+        normalize_screen_point_from_snapshot, normalized_gesture_coordinates,
+        parse_lsof_tcp_listener, split_filter_values, suppress_native_ax_translation_error,
+        tap_point_from_snapshot, trim_tree_depth, AccessibilityHierarchySource,
+        ElementSelectorPayload, InspectorSession, InspectorSessionTransport, SOURCE_NATIVE_AX,
+        SOURCE_NATIVE_SCRIPT, SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
+    };
+    use serde_json::{json, Value};
+
+    fn selector() -> ElementSelectorPayload {
+        ElementSelectorPayload {
+            id: Some("continue-button".to_owned()),
+            label: Some("Continue".to_owned()),
+            value: None,
+            element_type: Some("Button".to_owned()),
+        }
+    }
+
+    fn accessibility_snapshot() -> Value {
+        json!({
+            "roots": [{
+                "type": "Window",
+                "frame": { "x": 0.0, "y": 0.0, "width": 400.0, "height": 800.0 },
+                "children": [{
+                    "type": "Button",
+                    "AXIdentifier": "continue-button",
+                    "AXLabel": "Continue",
+                    "frame": { "x": 100.0, "y": 200.0, "width": 80.0, "height": 40.0 },
+                    "children": []
+                }]
+            }]
+        })
+    }
+
+    #[test]
+    fn selector_matching_uses_identifier_label_and_type_aliases() {
+        let snapshot = accessibility_snapshot();
+        let node = &snapshot["roots"][0]["children"][0];
+
+        assert!(element_matches_selector(node, &selector()));
+        assert!(!element_matches_selector(
+            node,
+            &ElementSelectorPayload {
+                label: Some("Cancel".to_owned()),
+                ..selector()
+            }
+        ));
+    }
+
+    #[test]
+    fn first_matching_element_searches_descendants() {
+        let found = first_matching_element(&accessibility_snapshot(), &selector()).unwrap();
+
+        assert_eq!(found["AXIdentifier"], "continue-button");
+    }
+
+    #[test]
+    fn tap_point_from_snapshot_returns_normalized_element_center() {
+        let point = tap_point_from_snapshot(&accessibility_snapshot(), &selector()).unwrap();
+
+        assert_eq!(point, (0.35, 0.275));
+    }
+
+    #[test]
+    fn normalize_screen_point_clamps_to_root_bounds() {
+        let point =
+            normalize_screen_point_from_snapshot(&accessibility_snapshot(), 500.0, -20.0).unwrap();
+
+        assert_eq!(point, (1.0, 0.0));
+    }
+
+    #[test]
+    fn gesture_presets_clamp_delta_and_reject_unknown_names() {
+        assert_eq!(
+            normalized_gesture_coordinates("scroll-down", Some(2.0)).unwrap(),
+            (0.5, 0.975, 0.5, 0.025000000000000022, 500)
+        );
+        assert!(normalized_gesture_coordinates("orbit", None).is_err());
+    }
+
+    #[test]
+    fn compact_accessibility_snapshot_removes_nested_noise_but_keeps_identity() {
+        let compact = compact_accessibility_snapshot(&accessibility_snapshot());
+
+        assert_eq!(compact["roots"][0]["children"][0]["id"], "continue-button");
+        assert_eq!(compact["roots"][0]["children"][0]["label"], "Continue");
+        assert!(compact["roots"][0]["children"][0].get("frame").is_some());
+    }
+
+    #[test]
+    fn trim_tree_depth_drops_children_at_requested_depth() {
+        let trimmed = trim_tree_depth(accessibility_snapshot(), Some(0));
+
+        assert_eq!(trimmed["roots"][0]["children"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn inspector_source_detection_prefers_framework_specific_sources() {
+        let sources = inspector_available_sources(&json!({
+            "reactNative": { "available": true },
+            "appHierarchy": { "available": true, "source": "nativescript" },
+            "uikit": { "available": true }
+        }));
+
+        assert_eq!(
+            sources,
+            vec![
+                SOURCE_REACT_NATIVE.to_owned(),
+                SOURCE_NATIVE_SCRIPT.to_owned(),
+                SOURCE_UIKIT.to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn best_inspector_session_prioritizes_react_native_then_nativescript() {
+        let uikit = InspectorSession {
+            transport: InspectorSessionTransport::Connected,
+            available_sources: vec![SOURCE_UIKIT.to_owned()],
+            info: json!({}),
+            process_identifier: 1,
+        };
+        let react_native = InspectorSession {
+            transport: InspectorSessionTransport::Tcp { port: 47370 },
+            available_sources: vec![SOURCE_REACT_NATIVE.to_owned()],
+            info: json!({}),
+            process_identifier: 2,
+        };
+
+        let best = best_inspector_session(vec![uikit, react_native]).unwrap();
+
+        assert_eq!(best.process_identifier, 2);
+    }
+
+    #[test]
+    fn available_sources_for_react_native_snapshot_removes_uikit_fallback() {
+        let sources = available_sources_for_snapshot(
+            &[SOURCE_UIKIT.to_owned(), SOURCE_NATIVE_AX.to_owned()],
+            &json!({ "source": SOURCE_REACT_NATIVE }),
+        );
+
+        assert_eq!(
+            sources,
+            vec![SOURCE_REACT_NATIVE.to_owned(), SOURCE_NATIVE_AX.to_owned()]
+        );
+    }
+
+    #[test]
+    fn native_ax_expected_translation_failures_are_suppressed() {
+        assert_eq!(
+            suppress_native_ax_translation_error(
+                "No translation object returned for simulator SIM"
+            ),
+            None
+        );
+        assert!(suppress_native_ax_translation_error("Bridge failed").is_some());
+    }
+
+    #[test]
+    fn parse_lsof_tcp_listener_extracts_pid_and_port() {
+        assert_eq!(
+            parse_lsof_tcp_listener("Fixture 123 dj 12u IPv4 0x1 0t0 TCP 127.0.0.1:47370 (LISTEN)"),
+            Some((123, 47370))
+        );
+        assert_eq!(
+            parse_lsof_tcp_listener(
+                "Fixture 123 dj 12u IPv4 0x1 0t0 TCP 127.0.0.1:47370 (ESTABLISHED)"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn normalize_inspector_node_maps_runtime_metadata_to_accessibility_fields() {
+        let normalized = normalize_inspector_node(
+            &json!({
+                "id": "node-1",
+                "className": "UIButton",
+                "displayName": "Button",
+                "accessibility": {
+                    "identifier": "continue-button",
+                    "label": "Continue",
+                    "value": "Ready"
+                },
+                "frameInScreen": { "x": 10.0, "y": 20.0, "width": 30.0, "height": 40.0 },
+                "isUserInteractionEnabled": true,
+                "isHidden": false,
+                "alpha": 1.0,
+                "children": []
+            }),
+            Some(42),
+        );
+
+        assert_eq!(normalized["AXUniqueId"], "node-1");
+        assert_eq!(normalized["AXIdentifier"], "continue-button");
+        assert_eq!(normalized["AXLabel"], "Continue");
+        assert_eq!(normalized["AXValue"], "Ready");
+        assert_eq!(normalized["enabled"], true);
+        assert_eq!(normalized["pid"], 42);
+    }
+
+    #[test]
+    fn tree_metadata_attaches_available_sources_and_fallback_reason() {
+        let metadata = attach_tree_metadata(
+            json!({ "roots": [], "source": SOURCE_NATIVE_AX }),
+            &[SOURCE_SWIFTUI.to_owned(), SOURCE_NATIVE_AX.to_owned()],
+            Some("native accessibility unavailable".to_owned()),
+        );
+
+        assert_eq!(metadata["availableSources"][0], SOURCE_SWIFTUI);
+        assert_eq!(metadata["fallbackSource"], SOURCE_NATIVE_AX);
+        assert_eq!(
+            metadata["fallbackReason"],
+            "native accessibility unavailable"
+        );
+    }
+
+    #[test]
+    fn accessibility_source_parser_accepts_documented_aliases() {
+        assert!(matches!(
+            AccessibilityHierarchySource::parse(Some("rn")).unwrap(),
+            AccessibilityHierarchySource::ReactNative
+        ));
+        assert!(matches!(
+            AccessibilityHierarchySource::parse(Some("swift-ui")).unwrap(),
+            AccessibilityHierarchySource::SwiftUI
+        ));
+        assert!(AccessibilityHierarchySource::parse(Some("unknown")).is_err());
+    }
+
+    #[test]
+    fn split_filter_values_trims_lowercases_and_omits_empty_parts() {
+        assert_eq!(
+            split_filter_values(Some(" Error, SpringBoard ,, DEBUG ")),
+            vec!["error", "springboard", "debug"]
+        );
+    }
+}
