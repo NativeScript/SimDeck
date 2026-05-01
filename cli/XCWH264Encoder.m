@@ -1114,10 +1114,11 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         .width = (vImagePixelCount)CVPixelBufferGetWidth(_scaledPixelBuffer),
         .rowBytes = CVPixelBufferGetBytesPerRow(_scaledPixelBuffer),
     };
+    vImage_Flags scaleFlags = _realtimeStreamMode ? kvImageNoFlags : kvImageHighQualityResampling;
     vImage_Error scaleStatus = vImageScale_ARGB8888(&sourceBuffer,
                                                     &targetBuffer,
                                                     NULL,
-                                                    kvImageHighQualityResampling);
+                                                    scaleFlags);
     CVPixelBufferUnlockBaseAddress(_scaledPixelBuffer, 0);
     CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
     _lastScaleStatus = scaleStatus;

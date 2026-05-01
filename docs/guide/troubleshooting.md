@@ -85,11 +85,10 @@ The encoder did not produce a keyframe within 3 seconds. The most common causes:
   simdeck daemon start --video-codec h264-software
   ```
 
-  On virtualized CI Macs where hardware H.264 is unavailable, keep
-  `h264-software`. If the stream still falls behind, restart with
-  `--video-codec h264-software --low-latency`; that profile caps at 15 fps,
-  drops stale pending frames, and caps the longest edge at 1170 pixels before backlog
-  turns into visible stream delay.
+  On virtualized CI Macs where hardware H.264 is unavailable, use
+  `--video-codec h264-software --stream-quality ci-software`. That profile
+  targets a 960-pixel longest edge at 24 fps and lowers bitrate/CPU pressure
+  before backlog turns into visible stream delay.
 
 - **The Simulator window is minimised or off-screen.** The private display bridge captures from a headless context, so this is rare, but if you see it after waking from sleep, shut the simulator down and boot it again.
 - **The simulator is mid-shutdown.** Wait for `simdeck list` to report `isBooted: true`.

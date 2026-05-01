@@ -42,7 +42,7 @@ const WEBRTC_LOW_LATENCY_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
 const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
-const WEBRTC_REALTIME_SAMPLE_DURATION: Duration = Duration::from_micros(33_333);
+const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(90);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
@@ -800,8 +800,12 @@ async fn write_frame_sample_with_timeout<P: Packetizer>(
     duration: Duration,
     realtime_stream: bool,
 ) -> anyhow::Result<bool> {
-    let timeout = if realtime_stream_enabled() {
-        WEBRTC_REALTIME_WRITE_TIMEOUT
+    let timeout = if realtime_stream {
+        if frame.is_keyframe {
+            WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT
+        } else {
+            WEBRTC_REALTIME_WRITE_TIMEOUT.max(realtime_sample_duration() * 2)
+        }
     } else {
         WEBRTC_WRITE_TIMEOUT
     };
@@ -965,7 +969,7 @@ impl WebRtcSendTiming {
     ) -> Duration {
         if realtime_stream {
             self.last_timestamp_us = Some(frame.timestamp_us);
-            return WEBRTC_REALTIME_SAMPLE_DURATION;
+            return realtime_sample_duration();
         }
 
         const MIN_FRAME_DURATION_US: u64 = 1_000;
@@ -981,6 +985,15 @@ impl WebRtcSendTiming {
         self.last_timestamp_us = Some(frame.timestamp_us);
         Duration::from_micros(duration_us)
     }
+}
+
+fn realtime_sample_duration() -> Duration {
+    let fps = std::env::var("SIMDECK_REALTIME_FPS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(30)
+        .clamp(15, 60);
+    Duration::from_micros(1_000_000 / fps)
 }
 
 struct WebRtcMetricsGuard {

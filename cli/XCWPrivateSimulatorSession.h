@@ -30,6 +30,7 @@ typedef void (^XCWPrivateSimulatorEncodedFrameHandler)(NSData *sampleData,
 - (void)requestKeyFrameRefresh;
 - (void)requestFrameRefresh;
 - (void)reconfigureVideoEncoder;
+- (NSDictionary *)videoEncoderStats;
 - (id)addEncodedFrameListener:(XCWPrivateSimulatorEncodedFrameHandler)handler;
 - (void)removeEncodedFrameListener:(id)token;
 

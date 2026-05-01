@@ -696,6 +696,12 @@ void xcw_native_session_reconfigure_video_encoder(void *handle) {
     }
 }
 
+char *xcw_native_session_video_encoder_stats(void *handle, char **error_message) {
+    @autoreleasepool {
+        return XCWJSONStringFromObject([XCWNativeSessionFromHandle(handle) videoEncoderStats] ?: @{}, error_message);
+    }
+}
+
 bool xcw_native_session_send_touch(void *handle, double x, double y, const char *phase, char **error_message) {
     @autoreleasepool {
         NSError *error = nil;

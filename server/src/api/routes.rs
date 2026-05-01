@@ -104,6 +104,14 @@ struct StreamQualityProfile {
 
 const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
     StreamQualityProfile {
+        id: "ci-software",
+        label: "CI Software",
+        max_edge: 960,
+        fps: 24,
+        min_bitrate: 1_200_000,
+        bits_per_pixel: 2,
+    },
+    StreamQualityProfile {
         id: "quality",
         label: "Quality",
         max_edge: 1440,
@@ -626,15 +634,31 @@ fn stream_quality_response() -> Value {
 }
 
 fn stream_quality_state() -> Value {
-    let max_edge = env_u32("SIMDECK_REALTIME_MAX_EDGE", 1440, 720, 1920);
-    let fps = env_u32("SIMDECK_REALTIME_FPS", 30, 15, 60);
+    let configured_profile = env::var("SIMDECK_STREAM_QUALITY_PROFILE")
+        .ok()
+        .and_then(|value| stream_quality_profile(value.trim()).ok());
+    let fallback = configured_profile.unwrap_or(StreamQualityProfile {
+        id: "custom",
+        label: "Custom",
+        max_edge: 1440,
+        fps: 30,
+        min_bitrate: 3_000_000,
+        bits_per_pixel: 4,
+    });
+    let max_edge = env_u32("SIMDECK_REALTIME_MAX_EDGE", fallback.max_edge, 720, 1920);
+    let fps = env_u32("SIMDECK_REALTIME_FPS", fallback.fps, 15, 60);
     let min_bitrate = env_u32(
         "SIMDECK_REALTIME_MIN_BITRATE",
-        3_000_000,
+        fallback.min_bitrate,
         750_000,
         20_000_000,
     );
-    let bits_per_pixel = env_u32("SIMDECK_REALTIME_BITS_PER_PIXEL", 4, 1, 10);
+    let bits_per_pixel = env_u32(
+        "SIMDECK_REALTIME_BITS_PER_PIXEL",
+        fallback.bits_per_pixel,
+        1,
+        10,
+    );
     let profile = env::var("SIMDECK_STREAM_QUALITY_PROFILE")
         .ok()
         .filter(|value| !value.trim().is_empty())

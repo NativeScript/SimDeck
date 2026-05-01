@@ -180,6 +180,10 @@ unsafe extern "C" {
     pub fn xcw_native_session_request_refresh(handle: *mut c_void);
     pub fn xcw_native_session_request_keyframe(handle: *mut c_void);
     pub fn xcw_native_session_reconfigure_video_encoder(handle: *mut c_void);
+    pub fn xcw_native_session_video_encoder_stats(
+        handle: *mut c_void,
+        error_message: *mut *mut c_char,
+    ) -> *mut c_char;
     pub fn xcw_native_session_set_frame_callback(
         handle: *mut c_void,
         callback: Option<xcw_native_frame_callback>,

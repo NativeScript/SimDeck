@@ -183,6 +183,10 @@ fn plist_contents(
     if options.low_latency {
         program_arguments.push("--low-latency".to_string());
     }
+    if let Some(stream_quality_profile) = options.stream_quality_profile.as_ref() {
+        program_arguments.push("--stream-quality".to_string());
+        program_arguments.push(stream_quality_profile.clone());
+    }
 
     if let Some(advertise_host) = options.advertise_host.as_ref() {
         program_arguments.push("--advertise-host".to_string());

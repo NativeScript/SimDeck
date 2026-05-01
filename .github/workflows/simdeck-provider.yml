@@ -24,6 +24,10 @@ on:
       simdeck_artifact_url:
         description: Optional URL to a prebuilt simdeck binary tarball
         required: false
+      stream_quality:
+        description: SimDeck realtime stream quality profile
+        required: false
+        default: ci-software
 
 permissions:
   actions: read
@@ -107,6 +111,7 @@ jobs:
           PROVIDER_TOKEN: ${{ inputs.provider_token }}
           BUNDLE_ID: ${{ inputs.bundle_id }}
           SIMDECK_ALLOWED_ORIGINS: ${{ inputs.simdeck_cloud_url }}
+          SIMDECK_STREAM_QUALITY: ${{ inputs.stream_quality || 'ci-software' }}
         run: |
           set -euo pipefail
 
@@ -143,6 +148,7 @@ jobs:
             --access-token "$PROVIDER_TOKEN" \
             --client-root "$PWD/client/dist" \
             --video-codec h264-software \
+            --stream-quality "${SIMDECK_STREAM_QUALITY:-ci-software}" \
             > simdeck.log 2>&1 &
           simdeck_pid="$!"
 

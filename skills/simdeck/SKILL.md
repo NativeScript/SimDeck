@@ -46,10 +46,10 @@ directly with the runner.
 For an ad-hoc local provider that can be opened from another browser or phone,
 run `simdeck studio expose "iPhone 17 Pro"` and keep that process running. It
 prints the unique Studio simulator URL. This defaults to hardware H.264; add
-`--low-latency` to use software H.264's low-latency profile. Studio expose uses
+`--software-h264` when hardware encode is unavailable. Studio expose uses
 realtime stream settings so remote viewers drop stale frames instead of building
-latency. Add `--software-h264` to keep the same realtime Studio stream profile
-but encode with software H.264.
+latency. Software H.264 Studio providers default to the `ci-software` stream
+quality profile; override with `--stream-quality quality|balanced|smooth|economy|ci-software`.
 
 The local viewer gets the API token automatically. LAN browsers pair with the printed code before receiving the API cookie. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
 

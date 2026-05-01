@@ -647,6 +647,17 @@ impl NativeSession {
         }
     }
 
+    pub fn video_encoder_stats(&self) -> serde_json::Value {
+        unsafe {
+            let mut error = ptr::null_mut();
+            let raw = ffi::xcw_native_session_video_encoder_stats(self.handle, &mut error);
+            string_from_raw(raw, error)
+                .ok()
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .unwrap_or_else(|| serde_json::json!({}))
+        }
+    }
+
     pub unsafe fn set_frame_callback(
         &self,
         callback: Option<ffi::xcw_native_frame_callback>,

@@ -27,6 +27,8 @@ Returns the static bootstrap information the browser client needs, plus a freshn
 | `timestamp`                 | Server-side `time.now()` as a fractional Unix epoch in seconds.                         |
 | `videoCodec`                | Active encoder. One of `h264` or `h264-software`. See [Video Pipeline](/guide/video).   |
 | `lowLatency`                | `true` when software H.264 low-latency mode was enabled at daemon startup.              |
+| `realtimeStream`            | `true` when the WebRTC stream is configured to favor freshness and realtime pacing.      |
+| `streamQuality`             | Active realtime quality profile and encoder limits such as `maxEdge`, `fps`, and bitrate. |
 | `webRtc.iceServers`         | ICE servers the browser should use when creating the WebRTC peer connection.            |
 | `webRtc.iceTransportPolicy` | Browser ICE transport policy. One of `all` or `relay`.                                  |
 
