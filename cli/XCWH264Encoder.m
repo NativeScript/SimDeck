@@ -8,7 +8,7 @@
 #include <stdlib.h>
 
 static const int32_t XCWMaximumEncodedDimension = 1920;
-static const int32_t XCWMaximumRealtimeHardwareEncodedDimension = 1600;
+static const int32_t XCWMaximumRealtimeHardwareEncodedDimension = 1440;
 static const int32_t XCWMaximumSoftwareEncodedDimension = 1600;
 static const int32_t XCWMaximumLowLatencySoftwareEncodedDimension = 1170;
 static const int32_t XCWTargetRealTimeFrameRate = 60;
@@ -812,7 +812,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     if (@available(macOS 10.14, *)) {
         VTSessionSetProperty(session, kVTCompressionPropertyKey_AllowOpenGOP, kCFBooleanFalse);
     }
-    if (_encoderMode == XCWVideoEncoderModeH264Software) {
+    if (_encoderMode == XCWVideoEncoderModeH264Software || _realtimeStreamMode) {
         if (@available(macOS 12.0, *)) {
             VTSessionSetProperty(session,
                                  kVTCompressionPropertyKey_ProfileLevel,
