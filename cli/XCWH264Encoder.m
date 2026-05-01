@@ -12,6 +12,7 @@ static const int32_t XCWMaximumRealtimeHardwareEncodedDimension = 1600;
 static const int32_t XCWMaximumSoftwareEncodedDimension = 1600;
 static const int32_t XCWMaximumLowLatencySoftwareEncodedDimension = 1170;
 static const int32_t XCWTargetRealTimeFrameRate = 60;
+static const int32_t XCWTargetRealtimeHardwareFrameRate = 45;
 static const int32_t XCWTargetSoftwareFrameRate = 60;
 static const int32_t XCWTargetLowLatencySoftwareFrameRate = 15;
 static const NSUInteger XCWMaximumInFlightFrames = 2;
@@ -33,6 +34,11 @@ static const uint64_t XCWLowLatencySoftwareInitialFrameIntervalUs = 66667;
 static const uint64_t XCWLowLatencySoftwareMaximumFrameIntervalUs = 133333;
 static const uint64_t XCWLowLatencySoftwareFrameIntervalStepUs = 11111;
 static const NSUInteger XCWLowLatencySoftwareHealthyFrameWindow = 8;
+static const uint64_t XCWRealtimeHardwareInitialFrameIntervalUs = 22222;
+static const uint64_t XCWRealtimeHardwareMinimumFrameIntervalUs = 22222;
+static const uint64_t XCWRealtimeHardwareMaximumFrameIntervalUs = 50000;
+static const uint64_t XCWRealtimeHardwareFrameIntervalStepUs = 5556;
+static const NSUInteger XCWRealtimeHardwareHealthyFrameWindow = 6;
 
 typedef NS_ENUM(NSUInteger, XCWVideoEncoderMode) {
     XCWVideoEncoderModeH264Hardware,
@@ -384,6 +390,10 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     uint64_t _lastSoftwareSubmissionUs;
     NSUInteger _softwarePacedFrameCount;
     NSUInteger _softwareHealthyFrameCount;
+    uint64_t _realtimeHardwareFrameIntervalUs;
+    uint64_t _lastRealtimeHardwareSubmissionUs;
+    NSUInteger _realtimeHardwarePacedFrameCount;
+    NSUInteger _realtimeHardwareHealthyFrameCount;
     NSInteger _lastSessionStatus;
     NSInteger _lastPrepareStatus;
     NSInteger _lastScaleStatus;
@@ -407,6 +417,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _realtimeStreamMode = XCWRealtimeStreamModeFromEnvironment() || _lowLatencyMode;
     _codecType = XCWVideoCodecTypeForMode(_encoderMode);
     _softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
+    _realtimeHardwareFrameIntervalUs = XCWRealtimeHardwareInitialFrameIntervalUs;
     return self;
 }
 
@@ -472,6 +483,9 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
             @"softwareFrameIntervalUs": @(self->_softwareFrameIntervalUs),
             @"softwareTargetFps": @(self->_softwareFrameIntervalUs > 0 ? (1000000.0 / (double)self->_softwareFrameIntervalUs) : 0.0),
             @"softwarePacedFrames": @(self->_softwarePacedFrameCount),
+            @"realtimeHardwareFrameIntervalUs": @(self->_realtimeHardwareFrameIntervalUs),
+            @"realtimeHardwareTargetFps": @(self->_realtimeHardwareFrameIntervalUs > 0 ? (1000000.0 / (double)self->_realtimeHardwareFrameIntervalUs) : 0.0),
+            @"realtimeHardwarePacedFrames": @(self->_realtimeHardwarePacedFrameCount),
             @"transportCodec": XCWCodecName(self->_codecType),
             @"encoderMode": XCWVideoEncoderModeName(self->_encoderMode),
             @"lowLatencyMode": @(self->_lowLatencyMode),
@@ -530,7 +544,28 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     if (_encoderMode == XCWVideoEncoderModeH264Software) {
         return _lowLatencyMode ? XCWTargetLowLatencySoftwareFrameRate : XCWTargetSoftwareFrameRate;
     }
+    if (_realtimeStreamMode) {
+        return XCWTargetRealtimeHardwareFrameRate;
+    }
     return XCWTargetRealTimeFrameRate;
+}
+
+- (BOOL)shouldPaceRealtimeHardwareFrameAtTimeUs:(uint64_t)nowUs {
+    if (_encoderMode != XCWVideoEncoderModeH264Hardware || !_realtimeStreamMode || _needsKeyFrame) {
+        return NO;
+    }
+    if (_realtimeHardwareFrameIntervalUs == 0) {
+        _realtimeHardwareFrameIntervalUs = XCWRealtimeHardwareInitialFrameIntervalUs;
+    }
+    if (_lastRealtimeHardwareSubmissionUs == 0) {
+        return NO;
+    }
+    uint64_t elapsedUs = nowUs >= _lastRealtimeHardwareSubmissionUs ? nowUs - _lastRealtimeHardwareSubmissionUs : 0;
+    if (elapsedUs >= _realtimeHardwareFrameIntervalUs) {
+        return NO;
+    }
+    _realtimeHardwarePacedFrameCount += 1;
+    return YES;
 }
 
 - (BOOL)shouldPaceSoftwareFrameAtTimeUs:(uint64_t)nowUs {
@@ -590,6 +625,41 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _softwareHealthyFrameCount = 0;
 }
 
+- (void)adaptRealtimeHardwarePacingForLatencyUs:(uint64_t)latencyUs {
+    if (_encoderMode != XCWVideoEncoderModeH264Hardware || !_realtimeStreamMode || latencyUs == 0) {
+        return;
+    }
+    if (_realtimeHardwareFrameIntervalUs == 0) {
+        _realtimeHardwareFrameIntervalUs = XCWRealtimeHardwareInitialFrameIntervalUs;
+    }
+
+    if (latencyUs > _realtimeHardwareFrameIntervalUs) {
+        uint64_t nextIntervalUs = _realtimeHardwareFrameIntervalUs + XCWRealtimeHardwareFrameIntervalStepUs;
+        uint64_t latencyBoundIntervalUs = latencyUs + XCWRealtimeHardwareFrameIntervalStepUs;
+        if (nextIntervalUs < latencyBoundIntervalUs) {
+            nextIntervalUs = latencyBoundIntervalUs;
+        }
+        _realtimeHardwareFrameIntervalUs = MIN(nextIntervalUs, XCWRealtimeHardwareMaximumFrameIntervalUs);
+        _realtimeHardwareHealthyFrameCount = 0;
+        return;
+    }
+
+    if (latencyUs < _realtimeHardwareFrameIntervalUs &&
+        _realtimeHardwareFrameIntervalUs > XCWRealtimeHardwareMinimumFrameIntervalUs) {
+        _realtimeHardwareHealthyFrameCount += 1;
+        if (_realtimeHardwareHealthyFrameCount >= XCWRealtimeHardwareHealthyFrameWindow) {
+            uint64_t nextIntervalUs = _realtimeHardwareFrameIntervalUs > XCWRealtimeHardwareFrameIntervalStepUs
+                ? _realtimeHardwareFrameIntervalUs - XCWRealtimeHardwareFrameIntervalStepUs
+                : XCWRealtimeHardwareMinimumFrameIntervalUs;
+            _realtimeHardwareFrameIntervalUs = MAX(nextIntervalUs, XCWRealtimeHardwareMinimumFrameIntervalUs);
+            _realtimeHardwareHealthyFrameCount = 0;
+        }
+        return;
+    }
+
+    _realtimeHardwareHealthyFrameCount = 0;
+}
+
 - (void)drainPendingFramesLocked {
     while (YES) {
         if (_inFlightFrameCount >= [self maximumInFlightFrameCountLocked]) {
@@ -628,7 +698,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     }
 
     uint64_t nowUs = (uint64_t)(CACurrentMediaTime() * 1000000.0);
-    if ([self shouldPaceSoftwareFrameAtTimeUs:nowUs]) {
+    if ([self shouldPaceSoftwareFrameAtTimeUs:nowUs] || [self shouldPaceRealtimeHardwareFrameAtTimeUs:nowUs]) {
         return YES;
     }
 
@@ -674,6 +744,8 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _submittedFrameCount += 1;
     if (_encoderMode == XCWVideoEncoderModeH264Software) {
         _lastSoftwareSubmissionUs = nowUs;
+    } else if (_encoderMode == XCWVideoEncoderModeH264Hardware && _realtimeStreamMode) {
+        _lastRealtimeHardwareSubmissionUs = nowUs;
     }
     _maxInFlightFrameCount = MAX(_maxInFlightFrameCount, _inFlightFrameCount);
     if (_encoderMode == XCWVideoEncoderModeH264Software) {
@@ -796,6 +868,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _timestampOriginUs = 0;
     _inFlightFrameCount = 0;
     _lastSoftwareSubmissionUs = 0;
+    _lastRealtimeHardwareSubmissionUs = 0;
     _hardwareAccelerated = NO;
     [self invalidateScalingResourcesLocked];
 }
@@ -983,6 +1056,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         uint64_t nowUs = (uint64_t)(CACurrentMediaTime() * 1000000.0);
         _latestEncodeLatencyUs = nowUs >= submittedAtUs ? nowUs - submittedAtUs : 0;
         [self adaptSoftwarePacingForLatencyUs:_latestEncodeLatencyUs];
+        [self adaptRealtimeHardwarePacingForLatencyUs:_latestEncodeLatencyUs];
     }
     NSString *codec = nil;
     NSData *decoderConfig = nil;

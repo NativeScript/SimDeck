@@ -39,6 +39,7 @@ const WEBRTC_LOW_LATENCY_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
 const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
+const WEBRTC_REALTIME_SAMPLE_DURATION: Duration = Duration::from_micros(22_222);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
 
@@ -540,6 +541,7 @@ impl WebRtcMediaStream {
         let mut send_timing = WebRtcSendTiming::new();
         let mut peer_state_interval = time::interval(Duration::from_millis(250));
         let mut bootstrap_sleep = Box::pin(time::sleep(WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL));
+        let realtime_stream = realtime_stream_enabled();
         let refresh_floor = refresh_floor_for_low_latency(state.config.low_latency);
         let refresh_ceiling = refresh_ceiling_for_low_latency(state.config.low_latency);
         let mut refresh_sleep = Box::pin(time::sleep(refresh_floor));
@@ -629,12 +631,14 @@ impl WebRtcMediaStream {
                         }
                     };
                     let (frame, stale_frames) = drain_to_latest_frame(&mut rx, frame, &state.metrics);
-                    if stale_frames > 0 && !frame.is_keyframe {
-                        waiting_for_keyframe = true;
+                    if stale_frames > 0 {
                         session.request_keyframe();
+                    }
+                    if stale_frames > 0 && !realtime_stream && !frame.is_keyframe {
+                        waiting_for_keyframe = true;
                         continue;
                     }
-                    if waiting_for_keyframe && !frame.is_keyframe {
+                    if !realtime_stream && waiting_for_keyframe && !frame.is_keyframe {
                         state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
@@ -642,7 +646,7 @@ impl WebRtcMediaStream {
                         latest_keyframe = frame.clone();
                         waiting_for_keyframe = false;
                     }
-                    let duration = send_timing.duration_for(&frame);
+                    let duration = send_timing.duration_for(&frame, realtime_stream);
                     let started_at = time::Instant::now();
                     let write_result = write_frame_sample_with_timeout(&video_track, &frame, duration).await;
                     adaptive_refresh_interval =
@@ -656,7 +660,7 @@ impl WebRtcMediaStream {
                                 .metrics
                                 .frames_dropped_server
                                 .fetch_add(1, Ordering::Relaxed);
-                            waiting_for_keyframe = true;
+                            waiting_for_keyframe = !realtime_stream;
                             adaptive_refresh_interval = refresh_ceiling;
                             session.request_keyframe();
                         }
@@ -890,7 +894,16 @@ impl WebRtcSendTiming {
         }
     }
 
-    fn duration_for(&mut self, frame: &crate::transport::packet::FramePacket) -> Duration {
+    fn duration_for(
+        &mut self,
+        frame: &crate::transport::packet::FramePacket,
+        realtime_stream: bool,
+    ) -> Duration {
+        if realtime_stream {
+            self.last_timestamp_us = Some(frame.timestamp_us);
+            return WEBRTC_REALTIME_SAMPLE_DURATION;
+        }
+
         const MIN_FRAME_DURATION_US: u64 = 1_000;
         const DEFAULT_FRAME_DURATION_US: u64 = 16_667;
         const MAX_FRAME_DURATION_US: u64 = 100_000;
