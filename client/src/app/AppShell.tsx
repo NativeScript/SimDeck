@@ -359,7 +359,12 @@ export function AppShell() {
       return;
     }
     const failedUDID = selectedSimulator.udid;
-    setFailedStreamUDIDs((current) => new Set(current).add(failedUDID));
+    setFailedStreamUDIDs((current) => {
+      if (current.has(failedUDID)) {
+        return current;
+      }
+      return new Set(current).add(failedUDID);
+    });
     const nextSimulator = simulators.find(
       (simulator) =>
         simulator.isBooted &&

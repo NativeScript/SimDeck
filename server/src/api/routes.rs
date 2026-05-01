@@ -8,7 +8,6 @@ use crate::metrics::counters::{ClientStreamStats, Metrics};
 use crate::native::bridge::{LogFilters, NativeBridge};
 use crate::simulators::registry::SessionRegistry;
 use crate::simulators::session::SimulatorSession;
-use crate::transport::packet::SharedFrame;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Path, Query, State};
@@ -17,16 +16,13 @@ use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Map;
 use serde_json::{json as json_value, Value};
 use std::collections::VecDeque;
-use std::convert::Infallible;
 use std::env;
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -429,7 +425,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/touch", post(send_touch))
         .route("/api/simulators/{udid}/control", get(control_socket))
         .route("/api/simulators/{udid}/webrtc/offer", post(webrtc_offer))
-        .route("/api/simulators/{udid}/mjpeg", get(mjpeg_stream))
         .route(
             "/api/simulators/{udid}/touch-sequence",
             post(send_touch_sequence),
@@ -569,7 +564,6 @@ fn normalize_video_codec(codec: &str) -> Option<&'static str> {
     match codec.trim().to_ascii_lowercase().as_str() {
         "h264" | "h264-hardware" | "avc" => Some("h264"),
         "h264-software" | "software-h264" => Some("h264-software"),
-        "jpeg" | "jpg" | "mjpeg" => Some("jpeg"),
         _ => None,
     }
 }
@@ -1153,115 +1147,6 @@ async fn webrtc_offer(
     crate::transport::webrtc::create_answer(state, udid, payload)
         .await
         .map(Json)
-}
-
-async fn mjpeg_stream(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-) -> Result<Response, AppError> {
-    let session = state.registry.get_or_create_async(&udid).await?;
-    session.ensure_started_async().await?;
-    session.request_refresh();
-    let first_frame = session
-        .wait_for_keyframe(Duration::from_secs(3))
-        .await
-        .ok_or_else(|| AppError::internal("timed out waiting for simulator JPEG frame"))?;
-    if first_frame.codec.as_deref() != Some("jpeg") {
-        return Err(AppError::bad_request(
-            "MJPEG stream requires starting simdeck with --video-codec jpeg",
-        ));
-    }
-
-    let stream = futures::stream::unfold(
-        MjpegStreamState {
-            first_frame: Some(first_frame),
-            metrics: state.metrics.clone(),
-            receiver: session.subscribe(),
-            session,
-            ticker: tokio::time::interval(Duration::from_millis(67)),
-        },
-        |mut state| async move {
-            state.ticker.tick().await;
-            state.session.request_refresh();
-            let mut frame = match state.first_frame.take() {
-                Some(frame) => frame,
-                None => match state.receiver.recv().await {
-                    Ok(frame) => frame,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        state
-                            .metrics
-                            .frames_dropped_server
-                            .fetch_add(skipped, Ordering::Relaxed);
-                        match state.receiver.recv().await {
-                            Ok(frame) => frame,
-                            Err(_) => return None,
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
-                },
-            };
-            let mut stale_frames = 0u64;
-            loop {
-                match state.receiver.try_recv() {
-                    Ok(next_frame) => {
-                        stale_frames += 1;
-                        frame = next_frame;
-                    }
-                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => {
-                        stale_frames = stale_frames.saturating_add(skipped);
-                    }
-                    Err(
-                        tokio::sync::broadcast::error::TryRecvError::Empty
-                        | tokio::sync::broadcast::error::TryRecvError::Closed,
-                    ) => break,
-                }
-            }
-            if stale_frames > 0 {
-                state
-                    .metrics
-                    .frames_dropped_server
-                    .fetch_add(stale_frames, Ordering::Relaxed);
-            }
-            if frame.codec.as_deref() != Some("jpeg") {
-                return None;
-            }
-
-            let payload = mjpeg_part(&frame);
-            state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
-            Some((Ok::<Bytes, Infallible>(Bytes::from(payload)), state))
-        },
-    );
-
-    Response::builder()
-        .header(
-            header::CONTENT_TYPE,
-            "multipart/x-mixed-replace; boundary=simdeck-mjpeg",
-        )
-        .header(header::CACHE_CONTROL, "no-store, no-transform")
-        .header("x-accel-buffering", "no")
-        .body(Body::from_stream(stream))
-        .map_err(|error| AppError::internal(format!("failed to build MJPEG response: {error}")))
-}
-
-struct MjpegStreamState {
-    first_frame: Option<SharedFrame>,
-    metrics: Arc<Metrics>,
-    receiver: tokio::sync::broadcast::Receiver<SharedFrame>,
-    session: SimulatorSession,
-    ticker: tokio::time::Interval,
-}
-
-fn mjpeg_part(frame: &SharedFrame) -> Vec<u8> {
-    let header = format!(
-        "--simdeck-mjpeg\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\nX-SimDeck-Frame: {}\r\n\r\n",
-        frame.data.len(),
-        frame.frame_sequence
-    );
-    let mut payload = Vec::with_capacity(header.len() + frame.data.len() + 2);
-    payload.extend_from_slice(header.as_bytes());
-    payload.extend_from_slice(&frame.data);
-    payload.extend_from_slice(b"\r\n");
-    payload
 }
 
 async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket) {
