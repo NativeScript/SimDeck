@@ -15,7 +15,7 @@ const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 8000;
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
 let activeStreamClient: StreamWorkerClient | null = null;
 
-export type StreamBackend = "mjpeg-img" | "webrtc";
+export type StreamBackend = "webrtc";
 
 export function sendWebRtcControlMessage(encoded: string): boolean {
   if (activeWebRtcControlChannel?.readyState !== "open") {
@@ -39,118 +39,6 @@ interface StreamClientBackend {
   connect(target: StreamConnectTarget): void | Promise<void>;
   destroy(): void;
   disconnect(): void;
-}
-
-class MjpegImageStreamClient implements StreamClientBackend {
-  private canvas: HTMLCanvasElement | null = null;
-  private connectGeneration = 0;
-  private image: HTMLImageElement | null = null;
-  private statsInterval = 0;
-  private stats: StreamStats = createEmptyStreamStats();
-
-  constructor(
-    private readonly onMessage: (message: WorkerToMainMessage) => void,
-  ) {}
-
-  attachCanvas(canvasElement: HTMLCanvasElement) {
-    this.canvas = canvasElement;
-  }
-
-  clear() {
-    this.canvas
-      ?.getContext("2d")
-      ?.clearRect(0, 0, this.canvas.width, this.canvas.height);
-  }
-
-  connect(target: StreamConnectTarget) {
-    this.disconnect();
-    if (!this.canvas) {
-      return;
-    }
-    const canvasElement = this.canvas;
-    const generation = ++this.connectGeneration;
-    this.stats = {
-      ...createEmptyStreamStats(),
-      codec: "mjpeg",
-    };
-    this.onMessage({
-      type: "status",
-      status: { detail: "Opening MJPEG image stream", state: "connecting" },
-    });
-
-    const image = document.createElement("img");
-    image.alt = "";
-    image.className = "stream-image";
-    image.decoding = "async";
-    image.draggable = false;
-    image.src = buildMjpegStreamUrl(target.udid);
-    image.addEventListener("load", () => {
-      if (generation !== this.connectGeneration) {
-        return;
-      }
-      this.reportImageSize(image);
-      this.stats.decodedFrames = Math.max(1, this.stats.decodedFrames);
-      this.stats.renderedFrames = Math.max(1, this.stats.renderedFrames);
-      this.stats.receivedPackets = Math.max(1, this.stats.receivedPackets);
-      this.onMessage({ type: "stats", stats: { ...this.stats } });
-      this.onMessage({ type: "status", status: { state: "streaming" } });
-    });
-    image.addEventListener("error", () => {
-      if (generation !== this.connectGeneration) {
-        return;
-      }
-      this.onMessage({
-        type: "status",
-        status: { error: "MJPEG image stream failed.", state: "error" },
-      });
-    });
-    canvasElement.after(image);
-    this.image = image;
-    this.statsInterval = window.setInterval(() => {
-      if (generation !== this.connectGeneration || !this.image) {
-        return;
-      }
-      this.reportImageSize(this.image);
-      this.onMessage({ type: "stats", stats: { ...this.stats } });
-    }, 1000);
-  }
-
-  destroy() {
-    this.disconnect();
-  }
-
-  disconnect() {
-    this.connectGeneration += 1;
-    if (this.statsInterval) {
-      window.clearInterval(this.statsInterval);
-      this.statsInterval = 0;
-    }
-    if (this.image) {
-      this.image.removeAttribute("src");
-      this.image.remove();
-      this.image = null;
-    }
-    this.onMessage({ type: "status", status: { state: "idle" } });
-  }
-
-  private reportImageSize(image: HTMLImageElement) {
-    const width = image.naturalWidth;
-    const height = image.naturalHeight;
-    if (width <= 0 || height <= 0) {
-      return;
-    }
-    if (this.canvas) {
-      if (this.canvas.width !== width) {
-        this.canvas.width = width;
-      }
-      if (this.canvas.height !== height) {
-        this.canvas.height = height;
-      }
-    }
-    this.stats.width = width;
-    this.stats.height = height;
-    this.onMessage({ type: "video-config", size: { width, height } });
-  }
 }
 
 class WebRtcStreamClient implements StreamClientBackend {
@@ -218,8 +106,7 @@ class WebRtcStreamClient implements StreamClientBackend {
       const controlChannel = peerConnection.createDataChannel(
         WEBRTC_CONTROL_CHANNEL_LABEL,
         {
-          maxPacketLifeTime: 250,
-          ordered: false,
+          ordered: true,
         },
       );
       this.controlChannel = controlChannel;
@@ -381,10 +268,6 @@ class WebRtcStreamClient implements StreamClientBackend {
       type: "status",
       status: { error: message, state: "error" },
     });
-    if (isPermanentStreamFailure(message)) {
-      this.shouldReconnect = false;
-      return;
-    }
     this.scheduleReconnect(target, generation);
   }
 
@@ -857,30 +740,6 @@ function candidateStatsSummary(candidate: RTCStats | undefined): string {
   return `${stats.candidateType ?? "?"}/${stats.protocol ?? "?"}/${stats.address || stats.ip ? "addr" : "noaddr"}/${stats.port ?? "?"}`;
 }
 
-function buildMjpegStreamUrl(udid: string): string {
-  const url = new URL(
-    `/api/simulators/${encodeURIComponent(udid)}/mjpeg`,
-    window.location.href,
-  );
-  const token = new URL(window.location.href).searchParams.get("simdeckToken");
-  if (token) {
-    url.searchParams.set("simdeckToken", token);
-  }
-  url.searchParams.set("cacheBust", String(Date.now()));
-  return url.toString();
-}
-
-function isPermanentStreamFailure(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("private simulator display attach previously failed") ||
-    normalized.includes("coresimulator did not provide") ||
-    normalized.includes("did not expose any live screens") ||
-    normalized.includes("headless screen") ||
-    normalized.includes("screen adapter")
-  );
-}
-
 function waitForIceGathering(peerConnection: RTCPeerConnection) {
   if (peerConnection.iceGatheringState === "complete") {
     return Promise.resolve();
@@ -899,7 +758,6 @@ function waitForIceGathering(peerConnection: RTCPeerConnection) {
 export class StreamWorkerClient {
   private readonly onMessage: (message: WorkerToMainMessage) => void;
   private backend: StreamClientBackend | null = null;
-  private canvas: HTMLCanvasElement | null = null;
   private attachedCanvas = false;
   private disposed = false;
 
@@ -916,24 +774,13 @@ export class StreamWorkerClient {
       return;
     }
 
-    this.canvas = canvasElement;
+    this.backend = new WebRtcStreamClient(this.onMessage);
+    this.backend.attachCanvas(canvasElement);
     this.attachedCanvas = true;
   }
 
-  async connect(target: StreamConnectTarget) {
+  connect(target: StreamConnectTarget) {
     try {
-      const health = await fetchHealth().catch(() => null);
-      const shouldUseMjpeg = health?.videoCodec === "jpeg";
-      const isMjpegBackend = this.backend instanceof MjpegImageStreamClient;
-      if (!this.backend || shouldUseMjpeg !== isMjpegBackend) {
-        this.backend?.destroy();
-        this.backend = shouldUseMjpeg
-          ? new MjpegImageStreamClient(this.onMessage)
-          : new WebRtcStreamClient(this.onMessage);
-        if (this.canvas) {
-          this.backend.attachCanvas(this.canvas);
-        }
-      }
       const result = this.backend?.connect(target);
       if (result && typeof result.catch === "function") {
         result.catch((error: unknown) => {

@@ -288,7 +288,7 @@ export function useLiveStream({
     runtimeInfo,
     stats,
     status,
-    streamBackend: stats.codec === "mjpeg" ? "mjpeg-img" : "webrtc",
-    streamCanvasKey: `stream-${streamCanvasRevision}`,
+    streamBackend: "webrtc",
+    streamCanvasKey: `webrtc-${streamCanvasRevision}`,
   };
 }
