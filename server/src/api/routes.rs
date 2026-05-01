@@ -591,17 +591,17 @@ async fn set_stream_quality(
         .max_edge
         .or_else(|| profile.map(|profile| profile.max_edge))
         .unwrap_or(1440)
-        .clamp(720, 1920);
+        .clamp(320, 1920);
     let fps = payload
         .fps
         .or_else(|| profile.map(|profile| profile.fps))
         .unwrap_or(30)
-        .clamp(15, 60);
+        .clamp(10, 60);
     let min_bitrate = payload
         .min_bitrate
         .or_else(|| profile.map(|profile| profile.min_bitrate))
         .unwrap_or(3_000_000)
-        .clamp(750_000, 20_000_000);
+        .clamp(200_000, 20_000_000);
     let bits_per_pixel = payload
         .bits_per_pixel
         .or_else(|| profile.map(|profile| profile.bits_per_pixel))
@@ -645,12 +645,12 @@ fn stream_quality_state() -> Value {
         min_bitrate: 3_000_000,
         bits_per_pixel: 4,
     });
-    let max_edge = env_u32("SIMDECK_REALTIME_MAX_EDGE", fallback.max_edge, 720, 1920);
-    let fps = env_u32("SIMDECK_REALTIME_FPS", fallback.fps, 15, 60);
+    let max_edge = env_u32("SIMDECK_REALTIME_MAX_EDGE", fallback.max_edge, 320, 1920);
+    let fps = env_u32("SIMDECK_REALTIME_FPS", fallback.fps, 10, 60);
     let min_bitrate = env_u32(
         "SIMDECK_REALTIME_MIN_BITRATE",
         fallback.min_bitrate,
-        750_000,
+        200_000,
         20_000_000,
     );
     let bits_per_pixel = env_u32(
