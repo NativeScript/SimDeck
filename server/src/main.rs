@@ -714,7 +714,7 @@ impl Default for DaemonLaunchOptions {
             client_root: None,
             video_codec: VideoCodecMode::H264,
             low_latency: false,
-            realtime_stream: false,
+            realtime_stream: true,
             stream_quality_profile: None,
         }
     }
@@ -1216,7 +1216,7 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
         log_path: None,
         video_codec: Some(video_codec.as_env_value().to_owned()),
         low_latency,
-        realtime_stream: false,
+        realtime_stream: true,
         stream_quality_profile: None,
     };
     write_daemon_metadata(&metadata)?;
@@ -1232,6 +1232,7 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
     println!("q or ^C to stop server");
     let _ = io::stdout().flush();
 
+    env::set_var("SIMDECK_REALTIME_STREAM", "1");
     let result = serve_with_appkit(
         port,
         bind,

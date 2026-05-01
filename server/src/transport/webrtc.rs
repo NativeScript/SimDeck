@@ -44,9 +44,10 @@ const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
 const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(90);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
+const WEBRTC_DISCONNECTED_GRACE: Duration = Duration::from_secs(6);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
-const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 3;
+const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 8;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -597,6 +598,7 @@ impl WebRtcMediaStream {
         let mut refresh_sleep = Box::pin(time::sleep(refresh_floor));
         let mut adaptive_refresh_interval = refresh_floor;
         let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
+        let mut disconnected_since: Option<time::Instant> = None;
         let mut waiting_for_keyframe = false;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
@@ -641,6 +643,15 @@ impl WebRtcMediaStream {
                     if matches!(peer_state, RTCPeerConnectionState::Closed | RTCPeerConnectionState::Failed) {
                         warn!("WebRTC media stream closing for {udid}: peer state {peer_state}");
                         break;
+                    }
+                    if matches!(peer_state, RTCPeerConnectionState::Disconnected) {
+                        let since = disconnected_since.get_or_insert_with(time::Instant::now);
+                        if since.elapsed() >= WEBRTC_DISCONNECTED_GRACE {
+                            warn!("WebRTC media stream closing for {udid}: peer disconnected for {:?}", since.elapsed());
+                            break;
+                        }
+                    } else {
+                        disconnected_since = None;
                     }
                 }
                 _ = &mut bootstrap_sleep, if bootstrap_frames_remaining > 0 => {
@@ -1015,10 +1026,7 @@ impl WebRtcSendTiming {
         frame: &crate::transport::packet::FramePacket,
         realtime_stream: bool,
     ) -> Duration {
-        if realtime_stream {
-            self.last_timestamp_us = Some(frame.timestamp_us);
-            return realtime_sample_duration();
-        }
+        let _ = realtime_stream;
 
         const MIN_FRAME_DURATION_US: u64 = 1_000;
         const DEFAULT_FRAME_DURATION_US: u64 = 16_667;
