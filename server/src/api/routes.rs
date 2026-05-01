@@ -476,6 +476,7 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64(),
         "videoCodec": active_video_codec(&state.config),
         "lowLatency": state.config.low_latency,
+        "realtimeStream": crate::transport::webrtc::realtime_stream_enabled(),
         "webRtc": {
             "iceServers": crate::transport::webrtc::client_ice_servers(),
             "iceTransportPolicy": crate::transport::webrtc::ice_transport_policy_label()

@@ -78,8 +78,9 @@ simdeck studio expose "iPhone 17 Pro"
 The command starts or reuses the local daemon, creates an ephemeral Studio
 session, prints a unique `https://simdeck.djdev.me/simulator/...` URL, and keeps
 the outbound bridge alive until you press Ctrl-C. It uses hardware H.264 by
-default; pass `--low-latency` to switch to software H.264's low-latency profile
-for slower Macs or shared runners.
+default with realtime stream settings for remote viewing; pass `--low-latency`
+to switch to software H.264's low-latency profile for slower Macs or shared
+runners.
 
 CLI commands automatically use the same warm daemon:
 

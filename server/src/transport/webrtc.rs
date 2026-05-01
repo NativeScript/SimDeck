@@ -38,6 +38,7 @@ const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const WEBRTC_LOW_LATENCY_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
 const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
+const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
 
@@ -751,15 +752,26 @@ async fn write_frame_sample_with_timeout(
     frame: &crate::transport::packet::SharedFrame,
     duration: Duration,
 ) -> anyhow::Result<bool> {
-    match time::timeout(
-        WEBRTC_WRITE_TIMEOUT,
-        write_frame_sample(video_track, frame, duration),
-    )
-    .await
-    {
+    let timeout = if realtime_stream_enabled() {
+        WEBRTC_REALTIME_WRITE_TIMEOUT
+    } else {
+        WEBRTC_WRITE_TIMEOUT
+    };
+    match time::timeout(timeout, write_frame_sample(video_track, frame, duration)).await {
         Ok(result) => result.map(|()| true),
         Err(_) => Ok(false),
     }
+}
+
+pub fn realtime_stream_enabled() -> bool {
+    std::env::var("SIMDECK_REALTIME_STREAM")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
 }
 
 fn h264_annex_b_sample(frame: &crate::transport::packet::FramePacket) -> anyhow::Result<Vec<u8>> {

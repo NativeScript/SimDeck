@@ -532,6 +532,12 @@ struct DaemonMetadata {
     started_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     log_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    video_codec: Option<String>,
+    #[serde(default)]
+    low_latency: bool,
+    #[serde(default)]
+    realtime_stream: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -542,6 +548,7 @@ struct DaemonLaunchOptions {
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
     low_latency: bool,
+    realtime_stream: bool,
 }
 
 struct StudioExposeOptions {
@@ -581,6 +588,7 @@ impl Default for DaemonLaunchOptions {
             client_root: None,
             video_codec: VideoCodecMode::H264Software,
             low_latency: false,
+            realtime_stream: false,
         }
     }
 }
@@ -593,9 +601,10 @@ fn ensure_project_daemon_with_status(
     options: DaemonLaunchOptions,
 ) -> anyhow::Result<(DaemonMetadata, bool)> {
     if let Some(metadata) = read_daemon_metadata().ok().flatten() {
-        if daemon_is_healthy(&metadata) {
+        if daemon_is_healthy(&metadata) && daemon_matches_launch_options(&metadata, &options) {
             return Ok((metadata, false));
         }
+        let _ = terminate_daemon_metadata(&metadata);
     }
     Ok((start_project_daemon(options)?, true))
 }
@@ -666,17 +675,21 @@ done
         recoverable_restart_exit_code = RECOVERABLE_RESTART_EXIT_CODE
     );
 
-    let child = ProcessCommand::new("/bin/sh")
+    let mut command = ProcessCommand::new("/bin/sh");
+    command
         .arg("-c")
         .arg(supervisor_script)
         .arg("simdeck-supervisor")
         .arg(&executable)
         .args(args)
+        .env(
+            "SIMDECK_REALTIME_STREAM",
+            if options.realtime_stream { "1" } else { "0" },
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_stdout))
-        .stderr(Stdio::from(log_stderr))
-        .spawn()
-        .context("start project SimDeck daemon")?;
+        .stderr(Stdio::from(log_stderr));
+    let child = command.spawn().context("start project SimDeck daemon")?;
 
     let metadata = DaemonMetadata {
         project_root,
@@ -687,6 +700,9 @@ done
         binary_path: executable,
         started_at: now_secs(),
         log_path: Some(log_path),
+        video_codec: Some(options.video_codec.as_env_value().to_owned()),
+        low_latency: options.low_latency,
+        realtime_stream: options.realtime_stream,
     };
     write_daemon_metadata(&metadata)?;
     wait_for_daemon(&metadata, Duration::from_secs(15))?;
@@ -818,6 +834,15 @@ fn wait_for_daemon(metadata: &DaemonMetadata, timeout: Duration) -> anyhow::Resu
 
 fn daemon_is_healthy(metadata: &DaemonMetadata) -> bool {
     http_get_json(&metadata.http_url, "/api/health").is_ok()
+}
+
+fn daemon_matches_launch_options(metadata: &DaemonMetadata, options: &DaemonLaunchOptions) -> bool {
+    metadata
+        .video_codec
+        .as_deref()
+        .is_some_and(|codec| codec == options.video_codec.as_env_value())
+        && metadata.low_latency == options.low_latency
+        && metadata.realtime_stream == options.realtime_stream
 }
 
 fn read_daemon_metadata() -> anyhow::Result<Option<DaemonMetadata>> {
@@ -1024,6 +1049,9 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
         binary_path: executable,
         started_at: now_secs(),
         log_path: None,
+        video_codec: Some(video_codec.as_env_value().to_owned()),
+        low_latency,
+        realtime_stream: false,
     };
     write_daemon_metadata(&metadata)?;
 
@@ -1089,6 +1117,7 @@ fn expose_to_studio(options: StudioExposeOptions) -> anyhow::Result<()> {
         client_root: None,
         video_codec: options.video_codec,
         low_latency: options.low_latency,
+        realtime_stream: true,
     })?;
     let selected = if let Some(selector) = options.simulator.as_deref() {
         select_studio_simulator(&metadata.http_url, selector)
@@ -1276,6 +1305,7 @@ fn main() -> anyhow::Result<()> {
                 client_root,
                 video_codec,
                 low_latency,
+                realtime_stream: false,
             })?;
             if open {
                 open_browser(&metadata.http_url)?;
@@ -1299,6 +1329,7 @@ fn main() -> anyhow::Result<()> {
                     client_root,
                     video_codec,
                     low_latency,
+                    realtime_stream: false,
                 })?;
                 print_daemon_start_result(&metadata, started)
             }
@@ -1316,6 +1347,7 @@ fn main() -> anyhow::Result<()> {
                 client_root,
                 video_codec,
                 low_latency,
+                realtime_stream: false,
             }),
             DaemonCommand::Stop => stop_project_daemon(),
             DaemonCommand::Killall => kill_all_project_daemons(),
@@ -1345,6 +1377,10 @@ fn main() -> anyhow::Result<()> {
                     binary_path: env::current_exe().context("resolve daemon executable")?,
                     started_at: now_secs(),
                     log_path,
+                    video_codec: Some(video_codec.as_env_value().to_owned()),
+                    low_latency,
+                    realtime_stream: crate::transport::webrtc::realtime_stream_enabled()
+                        || low_latency,
                 })?;
                 let result = serve_with_appkit(
                     port,
@@ -2144,6 +2180,15 @@ fn serve_with_appkit(
 ) -> anyhow::Result<()> {
     std::env::set_var("SIMDECK_VIDEO_CODEC", video_codec.as_env_value());
     std::env::set_var("SIMDECK_LOW_LATENCY", if low_latency { "1" } else { "0" });
+    let inherited_realtime_stream = crate::transport::webrtc::realtime_stream_enabled();
+    std::env::set_var(
+        "SIMDECK_REALTIME_STREAM",
+        if inherited_realtime_stream || low_latency {
+            "1"
+        } else {
+            "0"
+        },
+    );
     std::env::set_var(RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV, "1");
     start_fd_pressure_watchdog();
     unsafe {
