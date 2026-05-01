@@ -1167,6 +1167,7 @@
   pointer-events: none;
 }
 
+.stream-image,
 .stream-video {
   position: absolute;
   inset: 0;

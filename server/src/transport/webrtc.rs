@@ -39,10 +39,10 @@ const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 3;
 const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
 const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_LOW_LATENCY_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
-const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(134);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
-const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
-const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(90);
+const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(25);
+const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(60);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
@@ -852,7 +852,7 @@ async fn write_frame_sample_with_timeout<P: Packetizer>(
         if frame.is_keyframe {
             WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT
         } else {
-            WEBRTC_REALTIME_WRITE_TIMEOUT.max(realtime_sample_duration() * 2)
+            WEBRTC_REALTIME_WRITE_TIMEOUT
         }
     } else {
         WEBRTC_WRITE_TIMEOUT
@@ -873,7 +873,7 @@ fn realtime_packet_pacing(
     packet_count: usize,
     realtime_stream: bool,
 ) -> Option<(usize, Duration)> {
-    if !realtime_stream || packet_count <= 1 {
+    if realtime_stream || packet_count <= 1 {
         return None;
     }
     let pacing_ticks = ((duration.as_millis() / 4).max(1) as usize).min(packet_count - 1);
@@ -1040,7 +1040,7 @@ fn realtime_sample_duration() -> Duration {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(30)
-        .clamp(15, 60);
+        .clamp(30, 60);
     Duration::from_micros(1_000_000 / fps)
 }
 
