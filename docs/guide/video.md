@@ -6,15 +6,15 @@ SimDeck streams the iOS Simulator over WebRTC using browser-native H.264 video p
 
 The server can encode the simulator display in two modes, picked at startup with `--video-codec`:
 
-| Value              | Encoder                         | When to use it                                                 |
-| ------------------ | ------------------------------- | -------------------------------------------------------------- |
-| `h264` _(default)_ | Hardware H.264 via VideoToolbox | Best local performance when the hardware encoder is available. |
-| `h264-software`    | Software H.264 via VideoToolbox | Compatibility fallback when hardware encode is unavailable.    |
+| Value                       | Encoder                         | When to use it                                                                         |
+| --------------------------- | ------------------------------- | -------------------------------------------------------------------------------------- |
+| `h264`                      | Hardware H.264 via VideoToolbox | Use when the hardware encoder is available and not starved by other capture workloads. |
+| `h264-software` _(default)_ | Software H.264 via VideoToolbox | Stable local default that avoids VideoToolbox hardware encoder starvation.             |
 
 Restart the daemon to change encoder mode:
 
 ```sh
-simdeck daemon restart --video-codec h264-software
+simdeck daemon restart --video-codec h264
 ```
 
 For slower runners, add `--low-latency` with software H.264:
@@ -76,8 +76,8 @@ The WebRTC path favors freshness: stale frames are dropped and the sender reques
 
 A few practical guidelines:
 
-- **Start on the default for local preview.** `h264` gives the smoothest preview when VideoToolbox can provide a hardware encoder.
-- **Switch to `h264-software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
+- **Start on the default for local preview.** `h264-software` avoids intermittent stalls when another process is using or starving the hardware encoder.
+- **Switch to `h264` when you know the hardware encoder is available.** Hardware H.264 can be efficient, but macOS screen recording and similar workloads can cause visible pauses.
 - **Use `--stream-quality ci-software` for Studio providers on virtualized CI Macs when hardware encode is unavailable.** This profile uses software H.264 at a 960-pixel longest edge, targets 24 fps, lowers bitrate pressure, and favors fresh frames over full-resolution sharpness.
 - **Use `h264-software --low-latency` only when you need the older extra-conservative software profile.** It caps at 15 fps, uses a single pending frame, reduces the longest edge to 1170 pixels, and backs off before software encode latency turns into seconds of stream delay.
 
