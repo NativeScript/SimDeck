@@ -113,14 +113,14 @@ static int64_t XCWInt64FromEnvironment(NSString *name, int64_t fallback, int64_t
 static int32_t XCWRealtimeMaximumEncodedDimension(void) {
     return XCWIntFromEnvironment(@"SIMDECK_REALTIME_MAX_EDGE",
                                  XCWMaximumRealtimeHardwareEncodedDimension,
-                                 720,
+                                 320,
                                  XCWMaximumEncodedDimension);
 }
 
 static int32_t XCWRealtimeTargetFrameRate(void) {
     return XCWIntFromEnvironment(@"SIMDECK_REALTIME_FPS",
                                  XCWTargetRealtimeHardwareFrameRate,
-                                 15,
+                                 10,
                                  60);
 }
 
