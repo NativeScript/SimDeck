@@ -98,6 +98,10 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
     [self.session requestKeyFrameRefresh];
 }
 
+- (void)reconfigureVideoEncoder {
+    [self.session reconfigureVideoEncoder];
+}
+
 - (BOOL)sendTouchAtX:(double)x
                    y:(double)y
                phase:(NSString *)phase

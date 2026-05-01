@@ -690,6 +690,12 @@ void xcw_native_session_request_keyframe(void *handle) {
     }
 }
 
+void xcw_native_session_reconfigure_video_encoder(void *handle) {
+    @autoreleasepool {
+        [XCWNativeSessionFromHandle(handle) reconfigureVideoEncoder];
+    }
+}
+
 bool xcw_native_session_send_touch(void *handle, double x, double y, const char *phase, char **error_message) {
     @autoreleasepool {
         NSError *error = nil;

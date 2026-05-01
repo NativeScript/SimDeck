@@ -50,6 +50,13 @@ impl<T: Clone> SessionStore<T> {
             std::mem::forget(value);
         }
     }
+
+    fn values(&self) -> Vec<T>
+    where
+        T: Clone,
+    {
+        self.sessions.lock().unwrap().values().cloned().collect()
+    }
 }
 
 #[derive(Clone)]
@@ -119,6 +126,12 @@ impl<T: Clone + Send + 'static> SessionRegistry<T> {
 }
 
 impl SessionRegistry<SimulatorSession> {
+    pub fn reconfigure_video_encoders(&self) {
+        for session in self.store.values() {
+            session.reconfigure_video_encoder();
+        }
+    }
+
     pub fn enrich_simulators(&self, simulators: Vec<Simulator>) -> Vec<serde_json::Value> {
         simulators
             .into_iter()

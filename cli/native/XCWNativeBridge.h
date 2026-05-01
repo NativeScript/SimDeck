@@ -72,6 +72,7 @@ void xcw_native_session_destroy(void * _Nullable handle);
 bool xcw_native_session_start(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 void xcw_native_session_request_refresh(void * _Nonnull handle);
 void xcw_native_session_request_keyframe(void * _Nonnull handle);
+void xcw_native_session_reconfigure_video_encoder(void * _Nonnull handle);
 bool xcw_native_session_send_touch(void * _Nonnull handle, double x, double y, const char * _Nonnull phase, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_send_multitouch(void * _Nonnull handle, double x1, double y1, double x2, double y2, const char * _Nonnull phase, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_send_key(void * _Nonnull handle, uint16_t key_code, uint32_t modifiers, char * _Nullable * _Nullable error_message);

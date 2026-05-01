@@ -171,6 +171,12 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
     [self refreshCurrentFrame];
 }
 
+- (void)reconfigureVideoEncoder {
+    [_videoEncoder reconfigureForStreamQualityChange];
+    [_videoEncoder requestKeyFrame];
+    [self refreshCurrentFrame];
+}
+
 - (id)addEncodedFrameListener:(XCWPrivateSimulatorEncodedFrameHandler)handler {
     if (handler == nil) {
         return [NSUUID UUID];

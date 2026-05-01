@@ -34,9 +34,6 @@ static const uint64_t XCWLowLatencySoftwareInitialFrameIntervalUs = 66667;
 static const uint64_t XCWLowLatencySoftwareMaximumFrameIntervalUs = 133333;
 static const uint64_t XCWLowLatencySoftwareFrameIntervalStepUs = 11111;
 static const NSUInteger XCWLowLatencySoftwareHealthyFrameWindow = 8;
-static const uint64_t XCWRealtimeHardwareInitialFrameIntervalUs = 33333;
-static const uint64_t XCWRealtimeHardwareMinimumFrameIntervalUs = 33333;
-static const uint64_t XCWRealtimeHardwareMaximumFrameIntervalUs = 66667;
 static const uint64_t XCWRealtimeHardwareFrameIntervalStepUs = 5556;
 static const NSUInteger XCWRealtimeHardwareHealthyFrameWindow = 6;
 
@@ -308,7 +305,7 @@ static CGSize XCWScaledDimensionsForSourceSize(int32_t width, int32_t height, XC
         ? XCWRealtimeMaximumEncodedDimension()
         : XCWMaximumEncodedDimension;
     if (mode == XCWVideoEncoderModeH264Software && lowLatencyMode) {
-        maximumDimension = XCWMaximumLowLatencySoftwareEncodedDimension;
+        maximumDimension = MIN(maximumDimension, XCWMaximumLowLatencySoftwareEncodedDimension);
     } else if (mode == XCWVideoEncoderModeH264Software && !realtimeStreamMode) {
         maximumDimension = XCWMaximumSoftwareEncodedDimension;
     }
@@ -492,7 +489,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _realtimeStreamMode = XCWRealtimeStreamModeFromEnvironment() || _lowLatencyMode;
     _codecType = XCWVideoCodecTypeForMode(_encoderMode);
     _softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
-    _realtimeHardwareFrameIntervalUs = XCWRealtimeHardwareInitialFrameIntervalUs;
+    _realtimeHardwareFrameIntervalUs = XCWRealtimeFrameIntervalUs();
     return self;
 }
 
@@ -532,6 +529,19 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 - (void)requestKeyFrame {
     dispatch_async(_queue, ^{
         self->_needsKeyFrame = YES;
+    });
+}
+
+- (void)reconfigureForStreamQualityChange {
+    dispatch_async(_queue, ^{
+        [self invalidateCompressionSessionLocked];
+        self->_needsKeyFrame = YES;
+        self->_softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
+        self->_softwarePacedFrameCount = 0;
+        self->_softwareHealthyFrameCount = 0;
+        self->_realtimeHardwareFrameIntervalUs = XCWRealtimeFrameIntervalUs();
+        self->_realtimeHardwarePacedFrameCount = 0;
+        self->_realtimeHardwareHealthyFrameCount = 0;
     });
 }
 
@@ -642,7 +652,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         return NO;
     }
     if (_realtimeHardwareFrameIntervalUs == 0) {
-        _realtimeHardwareFrameIntervalUs = XCWRealtimeHardwareInitialFrameIntervalUs;
+        _realtimeHardwareFrameIntervalUs = XCWRealtimeFrameIntervalUs();
     }
     if (_lastRealtimeHardwareSubmissionUs == 0) {
         return NO;
@@ -717,28 +727,30 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         return;
     }
     if (_realtimeHardwareFrameIntervalUs == 0) {
-        _realtimeHardwareFrameIntervalUs = XCWRealtimeHardwareInitialFrameIntervalUs;
+        _realtimeHardwareFrameIntervalUs = XCWRealtimeFrameIntervalUs();
     }
 
+    uint64_t minimumIntervalUs = XCWRealtimeFrameIntervalUs();
+    uint64_t maximumIntervalUs = XCWRealtimeMaximumFrameIntervalUs();
     if (latencyUs > _realtimeHardwareFrameIntervalUs) {
         uint64_t nextIntervalUs = _realtimeHardwareFrameIntervalUs + XCWRealtimeHardwareFrameIntervalStepUs;
         uint64_t latencyBoundIntervalUs = latencyUs + XCWRealtimeHardwareFrameIntervalStepUs;
         if (nextIntervalUs < latencyBoundIntervalUs) {
             nextIntervalUs = latencyBoundIntervalUs;
         }
-        _realtimeHardwareFrameIntervalUs = MIN(nextIntervalUs, XCWRealtimeHardwareMaximumFrameIntervalUs);
+        _realtimeHardwareFrameIntervalUs = MIN(nextIntervalUs, maximumIntervalUs);
         _realtimeHardwareHealthyFrameCount = 0;
         return;
     }
 
     if (latencyUs < _realtimeHardwareFrameIntervalUs &&
-        _realtimeHardwareFrameIntervalUs > XCWRealtimeHardwareMinimumFrameIntervalUs) {
+        _realtimeHardwareFrameIntervalUs > minimumIntervalUs) {
         _realtimeHardwareHealthyFrameCount += 1;
         if (_realtimeHardwareHealthyFrameCount >= XCWRealtimeHardwareHealthyFrameWindow) {
             uint64_t nextIntervalUs = _realtimeHardwareFrameIntervalUs > XCWRealtimeHardwareFrameIntervalStepUs
                 ? _realtimeHardwareFrameIntervalUs - XCWRealtimeHardwareFrameIntervalStepUs
-                : XCWRealtimeHardwareMinimumFrameIntervalUs;
-            _realtimeHardwareFrameIntervalUs = MAX(nextIntervalUs, XCWRealtimeHardwareMinimumFrameIntervalUs);
+                : minimumIntervalUs;
+            _realtimeHardwareFrameIntervalUs = MAX(nextIntervalUs, minimumIntervalUs);
             _realtimeHardwareHealthyFrameCount = 0;
         }
         return;

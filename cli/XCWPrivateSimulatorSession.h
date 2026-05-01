@@ -29,6 +29,7 @@ typedef void (^XCWPrivateSimulatorEncodedFrameHandler)(NSData *sampleData,
 - (BOOL)waitForFirstEncodedFrameWithTimeout:(NSTimeInterval)timeout;
 - (void)requestKeyFrameRefresh;
 - (void)requestFrameRefresh;
+- (void)reconfigureVideoEncoder;
 - (id)addEncodedFrameListener:(XCWPrivateSimulatorEncodedFrameHandler)handler;
 - (void)removeEncodedFrameListener:(id)token;
 

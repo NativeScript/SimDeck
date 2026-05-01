@@ -569,6 +569,7 @@ async fn stream_quality() -> Json<Value> {
 }
 
 async fn set_stream_quality(
+    State(state): State<AppState>,
     Json(payload): Json<StreamQualityPayload>,
 ) -> Result<Json<Value>, AppError> {
     let profile = payload
@@ -612,6 +613,7 @@ async fn set_stream_quality(
         env::set_var("SIMDECK_STREAM_QUALITY_PROFILE", "custom");
     }
 
+    state.registry.reconfigure_video_encoders();
     Ok(json(json_value!(stream_quality_response())))
 }
 

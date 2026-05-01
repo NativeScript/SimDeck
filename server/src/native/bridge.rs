@@ -641,6 +641,12 @@ impl NativeSession {
         }
     }
 
+    pub fn reconfigure_video_encoder(&self) {
+        unsafe {
+            ffi::xcw_native_session_reconfigure_video_encoder(self.handle);
+        }
+    }
+
     pub unsafe fn set_frame_callback(
         &self,
         callback: Option<ffi::xcw_native_frame_callback>,

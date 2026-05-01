@@ -168,6 +168,12 @@ impl SimulatorSession {
         self.inner.native.request_keyframe();
     }
 
+    pub fn reconfigure_video_encoder(&self) {
+        self.inner.last_keyframe_ms.store(0, Ordering::Relaxed);
+        self.inner.last_refresh_ms.store(0, Ordering::Relaxed);
+        self.inner.native.reconfigure_video_encoder();
+    }
+
     pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
         self.inner.native.send_touch(x, y, phase)
     }
