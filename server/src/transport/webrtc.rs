@@ -35,7 +35,7 @@ const ANNEX_B_START_CODE: &[u8] = &[0, 0, 0, 1];
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
 const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(150);
-const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 8;
+const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 3;
 const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
 const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const WEBRTC_LOW_LATENCY_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
@@ -617,7 +617,11 @@ impl WebRtcMediaStream {
                     .metrics
                     .frames_dropped_server
                     .fetch_add(1, Ordering::Relaxed);
-                session.request_keyframe();
+                if realtime_stream {
+                    session.request_refresh();
+                } else {
+                    session.request_keyframe();
+                }
             }
             Err(error) => {
                 warn!("WebRTC initial keyframe write failed for {udid}: {error}");
@@ -655,7 +659,11 @@ impl WebRtcMediaStream {
                                 .metrics
                                 .frames_dropped_server
                                 .fetch_add(1, Ordering::Relaxed);
-                            session.request_keyframe();
+                            if realtime_stream {
+                                session.request_refresh();
+                            } else {
+                                session.request_keyframe();
+                            }
                         }
                         Err(error) => {
                             warn!("WebRTC bootstrap keyframe write failed for {udid}: {error}");
@@ -681,8 +689,12 @@ impl WebRtcMediaStream {
                                 .metrics
                                 .frames_dropped_server
                                 .fetch_add(skipped, Ordering::Relaxed);
-                            waiting_for_keyframe = true;
-                            session.request_keyframe();
+                            if realtime_stream {
+                                session.request_refresh();
+                            } else {
+                                waiting_for_keyframe = true;
+                                session.request_keyframe();
+                            }
                             continue;
                         }
                         Err(broadcast::error::RecvError::Closed) => {
@@ -691,7 +703,7 @@ impl WebRtcMediaStream {
                         }
                     };
                     let (frame, stale_frames) = drain_to_latest_frame(&mut rx, frame, &state.metrics);
-                    if stale_frames > 0 {
+                    if stale_frames > 0 && !realtime_stream {
                         session.request_keyframe();
                     }
                     if stale_frames > 0 && !realtime_stream && !frame.is_keyframe {
@@ -729,7 +741,11 @@ impl WebRtcMediaStream {
                                 .fetch_add(1, Ordering::Relaxed);
                             waiting_for_keyframe = !realtime_stream;
                             adaptive_refresh_interval = refresh_ceiling;
-                            session.request_keyframe();
+                            if realtime_stream {
+                                session.request_refresh();
+                            } else {
+                                session.request_keyframe();
+                            }
                         }
                         Err(error) => {
                             warn!("WebRTC frame write failed for {udid}: {error}");
