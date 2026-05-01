@@ -45,7 +45,8 @@ and proxies REST requests through that bridge while WebRTC media negotiates
 directly with the runner.
 For an ad-hoc local provider that can be opened from another browser or phone,
 run `simdeck studio expose "iPhone 17 Pro"` and keep that process running. It
-prints the unique Studio simulator URL.
+prints the unique Studio simulator URL. This defaults to hardware H.264; add
+`--low-latency` to use software H.264's low-latency profile.
 
 The local viewer gets the API token automatically. LAN browsers pair with the printed code before receiving the API cookie. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
 

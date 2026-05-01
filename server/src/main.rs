@@ -433,10 +433,8 @@ enum StudioCommand {
         port: u16,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
-        video_codec: VideoCodecMode,
-        #[arg(long = "no-low-latency")]
-        no_low_latency: bool,
+        #[arg(long)]
+        low_latency: bool,
     },
 }
 
@@ -1368,15 +1366,18 @@ fn main() -> anyhow::Result<()> {
                 studio_url,
                 port,
                 bind,
-                video_codec,
-                no_low_latency,
+                low_latency,
             } => expose_to_studio(StudioExposeOptions {
                 simulator,
                 studio_url,
                 port,
                 bind,
-                video_codec,
-                low_latency: !no_low_latency,
+                video_codec: if low_latency {
+                    VideoCodecMode::H264Software
+                } else {
+                    VideoCodecMode::H264
+                },
+                low_latency,
             }),
         },
         Command::Serve {
