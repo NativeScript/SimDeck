@@ -190,6 +190,9 @@ export function AppShell() {
   );
   const [menuOpen, setMenuOpen] = useState(false);
   const [localError, setLocalError] = useState("");
+  const [failedStreamUDIDs, setFailedStreamUDIDs] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [pairingCode, setPairingCode] = useState("");
   const [pairingError, setPairingError] = useState("");
   const [pairingBusy, setPairingBusy] = useState(false);
@@ -333,6 +336,31 @@ export function AppShell() {
     canvasElement: streamCanvasElement,
     simulator: selectedSimulator,
   });
+
+  useEffect(() => {
+    if (
+      !selectedSimulator ||
+      !streamError ||
+      readDeviceQueryParam() ||
+      !isStreamAttachFailure(streamError)
+    ) {
+      return;
+    }
+    const failedUDID = selectedSimulator.udid;
+    setFailedStreamUDIDs((current) => new Set(current).add(failedUDID));
+    const nextSimulator = simulators.find(
+      (simulator) =>
+        simulator.isBooted &&
+        simulator.udid !== failedUDID &&
+        !failedStreamUDIDs.has(simulator.udid),
+    );
+    if (nextSimulator) {
+      setSelectedUDID(nextSimulator.udid);
+      setLocalError(
+        `${selectedSimulator.name} did not expose a live simulator screen. Switched to ${nextSimulator.name}.`,
+      );
+    }
+  }, [failedStreamUDIDs, selectedSimulator, simulators, streamError]);
   const shouldRenderChrome =
     selectedSimulator != null && shouldRenderNativeChrome(selectedSimulator);
   const viewportChromeProfile = shouldRenderChrome ? chromeProfile : null;
@@ -1388,4 +1416,14 @@ function readDeviceQueryParam(): string | undefined {
   const value = new URLSearchParams(window.location.search).get("device");
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function isStreamAttachFailure(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("headless screen") ||
+    normalized.includes("screen adapter") ||
+    normalized.includes("coresimulator did not provide") ||
+    normalized.includes("did not expose any live screens")
+  );
 }

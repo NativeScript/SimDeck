@@ -79,7 +79,7 @@ enum Command {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -106,7 +106,7 @@ enum Command {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -380,7 +380,7 @@ enum DaemonCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -396,7 +396,7 @@ enum DaemonCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -420,7 +420,7 @@ enum DaemonCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -463,7 +463,7 @@ enum ServiceCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -481,7 +481,7 @@ enum ServiceCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -712,7 +712,7 @@ impl Default for DaemonLaunchOptions {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             advertise_host: None,
             client_root: None,
-            video_codec: VideoCodecMode::H264Software,
+            video_codec: VideoCodecMode::H264,
             low_latency: false,
             realtime_stream: false,
             stream_quality_profile: None,
@@ -1188,7 +1188,7 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
     let project_root = project_root()?;
     let port = choose_daemon_port(4310)?;
     let bind = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
-    let video_codec = VideoCodecMode::H264Software;
+    let video_codec = VideoCodecMode::H264;
     let low_latency = false;
     let advertise_host = detect_lan_ip()
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
