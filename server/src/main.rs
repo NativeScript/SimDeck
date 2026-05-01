@@ -652,9 +652,9 @@ fn stream_quality_env_for_profile(profile: &str) -> anyhow::Result<StreamQuality
         }),
         "ci-software" => Ok(StreamQualityEnvironment {
             profile: "ci-software",
-            max_edge: 844,
-            fps: 20,
-            min_bitrate: 800_000,
+            max_edge: 640,
+            fps: 15,
+            min_bitrate: 350_000,
             bits_per_pixel: 1,
         }),
         _ => anyhow::bail!("Unknown stream quality profile `{profile}`."),

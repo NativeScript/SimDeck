@@ -143,8 +143,16 @@ static int64_t XCWRealtimeBitsPerPixelBudgetValue(void) {
 static int32_t XCWRealtimeMinimumAverageBitRate(void) {
     return XCWIntFromEnvironment(@"SIMDECK_REALTIME_MIN_BITRATE",
                                  XCWMinimumRealtimeAverageBitRate,
-                                 750000,
+                                 200000,
                                  20000000);
+}
+
+static double XCWRealtimeKeyFrameIntervalSeconds(void) {
+    NSString *value = NSProcessInfo.processInfo.environment[@"SIMDECK_REALTIME_KEYFRAME_INTERVAL_SECONDS"];
+    if (value.length == 0) {
+        return 4.0;
+    }
+    return fmin(10.0, fmax(1.0, value.doubleValue));
 }
 
 static CMVideoCodecType XCWVideoCodecTypeForMode(XCWVideoEncoderMode mode) {
@@ -924,9 +932,12 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         VTSessionSetProperty(session, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);
     }
     VTSessionSetProperty(session, kVTCompressionPropertyKey_ExpectedFrameRate, (__bridge CFTypeRef)@(expectedFrameRate));
-    BOOL shortKeyframeInterval = _lowLatencyMode || _realtimeStreamMode;
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(shortKeyframeInterval ? expectedFrameRate : expectedFrameRate * 2));
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, (__bridge CFTypeRef)@(shortKeyframeInterval ? 1.0 : 2.0));
+    double keyframeIntervalSeconds = _realtimeStreamMode
+        ? XCWRealtimeKeyFrameIntervalSeconds()
+        : (_lowLatencyMode ? 1.0 : 2.0);
+    int keyframeIntervalFrames = MAX(1, (int)llround((double)expectedFrameRate * keyframeIntervalSeconds));
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(keyframeIntervalFrames));
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, (__bridge CFTypeRef)@(keyframeIntervalSeconds));
     VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@(averageBitRate));
     if (_realtimeStreamMode) {
         NSArray *dataRateLimits = @[
