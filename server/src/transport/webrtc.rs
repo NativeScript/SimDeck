@@ -16,17 +16,20 @@ use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
-use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::rtp::codecs::h264::H264Payloader;
+use webrtc::rtp::packetizer::{new_packetizer, Packetizer};
+use webrtc::rtp::sequence::new_random_sequencer;
 use webrtc::rtp_transceiver::rtp_codec::{
     RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
 };
 use webrtc::rtp_transceiver::RTCPFeedback;
-use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
+use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocal;
+use webrtc::track::track_local::TrackLocalWriter;
 
 const ANNEX_B_START_CODE: &[u8] = &[0, 0, 0, 1];
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
@@ -40,6 +43,7 @@ const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
 const WEBRTC_REALTIME_SAMPLE_DURATION: Duration = Duration::from_micros(33_333);
+const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
 
@@ -156,7 +160,7 @@ pub async fn create_answer(
     register_diagnostics(&peer_connection, &udid);
     register_control_data_channel(&peer_connection, session.clone(), udid.clone());
 
-    let video_track = Arc::new(TrackLocalStaticSample::new(
+    let video_track = Arc::new(TrackLocalStaticRTP::new(
         RTCRtpCodecCapability {
             mime_type: MIME_TYPE_H264.to_owned(),
             clock_rate: 90_000,
@@ -525,7 +529,7 @@ struct WebRtcMediaStream {
     udid: String,
     first_frame: crate::transport::packet::SharedFrame,
     peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
-    video_track: Arc<TrackLocalStaticSample>,
+    video_track: Arc<TrackLocalStaticRTP>,
     cancellation_token: broadcast::Sender<()>,
     cancellation: broadcast::Receiver<()>,
 }
@@ -548,6 +552,14 @@ impl WebRtcMediaStream {
         let mut peer_state_interval = time::interval(Duration::from_millis(250));
         let mut bootstrap_sleep = Box::pin(time::sleep(WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL));
         let realtime_stream = realtime_stream_enabled();
+        let mut packetizer = new_packetizer(
+            WEBRTC_RTP_OUTBOUND_MTU,
+            96,
+            0,
+            Box::<H264Payloader>::default(),
+            Box::new(new_random_sequencer()),
+            90_000,
+        );
         let refresh_floor = refresh_floor_for_low_latency(state.config.low_latency);
         let refresh_ceiling = refresh_ceiling_for_low_latency(state.config.low_latency);
         let mut refresh_sleep = Box::pin(time::sleep(refresh_floor));
@@ -556,7 +568,15 @@ impl WebRtcMediaStream {
         let mut waiting_for_keyframe = false;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
-        match write_frame_sample_with_timeout(&video_track, &first_frame, refresh_floor).await {
+        match write_frame_sample_with_timeout(
+            &video_track,
+            &mut packetizer,
+            &first_frame,
+            refresh_floor,
+            realtime_stream,
+        )
+        .await
+        {
             Ok(true) => {
                 state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
             }
@@ -590,8 +610,10 @@ impl WebRtcMediaStream {
                 _ = &mut bootstrap_sleep, if bootstrap_frames_remaining > 0 => {
                     match write_frame_sample_with_timeout(
                         &video_track,
+                        &mut packetizer,
                         &latest_keyframe,
                         WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL,
+                        realtime_stream,
                     ).await {
                         Ok(true) => {
                             state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
@@ -654,7 +676,14 @@ impl WebRtcMediaStream {
                     }
                     let duration = send_timing.duration_for(&frame, realtime_stream);
                     let started_at = time::Instant::now();
-                    let write_result = write_frame_sample_with_timeout(&video_track, &frame, duration).await;
+                    let write_result = write_frame_sample_with_timeout(
+                        &video_track,
+                        &mut packetizer,
+                        &frame,
+                        duration,
+                        realtime_stream,
+                    )
+                    .await;
                     adaptive_refresh_interval =
                         adaptive_interval_for_write(started_at.elapsed(), refresh_floor, refresh_ceiling);
                     match write_result {
@@ -741,36 +770,65 @@ fn adaptive_interval_for_write(
     Duration::from_millis(target_ms)
 }
 
-async fn write_frame_sample(
-    video_track: &TrackLocalStaticSample,
+async fn write_frame_sample<P: Packetizer>(
+    video_track: &TrackLocalStaticRTP,
+    packetizer: &mut P,
     frame: &crate::transport::packet::SharedFrame,
     duration: Duration,
+    realtime_stream: bool,
 ) -> anyhow::Result<()> {
     let data = h264_annex_b_sample(frame)?;
-    video_track
-        .write_sample(&Sample {
-            data: Bytes::from(data),
-            duration,
-            ..Default::default()
-        })
-        .await?;
+    let samples = (duration.as_secs_f64() * 90_000.0).max(1.0) as u32;
+    let packets = packetizer.packetize(&Bytes::from(data), samples)?;
+    let packet_count = packets.len();
+    let pacing = realtime_packet_pacing(duration, packet_count, realtime_stream);
+    for (index, packet) in packets.into_iter().enumerate() {
+        video_track.write_rtp(&packet).await?;
+        if let Some((batch_size, delay)) = pacing.filter(|_| index + 1 < packet_count) {
+            if (index + 1) % batch_size == 0 {
+                time::sleep(delay).await;
+            }
+        }
+    }
     Ok(())
 }
 
-async fn write_frame_sample_with_timeout(
-    video_track: &TrackLocalStaticSample,
+async fn write_frame_sample_with_timeout<P: Packetizer>(
+    video_track: &TrackLocalStaticRTP,
+    packetizer: &mut P,
     frame: &crate::transport::packet::SharedFrame,
     duration: Duration,
+    realtime_stream: bool,
 ) -> anyhow::Result<bool> {
     let timeout = if realtime_stream_enabled() {
         WEBRTC_REALTIME_WRITE_TIMEOUT
     } else {
         WEBRTC_WRITE_TIMEOUT
     };
-    match time::timeout(timeout, write_frame_sample(video_track, frame, duration)).await {
+    match time::timeout(
+        timeout,
+        write_frame_sample(video_track, packetizer, frame, duration, realtime_stream),
+    )
+    .await
+    {
         Ok(result) => result.map(|()| true),
         Err(_) => Ok(false),
     }
+}
+
+fn realtime_packet_pacing(
+    duration: Duration,
+    packet_count: usize,
+    realtime_stream: bool,
+) -> Option<(usize, Duration)> {
+    if !realtime_stream || packet_count <= 1 {
+        return None;
+    }
+    let pacing_ticks = ((duration.as_millis() / 4).max(1) as usize).min(packet_count - 1);
+    let batch_size = packet_count.div_ceil(pacing_ticks).max(1);
+    let delay =
+        (duration / pacing_ticks as u32).clamp(Duration::from_millis(1), Duration::from_millis(5));
+    Some((batch_size, delay))
 }
 
 pub fn realtime_stream_enabled() -> bool {
