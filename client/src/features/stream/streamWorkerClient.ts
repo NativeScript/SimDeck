@@ -381,6 +381,10 @@ class WebRtcStreamClient implements StreamClientBackend {
       type: "status",
       status: { error: message, state: "error" },
     });
+    if (isPermanentStreamFailure(message)) {
+      this.shouldReconnect = false;
+      return;
+    }
     this.scheduleReconnect(target, generation);
   }
 
@@ -864,6 +868,17 @@ function buildMjpegStreamUrl(udid: string): string {
   }
   url.searchParams.set("cacheBust", String(Date.now()));
   return url.toString();
+}
+
+function isPermanentStreamFailure(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("private simulator display attach previously failed") ||
+    normalized.includes("coresimulator did not provide") ||
+    normalized.includes("did not expose any live screens") ||
+    normalized.includes("headless screen") ||
+    normalized.includes("screen adapter")
+  );
 }
 
 function waitForIceGathering(peerConnection: RTCPeerConnection) {
