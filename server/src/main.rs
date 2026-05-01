@@ -47,8 +47,8 @@ const SERVER_FD_RESTART_THRESHOLD: usize = 4096;
 const SERVER_HEALTH_WATCHDOG_INITIAL_DELAY: Duration = Duration::from_secs(15);
 const SERVER_HEALTH_WATCHDOG_INTERVAL: Duration = Duration::from_secs(5);
 const SERVER_HEALTH_WATCHDOG_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
-const SERVER_HEALTH_WATCHDOG_STALE_HEARTBEAT: Duration = Duration::from_secs(10);
-const SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD: usize = 3;
+const SERVER_HEALTH_WATCHDOG_STALE_HEARTBEAT: Duration = Duration::from_secs(60);
+const SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD: usize = 12;
 
 #[derive(Parser)]
 #[command(name = "simdeck")]
@@ -79,7 +79,7 @@ enum Command {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -106,7 +106,7 @@ enum Command {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -380,7 +380,7 @@ enum DaemonCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -396,7 +396,7 @@ enum DaemonCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -420,7 +420,7 @@ enum DaemonCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -463,7 +463,7 @@ enum ServiceCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -481,7 +481,7 @@ enum ServiceCommand {
         advertise_host: Option<String>,
         #[arg(long)]
         client_root: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264Software)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::H264)]
         video_codec: VideoCodecMode,
         #[arg(long)]
         low_latency: bool,
@@ -652,10 +652,10 @@ fn stream_quality_env_for_profile(profile: &str) -> anyhow::Result<StreamQuality
         }),
         "ci-software" => Ok(StreamQualityEnvironment {
             profile: "ci-software",
-            max_edge: 844,
-            fps: 20,
-            min_bitrate: 800_000,
-            bits_per_pixel: 1,
+            max_edge: 960,
+            fps: 24,
+            min_bitrate: 1_200_000,
+            bits_per_pixel: 2,
         }),
         _ => anyhow::bail!("Unknown stream quality profile `{profile}`."),
     }
@@ -710,7 +710,7 @@ impl Default for DaemonLaunchOptions {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             advertise_host: None,
             client_root: None,
-            video_codec: VideoCodecMode::H264Software,
+            video_codec: VideoCodecMode::H264,
             low_latency: false,
             realtime_stream: false,
             stream_quality_profile: None,
@@ -1071,17 +1071,24 @@ fn project_root() -> anyhow::Result<PathBuf> {
 }
 
 fn choose_daemon_port(preferred: u16) -> anyhow::Result<u16> {
+    choose_daemon_port_for_bind(preferred, IpAddr::V4(Ipv4Addr::LOCALHOST))
+}
+
+fn choose_daemon_port_for_bind(preferred: u16, bind: IpAddr) -> anyhow::Result<u16> {
     let start = preferred.max(1024);
     for port in start..start.saturating_add(200) {
-        if port_available(port) {
+        if port_available(bind, port) {
             return Ok(port);
         }
     }
     anyhow::bail!("No available SimDeck daemon port near {preferred}")
 }
 
-fn port_available(port: u16) -> bool {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
+fn port_available(bind: IpAddr, port: u16) -> bool {
+    if bind.is_unspecified() && TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
+        return false;
+    }
+    TcpListener::bind((bind, port)).is_ok()
 }
 
 fn open_browser(url: &str) -> anyhow::Result<()> {
@@ -1184,9 +1191,9 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
     }
 
     let project_root = project_root()?;
-    let port = choose_daemon_port(4310)?;
     let bind = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
-    let video_codec = VideoCodecMode::H264Software;
+    let port = choose_daemon_port_for_bind(4310, bind)?;
+    let video_codec = VideoCodecMode::H264;
     let low_latency = false;
     let advertise_host = detect_lan_ip()
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))

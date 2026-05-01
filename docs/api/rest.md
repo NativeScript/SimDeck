@@ -22,7 +22,7 @@ Returns server health and the active video encoder mode.
   "ok": true,
   "httpPort": 4310,
   "timestamp": 1714094761.234,
-  "videoCodec": "h264-software",
+  "videoCodec": "h264",
   "lowLatency": false,
   "webRtc": {
     "iceServers": [{ "urls": ["stun:stun.l.google.com:19302"] }],
