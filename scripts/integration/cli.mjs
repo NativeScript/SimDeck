@@ -213,10 +213,14 @@ async function main() {
     async () => {
       fs.writeFileSync(
         stdoutPng,
-        runBuffer(simdeck, ["screenshot", simulatorUDID, "--stdout"], {
-          timeoutMs: 300_000,
-          maxBuffer: 64 * 1024 * 1024,
-        }),
+        runBuffer(
+          simdeck,
+          ["--server-url", serverUrl, "screenshot", simulatorUDID, "--stdout"],
+          {
+            timeoutMs: 300_000,
+            maxBuffer: 64 * 1024 * 1024,
+          },
+        ),
       );
       assertPng(stdoutPng);
     },
