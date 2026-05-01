@@ -135,6 +135,16 @@ function simulatorDisplaySize(
   };
 }
 
+function simulatorDisplayReady(simulator: SimulatorMetadata): boolean {
+  const display = simulator.privateDisplay;
+  return Boolean(
+    simulator.isBooted &&
+      display?.displayReady &&
+      display.displayWidth > 0 &&
+      display.displayHeight > 0,
+  );
+}
+
 function mergeAccessibilitySources(
   ...sources: unknown[]
 ): AccessibilitySource[] {
@@ -295,6 +305,8 @@ export function AppShell() {
     simulators.find((simulator) =>
       simulatorMatchesIdentifier(simulator, selectedUDID),
     ) ??
+    filteredSimulators.find((simulator) => simulatorDisplayReady(simulator)) ??
+    filteredSimulators.find((simulator) => simulator.isBooted) ??
     filteredSimulators[0] ??
     null;
   const selectedSimulatorDetail =

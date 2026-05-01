@@ -47,8 +47,8 @@ const SERVER_FD_RESTART_THRESHOLD: usize = 4096;
 const SERVER_HEALTH_WATCHDOG_INITIAL_DELAY: Duration = Duration::from_secs(15);
 const SERVER_HEALTH_WATCHDOG_INTERVAL: Duration = Duration::from_secs(5);
 const SERVER_HEALTH_WATCHDOG_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
-const SERVER_HEALTH_WATCHDOG_STALE_HEARTBEAT: Duration = Duration::from_secs(10);
-const SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD: usize = 3;
+const SERVER_HEALTH_WATCHDOG_STALE_HEARTBEAT: Duration = Duration::from_secs(60);
+const SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD: usize = 12;
 
 #[derive(Parser)]
 #[command(name = "simdeck")]
