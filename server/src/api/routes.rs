@@ -21,6 +21,7 @@ use serde::Deserialize;
 use serde_json::Map;
 use serde_json::{json as json_value, Value};
 use std::collections::VecDeque;
+use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -80,6 +81,61 @@ struct TouchPayload {
 struct TouchSequencePayload {
     events: Vec<TouchSequenceEvent>,
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamQualityPayload {
+    profile: Option<String>,
+    max_edge: Option<u32>,
+    fps: Option<u32>,
+    min_bitrate: Option<u32>,
+    bits_per_pixel: Option<u32>,
+}
+
+#[derive(Clone, Copy)]
+struct StreamQualityProfile {
+    id: &'static str,
+    label: &'static str,
+    max_edge: u32,
+    fps: u32,
+    min_bitrate: u32,
+    bits_per_pixel: u32,
+}
+
+const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
+    StreamQualityProfile {
+        id: "quality",
+        label: "Quality",
+        max_edge: 1440,
+        fps: 30,
+        min_bitrate: 3_000_000,
+        bits_per_pixel: 4,
+    },
+    StreamQualityProfile {
+        id: "balanced",
+        label: "Balanced",
+        max_edge: 1280,
+        fps: 30,
+        min_bitrate: 2_500_000,
+        bits_per_pixel: 4,
+    },
+    StreamQualityProfile {
+        id: "smooth",
+        label: "Smooth",
+        max_edge: 1170,
+        fps: 30,
+        min_bitrate: 2_000_000,
+        bits_per_pixel: 3,
+    },
+    StreamQualityProfile {
+        id: "economy",
+        label: "Economy",
+        max_edge: 1080,
+        fps: 24,
+        min_bitrate: 1_500_000,
+        bits_per_pixel: 3,
+    },
+];
 
 #[derive(Deserialize, Clone)]
 struct TouchSequenceEvent {
@@ -325,6 +381,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/metrics", get(metrics))
         .route(
+            "/api/stream-quality",
+            get(stream_quality).post(set_stream_quality),
+        )
+        .route(
             "/api/client-stream-stats",
             get(client_stream_stats).post(record_client_stream_stats),
         )
@@ -477,6 +537,7 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "videoCodec": active_video_codec(&state.config),
         "lowLatency": state.config.low_latency,
         "realtimeStream": crate::transport::webrtc::realtime_stream_enabled(),
+        "streamQuality": stream_quality_state(),
         "webRtc": {
             "iceServers": crate::transport::webrtc::client_ice_servers(),
             "iceTransportPolicy": crate::transport::webrtc::ice_transport_policy_label()
@@ -501,6 +562,126 @@ fn normalize_video_codec(codec: &str) -> Option<&'static str> {
 
 async fn metrics(State(state): State<AppState>) -> Json<Value> {
     json(json_value!(state.metrics.snapshot()))
+}
+
+async fn stream_quality() -> Json<Value> {
+    json(json_value!(stream_quality_response()))
+}
+
+async fn set_stream_quality(
+    Json(payload): Json<StreamQualityPayload>,
+) -> Result<Json<Value>, AppError> {
+    let profile = payload
+        .profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(stream_quality_profile)
+        .transpose()?;
+    let max_edge = payload
+        .max_edge
+        .or_else(|| profile.map(|profile| profile.max_edge))
+        .unwrap_or(1440)
+        .clamp(720, 1920);
+    let fps = payload
+        .fps
+        .or_else(|| profile.map(|profile| profile.fps))
+        .unwrap_or(30)
+        .clamp(15, 60);
+    let min_bitrate = payload
+        .min_bitrate
+        .or_else(|| profile.map(|profile| profile.min_bitrate))
+        .unwrap_or(3_000_000)
+        .clamp(750_000, 20_000_000);
+    let bits_per_pixel = payload
+        .bits_per_pixel
+        .or_else(|| profile.map(|profile| profile.bits_per_pixel))
+        .unwrap_or(4)
+        .clamp(1, 10);
+
+    env::set_var("SIMDECK_REALTIME_MAX_EDGE", max_edge.to_string());
+    env::set_var("SIMDECK_REALTIME_FPS", fps.to_string());
+    env::set_var("SIMDECK_REALTIME_MIN_BITRATE", min_bitrate.to_string());
+    env::set_var(
+        "SIMDECK_REALTIME_BITS_PER_PIXEL",
+        bits_per_pixel.to_string(),
+    );
+    if let Some(profile) = profile {
+        env::set_var("SIMDECK_STREAM_QUALITY_PROFILE", profile.id);
+    } else {
+        env::set_var("SIMDECK_STREAM_QUALITY_PROFILE", "custom");
+    }
+
+    Ok(json(json_value!(stream_quality_response())))
+}
+
+fn stream_quality_response() -> Value {
+    json_value!({
+        "ok": true,
+        "quality": stream_quality_state(),
+        "profiles": STREAM_QUALITY_PROFILES.iter().map(stream_quality_profile_value).collect::<Vec<_>>()
+    })
+}
+
+fn stream_quality_state() -> Value {
+    let max_edge = env_u32("SIMDECK_REALTIME_MAX_EDGE", 1440, 720, 1920);
+    let fps = env_u32("SIMDECK_REALTIME_FPS", 30, 15, 60);
+    let min_bitrate = env_u32(
+        "SIMDECK_REALTIME_MIN_BITRATE",
+        3_000_000,
+        750_000,
+        20_000_000,
+    );
+    let bits_per_pixel = env_u32("SIMDECK_REALTIME_BITS_PER_PIXEL", 4, 1, 10);
+    let profile = env::var("SIMDECK_STREAM_QUALITY_PROFILE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            STREAM_QUALITY_PROFILES
+                .iter()
+                .find(|candidate| {
+                    candidate.max_edge == max_edge
+                        && candidate.fps == fps
+                        && candidate.min_bitrate == min_bitrate
+                        && candidate.bits_per_pixel == bits_per_pixel
+                })
+                .map(|candidate| candidate.id.to_owned())
+                .unwrap_or_else(|| "custom".to_owned())
+        });
+    json_value!({
+        "profile": profile,
+        "maxEdge": max_edge,
+        "fps": fps,
+        "minBitrate": min_bitrate,
+        "bitsPerPixel": bits_per_pixel,
+    })
+}
+
+fn stream_quality_profile(id: &str) -> Result<StreamQualityProfile, AppError> {
+    STREAM_QUALITY_PROFILES
+        .iter()
+        .copied()
+        .find(|profile| profile.id == id)
+        .ok_or_else(|| AppError::bad_request(format!("Unknown stream quality profile `{id}`.")))
+}
+
+fn stream_quality_profile_value(profile: &StreamQualityProfile) -> Value {
+    json_value!({
+        "id": profile.id,
+        "label": profile.label,
+        "maxEdge": profile.max_edge,
+        "fps": profile.fps,
+        "minBitrate": profile.min_bitrate,
+        "bitsPerPixel": profile.bits_per_pixel,
+    })
+}
+
+fn env_u32(name: &str, fallback: u32, minimum: u32, maximum: u32) -> u32 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(fallback)
+        .clamp(minimum, maximum)
 }
 
 async fn client_stream_stats(State(state): State<AppState>) -> Json<Value> {
