@@ -106,10 +106,10 @@ const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
     StreamQualityProfile {
         id: "ci-software",
         label: "CI Software",
-        max_edge: 960,
-        fps: 24,
-        min_bitrate: 1_200_000,
-        bits_per_pixel: 2,
+        max_edge: 844,
+        fps: 20,
+        min_bitrate: 800_000,
+        bits_per_pixel: 1,
     },
     StreamQualityProfile {
         id: "quality",
