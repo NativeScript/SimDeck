@@ -170,7 +170,7 @@ class WebRtcStreamClient implements StreamClientBackend {
         if (
           generation === this.connectGeneration &&
           (peerConnection.connectionState === "failed" ||
-            peerConnection.connectionState === "disconnected")
+            peerConnection.connectionState === "closed")
         ) {
           if (peerConnection.connectionState === "failed") {
             void this.updateSelectedCandidatePair(peerConnection, target);
