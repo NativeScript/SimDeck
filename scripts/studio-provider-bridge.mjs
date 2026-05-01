@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+import crypto from "node:crypto";
+import os from "node:os";
+
 const cloudUrl = (
   process.env.SIMDECK_CLOUD_URL || "https://simdeck.djdev.me"
 ).replace(/\/$/, "");
@@ -13,52 +16,64 @@ let localToken = process.env.SIMDECK_LOCAL_TOKEN || providerToken;
 const registerIntervalMs = Number(
   process.env.SIMDECK_PROVIDER_REGISTER_INTERVAL_MS || 15000,
 );
+const providerId =
+  process.env.SIMDECK_STUDIO_PROVIDER_ID || stableLocalProviderId();
 
 let stopped = false;
 let lastRegisterAt = 0;
+let registered = false;
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.once(signal, () => {
     stopped = true;
   });
 }
 
-if (!previewId || !providerToken) {
-  const session = await createLocalProviderSession();
-  previewId = session.sessionId;
-  providerToken = session.providerToken;
-  publicUrl = session.url;
-}
+try {
+  if (!previewId || !providerToken) {
+    const session = await createLocalProviderSession();
+    previewId = session.sessionId;
+    providerToken = session.providerToken;
+    publicUrl = session.url;
+  }
 
-if (!publicUrl) {
-  publicUrl = `${cloudUrl}/simulator/${encodeURIComponent(previewId)}`;
-}
-if (!localToken) {
-  localToken = providerToken;
-}
+  if (!publicUrl) {
+    publicUrl = `${cloudUrl}/simulator/${encodeURIComponent(previewId)}`;
+  }
+  if (!localToken) {
+    localToken = providerToken;
+  }
 
-console.log(`[simdeck-provider-bridge] ${publicUrl}`);
+  console.log(`[simdeck-provider-bridge] ${publicUrl}`);
 
-await registerProvider();
+  await registerProvider();
 
-while (!stopped) {
-  try {
-    if (Date.now() - lastRegisterAt > registerIntervalMs) {
-      await registerProvider();
+  while (!stopped) {
+    try {
+      if (Date.now() - lastRegisterAt > registerIntervalMs) {
+        await registerProvider();
+      }
+      const next = await fetchJson(
+        `${cloudUrl}/api/actions/providers/rpc/next`,
+        {
+          previewId,
+          providerToken,
+        },
+      );
+      if (!next || !next.request) {
+        await sleep(250);
+        continue;
+      }
+      await handleRequest(next.request);
+    } catch (error) {
+      console.error(
+        `[simdeck-provider-bridge] ${error instanceof Error ? error.message : String(error)}`,
+      );
+      await sleep(1000);
     }
-    const next = await fetchJson(`${cloudUrl}/api/actions/providers/rpc/next`, {
-      previewId,
-      providerToken,
-    });
-    if (!next || !next.request) {
-      await sleep(250);
-      continue;
-    }
-    await handleRequest(next.request);
-  } catch (error) {
-    console.error(
-      `[simdeck-provider-bridge] ${error instanceof Error ? error.message : String(error)}`,
-    );
-    await sleep(1000);
+  }
+} finally {
+  if (registered) {
+    await markProviderExpired();
   }
 }
 
@@ -74,6 +89,7 @@ async function registerProvider() {
       simulatorName: metadata.simulator?.name,
       runtimeName: metadata.simulator?.runtimeName,
     });
+    registered = true;
     lastRegisterAt = Date.now();
   } catch (error) {
     console.error(
@@ -84,6 +100,7 @@ async function registerProvider() {
 
 async function createLocalProviderSession() {
   const response = await fetchJson(`${cloudUrl}/api/local-provider-sessions`, {
+    providerId,
     simulatorName: process.env.SIMDECK_STUDIO_SIMULATOR_NAME,
     runtimeName: process.env.SIMDECK_STUDIO_RUNTIME_NAME,
   });
@@ -91,6 +108,21 @@ async function createLocalProviderSession() {
     throw new Error("Studio did not return a local provider session.");
   }
   return response;
+}
+
+async function markProviderExpired() {
+  try {
+    await fetchJson(`${cloudUrl}/api/actions/providers/register`, {
+      previewId,
+      providerToken,
+      baseUrl: publicUrl,
+      status: "expired",
+    });
+  } catch (error) {
+    console.error(
+      `[simdeck-provider-bridge] provider expiration failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 async function localProviderMetadata() {
@@ -199,4 +231,13 @@ async function fetchJson(url, body) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function stableLocalProviderId() {
+  const fingerprint = [
+    os.hostname(),
+    localUrl,
+    process.env.SIMDECK_STUDIO_SIMULATOR_UDID || "",
+  ].join("\n");
+  return `local-${crypto.createHash("sha256").update(fingerprint).digest("hex").slice(0, 24)}`;
 }
