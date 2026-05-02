@@ -385,7 +385,7 @@ fn attach_control_data_channel(
                 match message {
                     WebRtcDataChannelMessage::ClientStats { stats } => {
                         if !stats.client_id.trim().is_empty() && !stats.kind.trim().is_empty() {
-                            state.metrics.record_client_stream_stats(stats);
+                            state.metrics.record_client_stream_stats(*stats);
                         }
                     }
                     WebRtcDataChannelMessage::StreamControl {
@@ -444,7 +444,7 @@ fn attach_control_data_channel(
 #[serde(tag = "type", rename_all = "camelCase")]
 enum WebRtcDataChannelMessage {
     ClientStats {
-        stats: ClientStreamStats,
+        stats: Box<ClientStreamStats>,
     },
     StreamControl {
         fps: Option<u32>,
