@@ -4610,6 +4610,7 @@ async fn serve(
         logs,
         inspectors,
         metrics,
+        simulator_inventory: Default::default(),
     };
 
     let http_router = app_router(
