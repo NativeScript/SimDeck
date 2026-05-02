@@ -12,8 +12,9 @@ const HAVE_CURRENT_DATA = 2;
 const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
 const WEBRTC_TELEMETRY_CHANNEL_LABEL = "simdeck-telemetry";
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 10000;
-const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 8000;
-const WEBRTC_DISCONNECTED_GRACE_MS = 8000;
+const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 60000;
+const WEBRTC_RECEIVER_BUFFER_SECONDS = 0.06;
+const WEBRTC_DISCONNECTED_GRACE_MS = 30000;
 const WEBRTC_RECONNECT_BASE_DELAY_MS = 3000;
 const WEBRTC_RECONNECT_MAX_DELAY_MS = 10000;
 
@@ -47,9 +48,9 @@ function sendDataChannelMessage(
 
 export function buildStreamTarget(
   udid: string,
-  options: { remote?: boolean } = {},
+  options: { clientId?: string; remote?: boolean } = {},
 ): StreamConnectTarget {
-  return { remote: options.remote, udid };
+  return { clientId: options.clientId, remote: options.remote, udid };
 }
 
 export function canUseWebRtc(): boolean {
@@ -431,13 +432,16 @@ class WebRtcStreamClient implements StreamClientBackend {
         const hasRenderedFrame = this.stats.renderedFrames > 0;
         const frameAgeMs =
           this.lastVideoFrameAt > 0 ? now - this.lastVideoFrameAt : Infinity;
-        if (!hasRenderedFrame || frameAgeMs > WEBRTC_STALLED_FRAME_TIMEOUT_MS) {
+        if (!hasRenderedFrame) {
           this.handleConnectionError(
             target,
             generation,
             new Error("WebRTC video stalled before rendering fresh frames."),
           );
           return;
+        }
+        if (frameAgeMs > WEBRTC_STALLED_FRAME_TIMEOUT_MS) {
+          this.postDiagnostics(target, "video-frame-watchdog-stalled");
         }
         this.scheduleFrameWatchdog(target, generation);
       },
@@ -575,7 +579,7 @@ class WebRtcStreamClient implements StreamClientBackend {
   private postDiagnostics(target: StreamConnectTarget, detail: string) {
     const payload = {
       ...this.stats,
-      clientId: "webrtc-page",
+      clientId: target.clientId ?? "webrtc-page",
       connectionId: this.connectGeneration,
       detail,
       iceConnectionState: this.diagnostics.iceConnectionState,
@@ -784,10 +788,10 @@ function configureLowLatencyReceiver(receiver: RTCRtpReceiver) {
     playoutDelayHint?: number;
   };
   if ("jitterBufferTarget" in lowLatencyReceiver) {
-    lowLatencyReceiver.jitterBufferTarget = 0.001;
+    lowLatencyReceiver.jitterBufferTarget = WEBRTC_RECEIVER_BUFFER_SECONDS;
   }
   if ("playoutDelayHint" in lowLatencyReceiver) {
-    lowLatencyReceiver.playoutDelayHint = 0.001;
+    lowLatencyReceiver.playoutDelayHint = WEBRTC_RECEIVER_BUFFER_SECONDS;
   }
 }
 

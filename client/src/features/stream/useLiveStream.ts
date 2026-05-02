@@ -242,7 +242,12 @@ export function useLiveStream({
       return;
     }
 
-    workerClient.connect(buildStreamTarget(simulator.udid, { remote }));
+    workerClient.connect(
+      buildStreamTarget(simulator.udid, {
+        clientId: clientTelemetryIdRef.current,
+        remote,
+      }),
+    );
     return () => {
       workerClient.disconnect();
     };

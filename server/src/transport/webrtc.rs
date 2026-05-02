@@ -47,6 +47,7 @@ const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
 const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(90);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
+const WEBRTC_PEER_DISCONNECTED_TIMEOUT: Duration = Duration::from_secs(45);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
 const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 3;
@@ -690,6 +691,7 @@ impl WebRtcMediaStream {
         let mut adaptive_refresh_interval = refresh_floor;
         let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
         let mut waiting_for_keyframe = false;
+        let mut peer_disconnected_since: Option<time::Instant> = None;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
         match write_frame_sample_with_timeout(
@@ -736,6 +738,16 @@ impl WebRtcMediaStream {
                     if matches!(peer_state, RTCPeerConnectionState::Closed | RTCPeerConnectionState::Failed) {
                         warn!("WebRTC media stream closing for {udid}: peer state {peer_state}");
                         break;
+                    }
+                    if peer_state == RTCPeerConnectionState::Disconnected {
+                        let disconnected_since =
+                            peer_disconnected_since.get_or_insert_with(time::Instant::now);
+                        if disconnected_since.elapsed() >= WEBRTC_PEER_DISCONNECTED_TIMEOUT {
+                            warn!("WebRTC media stream closing for {udid}: peer state {peer_state}");
+                            break;
+                        }
+                    } else {
+                        peer_disconnected_since = None;
                     }
                 }
                 _ = &mut bootstrap_sleep, if bootstrap_frames_remaining > 0 => {
