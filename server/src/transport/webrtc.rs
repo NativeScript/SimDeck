@@ -36,6 +36,8 @@ use webrtc::track::track_local::TrackLocalWriter;
 const ANNEX_B_START_CODE: &[u8] = &[0, 0, 0, 1];
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
+const WEBRTC_REALTIME_INPUT_CHANNEL_LABEL: &str = "simdeck-input";
+const WEBRTC_TELEMETRY_CHANNEL_LABEL: &str = "simdeck-telemetry";
 const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(150);
 const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 3;
 const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
@@ -345,7 +347,13 @@ fn register_control_data_channel(
         let state = state.clone();
         let udid = udid.clone();
         Box::pin(async move {
-            if channel.label() != WEBRTC_CONTROL_CHANNEL_LABEL {
+            let label = channel.label();
+            if !matches!(
+                label.as_ref(),
+                WEBRTC_CONTROL_CHANNEL_LABEL
+                    | WEBRTC_REALTIME_INPUT_CHANNEL_LABEL
+                    | WEBRTC_TELEMETRY_CHANNEL_LABEL
+            ) {
                 return;
             }
             attach_control_data_channel(channel, session, state, udid);
@@ -431,14 +439,7 @@ fn h264_sdp_fmtp_line(codec: &str, offer_sdp: &str) -> String {
         .map(|value| value.to_ascii_lowercase());
     let offered_profile_level_ids = offer_h264_profile_level_ids(offer_sdp);
     let profile_level_id = codec_profile_level_id
-        .as_deref()
-        .filter(|codec_profile| {
-            offered_profile_level_ids.is_empty()
-                || offered_profile_level_ids
-                    .iter()
-                    .any(|offered_profile| offered_profile == *codec_profile)
-        })
-        .map(str::to_owned)
+        .clone()
         .or_else(|| offered_profile_level_ids.first().cloned())
         .unwrap_or_else(|| "42e01f".to_owned());
     format!("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id={profile_level_id}")
@@ -1196,8 +1197,8 @@ mod tests {
         assert!(h264_sdp_fmtp_line("avc1.42e01f", "").contains("profile-level-id=42e01f"));
         assert!(h264_sdp_fmtp_line("h264", "").contains("profile-level-id=42e01f"));
         assert!(h264_sdp_fmtp_line(
-            "avc1.640034",
-            "a=rtpmap:99 H264/90000\r\na=fmtp:99 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\n"
+            "avc1.42e01f",
+            "a=rtpmap:99 H264/90000\r\na=fmtp:99 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640c1f\r\n"
         )
         .contains("profile-level-id=42e01f"));
     }

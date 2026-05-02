@@ -39,7 +39,10 @@ import { useKeyboardInput } from "../features/input/useKeyboardInput";
 import { usePointerInput } from "../features/input/usePointerInput";
 import { simulatorRuntimeLabel } from "../features/simulators/simulatorDisplay";
 import { useSimulatorList } from "../features/simulators/useSimulatorList";
-import { sendWebRtcControlMessage } from "../features/stream/streamWorkerClient";
+import {
+  sendWebRtcControlMessage,
+  sendWebRtcRealtimeControlMessage,
+} from "../features/stream/streamWorkerClient";
 import { useLiveStream } from "../features/stream/useLiveStream";
 import { DebugPanel } from "../features/toolbar/DebugPanel";
 import { Toolbar } from "../features/toolbar/Toolbar";
@@ -843,7 +846,11 @@ export function AppShell({
         setAccessibilitySelectedId("");
         setAccessibilityHoveredId(null);
       }
-      sendControl(selectedSimulator.udid, { type: "touch", ...coords, phase });
+      sendControl(
+        selectedSimulator.udid,
+        { type: "touch", ...coords, phase },
+        { realtime: phase === "moved" },
+      );
     },
     onTouchPreview: showTouchIndicator,
     pan,
@@ -995,10 +1002,20 @@ export function AppShell({
     return state;
   }, []);
 
-  function sendControl(udid: string, message: ControlMessage): boolean {
+  function sendControl(
+    udid: string,
+    message: ControlMessage,
+    options: { realtime?: boolean } = {},
+  ): boolean {
     setLocalError("");
     const encoded = JSON.stringify(message);
-    if (sendWebRtcControlMessage(encoded)) {
+    const sent = options.realtime
+      ? sendWebRtcRealtimeControlMessage(encoded)
+      : sendWebRtcControlMessage(encoded);
+    if (sent) {
+      return true;
+    }
+    if (options.realtime) {
       return true;
     }
     const state = ensureControlSocket(udid);
