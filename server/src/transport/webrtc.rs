@@ -443,7 +443,9 @@ fn attach_control_data_channel(
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum WebRtcDataChannelMessage {
-    ClientStats { stats: ClientStreamStats },
+    ClientStats {
+        stats: ClientStreamStats,
+    },
     StreamControl {
         fps: Option<u32>,
         #[serde(rename = "forceKeyframe")]
@@ -1116,7 +1118,9 @@ pub fn realtime_stream_enabled() -> bool {
         })
 }
 
-pub fn h264_annex_b_sample(frame: &crate::transport::packet::FramePacket) -> anyhow::Result<Vec<u8>> {
+pub fn h264_annex_b_sample(
+    frame: &crate::transport::packet::FramePacket,
+) -> anyhow::Result<Vec<u8>> {
     let data = frame.data.as_ref();
     let description = frame.description.as_ref().map(bytes::Bytes::as_ref);
     let mut sample = Vec::with_capacity(data.len() + description.map_or(0, |bytes| bytes.len()));
