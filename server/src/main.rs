@@ -2951,15 +2951,24 @@ fn service_post_ok(server_url: &str, udid: &str, action: &str, body: &Value) -> 
             Ok(_) => return Ok(()),
             Err(error)
                 if Instant::now() < deadline
-                    && error
-                        .to_string()
-                        .contains("Resource temporarily unavailable") =>
+                    && service_post_error_is_retryable(action, &error.to_string()) =>
             {
                 std::thread::sleep(Duration::from_millis(250));
             }
             Err(error) => return Err(error),
         }
     }
+}
+
+fn service_post_error_is_retryable(action: &str, message: &str) -> bool {
+    if !matches!(action, "boot" | "shutdown" | "erase") {
+        return false;
+    }
+    let message = message.to_lowercase();
+    message.contains("resource temporarily unavailable")
+        || message.contains("connection reset by peer")
+        || message.contains("broken pipe")
+        || message.contains("unexpected eof")
 }
 
 fn http_request_json(
@@ -4766,7 +4775,8 @@ fn default_client_root() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_accessibility_point_for_display, Cli, Command, DaemonCommand, VideoCodecMode,
+        normalize_accessibility_point_for_display, service_post_error_is_retryable, Cli, Command,
+        DaemonCommand, VideoCodecMode,
     };
     use clap::Parser;
 
@@ -4807,6 +4817,22 @@ mod tests {
         assert!(
             Cli::try_parse_from(["simdeck", "daemon", "start", "--video-codec", "h264"]).is_err()
         );
+    }
+
+    #[test]
+    fn lifecycle_service_posts_retry_connection_resets() {
+        assert!(service_post_error_is_retryable(
+            "shutdown",
+            "Connection reset by peer (os error 54)"
+        ));
+        assert!(service_post_error_is_retryable(
+            "boot",
+            "Resource temporarily unavailable"
+        ));
+        assert!(!service_post_error_is_retryable(
+            "touch",
+            "Connection reset by peer (os error 54)"
+        ));
     }
 
     #[test]

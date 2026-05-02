@@ -134,7 +134,8 @@ export function useLiveStream({
             setError(message.status.error);
           } else if (
             message.status.state === "streaming" ||
-            message.status.state === "idle"
+            message.status.state === "idle" ||
+            message.status.state === "connecting"
           ) {
             setError("");
           }

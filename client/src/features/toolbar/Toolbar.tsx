@@ -29,6 +29,8 @@ interface ToolbarProps {
   selectedSimulator: SimulatorMetadata | null;
   selectedSimulatorIdentifier: string;
   setSelectedUDID: (udid: string) => void;
+  showBootButton: boolean;
+  showStopButton: boolean;
   touchOverlayVisible: boolean;
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
@@ -64,6 +66,8 @@ export function Toolbar({
   selectedSimulator,
   selectedSimulatorIdentifier,
   setSelectedUDID,
+  showBootButton,
+  showStopButton,
   touchOverlayVisible,
 }: ToolbarProps) {
   const [errorCopied, setErrorCopied] = useState(false);
@@ -106,13 +110,18 @@ export function Toolbar({
           menuRef={menuRef}
           onChangeSearch={onChangeSearch}
           onCloseMenu={closeMenu}
+          onDismissKeyboard={onDismissKeyboard}
           onOpenBundlePrompt={onOpenBundlePrompt}
           onOpenUrlPrompt={onOpenUrlPrompt}
+          onRotateLeft={onRotateLeft}
+          onToggleAppearance={onToggleAppearance}
           onToggleDebug={onToggleDebug}
           onToggleMenu={onToggleMenu}
+          onToggleTouchOverlay={onToggleTouchOverlay}
           search={search}
           selectedSimulator={selectedSimulator}
           setSelectedUDID={setSelectedUDID}
+          touchOverlayVisible={touchOverlayVisible}
         />
         {selectedSimulator ? (
           <div className="toolbar-sim-info">
@@ -140,22 +149,26 @@ export function Toolbar({
       <div className="toolbar-right">
         {selectedSimulator ? (
           <div className="toolbar-actions">
-            <button
-              aria-label="Boot"
-              className="tbtn icon-btn accent"
-              onClick={onBoot}
-              title="Boot"
-            >
-              <PlayIcon />
-            </button>
-            <button
-              aria-label="Stop"
-              className="tbtn icon-btn"
-              onClick={onShutdown}
-              title="Stop"
-            >
-              <StopIcon />
-            </button>
+            {showBootButton ? (
+              <button
+                aria-label="Boot"
+                className="tbtn icon-btn accent"
+                onClick={onBoot}
+                title="Boot"
+              >
+                <PlayIcon />
+              </button>
+            ) : null}
+            {showStopButton ? (
+              <button
+                aria-label="Stop"
+                className="tbtn icon-btn"
+                onClick={onShutdown}
+                title="Stop"
+              >
+                <StopIcon />
+              </button>
+            ) : null}
             <button
               aria-label="Home"
               className="tbtn icon-btn"
@@ -173,24 +186,8 @@ export function Toolbar({
               <AppSwitcherIcon />
             </button>
             <button
-              aria-label="Dismiss Keyboard"
-              className="tbtn icon-btn"
-              onClick={onDismissKeyboard}
-              title="Dismiss Keyboard"
-            >
-              <KeyboardDismissIcon />
-            </button>
-            <button
-              aria-label="Toggle Touch Overlay"
-              className={`tbtn icon-btn ${touchOverlayVisible ? "active" : ""}`}
-              onClick={onToggleTouchOverlay}
-              title="Toggle Touch Overlay"
-            >
-              <TouchOverlayIcon />
-            </button>
-            <button
               aria-label="Toggle Appearance"
-              className="tbtn icon-btn"
+              className="tbtn icon-btn toolbar-mobile-hidden"
               onClick={onToggleAppearance}
               title="Toggle Appearance"
             >
@@ -198,7 +195,7 @@ export function Toolbar({
             </button>
             <button
               aria-label="Rotate Left"
-              className="tbtn icon-btn"
+              className="tbtn icon-btn toolbar-mobile-hidden"
               onClick={onRotateLeft}
               title="Rotate Left"
             >
@@ -275,44 +272,6 @@ function AppSwitcherIcon() {
   );
 }
 
-function KeyboardDismissIcon() {
-  return (
-    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
-      <rect
-        height="6"
-        rx="1.2"
-        stroke="currentColor"
-        strokeWidth="1.25"
-        width="11"
-        x="2.5"
-        y="3"
-      />
-      <path
-        d="M4.5 5.2h.1M6.8 5.2h.1M9.1 5.2h.1M11.4 5.2h.1M4.5 7h7"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.25"
-      />
-      <path
-        d="m5.5 11 2.5 2.5 2.5-2.5M8 9.7v3.4"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.25"
-      />
-    </svg>
-  );
-}
-
-function TouchOverlayIcon() {
-  return (
-    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
-      <circle cx="8" cy="8" r="2.1" fill="currentColor" />
-      <circle cx="8" cy="8" r="5.1" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
-}
-
 function AppearanceIcon() {
   return (
     <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
@@ -358,11 +317,19 @@ function RotateRightIcon() {
 function HierarchyIcon() {
   return (
     <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
+      <rect
+        height="11"
+        rx="1.6"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        width="12"
+        x="2"
+        y="2.5"
+      />
       <path
-        d="M3 2.5h4v3H3zM9 2.5h4v3H9zM3 10.5h4v3H3zM9 10.5h4v3H9zM5 5.5v2.25h6V5.5M5 10.5V7.75M11 10.5V7.75"
+        d="M6.25 2.8v10.4M3.9 5h.45M3.9 7h.45M3.9 9h.45"
         stroke="currentColor"
         strokeLinecap="round"
-        strokeLinejoin="round"
         strokeWidth="1.35"
       />
     </svg>

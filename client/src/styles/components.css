@@ -360,6 +360,10 @@
   background: var(--surface-hover);
 }
 
+.mobile-menu-action {
+  display: none;
+}
+
 .sim-item {
   display: flex;
   flex-direction: column;
@@ -1268,16 +1272,24 @@
 .screen-overlay {
   position: absolute;
   inset: 0;
-  display: grid;
-  place-items: center;
-  color: #555555;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(245, 245, 245, 0.86);
   font-size: 13px;
-  padding: 24px;
+  line-height: 1.45;
+  padding: 24px 18px;
   text-align: center;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  background: color-mix(in srgb, #000000 38%, transparent);
+  pointer-events: none;
 }
 
 .screen-loading {
-  background: color-mix(in srgb, #000000 32%, transparent);
+  background: color-mix(in srgb, #000000 24%, transparent);
 }
 
 .canvas-empty {
@@ -1297,8 +1309,10 @@
   gap: 10px;
   color: var(--text-secondary);
   font-size: 13px;
+  line-height: 1.4;
   text-align: center;
   pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.58);
 }
 
 .canvas-loading p {

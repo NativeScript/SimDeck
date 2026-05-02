@@ -565,22 +565,6 @@ fn clear_webrtc_media_stream(udid: &str, token: &broadcast::Sender<()>) {
     }
 }
 
-fn cancel_other_webrtc_media_streams(udid: &str, token: &broadcast::Sender<()>) {
-    if let Some(streams) = WEBRTC_MEDIA_STREAMS.get() {
-        let mut streams = streams.lock().unwrap();
-        if let Some(active_streams) = streams.get_mut(udid) {
-            active_streams.retain(|current| {
-                if current.same_channel(token) {
-                    true
-                } else {
-                    let _ = current.send(());
-                    false
-                }
-            });
-        }
-    }
-}
-
 #[cfg(test)]
 pub fn cancel_media_stream(udid: &str) -> bool {
     let Some(streams) = WEBRTC_MEDIA_STREAMS.get() else {
@@ -706,7 +690,6 @@ impl WebRtcMediaStream {
         let mut adaptive_refresh_interval = refresh_floor;
         let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
         let mut waiting_for_keyframe = false;
-        let mut stream_established = false;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
         match write_frame_sample_with_timeout(
@@ -720,10 +703,6 @@ impl WebRtcMediaStream {
         {
             Ok(true) => {
                 state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
-                if !stream_established {
-                    stream_established = true;
-                    cancel_other_webrtc_media_streams(&udid, &cancellation_token);
-                }
             }
             Ok(false) => {
                 state
@@ -769,10 +748,6 @@ impl WebRtcMediaStream {
                     ).await {
                         Ok(true) => {
                             state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
-                            if !stream_established {
-                                stream_established = true;
-                                cancel_other_webrtc_media_streams(&udid, &cancellation_token);
-                            }
                         }
                         Ok(false) => {
                             state
@@ -854,10 +829,6 @@ impl WebRtcMediaStream {
                     match write_result {
                         Ok(true) => {
                             state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
-                            if !stream_established {
-                                stream_established = true;
-                                cancel_other_webrtc_media_streams(&udid, &cancellation_token);
-                            }
                         }
                         Ok(false) => {
                             state
@@ -1283,23 +1254,6 @@ mod tests {
         super::clear_webrtc_media_stream_for_test(&udid, &second_token);
         super::clear_webrtc_media_stream_for_test(&udid, &third_token);
         super::clear_webrtc_media_stream_for_test(&udid, &fourth_token);
-        assert!(!super::has_media_stream(&udid));
-    }
-
-    #[test]
-    fn established_webrtc_stream_cancels_older_streams() {
-        let udid = format!("test-established-{}", std::process::id());
-        super::reset_webrtc_media_streams_for_test(&udid);
-        let (_first_token, mut first_rx) = super::register_webrtc_media_stream_for_test(&udid);
-        let (second_token, mut second_rx) = super::register_webrtc_media_stream_for_test(&udid);
-
-        super::cancel_other_webrtc_media_streams(&udid, &second_token);
-
-        assert!(first_rx.try_recv().is_ok());
-        assert!(second_rx.try_recv().is_err());
-        assert_eq!(super::active_webrtc_media_stream_count(&udid), 1);
-
-        super::clear_webrtc_media_stream_for_test(&udid, &second_token);
         assert!(!super::has_media_stream(&udid));
     }
 

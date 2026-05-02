@@ -13,7 +13,9 @@ const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
 const WEBRTC_TELEMETRY_CHANNEL_LABEL = "simdeck-telemetry";
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 10000;
 const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 8000;
-const WEBRTC_REMOTE_DISCONNECTED_GRACE_MS = 3000;
+const WEBRTC_DISCONNECTED_GRACE_MS = 8000;
+const WEBRTC_RECONNECT_BASE_DELAY_MS = 3000;
+const WEBRTC_RECONNECT_MAX_DELAY_MS = 10000;
 
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
 let activeWebRtcTelemetryChannel: RTCDataChannel | null = null;
@@ -70,9 +72,12 @@ class WebRtcStreamClient implements StreamClientBackend {
   private diagnostics = createWebRtcDiagnostics();
   private disconnectGraceTimeout = 0;
   private frameWatchdogTimeout = 0;
+  private hasRenderedFrame = false;
   private lastVideoFrameAt = 0;
   private peerConnection: RTCPeerConnection | null = null;
   private reconnectTimeout = 0;
+  private reconnectDelayMs = WEBRTC_RECONNECT_BASE_DELAY_MS;
+  private reconnecting = false;
   private remoteMode = false;
   private reportedVideoConfig = false;
   private shouldReconnect = false;
@@ -96,7 +101,16 @@ class WebRtcStreamClient implements StreamClientBackend {
   }
 
   async connect(target: StreamConnectTarget) {
-    this.disconnect();
+    const wasReconnecting = this.reconnecting;
+    this.reconnecting = false;
+    if (wasReconnecting) {
+      this.clearReconnectTimeout();
+      this.clearDisconnectGraceTimeout();
+      this.clearFrameWatchdog();
+      this.closeActiveConnection();
+    } else {
+      this.disconnect();
+    }
     if (!this.canvas) {
       return;
     }
@@ -104,9 +118,13 @@ class WebRtcStreamClient implements StreamClientBackend {
     const generation = ++this.connectGeneration;
     this.shouldReconnect = true;
     this.remoteMode = Boolean(target.remote);
+    if (!wasReconnecting) {
+      this.hasRenderedFrame = false;
+      this.reconnectDelayMs = WEBRTC_RECONNECT_BASE_DELAY_MS;
+      this.stats = createEmptyStreamStats();
+    }
     this.diagnostics = createWebRtcDiagnostics();
     this.reportedVideoConfig = false;
-    this.stats = createEmptyStreamStats();
     this.onMessage({
       type: "status",
       status: { detail: "Creating WebRTC offer", state: "connecting" },
@@ -214,6 +232,7 @@ class WebRtcStreamClient implements StreamClientBackend {
         }
         if (peerConnection.connectionState === "connected") {
           this.clearDisconnectGraceTimeout();
+          this.reconnectDelayMs = WEBRTC_RECONNECT_BASE_DELAY_MS;
           if (this.reportedVideoConfig) {
             this.onMessage({
               type: "status",
@@ -223,8 +242,8 @@ class WebRtcStreamClient implements StreamClientBackend {
           return;
         }
         if (peerConnection.connectionState === "disconnected") {
-          if (this.remoteMode && this.stats.renderedFrames > 0) {
-            this.scheduleRemoteDisconnectGrace(target, generation);
+          if (this.hasRenderedFrame) {
+            this.scheduleDisconnectedGrace(target, generation);
             return;
           }
           this.handleConnectionError(
@@ -283,6 +302,7 @@ class WebRtcStreamClient implements StreamClientBackend {
 
   disconnect() {
     this.shouldReconnect = false;
+    this.reconnecting = false;
     this.connectGeneration += 1;
     this.clearReconnectTimeout();
     this.clearDisconnectGraceTimeout();
@@ -301,6 +321,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.clearFrameWatchdog();
     this.clearDisconnectGraceTimeout();
     this.cancelVideoFrameCallback();
+    this.captureCurrentVideoFrame();
     this.video?.pause();
     if (this.video) {
       this.video.srcObject = null;
@@ -331,34 +352,33 @@ class WebRtcStreamClient implements StreamClientBackend {
       return;
     }
     const message = error instanceof Error ? error.message : String(error);
+    const friendlyMessage = friendlyStreamError(message);
     this.closeActiveConnection();
-    const reconnecting = this.remoteMode && this.stats.renderedFrames > 0;
     this.onMessage({
       type: "status",
-      status: reconnecting
-        ? {
-            detail: "Connection interrupted. Reconnecting...",
-            state: "connecting",
-          }
-        : { error: message, state: "error" },
+      status: this.hasRenderedFrame
+        ? streamErrorIsServerUnreachable(message)
+          ? {
+              error: friendlyMessage,
+              detail: "Reconnecting in the background.",
+              state: "connecting",
+            }
+          : {
+              detail: "Reconnecting in the background.",
+              state: "connecting",
+            }
+        : { error: friendlyMessage, state: "error" },
     });
     this.scheduleReconnect(target, generation);
   }
 
-  private scheduleRemoteDisconnectGrace(
+  private scheduleDisconnectedGrace(
     target: StreamConnectTarget,
     generation: number,
   ) {
     if (this.disconnectGraceTimeout) {
       return;
     }
-    this.onMessage({
-      type: "status",
-      status: {
-        detail: "Connection interrupted. Reconnecting...",
-        state: "connecting",
-      },
-    });
     this.disconnectGraceTimeout = window.setTimeout(() => {
       this.disconnectGraceTimeout = 0;
       if (generation !== this.connectGeneration || !this.shouldReconnect) {
@@ -369,7 +389,7 @@ class WebRtcStreamClient implements StreamClientBackend {
         generation,
         new Error("WebRTC connection disconnected."),
       );
-    }, WEBRTC_REMOTE_DISCONNECTED_GRACE_MS);
+    }, WEBRTC_DISCONNECTED_GRACE_MS);
   }
 
   private scheduleReconnect(target: StreamConnectTarget, generation: number) {
@@ -382,12 +402,18 @@ class WebRtcStreamClient implements StreamClientBackend {
     }
     this.stats.reconnects += 1;
     this.onMessage({ type: "stats", stats: { ...this.stats } });
+    const delayMs = this.reconnectDelayMs;
+    this.reconnectDelayMs = Math.min(
+      WEBRTC_RECONNECT_MAX_DELAY_MS,
+      Math.round(this.reconnectDelayMs * 1.6),
+    );
     this.reconnectTimeout = window.setTimeout(() => {
       this.reconnectTimeout = 0;
       if (generation === this.connectGeneration && this.shouldReconnect) {
+        this.reconnecting = true;
         void this.connect(target);
       }
-    }, 750);
+    }, delayMs);
   }
 
   private scheduleFrameWatchdog(
@@ -597,6 +623,14 @@ class WebRtcStreamClient implements StreamClientBackend {
       this.syncCanvasSize(this.video.videoWidth, this.video.videoHeight);
       this.reportVideoConfig(this.video.videoWidth, this.video.videoHeight);
       const renderStartedAt = performance.now();
+      const context = this.canvas.getContext("2d");
+      context?.drawImage(
+        this.video,
+        0,
+        0,
+        this.canvas.width,
+        this.canvas.height,
+      );
       const now = performance.now();
       const latestRenderMs = performance.now() - renderStartedAt;
       this.stats.decodedFrames += 1;
@@ -605,6 +639,7 @@ class WebRtcStreamClient implements StreamClientBackend {
       this.stats.width = this.canvas.width;
       this.stats.height = this.canvas.height;
       this.stats.codec = "webrtc";
+      this.hasRenderedFrame = true;
       this.stats.latestRenderMs = latestRenderMs;
       this.stats.maxRenderMs = Math.max(this.stats.maxRenderMs, latestRenderMs);
       if (this.lastVideoFrameAt > 0) {
@@ -673,6 +708,38 @@ class WebRtcStreamClient implements StreamClientBackend {
       this.canvas.height = nextHeight;
     }
   }
+
+  private captureCurrentVideoFrame() {
+    if (
+      !this.canvas ||
+      !this.video ||
+      this.video.readyState < HAVE_CURRENT_DATA ||
+      this.video.videoWidth <= 0 ||
+      this.video.videoHeight <= 0
+    ) {
+      return;
+    }
+    this.syncCanvasSize(this.video.videoWidth, this.video.videoHeight);
+    this.canvas
+      .getContext("2d")
+      ?.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+  }
+}
+
+function friendlyStreamError(message: string): string {
+  if (streamErrorIsServerUnreachable(message)) {
+    return "SimDeck server is unreachable.";
+  }
+  return message.replace(/\.$/, "");
+}
+
+function streamErrorIsServerUnreachable(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized === "failed to fetch" ||
+    normalized === "load failed" ||
+    normalized.includes("networkerror")
+  );
 }
 
 async function postWebRtcOfferWithAuthRetry(

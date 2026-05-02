@@ -24,6 +24,7 @@ export const UI_STATE_STORAGE_KEY = "xcw-ui-state";
 export const DEBUG_VISIBLE_STORAGE_KEY = "xcw-debug-visible";
 export const HIERARCHY_VISIBLE_STORAGE_KEY = "xcw-hierarchy-visible";
 export const ACCESSIBILITY_SOURCE_STORAGE_KEY = "xcw-hierarchy-source";
+export const TOUCH_OVERLAY_VISIBLE_STORAGE_KEY = "xcw-touch-overlay-visible";
 
 const ACCESSIBILITY_SOURCE_ORDER: AccessibilitySource[] = [
   "nativescript",
@@ -36,16 +37,20 @@ const ACCESSIBILITY_SOURCE_ORDER: AccessibilitySource[] = [
 export const DEFAULT_VIEWPORT_STATE: PersistedViewportState = {
   pan: { x: 0, y: 0 },
   rotationQuarterTurns: 0,
-  viewMode: "center",
+  viewMode: "fit",
   zoom: null,
 };
 
-export function readStoredFlag(storageKey: string): boolean {
+export function readStoredFlag(
+  storageKey: string,
+  defaultValue = false,
+): boolean {
   if (typeof window === "undefined") {
-    return false;
+    return defaultValue;
   }
 
-  return window.localStorage.getItem(storageKey) === "1";
+  const value = window.localStorage.getItem(storageKey);
+  return value == null ? defaultValue : value === "1";
 }
 
 export function writeStoredFlag(storageKey: string, value: boolean): void {

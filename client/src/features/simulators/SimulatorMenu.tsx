@@ -12,13 +12,18 @@ interface SimulatorMenuProps {
   menuRef: RefObject<HTMLDivElement | null>;
   onChangeSearch: (value: string) => void;
   onCloseMenu: () => void;
+  onDismissKeyboard: () => void;
   onOpenBundlePrompt: () => void;
   onOpenUrlPrompt: () => void;
+  onRotateLeft: () => void;
+  onToggleAppearance: () => void;
   onToggleDebug: () => void;
   onToggleMenu: () => void;
+  onToggleTouchOverlay: () => void;
   search: string;
   selectedSimulator: SimulatorMetadata | null;
   setSelectedUDID: (udid: string) => void;
+  touchOverlayVisible: boolean;
 }
 
 export function SimulatorMenu({
@@ -30,13 +35,18 @@ export function SimulatorMenu({
   menuRef,
   onChangeSearch,
   onCloseMenu,
+  onDismissKeyboard,
   onOpenBundlePrompt,
   onOpenUrlPrompt,
+  onRotateLeft,
+  onToggleAppearance,
   onToggleDebug,
   onToggleMenu,
+  onToggleTouchOverlay,
   search,
   selectedSimulator,
   setSelectedUDID,
+  touchOverlayVisible,
 }: SimulatorMenuProps) {
   return (
     <div className="menu-wrap" ref={menuRef}>
@@ -91,6 +101,38 @@ export function SimulatorMenu({
                 </button>
                 <button className="menu-action" onClick={onOpenBundlePrompt}>
                   Launch Bundle…
+                </button>
+                <button
+                  className="menu-action"
+                  onClick={() => {
+                    onDismissKeyboard();
+                    onCloseMenu();
+                  }}
+                >
+                  Dismiss Keyboard
+                </button>
+                <button className="menu-action" onClick={onToggleTouchOverlay}>
+                  {touchOverlayVisible
+                    ? "Hide Touch Overlay"
+                    : "Show Touch Overlay"}
+                </button>
+                <button
+                  className="menu-action mobile-menu-action"
+                  onClick={() => {
+                    onToggleAppearance();
+                    onCloseMenu();
+                  }}
+                >
+                  Toggle Appearance
+                </button>
+                <button
+                  className="menu-action mobile-menu-action"
+                  onClick={() => {
+                    onRotateLeft();
+                    onCloseMenu();
+                  }}
+                >
+                  Rotate Left
                 </button>
               </div>
             </>

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_VIEWPORT_STATE,
+  readStoredFlag,
   sanitizeAccessibilitySources,
   sanitizePersistedUiState,
   viewportStateForUDID,
@@ -64,5 +65,9 @@ describe("uiState", () => {
 
   it("returns the default viewport state for unknown simulators", () => {
     expect(viewportStateForUDID({}, "missing")).toEqual(DEFAULT_VIEWPORT_STATE);
+  });
+
+  it("uses the supplied stored-flag default outside the browser", () => {
+    expect(readStoredFlag("missing-flag", true)).toBe(true);
   });
 });

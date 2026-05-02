@@ -137,6 +137,14 @@
     min-width: 100%;
   }
 
+  .toolbar-mobile-hidden {
+    display: none;
+  }
+
+  .mobile-menu-action {
+    display: block;
+  }
+
   .main {
     flex-direction: column;
   }

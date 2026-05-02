@@ -75,6 +75,7 @@ import {
   readStoredAccessibilitySource,
   readStoredFlag,
   sanitizeAccessibilitySources,
+  TOUCH_OVERLAY_VISIBLE_STORAGE_KEY,
   viewportStateForUDID,
   writePersistedUiState,
   writeStoredFlag,
@@ -273,7 +274,9 @@ export function AppShell({
   const [accessibilityPreferredSource, setAccessibilityPreferredSource] =
     useState<AccessibilitySourcePreference>(readStoredAccessibilitySource);
   const [zoomAnimating, setZoomAnimating] = useState(false);
-  const [touchOverlayVisible, setTouchOverlayVisible] = useState(false);
+  const [touchOverlayVisible, setTouchOverlayVisible] = useState(() =>
+    readStoredFlag(TOUCH_OVERLAY_VISIBLE_STORAGE_KEY, true),
+  );
   const [touchIndicators, setTouchIndicators] = useState<TouchIndicator[]>([]);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -344,15 +347,19 @@ export function AppShell({
     filteredSimulators.find((simulator) => simulator.isBooted) ??
     filteredSimulators[0] ??
     null;
-  const selectedSimulatorDetail =
+  const selectedSimulatorTransitionKind =
     selectedSimulator != null &&
     simulatorTransition?.udid === selectedSimulator.udid
-      ? simulatorTransition.kind === "boot"
-        ? "Starting..."
-        : "Stopping..."
-      : selectedSimulator != null
-        ? simulatorRuntimeLabel(selectedSimulator)
-        : "";
+      ? simulatorTransition.kind
+      : null;
+  const selectedSimulatorDetail =
+    selectedSimulatorTransitionKind === "boot"
+      ? "Starting..."
+      : selectedSimulatorTransitionKind === "shutdown"
+        ? "Stopping..."
+        : selectedSimulator != null
+          ? simulatorRuntimeLabel(selectedSimulator)
+          : "";
   const simulatorStatusOverlayLabel =
     selectedSimulator != null &&
     simulatorTransition?.udid === selectedSimulator.udid
@@ -470,6 +477,10 @@ export function AppShell({
   useEffect(() => {
     writeStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY, hierarchyVisible);
   }, [hierarchyVisible]);
+
+  useEffect(() => {
+    writeStoredFlag(TOUCH_OVERLAY_VISIBLE_STORAGE_KEY, touchOverlayVisible);
+  }, [touchOverlayVisible]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -855,13 +866,28 @@ export function AppShell({
     pairingEnabled &&
     listError === AUTH_REQUIRED_MESSAGE &&
     !accessTokenFromLocation();
-  const visibleListError =
-    remoteStream && hasFrame && listError === "Failed to fetch"
-      ? ""
-      : listError;
-  const error = pairingRequired
-    ? localError || streamError
-    : localError || streamError || visibleListError;
+  const visibleListError = selectedSimulator
+    ? friendlyClientError(listError)
+    : listError;
+  const toolbarError = pairingRequired
+    ? localError
+    : localError || (selectedSimulator ? "" : visibleListError);
+  const streamStatusMessage = streamStatus.error
+    ? streamStatus.detail
+      ? `${streamStatus.error} ${streamStatus.detail}`
+      : streamStatus.error
+    : streamStatus.state === "connecting" && !hasFrame
+      ? (streamStatus.detail ?? "")
+      : "";
+  const viewportStatusOverlayLabel =
+    simulatorStatusOverlayLabel ||
+    streamStatusMessage ||
+    (selectedSimulator ? visibleListError : "");
+  const viewportHasStreamError = Boolean(
+    streamStatus.state === "error" ||
+    streamStatus.error ||
+    (selectedSimulator && visibleListError),
+  );
   const deviceTransform = `translate(${pan.x}px, ${pan.y + autoViewportOffsetY}px) scale(${effectiveZoom})`;
   const chromeScreenRect = computeChromeScreenRect(
     viewportChromeProfile,
@@ -1272,7 +1298,7 @@ export function AppShell({
       <Toolbar
         closeMenu={() => setMenuOpen(false)}
         debugVisible={debugVisible}
-        error={error}
+        error={toolbarError}
         filteredSimulators={filteredSimulators}
         hierarchyVisible={hierarchyVisible}
         hideSimulatorSelection={hideSimulatorSelection}
@@ -1403,6 +1429,14 @@ export function AppShell({
         selectedSimulator={selectedSimulator}
         selectedSimulatorIdentifier={selectedSimulatorDetail}
         setSelectedUDID={setSelectedUDID}
+        showBootButton={Boolean(
+          selectedSimulator &&
+          !selectedSimulator.isBooted &&
+          !selectedSimulatorTransitionKind,
+        )}
+        showStopButton={Boolean(
+          selectedSimulator?.isBooted && !selectedSimulatorTransitionKind,
+        )}
         touchOverlayVisible={touchOverlayVisible}
       />
       <SimulatorViewport
@@ -1456,7 +1490,7 @@ export function AppShell({
         fitScale={fitScale}
         hasFrame={hasFrame}
         isLoading={isLoading}
-        isStreamError={streamStatus.state === "error"}
+        isStreamError={viewportHasStreamError}
         isPanning={pointerInput.isPanning}
         onChromeLoad={() => setChromeLoaded(true)}
         onPanPointerMove={pointerInput.handlePanPointerMove}
@@ -1496,7 +1530,7 @@ export function AppShell({
         streamCanvasRef={handleStreamCanvasRef}
         streamBackend={streamBackend}
         streamCanvasKey={streamCanvasKey}
-        statusOverlayLabel={simulatorStatusOverlayLabel}
+        statusOverlayLabel={viewportStatusOverlayLabel}
         touchIndicators={touchIndicators}
         touchOverlayVisible={touchOverlayVisible}
         viewMode={viewMode}
@@ -1525,4 +1559,12 @@ function isStreamAttachFailure(message: string): boolean {
     normalized.includes("coresimulator did not provide") ||
     normalized.includes("did not expose any live screens")
   );
+}
+
+function friendlyClientError(message: string): string {
+  const normalized = message.trim().toLowerCase();
+  if (normalized === "failed to fetch" || normalized === "load failed") {
+    return "SimDeck server is unreachable. Reconnecting in the background.";
+  }
+  return message;
 }
