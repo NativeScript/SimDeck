@@ -12,8 +12,9 @@ const HAVE_CURRENT_DATA = 2;
 const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
 const WEBRTC_TELEMETRY_CHANNEL_LABEL = "simdeck-telemetry";
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 10000;
-const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 8000;
-const WEBRTC_DISCONNECTED_GRACE_MS = 8000;
+const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 15000;
+const WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS = 0.06;
+const WEBRTC_DISCONNECTED_GRACE_MS = 30000;
 const WEBRTC_RECONNECT_BASE_DELAY_MS = 3000;
 const WEBRTC_RECONNECT_MAX_DELAY_MS = 10000;
 
@@ -47,9 +48,9 @@ function sendDataChannelMessage(
 
 export function buildStreamTarget(
   udid: string,
-  options: { remote?: boolean } = {},
+  options: { clientId?: string; remote?: boolean } = {},
 ): StreamConnectTarget {
-  return { remote: options.remote, udid };
+  return { clientId: options.clientId, remote: options.remote, udid };
 }
 
 export function canUseWebRtc(): boolean {
@@ -145,7 +146,10 @@ class WebRtcStreamClient implements StreamClientBackend {
         direction: "recvonly",
       });
       configureReceiverCodecPreferences(transceiver);
-      configureLowLatencyReceiver(transceiver.receiver);
+      configureLowLatencyReceiver(
+        transceiver.receiver,
+        target.remote ? WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS : null,
+      );
       const controlChannel = peerConnection.createDataChannel(
         WEBRTC_CONTROL_CHANNEL_LABEL,
         {
@@ -180,7 +184,10 @@ class WebRtcStreamClient implements StreamClientBackend {
         }
         event.track.contentHint = "motion";
         for (const receiver of peerConnection.getReceivers()) {
-          configureLowLatencyReceiver(receiver);
+          configureLowLatencyReceiver(
+            receiver,
+            target.remote ? WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS : null,
+          );
         }
         const stream = event.streams[0] ?? new MediaStream([event.track]);
         const video = document.createElement("video");
@@ -431,11 +438,19 @@ class WebRtcStreamClient implements StreamClientBackend {
         const hasRenderedFrame = this.stats.renderedFrames > 0;
         const frameAgeMs =
           this.lastVideoFrameAt > 0 ? now - this.lastVideoFrameAt : Infinity;
-        if (!hasRenderedFrame || frameAgeMs > WEBRTC_STALLED_FRAME_TIMEOUT_MS) {
+        if (!hasRenderedFrame) {
           this.handleConnectionError(
             target,
             generation,
             new Error("WebRTC video stalled before rendering fresh frames."),
+          );
+          return;
+        }
+        if (frameAgeMs > WEBRTC_STALLED_FRAME_TIMEOUT_MS) {
+          this.handleConnectionError(
+            target,
+            generation,
+            new Error("WebRTC video stalled after rendering frames."),
           );
           return;
         }
@@ -575,7 +590,7 @@ class WebRtcStreamClient implements StreamClientBackend {
   private postDiagnostics(target: StreamConnectTarget, detail: string) {
     const payload = {
       ...this.stats,
-      clientId: "webrtc-page",
+      clientId: target.clientId ?? "webrtc-page",
       connectionId: this.connectGeneration,
       detail,
       iceConnectionState: this.diagnostics.iceConnectionState,
@@ -778,16 +793,22 @@ function postWebRtcOffer(
   );
 }
 
-function configureLowLatencyReceiver(receiver: RTCRtpReceiver) {
+function configureLowLatencyReceiver(
+  receiver: RTCRtpReceiver,
+  bufferSeconds: number | null,
+) {
+  if (!bufferSeconds || bufferSeconds <= 0) {
+    return;
+  }
   const lowLatencyReceiver = receiver as RTCRtpReceiver & {
     jitterBufferTarget?: number;
     playoutDelayHint?: number;
   };
   if ("jitterBufferTarget" in lowLatencyReceiver) {
-    lowLatencyReceiver.jitterBufferTarget = 0.001;
+    lowLatencyReceiver.jitterBufferTarget = bufferSeconds;
   }
   if ("playoutDelayHint" in lowLatencyReceiver) {
-    lowLatencyReceiver.playoutDelayHint = 0.001;
+    lowLatencyReceiver.playoutDelayHint = bufferSeconds;
   }
 }
 

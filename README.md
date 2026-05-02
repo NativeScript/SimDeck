@@ -116,6 +116,13 @@ more important than full-resolution smoothness:
 simdeck daemon start --video-codec software --low-latency
 ```
 
+Local browser streams default to 60 fps. On high-refresh local displays, opt in
+to a paced hardware stream up to 120 fps:
+
+```sh
+simdeck daemon restart --local-stream-fps 120
+```
+
 Restart the CoreSimulator service layer when `simctl` reports a stale service
 version or the live display gets stuck before the first frame:
 

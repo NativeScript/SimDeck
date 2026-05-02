@@ -54,16 +54,17 @@ This starts or reuses the project daemon, serves the bundled browser client, and
 
 `daemon start`, `daemon restart`, and `ui` accept the same server options:
 
-| Flag               | Default               | Notes                                                                               |
-| ------------------ | --------------------- | ----------------------------------------------------------------------------------- |
-| `--port <u16>`     | `4310`                | HTTP port for the REST API, browser UI, and WebRTC offer endpoint.                  |
-| `--bind <ip>`      | `127.0.0.1`           | Bind address. Use `0.0.0.0` for [LAN access](/guide/lan-access).                    |
-| `--advertise-host` | matches local host    | Hostname or IP advertised to browser clients.                                       |
-| `--client-root`    | bundled `client/dist` | Override the static browser client directory.                                       |
-| `--video-codec`    | `auto`                | One of `auto`, `hardware`, or `software`. See [Video](/guide/video).                |
-| `--low-latency`    | `false`               | Software H.264 profile for slower runners; caps at 15 fps and drops stale frames.   |
-| `--stream-quality` | auto/default          | Optional realtime stream quality profile, including `ci-software` for CI providers. |
-| `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                              |
+| Flag                 | Default               | Notes                                                                               |
+| -------------------- | --------------------- | ----------------------------------------------------------------------------------- |
+| `--port <u16>`       | `4310`                | HTTP port for the REST API, browser UI, and WebRTC offer endpoint.                  |
+| `--bind <ip>`        | `127.0.0.1`           | Bind address. Use `0.0.0.0` for [LAN access](/guide/lan-access).                    |
+| `--advertise-host`   | matches local host    | Hostname or IP advertised to browser clients.                                       |
+| `--client-root`      | bundled `client/dist` | Override the static browser client directory.                                       |
+| `--video-codec`      | `auto`                | One of `auto`, `hardware`, or `software`. See [Video](/guide/video).                |
+| `--low-latency`      | `false`               | Software H.264 profile for slower runners; caps at 15 fps and drops stale frames.   |
+| `--stream-quality`   | auto/default          | Optional realtime stream quality profile, including `ci-software` for CI providers. |
+| `--local-stream-fps` | `60`                  | Local quality stream frame cap, from 15 to 120 fps.                                 |
+| `--open`             | `false`               | `ui` only. Open the browser after the daemon is ready.                              |
 
 Example:
 

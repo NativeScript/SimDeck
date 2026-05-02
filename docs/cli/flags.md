@@ -28,16 +28,17 @@ Targets a specific running SimDeck daemon for commands that support the HTTP fas
 
 `ui`, `daemon start`, and `daemon restart` accept the same server options. `ui` also accepts `--open`.
 
-| Flag               | Default               | Description                                                                                             |
-| ------------------ | --------------------- | ------------------------------------------------------------------------------------------------------- |
-| `--port <u16>`     | `4310`                | HTTP port for the REST API, browser UI, and WebRTC offer endpoint.                                      |
-| `--bind <ip>`      | `127.0.0.1`           | Bind address (`0.0.0.0` for [LAN access](/guide/lan-access), `::` for IPv6).                            |
-| `--advertise-host` | matches local host    | Hostname or IP printed for LAN browser access.                                                          |
-| `--client-root`    | bundled `client/dist` | Override the static browser client directory.                                                           |
-| `--video-codec`    | `auto`                | One of `auto`, `hardware`, or `software`. See [Video Pipeline](/guide/video).                           |
-| `--low-latency`    | `false`               | Software H.264 profile for slower runners: caps at 15 fps and favors freshness.                         |
-| `--stream-quality` | auto/default          | Optional realtime stream quality profile: `quality`, `balanced`, `smooth`, `economy`, or `ci-software`. |
-| `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                                                  |
+| Flag                 | Default               | Description                                                                                             |
+| -------------------- | --------------------- | ------------------------------------------------------------------------------------------------------- |
+| `--port <u16>`       | `4310`                | HTTP port for the REST API, browser UI, and WebRTC offer endpoint.                                      |
+| `--bind <ip>`        | `127.0.0.1`           | Bind address (`0.0.0.0` for [LAN access](/guide/lan-access), `::` for IPv6).                            |
+| `--advertise-host`   | matches local host    | Hostname or IP printed for LAN browser access.                                                          |
+| `--client-root`      | bundled `client/dist` | Override the static browser client directory.                                                           |
+| `--video-codec`      | `auto`                | One of `auto`, `hardware`, or `software`. See [Video Pipeline](/guide/video).                           |
+| `--low-latency`      | `false`               | Software H.264 profile for slower runners: caps at 15 fps and favors freshness.                         |
+| `--stream-quality`   | auto/default          | Optional realtime stream quality profile: `quality`, `balanced`, `smooth`, `economy`, or `ci-software`. |
+| `--local-stream-fps` | `60`                  | Local quality stream frame cap, from 15 to 120 fps.                                                     |
+| `--open`             | `false`               | `ui` only. Open the browser after the daemon is ready.                                                  |
 
 `studio expose` defaults to software H.264. Pass `--video-codec hardware` to
 opt into the hardware encoder when that is preferable.

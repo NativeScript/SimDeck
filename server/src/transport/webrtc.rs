@@ -41,12 +41,16 @@ const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(150);
 const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 3;
 const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
 const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+const WEBRTC_DEFAULT_LOCAL_STREAM_FPS: u32 = 60;
+const WEBRTC_MIN_LOCAL_STREAM_FPS: u32 = 15;
+const WEBRTC_MAX_LOCAL_STREAM_FPS: u32 = 120;
 const WEBRTC_LOW_LATENCY_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
 const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
 const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(90);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
+const WEBRTC_PEER_DISCONNECTED_TIMEOUT: Duration = Duration::from_secs(45);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<broadcast::Sender<()>>>>> =
     OnceLock::new();
 const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 3;
@@ -690,6 +694,7 @@ impl WebRtcMediaStream {
         let mut adaptive_refresh_interval = refresh_floor;
         let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
         let mut waiting_for_keyframe = false;
+        let mut peer_disconnected_since: Option<time::Instant> = None;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
         match write_frame_sample_with_timeout(
@@ -736,6 +741,16 @@ impl WebRtcMediaStream {
                     if matches!(peer_state, RTCPeerConnectionState::Closed | RTCPeerConnectionState::Failed) {
                         warn!("WebRTC media stream closing for {udid}: peer state {peer_state}");
                         break;
+                    }
+                    if peer_state == RTCPeerConnectionState::Disconnected {
+                        let disconnected_since =
+                            peer_disconnected_since.get_or_insert_with(time::Instant::now);
+                        if disconnected_since.elapsed() >= WEBRTC_PEER_DISCONNECTED_TIMEOUT {
+                            warn!("WebRTC media stream closing for {udid}: peer state {peer_state}");
+                            break;
+                        }
+                    } else {
+                        peer_disconnected_since = None;
                     }
                 }
                 _ = &mut bootstrap_sleep, if bootstrap_frames_remaining > 0 => {
@@ -891,7 +906,7 @@ fn refresh_floor_for_low_latency(low_latency: bool) -> Duration {
     if low_latency {
         WEBRTC_LOW_LATENCY_REFRESH_INTERVAL
     } else {
-        WEBRTC_MIN_REFRESH_INTERVAL
+        local_stream_refresh_interval()
     }
 }
 
@@ -901,6 +916,18 @@ fn refresh_ceiling_for_low_latency(low_latency: bool) -> Duration {
     } else {
         WEBRTC_MAX_REFRESH_INTERVAL
     }
+}
+
+fn local_stream_refresh_interval() -> Duration {
+    let fps = std::env::var("SIMDECK_LOCAL_STREAM_FPS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(WEBRTC_DEFAULT_LOCAL_STREAM_FPS)
+        .clamp(WEBRTC_MIN_LOCAL_STREAM_FPS, WEBRTC_MAX_LOCAL_STREAM_FPS);
+    if fps == WEBRTC_DEFAULT_LOCAL_STREAM_FPS {
+        return WEBRTC_MIN_REFRESH_INTERVAL;
+    }
+    Duration::from_micros((1_000_000u64 / u64::from(fps)).max(1))
 }
 
 fn adaptive_interval_for_write(

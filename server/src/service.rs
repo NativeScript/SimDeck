@@ -187,6 +187,10 @@ fn plist_contents(
         program_arguments.push("--stream-quality".to_string());
         program_arguments.push(stream_quality_profile.clone());
     }
+    if let Some(local_stream_fps) = options.local_stream_fps {
+        program_arguments.push("--local-stream-fps".to_string());
+        program_arguments.push(local_stream_fps.to_string());
+    }
 
     if let Some(advertise_host) = options.advertise_host.as_ref() {
         program_arguments.push("--advertise-host".to_string());
