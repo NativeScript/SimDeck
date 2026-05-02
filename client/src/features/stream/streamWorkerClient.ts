@@ -27,6 +27,16 @@ export function sendWebRtcControlMessage(encoded: string): boolean {
   return true;
 }
 
+export function sendWebRtcClientStats(stats: unknown): boolean {
+  if (activeWebRtcControlChannel?.readyState !== "open") {
+    return false;
+  }
+  activeWebRtcControlChannel.send(
+    JSON.stringify({ stats, type: "clientStats" }),
+  );
+  return true;
+}
+
 export function buildStreamTarget(
   udid: string,
   options: { remote?: boolean } = {},
@@ -532,6 +542,9 @@ class WebRtcStreamClient implements StreamClientBackend {
       url: window.location.href,
       userAgent: window.navigator.userAgent,
     };
+    if (sendWebRtcClientStats(payload) || this.remoteMode) {
+      return;
+    }
     void fetch(
       new URL(apiUrl("/api/client-stream-stats"), window.location.href),
       {

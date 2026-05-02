@@ -1,5 +1,6 @@
 use crate::api::routes::{run_control_message, AppState, ControlMessage};
 use crate::error::AppError;
+use crate::metrics::counters::ClientStreamStats;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -7,6 +8,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::broadcast;
+use tokio::task;
 use tokio::time;
 use tracing::{info, warn};
 use webrtc::api::interceptor_registry::register_default_interceptors;
@@ -123,7 +125,7 @@ pub async fn create_answer(
         ));
     }
 
-    let h264_fmtp_line = h264_sdp_fmtp_line(&codec);
+    let h264_fmtp_line = h264_sdp_fmtp_line(&codec, &payload.sdp);
     let mut media_engine = MediaEngine::default();
     media_engine
         .register_codec(
@@ -159,7 +161,12 @@ pub async fn create_answer(
         .map_err(|error| AppError::internal(format!("create WebRTC peer connection: {error}")))?,
     );
     register_diagnostics(&peer_connection, &udid);
-    register_control_data_channel(&peer_connection, session.clone(), udid.clone());
+    register_control_data_channel(
+        &peer_connection,
+        session.clone(),
+        state.clone(),
+        udid.clone(),
+    );
 
     let video_track = Arc::new(TrackLocalStaticRTP::new(
         RTCRtpCodecCapability {
@@ -330,16 +337,18 @@ fn redact_candidate_address(address: &str) -> String {
 fn register_control_data_channel(
     peer_connection: &Arc<webrtc::peer_connection::RTCPeerConnection>,
     session: crate::simulators::session::SimulatorSession,
+    state: AppState,
     udid: String,
 ) {
     peer_connection.on_data_channel(Box::new(move |channel: Arc<RTCDataChannel>| {
         let session = session.clone();
+        let state = state.clone();
         let udid = udid.clone();
         Box::pin(async move {
             if channel.label() != WEBRTC_CONTROL_CHANNEL_LABEL {
                 return;
             }
-            attach_control_data_channel(channel, session, udid);
+            attach_control_data_channel(channel, session, state, udid);
         })
     }));
 }
@@ -347,16 +356,28 @@ fn register_control_data_channel(
 fn attach_control_data_channel(
     channel: Arc<RTCDataChannel>,
     session: crate::simulators::session::SimulatorSession,
+    state: AppState,
     udid: String,
 ) {
     channel.on_message(Box::new(move |message: DataChannelMessage| {
         let session = session.clone();
+        let state = state.clone();
         let udid = udid.clone();
         Box::pin(async move {
             let Ok(text) = std::str::from_utf8(&message.data) else {
                 warn!("Invalid WebRTC control message bytes for {udid}");
                 return;
             };
+            if let Ok(message) = serde_json::from_str::<WebRtcDataChannelMessage>(text) {
+                match message {
+                    WebRtcDataChannelMessage::ClientStats { stats } => {
+                        if !stats.client_id.trim().is_empty() && !stats.kind.trim().is_empty() {
+                            state.metrics.record_client_stream_stats(stats);
+                        }
+                    }
+                }
+                return;
+            }
             let control_message = match serde_json::from_str::<ControlMessage>(text) {
                 Ok(message) => message,
                 Err(error) => {
@@ -364,11 +385,35 @@ fn attach_control_data_channel(
                     return;
                 }
             };
-            if let Err(error) = run_control_message(session, control_message).await {
-                warn!("WebRTC control message failed for {udid}: {error}");
+            match control_message {
+                ControlMessage::ToggleAppearance => {
+                    let bridge = state.registry.bridge().clone();
+                    let action_udid = udid.clone();
+                    let result =
+                        task::spawn_blocking(move || bridge.toggle_appearance(&action_udid))
+                            .await
+                            .map_err(|error| {
+                                AppError::internal(format!("Failed to join control task: {error}"))
+                            })
+                            .and_then(|result| result);
+                    if let Err(error) = result {
+                        warn!("WebRTC control message failed for {udid}: {error}");
+                    }
+                }
+                control_message => {
+                    if let Err(error) = run_control_message(session, control_message).await {
+                        warn!("WebRTC control message failed for {udid}: {error}");
+                    }
+                }
             }
         })
     }));
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum WebRtcDataChannelMessage {
+    ClientStats { stats: ClientStreamStats },
 }
 
 fn is_h264_codec(codec: &str) -> bool {
@@ -376,15 +421,67 @@ fn is_h264_codec(codec: &str) -> bool {
     codec.contains("h264") || codec.starts_with("avc1.") || codec.starts_with("avc3.")
 }
 
-fn h264_sdp_fmtp_line(codec: &str) -> String {
-    let profile_level_id = codec
+fn h264_sdp_fmtp_line(codec: &str, offer_sdp: &str) -> String {
+    let codec_profile_level_id = codec
         .split_once('.')
         .map(|(_, value)| value)
         .filter(|value| value.len() >= 6)
         .map(|value| &value[..6])
         .filter(|value| value.chars().all(|ch| ch.is_ascii_hexdigit()))
-        .unwrap_or("42e01f");
+        .map(|value| value.to_ascii_lowercase());
+    let offered_profile_level_ids = offer_h264_profile_level_ids(offer_sdp);
+    let profile_level_id = codec_profile_level_id
+        .as_deref()
+        .filter(|codec_profile| {
+            offered_profile_level_ids.is_empty()
+                || offered_profile_level_ids
+                    .iter()
+                    .any(|offered_profile| offered_profile == *codec_profile)
+        })
+        .map(str::to_owned)
+        .or_else(|| offered_profile_level_ids.first().cloned())
+        .unwrap_or_else(|| "42e01f".to_owned());
     format!("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id={profile_level_id}")
+}
+
+fn offer_h264_profile_level_ids(sdp: &str) -> Vec<String> {
+    let h264_payload_types = sdp
+        .lines()
+        .filter_map(|line| line.strip_prefix("a=rtpmap:"))
+        .filter_map(|line| {
+            let (payload_type, codec) = line.split_once(' ')?;
+            codec
+                .to_ascii_lowercase()
+                .starts_with("h264/")
+                .then(|| payload_type.to_owned())
+        })
+        .collect::<Vec<_>>();
+    if h264_payload_types.is_empty() {
+        return Vec::new();
+    }
+
+    sdp.lines()
+        .filter_map(|line| line.strip_prefix("a=fmtp:"))
+        .filter_map(|line| {
+            let (payload_type, fmtp) = line.split_once(' ')?;
+            h264_payload_types
+                .iter()
+                .any(|candidate| candidate == payload_type)
+                .then_some(fmtp)
+        })
+        .flat_map(|fmtp| fmtp.split(';'))
+        .filter_map(|parameter| parameter.trim().split_once('='))
+        .filter_map(|(name, value)| {
+            if name.eq_ignore_ascii_case("profile-level-id")
+                && value.len() >= 6
+                && value[..6].chars().all(|ch| ch.is_ascii_hexdigit())
+            {
+                Some(value[..6].to_ascii_lowercase())
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn h264_rtcp_feedback() -> Vec<RTCPFeedback> {
@@ -1096,8 +1193,13 @@ mod tests {
 
     #[test]
     fn uses_h264_profile_level_id_when_available() {
-        assert!(h264_sdp_fmtp_line("avc1.42e01f").contains("profile-level-id=42e01f"));
-        assert!(h264_sdp_fmtp_line("h264").contains("profile-level-id=42e01f"));
+        assert!(h264_sdp_fmtp_line("avc1.42e01f", "").contains("profile-level-id=42e01f"));
+        assert!(h264_sdp_fmtp_line("h264", "").contains("profile-level-id=42e01f"));
+        assert!(h264_sdp_fmtp_line(
+            "avc1.640034",
+            "a=rtpmap:99 H264/90000\r\na=fmtp:99 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\n"
+        )
+        .contains("profile-level-id=42e01f"));
     }
 
     #[test]

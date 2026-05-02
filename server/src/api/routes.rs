@@ -191,6 +191,12 @@ pub(crate) enum ControlMessage {
         key_code: u16,
         modifiers: Option<u32>,
     },
+    DismissKeyboard,
+    Home,
+    AppSwitcher,
+    RotateLeft,
+    RotateRight,
+    ToggleAppearance,
 }
 
 #[derive(Deserialize)]
@@ -1279,6 +1285,14 @@ pub(crate) async fn run_control_message(
             key_code,
             modifiers,
         } => session.send_key(key_code, modifiers.unwrap_or(0)),
+        ControlMessage::DismissKeyboard => session.send_key(41, 0),
+        ControlMessage::Home => session.press_home(),
+        ControlMessage::AppSwitcher => session.open_app_switcher(),
+        ControlMessage::RotateLeft => session.rotate_left(),
+        ControlMessage::RotateRight => session.rotate_right(),
+        ControlMessage::ToggleAppearance => Err(AppError::bad_request(
+            "`toggleAppearance` requires the WebRTC control channel.",
+        )),
     })
     .await
     .map_err(|error| AppError::internal(format!("Failed to join control task: {error}")))?

@@ -202,6 +202,22 @@ unsafe extern "C" {
         modifiers: u32,
         error_message: *mut *mut c_char,
     ) -> bool;
+    pub fn xcw_native_session_press_home(
+        handle: *mut c_void,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_session_open_app_switcher(
+        handle: *mut c_void,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_session_rotate_right(
+        handle: *mut c_void,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_session_rotate_left(
+        handle: *mut c_void,
+        error_message: *mut *mut c_char,
+    ) -> bool;
 
     pub fn xcw_native_free_string(value: *mut c_char);
     pub fn xcw_native_free_bytes(bytes: xcw_native_owned_bytes);

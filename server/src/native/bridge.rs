@@ -686,6 +686,46 @@ impl NativeSession {
             )
         }
     }
+
+    pub fn press_home(&self) -> Result<(), AppError> {
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_press_home(self.handle, &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn open_app_switcher(&self) -> Result<(), AppError> {
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_open_app_switcher(self.handle, &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn rotate_left(&self) -> Result<(), AppError> {
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_rotate_left(self.handle, &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn rotate_right(&self) -> Result<(), AppError> {
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_rotate_right(self.handle, &mut error),
+                error,
+            )
+        }
+    }
 }
 
 impl Drop for NativeSession {

@@ -8,6 +8,7 @@ import { createEmptyStreamStats } from "./stats";
 import {
   buildStreamTarget,
   canUseWebRtc,
+  sendWebRtcClientStats,
   StreamWorkerClient,
   type StreamBackend,
 } from "./streamWorkerClient";
@@ -254,21 +255,25 @@ export function useLiveStream({
     const postTelemetry = () => {
       const latestStats = latestStatsRef.current;
       const latestStatus = latestStatusRef.current;
+      const payload = {
+        ...latestStats,
+        appFps: latestFpsRef.current,
+        clientId: clientTelemetryIdRef.current,
+        focused: document.hasFocus(),
+        kind: "page",
+        pageFps: pageFpsRef.current,
+        status: latestStatus.state,
+        timestampMs: Date.now(),
+        udid: simulator.udid,
+        url: window.location.href,
+        userAgent: window.navigator.userAgent,
+        visibilityState: document.visibilityState,
+      };
+      if (sendWebRtcClientStats(payload) || remote) {
+        return;
+      }
       void fetch(buildClientTelemetryUrl(), {
-        body: JSON.stringify({
-          ...latestStats,
-          appFps: latestFpsRef.current,
-          clientId: clientTelemetryIdRef.current,
-          focused: document.hasFocus(),
-          kind: "page",
-          pageFps: pageFpsRef.current,
-          status: latestStatus.state,
-          timestampMs: Date.now(),
-          udid: simulator.udid,
-          url: window.location.href,
-          userAgent: window.navigator.userAgent,
-          visibilityState: document.visibilityState,
-        }),
+        body: JSON.stringify(payload),
         cache: "no-store",
         headers: apiHeaders(),
         method: "POST",
