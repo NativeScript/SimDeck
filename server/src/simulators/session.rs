@@ -14,7 +14,7 @@ use tokio::task;
 use tokio::time::{timeout, Instant};
 use tracing::debug;
 
-const FRAME_BROADCAST_CAPACITY: usize = 1;
+const FRAME_BROADCAST_CAPACITY: usize = 4;
 const MIN_REFRESH_INTERVAL_MS: u64 = 16;
 const MIN_KEYFRAME_INTERVAL_MS: u64 = 250;
 

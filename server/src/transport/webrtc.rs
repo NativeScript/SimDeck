@@ -565,6 +565,22 @@ fn clear_webrtc_media_stream(udid: &str, token: &broadcast::Sender<()>) {
     }
 }
 
+fn cancel_other_webrtc_media_streams(udid: &str, token: &broadcast::Sender<()>) {
+    if let Some(streams) = WEBRTC_MEDIA_STREAMS.get() {
+        let mut streams = streams.lock().unwrap();
+        if let Some(active_streams) = streams.get_mut(udid) {
+            active_streams.retain(|current| {
+                if current.same_channel(token) {
+                    true
+                } else {
+                    let _ = current.send(());
+                    false
+                }
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 pub fn cancel_media_stream(udid: &str) -> bool {
     let Some(streams) = WEBRTC_MEDIA_STREAMS.get() else {
@@ -690,6 +706,7 @@ impl WebRtcMediaStream {
         let mut adaptive_refresh_interval = refresh_floor;
         let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
         let mut waiting_for_keyframe = false;
+        let mut stream_established = false;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
 
         match write_frame_sample_with_timeout(
@@ -703,15 +720,22 @@ impl WebRtcMediaStream {
         {
             Ok(true) => {
                 state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
+                if !stream_established {
+                    stream_established = true;
+                    cancel_other_webrtc_media_streams(&udid, &cancellation_token);
+                }
             }
             Ok(false) => {
                 state
                     .metrics
                     .frames_dropped_server
                     .fetch_add(1, Ordering::Relaxed);
-                if realtime_stream {
+                if recovery_action_for_write_timeout(realtime_stream)
+                    == FrameRecoveryAction::Refresh
+                {
                     session.request_refresh();
                 } else {
+                    waiting_for_keyframe = true;
                     session.request_keyframe();
                 }
             }
@@ -745,15 +769,20 @@ impl WebRtcMediaStream {
                     ).await {
                         Ok(true) => {
                             state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
+                            if !stream_established {
+                                stream_established = true;
+                                cancel_other_webrtc_media_streams(&udid, &cancellation_token);
+                            }
                         }
                         Ok(false) => {
                             state
                                 .metrics
                                 .frames_dropped_server
                                 .fetch_add(1, Ordering::Relaxed);
-                            if realtime_stream {
+                            if recovery_action_for_write_timeout(realtime_stream) == FrameRecoveryAction::Refresh {
                                 session.request_refresh();
                             } else {
+                                waiting_for_keyframe = true;
                                 session.request_keyframe();
                             }
                         }
@@ -781,12 +810,8 @@ impl WebRtcMediaStream {
                                 .metrics
                                 .frames_dropped_server
                                 .fetch_add(skipped, Ordering::Relaxed);
-                            if realtime_stream {
-                                session.request_refresh();
-                            } else {
-                                waiting_for_keyframe = true;
-                                session.request_keyframe();
-                            }
+                            waiting_for_keyframe = true;
+                            session.request_keyframe();
                             continue;
                         }
                         Err(broadcast::error::RecvError::Closed) => {
@@ -794,15 +819,19 @@ impl WebRtcMediaStream {
                             break;
                         }
                     };
-                    let (frame, stale_frames) = drain_to_latest_frame(&mut rx, frame, &state.metrics);
-                    if stale_frames > 0 && !realtime_stream {
+                    let (frame, stale_frames) = if realtime_stream {
+                        drain_to_latest_frame(&mut rx, frame, &state.metrics)
+                    } else {
+                        (frame, 0)
+                    };
+                    if stale_frames > 0 {
                         session.request_keyframe();
                     }
-                    if stale_frames > 0 && !realtime_stream && !frame.is_keyframe {
+                    if stale_frames > 0 && !frame.is_keyframe {
                         waiting_for_keyframe = true;
                         continue;
                     }
-                    if !realtime_stream && waiting_for_keyframe && !frame.is_keyframe {
+                    if waiting_for_keyframe && !frame.is_keyframe {
                         state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
@@ -825,15 +854,20 @@ impl WebRtcMediaStream {
                     match write_result {
                         Ok(true) => {
                             state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
+                            if !stream_established {
+                                stream_established = true;
+                                cancel_other_webrtc_media_streams(&udid, &cancellation_token);
+                            }
                         }
                         Ok(false) => {
                             state
                                 .metrics
                                 .frames_dropped_server
                                 .fetch_add(1, Ordering::Relaxed);
-                            waiting_for_keyframe = !realtime_stream;
+                            let recovery_action = recovery_action_for_write_timeout(realtime_stream);
+                            waiting_for_keyframe = recovery_action == FrameRecoveryAction::Keyframe;
                             adaptive_refresh_interval = refresh_ceiling;
-                            if realtime_stream {
+                            if recovery_action == FrameRecoveryAction::Refresh {
                                 session.request_refresh();
                             } else {
                                 session.request_keyframe();
@@ -908,6 +942,20 @@ fn adaptive_interval_for_write(
         refresh_ceiling.as_millis() as u64,
     );
     Duration::from_millis(target_ms)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FrameRecoveryAction {
+    Refresh,
+    Keyframe,
+}
+
+fn recovery_action_for_write_timeout(realtime_stream: bool) -> FrameRecoveryAction {
+    if realtime_stream {
+        FrameRecoveryAction::Refresh
+    } else {
+        FrameRecoveryAction::Keyframe
+    }
 }
 
 async fn write_frame_sample<P: Packetizer>(
@@ -1239,6 +1287,23 @@ mod tests {
     }
 
     #[test]
+    fn established_webrtc_stream_cancels_older_streams() {
+        let udid = format!("test-established-{}", std::process::id());
+        super::reset_webrtc_media_streams_for_test(&udid);
+        let (_first_token, mut first_rx) = super::register_webrtc_media_stream_for_test(&udid);
+        let (second_token, mut second_rx) = super::register_webrtc_media_stream_for_test(&udid);
+
+        super::cancel_other_webrtc_media_streams(&udid, &second_token);
+
+        assert!(first_rx.try_recv().is_ok());
+        assert!(second_rx.try_recv().is_err());
+        assert_eq!(super::active_webrtc_media_stream_count(&udid), 1);
+
+        super::clear_webrtc_media_stream_for_test(&udid, &second_token);
+        assert!(!super::has_media_stream(&udid));
+    }
+
+    #[test]
     fn metrics_guard_balances_stream_connect_and_disconnect_counts() {
         let metrics = Arc::new(Metrics::default());
 
@@ -1350,6 +1415,18 @@ mod tests {
         assert_eq!(
             adaptive_interval_for_write(Duration::from_millis(500), floor, ceiling),
             ceiling
+        );
+    }
+
+    #[test]
+    fn write_timeout_recovery_preserves_non_realtime_h264_chain() {
+        assert_eq!(
+            super::recovery_action_for_write_timeout(false),
+            super::FrameRecoveryAction::Keyframe
+        );
+        assert_eq!(
+            super::recovery_action_for_write_timeout(true),
+            super::FrameRecoveryAction::Refresh
         );
     }
 
