@@ -202,7 +202,15 @@ async function main() {
       2_000,
     );
     await session.batch(simulatorUDID, [
-      { action: "type", text: "agent-ready", delayMs: 0 },
+      {
+        action: "tap",
+        selector: { id: "fixture.message" },
+        source: "native-ax",
+        maxDepth: 3,
+        waitTimeoutMs: 15_000,
+        durationMs: 30,
+      },
+      { action: "type", text: "agent-ready", delayMs: 12 },
       {
         action: "assert",
         selector: { id: "fixture.message" },
