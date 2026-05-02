@@ -37,6 +37,9 @@ simdeck ui [--port 4310] [--bind 127.0.0.1] [--advertise-host <host>]
 ```
 
 `--open` opens the authenticated local URL after the daemon is ready.
+The same React bundle also serves `/farm`, a multi-simulator dashboard with
+grid, wall, and list views. Booted simulators stream as low-rate thumbnails
+until selected; the focused simulator requests a full-rate WebRTC profile.
 
 ### `studio expose`
 
@@ -237,11 +240,16 @@ Batch input can come from `--step`, `--file`, or `--stdin`. It fails fast by def
 ```sh
 simdeck screenshot <udid> --output screen.png
 simdeck screenshot <udid> --stdout > screen.png
+simdeck stream <udid> --frames 120 > stream.h264
 simdeck pasteboard set <udid> "hello"
 simdeck pasteboard get <udid>
 simdeck logs <udid> --seconds 30 --limit 200
 simdeck chrome-profile <udid>
 ```
+
+`stream` writes Annex B H.264 samples to stdout and runs until interrupted, or
+until `--frames` samples have been written. It is intended for diagnostics and
+external tools.
 
 `logs` fetches recent simulator logs. `chrome-profile` returns the CoreSimulator chrome layout used by the browser viewport.
 

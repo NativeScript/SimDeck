@@ -35,6 +35,18 @@ export function sendWebRtcClientStats(stats: unknown): boolean {
   );
 }
 
+export function sendWebRtcStreamControl(options: {
+  forceKeyframe?: boolean;
+  fps?: number;
+  profile?: "focus" | "full" | "paused" | "thumb" | "thumbnail";
+  snapshot?: boolean;
+}): boolean {
+  return sendDataChannelMessage(
+    activeWebRtcControlChannel,
+    JSON.stringify({ ...options, type: "streamControl" }),
+  );
+}
+
 function sendDataChannelMessage(
   channel: RTCDataChannel | null,
   encoded: string,
@@ -63,6 +75,7 @@ interface StreamClientBackend {
   connect(target: StreamConnectTarget): void | Promise<void>;
   destroy(): void;
   disconnect(): void;
+  sendControl?(payload: unknown): boolean;
 }
 
 class WebRtcStreamClient implements StreamClientBackend {
@@ -316,6 +329,10 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.clearFrameWatchdog();
     this.closeActiveConnection();
     this.onMessage({ type: "status", status: { state: "idle" } });
+  }
+
+  sendControl(payload: unknown): boolean {
+    return sendDataChannelMessage(this.controlChannel, JSON.stringify(payload));
   }
 
   destroy() {
@@ -989,9 +1006,6 @@ export class StreamWorkerClient {
 
   constructor(onMessage: (message: WorkerToMainMessage) => void) {
     this.onMessage = onMessage;
-    if (activeStreamClient && activeStreamClient !== this) {
-      activeStreamClient.destroy();
-    }
     activeStreamClient = this;
   }
 
@@ -1036,6 +1050,17 @@ export class StreamWorkerClient {
 
   clear() {
     this.backend?.clear();
+  }
+
+  sendStreamControl(options: {
+    forceKeyframe?: boolean;
+    fps?: number;
+    profile?: "focus" | "full" | "paused" | "thumb" | "thumbnail";
+    snapshot?: boolean;
+  }) {
+    return Boolean(
+      this.backend?.sendControl?.({ ...options, type: "streamControl" }),
+    );
   }
 
   destroy() {

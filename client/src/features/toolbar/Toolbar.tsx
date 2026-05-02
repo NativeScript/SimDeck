@@ -147,6 +147,9 @@ export function Toolbar({
       </div>
 
       <div className="toolbar-right">
+        <a aria-label="Open Farm" className="tbtn" href="/farm" title="Open Farm">
+          Farm
+        </a>
         {selectedSimulator ? (
           <div className="toolbar-actions">
             {showBootButton ? (
