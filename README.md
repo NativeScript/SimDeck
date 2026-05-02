@@ -83,6 +83,8 @@ codec/profile when it starts. Studio defaults to the `smooth` stream quality
 profile (`1170` longest edge, dynamic up to `60` fps). Use
 `--stream-quality quality|balanced|smooth|economy|ci-software` to override it,
 or pass `--video-codec hardware` when a dedicated hardware encoder is preferable.
+The remote viewer renders live video with the browser's native video element;
+the canvas is only used for input geometry.
 
 CLI commands automatically use the same warm daemon:
 

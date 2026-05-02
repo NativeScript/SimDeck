@@ -690,8 +690,7 @@ fn studio_stream_quality_profile(
     requested
         .map(|profile| profile.as_profile_id().to_owned())
         .or_else(|| {
-            (video_codec == VideoCodecMode::Software && !low_latency)
-                .then_some("smooth".to_owned())
+            (video_codec == VideoCodecMode::Software && !low_latency).then_some("smooth".to_owned())
         })
 }
 
