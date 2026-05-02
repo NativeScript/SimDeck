@@ -36,7 +36,6 @@ view inside the editor.
 ## Features
 
 - Local simulator video stream over browser-native WebRTC H.264
-- Multi-simulator farm view at `/farm` with low-rate thumbnails and a focused full-rate stream
 - Full simulator control & inspection using private accessibility APIs
 - CoreSimulator chrome asset rendering for device bezels
 - NativeScript, React Native, UIKit and SwiftUI runtime inspector plugins to view app's view hierarchy live
@@ -63,9 +62,6 @@ simdeck "iPhone 17 Pro Max"
 Use `simdeck ui --open` or `simdeck daemon start` when you want a reusable background daemon instead.
 The no-subcommand lifecycle shortcuts are `simdeck -d` for detached start, `simdeck -k` to kill the background daemon, and `simdeck -r` to restart it.
 The served loopback browser UI receives the generated API access token automatically. LAN browsers pair with the printed code before receiving the API cookie.
-Open `http://127.0.0.1:4310/farm` to monitor every simulator in one dashboard.
-The farm uses thumbnail stream profiles for the grid and promotes the focused
-simulator to a full-rate WebRTC stream.
 
 SimDeck Studio providers run the daemon on loopback and use
 `scripts/studio-provider-bridge.mjs` for outbound control-plane communication
