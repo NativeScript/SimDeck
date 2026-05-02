@@ -200,7 +200,7 @@ async function startIsolatedDaemon(cliPath, options) {
       "--access-token",
       accessToken,
       "--video-codec",
-      options.videoCodec ?? "h264-software",
+      options.videoCodec ?? "software",
     ],
     {
       cwd: options.projectRoot,

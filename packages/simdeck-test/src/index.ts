@@ -12,7 +12,7 @@ export type SimDeckLaunchOptions = {
   keepDaemon?: boolean;
   isolated?: boolean;
   port?: number;
-  videoCodec?: "hevc" | "h264" | "h264-software";
+  videoCodec?: "auto" | "hardware" | "software" | "h264-software";
 };
 
 export type QueryOptions = {
@@ -294,7 +294,7 @@ async function startIsolatedDaemon(
       "--access-token",
       accessToken,
       "--video-codec",
-      options.videoCodec ?? "h264-software",
+      options.videoCodec ?? "software",
     ],
     {
       cwd: options.projectRoot,

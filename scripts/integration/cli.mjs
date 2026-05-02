@@ -726,7 +726,7 @@ function startServer() {
       "--access-token",
       "integration",
       "--video-codec",
-      "h264-software",
+      "software",
     ],
     {
       cwd: root,

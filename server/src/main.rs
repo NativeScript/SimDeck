@@ -519,6 +519,7 @@ enum PasteboardCommand {
 enum VideoCodecMode {
     Auto,
     Hardware,
+    #[value(alias = "h264-software")]
     Software,
 }
 
@@ -4788,6 +4789,7 @@ mod tests {
             ("auto", VideoCodecMode::Auto),
             ("hardware", VideoCodecMode::Hardware),
             ("software", VideoCodecMode::Software),
+            ("h264-software", VideoCodecMode::Software),
         ] {
             let cli = Cli::parse_from(["simdeck", "daemon", "start", "--video-codec", mode]);
             let Command::Daemon {
@@ -4805,14 +4807,6 @@ mod tests {
         assert!(
             Cli::try_parse_from(["simdeck", "daemon", "start", "--video-codec", "h264"]).is_err()
         );
-        assert!(Cli::try_parse_from([
-            "simdeck",
-            "daemon",
-            "start",
-            "--video-codec",
-            "h264-software"
-        ])
-        .is_err());
     }
 
     #[test]
