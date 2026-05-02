@@ -162,7 +162,7 @@ class WebRtcStreamClient implements StreamClientBackend {
       const realtimeInputChannel = peerConnection.createDataChannel(
         WEBRTC_REALTIME_INPUT_CHANNEL_LABEL,
         {
-          maxRetransmits: 0,
+          maxRetransmits: 1,
           ordered: false,
         },
       );

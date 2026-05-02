@@ -849,7 +849,7 @@ export function AppShell({
       sendControl(
         selectedSimulator.udid,
         { type: "touch", ...coords, phase },
-        { realtime: phase === "moved" },
+        { realtime: true },
       );
     },
     onTouchPreview: showTouchIndicator,
