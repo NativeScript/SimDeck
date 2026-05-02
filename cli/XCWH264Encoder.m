@@ -933,8 +933,8 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     }
     VTSessionSetProperty(session, kVTCompressionPropertyKey_ExpectedFrameRate, (__bridge CFTypeRef)@(expectedFrameRate));
     BOOL shortKeyframeInterval = _lowLatencyMode || _realtimeStreamMode;
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(shortKeyframeInterval ? expectedFrameRate : expectedFrameRate * 2));
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, (__bridge CFTypeRef)@(shortKeyframeInterval ? 1.0 : 2.0));
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(shortKeyframeInterval ? MAX(1, expectedFrameRate / 2) : expectedFrameRate * 2));
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, (__bridge CFTypeRef)@(shortKeyframeInterval ? 0.5 : 2.0));
     VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@(averageBitRate));
     if (_realtimeStreamMode) {
         NSArray *dataRateLimits = @[

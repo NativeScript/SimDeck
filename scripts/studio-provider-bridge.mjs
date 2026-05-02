@@ -93,6 +93,9 @@ async function registerProvider() {
       simulatorUdid: metadata.simulator?.udid,
       simulatorName: metadata.simulator?.name,
       runtimeName: metadata.simulator?.runtimeName,
+      videoCodec: metadata.health?.videoCodec,
+      realtimeStream: metadata.health?.realtimeStream,
+      streamQuality: metadata.health?.streamQuality,
     });
     registered = true;
     lastRegisterAt = Date.now();
@@ -131,20 +134,25 @@ async function markProviderExpired() {
 }
 
 async function localProviderMetadata() {
+  let health = null;
+  try {
+    health = await localJson("/api/health");
+  } catch {
+    health = null;
+  }
+
   try {
     const simulators = await localJson("/api/simulators");
     const selected =
       simulators.simulators?.find((simulator) => simulator.isBooted) ??
       simulators.simulators?.[0] ??
       null;
-    return { ok: true, simulator: selected };
+    return { health, ok: true, simulator: selected };
   } catch {
-    try {
-      await localJson("/api/health");
-      return { ok: true, simulator: null };
-    } catch {
-      return { ok: false, simulator: null };
+    if (health) {
+      return { health, ok: true, simulator: null };
     }
+    return { health: null, ok: false, simulator: null };
   }
 }
 

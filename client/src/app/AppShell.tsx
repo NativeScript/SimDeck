@@ -111,6 +111,15 @@ function buildAuthenticatedAssetUrl(path: string, stamp: number): string {
   return url.toString();
 }
 
+function shouldUseRemoteStreamDefault(apiRoot: string): boolean {
+  if (apiRoot) {
+    return true;
+  }
+  return (
+    new URLSearchParams(window.location.search).get("remoteStream") === "1"
+  );
+}
+
 function shouldRenderNativeChrome(simulator: SimulatorMetadata): boolean {
   const identifier = simulator.deviceTypeIdentifier ?? "";
   const name = simulator.name ?? "";
@@ -177,6 +186,7 @@ export interface AppShellProps {
   fixedSimulatorUDID?: string | null;
   hideSimulatorSelection?: boolean;
   pairingEnabled?: boolean;
+  remoteStream?: boolean;
 }
 
 export function AppShell({
@@ -184,6 +194,7 @@ export function AppShell({
   fixedSimulatorUDID = null,
   hideSimulatorSelection = false,
   pairingEnabled = true,
+  remoteStream = shouldUseRemoteStreamDefault(apiRoot),
 }: AppShellProps = {}) {
   configureSimDeckClient({ apiRoot });
   const [initialUiState] = useState(readPersistedUiState);
@@ -370,6 +381,7 @@ export function AppShell({
     streamCanvasKey,
   } = useLiveStream({
     canvasElement: streamCanvasElement,
+    remote: remoteStream,
     simulator: selectedSimulator,
   });
 
@@ -843,9 +855,13 @@ export function AppShell({
     pairingEnabled &&
     listError === AUTH_REQUIRED_MESSAGE &&
     !accessTokenFromLocation();
+  const visibleListError =
+    remoteStream && hasFrame && listError === "Failed to fetch"
+      ? ""
+      : listError;
   const error = pairingRequired
     ? localError || streamError
-    : localError || streamError || listError;
+    : localError || streamError || visibleListError;
   const deviceTransform = `translate(${pan.x}px, ${pan.y + autoViewportOffsetY}px) scale(${effectiveZoom})`;
   const chromeScreenRect = computeChromeScreenRect(
     viewportChromeProfile,

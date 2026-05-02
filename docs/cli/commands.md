@@ -37,6 +37,22 @@ simdeck ui [--port 4310] [--bind 127.0.0.1] [--advertise-host <host>]
 
 `--open` opens the authenticated local URL after the daemon is ready.
 
+### `studio expose`
+
+Expose one local simulator through SimDeck Studio:
+
+```sh
+simdeck studio expose [simulator] [--studio-url https://simdeck.djdev.me]
+                      [--port 4310] [--bind 127.0.0.1]
+                      [--video-codec auto|hardware|software]
+                      [--low-latency] [--stream-quality <profile>]
+```
+
+Studio expose defaults to software H.264, realtime stream delivery, and the
+`smooth` stream quality profile. The process prints the Studio URL plus the
+active codec/profile, and keeps the outbound bridge alive until Ctrl-C.
+`--video-codec hardware` opts back into the hardware encoder when that is preferable.
+
 ### `daemon start`
 
 Start or reuse the project daemon without opening the browser:

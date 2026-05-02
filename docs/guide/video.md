@@ -79,7 +79,9 @@ A few practical guidelines:
 
 - **Start on the default for local preview.** `auto` lets VideoToolbox choose without requiring the shared hardware encoder.
 - **Switch to `software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
-- **Use `--stream-quality ci-software` for Studio providers on virtualized CI Macs when hardware encode is unavailable.** This profile uses software H.264 at a 960-pixel longest edge, targets 24 fps, lowers bitrate pressure, and favors fresh frames over full-resolution sharpness.
+- **Studio providers default to software H.264 plus `--stream-quality smooth`.** This profile uses a 1170-pixel longest edge, allows up to 60 fps, raises the bitrate budget to reduce compression artifacts, and lets multiple provider sessions share CPU cores without depending on one hardware encoder.
+- **Use `--stream-quality ci-software` for denser virtualized CI Macs.** This profile uses software H.264 at a 960-pixel longest edge, targets 24 fps, lowers bitrate pressure, and favors fresh frames over full-resolution sharpness.
+- **Use `simdeck studio expose --video-codec hardware` only when a dedicated hardware encoder is preferable.** The normal Studio default stays on software H.264 so future multi-simulator provider hosts can scale across CPU cores.
 - **Use `software --low-latency` only when you need the older extra-conservative software profile.** It caps at 15 fps, uses a single pending frame, reduces the longest edge to 1170 pixels, and backs off before software encode latency turns into seconds of stream delay.
 
 ## Tuning with metrics

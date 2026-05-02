@@ -24,6 +24,7 @@ const CLIENT_TELEMETRY_INTERVAL_MS = 1000;
 interface UseLiveStreamOptions {
   canvasElement: HTMLCanvasElement | null;
   paused?: boolean;
+  remote?: boolean;
   simulator: SimulatorMetadata | null;
 }
 
@@ -67,6 +68,7 @@ function buildClientTelemetryUrl(): string {
 export function useLiveStream({
   canvasElement,
   paused = false,
+  remote = false,
   simulator,
 }: UseLiveStreamOptions): UseLiveStreamResult {
   const clientTelemetryIdRef = useRef("");
@@ -237,11 +239,11 @@ export function useLiveStream({
       return;
     }
 
-    workerClient.connect(buildStreamTarget(simulator.udid));
+    workerClient.connect(buildStreamTarget(simulator.udid, { remote }));
     return () => {
       workerClient.disconnect();
     };
-  }, [canvasElement, simulator?.isBooted, simulator?.udid, paused]);
+  }, [canvasElement, simulator?.isBooted, simulator?.udid, paused, remote]);
 
   useEffect(() => {
     if (!simulator?.udid) {
