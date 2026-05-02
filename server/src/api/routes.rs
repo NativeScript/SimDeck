@@ -565,6 +565,7 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "videoCodec": active_video_codec(&state.config),
         "lowLatency": state.config.low_latency,
         "realtimeStream": crate::transport::webrtc::realtime_stream_enabled(),
+        "localStreamFps": env_u32("SIMDECK_LOCAL_STREAM_FPS", 60, 15, 120),
         "streamQuality": stream_quality_state(),
         "webRtc": {
             "iceServers": crate::transport::webrtc::client_ice_servers(),

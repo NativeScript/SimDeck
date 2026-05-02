@@ -28,6 +28,7 @@ Returns the static bootstrap information the browser client needs, plus a freshn
 | `videoCodec`                | Requested encoder mode. One of `auto`, `hardware`, or `software`. See [Video Pipeline](/guide/video). |
 | `lowLatency`                | `true` when software H.264 low-latency mode was enabled at daemon startup.                            |
 | `realtimeStream`            | `true` when the WebRTC stream is configured to favor freshness and realtime pacing.                   |
+| `localStreamFps`            | Local quality stream frame cap, from 15 to 120 fps. Defaults to 60.                                   |
 | `streamQuality`             | Active realtime quality profile and encoder limits such as `maxEdge`, `fps`, and bitrate.             |
 | `webRtc.iceServers`         | ICE servers the browser should use when creating the WebRTC peer connection.                          |
 | `webRtc.iceTransportPolicy` | Browser ICE transport policy. One of `all` or `relay`.                                                |

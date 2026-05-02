@@ -41,6 +41,9 @@ const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(150);
 const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 3;
 const WEBRTC_MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(16);
 const WEBRTC_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+const WEBRTC_DEFAULT_LOCAL_STREAM_FPS: u32 = 60;
+const WEBRTC_MIN_LOCAL_STREAM_FPS: u32 = 15;
+const WEBRTC_MAX_LOCAL_STREAM_FPS: u32 = 120;
 const WEBRTC_LOW_LATENCY_REFRESH_INTERVAL: Duration = Duration::from_millis(67);
 const WEBRTC_LOW_LATENCY_MAX_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
@@ -903,7 +906,7 @@ fn refresh_floor_for_low_latency(low_latency: bool) -> Duration {
     if low_latency {
         WEBRTC_LOW_LATENCY_REFRESH_INTERVAL
     } else {
-        WEBRTC_MIN_REFRESH_INTERVAL
+        local_stream_refresh_interval()
     }
 }
 
@@ -913,6 +916,18 @@ fn refresh_ceiling_for_low_latency(low_latency: bool) -> Duration {
     } else {
         WEBRTC_MAX_REFRESH_INTERVAL
     }
+}
+
+fn local_stream_refresh_interval() -> Duration {
+    let fps = std::env::var("SIMDECK_LOCAL_STREAM_FPS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(WEBRTC_DEFAULT_LOCAL_STREAM_FPS)
+        .clamp(WEBRTC_MIN_LOCAL_STREAM_FPS, WEBRTC_MAX_LOCAL_STREAM_FPS);
+    if fps == WEBRTC_DEFAULT_LOCAL_STREAM_FPS {
+        return WEBRTC_MIN_REFRESH_INTERVAL;
+    }
+    Duration::from_micros((1_000_000u64 / u64::from(fps)).max(1))
 }
 
 fn adaptive_interval_for_write(

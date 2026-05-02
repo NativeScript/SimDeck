@@ -37,6 +37,7 @@ Targets a specific running SimDeck daemon for commands that support the HTTP fas
 | `--video-codec`    | `auto`                | One of `auto`, `hardware`, or `software`. See [Video Pipeline](/guide/video).                           |
 | `--low-latency`    | `false`               | Software H.264 profile for slower runners: caps at 15 fps and favors freshness.                         |
 | `--stream-quality` | auto/default          | Optional realtime stream quality profile: `quality`, `balanced`, `smooth`, `economy`, or `ci-software`. |
+| `--local-stream-fps` | `60`                | Local quality stream frame cap, from 15 to 120 fps.                                                      |
 | `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                                                  |
 
 `studio expose` defaults to software H.264. Pass `--video-codec hardware` to

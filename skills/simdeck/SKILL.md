@@ -34,6 +34,9 @@ The browser uses WebRTC H.264 video for both hardware and software encoders.
 Add `--low-latency` on less capable runners to cap software H.264 at 15 fps,
 drop stale pending frames more aggressively, and cap the longest edge at 1170 px
 before latency piles up.
+For local high-refresh testing, pass `--local-stream-fps <15-120>` on `ui`,
+`daemon start`, or `daemon restart`. The default stays 60 fps; 120 fps is the
+maximum local cap.
 For remote browsers where Safari stalls but Chrome works, run the daemon with a
 TURN server and relay-only ICE:
 `SIMDECK_WEBRTC_ICE_SERVERS=turns:turn.example.com:5349?transport=tcp`,
