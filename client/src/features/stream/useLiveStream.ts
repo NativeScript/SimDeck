@@ -28,6 +28,7 @@ interface UseLiveStreamOptions {
   paused?: boolean;
   remote?: boolean;
   simulator: SimulatorMetadata | null;
+  streamProfile?: "focus" | "full" | "paused" | "thumb" | "thumbnail";
 }
 
 interface UseLiveStreamResult {
@@ -72,6 +73,7 @@ export function useLiveStream({
   paused = false,
   remote = false,
   simulator,
+  streamProfile = "focus",
 }: UseLiveStreamOptions): UseLiveStreamResult {
   const clientTelemetryIdRef = useRef("");
   const workerClientRef = useRef<StreamWorkerClient | null>(null);
@@ -252,6 +254,31 @@ export function useLiveStream({
       workerClient.disconnect();
     };
   }, [canvasElement, simulator?.isBooted, simulator?.udid, paused, remote]);
+
+  useEffect(() => {
+    if (paused || !simulator?.isBooted) {
+      return;
+    }
+    let attempts = 0;
+    const send = () => {
+      attempts += 1;
+      return Boolean(
+        workerClientRef.current?.sendStreamControl({
+          forceKeyframe: streamProfile === "focus" || streamProfile === "full",
+          profile: streamProfile,
+        }),
+      );
+    };
+    if (send()) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      if (send() || attempts >= 8) {
+        window.clearInterval(interval);
+      }
+    }, 250);
+    return () => window.clearInterval(interval);
+  }, [paused, simulator?.isBooted, simulator?.udid, streamProfile]);
 
   useEffect(() => {
     if (!simulator?.udid) {

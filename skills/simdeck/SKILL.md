@@ -30,6 +30,8 @@ simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 `simdeck` without a subcommand starts a foreground workspace daemon, prints local and LAN HTTP URLs, prints a six-digit pairing code for LAN browsers, and stops on `q` or Ctrl-C. The optional single argument is a simulator name or UDID to select by default. Use `-d` for detached start, `-k` to kill the background daemon, and `-r` to restart it.
 
 Viewer: `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
+Farm viewer: `http://127.0.0.1:4310/farm` shows all simulators with
+low-rate thumbnails and a focused full-rate stream.
 The browser uses WebRTC H.264 video for both hardware and software encoders.
 Add `--low-latency` on less capable runners to cap software H.264 at 15 fps,
 drop stale pending frames more aggressively, and cap the longest edge at 1170 px
@@ -213,11 +215,13 @@ await simdeck.batch(udid, [
 ```bash
 simdeck screenshot <UDID> --output screen.png
 simdeck screenshot <UDID> --stdout > screen.png
+simdeck stream <UDID> --frames 120 > stream.h264
 simdeck logs <UDID> --seconds 30 --limit 200
 simdeck chrome-profile <UDID>
 ```
 
-Use screenshots for still evidence.
+Use screenshots for still evidence. Use `stream` when a diagnostic needs raw
+H.264 samples for an external player or capture pipeline.
 
 ## Default Loop
 

@@ -29,6 +29,7 @@ client/
     │   ├── simulators.ts
     │   └── types.ts
     ├── features/
+    │   ├── farm/
     │   ├── simulators/
     │   ├── viewport/
     │   ├── stream/
@@ -42,6 +43,7 @@ client/
 | Folder                    | Responsibility                                                          |
 | ------------------------- | ----------------------------------------------------------------------- |
 | `api/`                    | Typed wrappers around the SimDeck REST API and shared TypeScript types. |
+| `features/farm/`          | Multi-simulator dashboard with thumbnail/focus stream profiles.         |
 | `features/simulators/`    | Sidebar list of simulators plus boot/shutdown affordances.              |
 | `features/viewport/`      | Frame canvas, chrome compositing, hit testing.                          |
 | `features/stream/`        | WebRTC client, receiver stats, and video frame plumbing.                |
@@ -58,6 +60,11 @@ client/
 5. Selecting a simulator posts an SDP offer to `/api/simulators/<udid>/webrtc/offer`.
 6. The browser renders the H.264 video track through native WebRTC playback.
 7. Touch and key events round-trip through `POST /api/simulators/<udid>/touch` and `/key`.
+
+`/farm` mounts the same bundle in farm mode. Each booted tile owns a WebRTC
+session and sends `streamControl` messages over the control data channel:
+thumbnail tiles request a low-rate profile, while the focused simulator requests
+full-rate video and a fresh keyframe.
 
 ## Dev workflow
 

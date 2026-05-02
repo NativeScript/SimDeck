@@ -177,6 +177,11 @@ enum Command {
         #[arg(long)]
         stdout: bool,
     },
+    Stream {
+        udid: String,
+        #[arg(long, default_value_t = 0)]
+        frames: u64,
+    },
     #[command(name = "describe")]
     DescribeUi {
         udid: String,
@@ -1939,6 +1944,7 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Stream { udid, frames } => run_stream_stdout(&bridge, udid, frames),
         Command::DescribeUi {
             udid,
             point,
@@ -2789,6 +2795,38 @@ fn default_screenshot_path(udid: &str) -> PathBuf {
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
     PathBuf::from(format!("Simulator Screenshot - {udid} - {timestamp}.png"))
+}
+
+fn run_stream_stdout(bridge: &NativeBridge, udid: String, frames: u64) -> anyhow::Result<()> {
+    let metrics = Arc::new(Metrics::default());
+    let session = simulators::session::SimulatorSession::new(bridge, udid, metrics)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    session
+        .ensure_started()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    session.request_keyframe();
+
+    let mut receiver = session.subscribe();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .context("create stream runtime")?;
+    let mut stdout = io::stdout().lock();
+    let mut written = 0u64;
+    runtime.block_on(async {
+        loop {
+            if frames > 0 && written >= frames {
+                break;
+            }
+            let frame = receiver.recv().await?;
+            let sample = crate::transport::webrtc::h264_annex_b_sample(&frame)
+                .map_err(|error| anyhow::anyhow!("encode Annex B frame: {error}"))?;
+            stdout.write_all(&sample)?;
+            stdout.flush()?;
+            written += 1;
+        }
+        anyhow::Ok(())
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
