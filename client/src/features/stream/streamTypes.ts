@@ -1,6 +1,7 @@
 import type { Size } from "../viewport/types";
 
 export interface StreamConnectTarget {
+  remote?: boolean;
   udid: string;
 }
 

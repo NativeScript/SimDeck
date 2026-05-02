@@ -4,7 +4,7 @@ export type SimDeckLaunchOptions = {
   keepDaemon?: boolean;
   isolated?: boolean;
   port?: number;
-  videoCodec?: "hevc" | "h264" | "h264-software";
+  videoCodec?: "auto" | "hardware" | "software" | "h264-software";
 };
 export type QueryOptions = {
   source?: "auto" | "nativescript" | "uikit" | "native-ax";

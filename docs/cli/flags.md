@@ -39,6 +39,9 @@ Targets a specific running SimDeck daemon for commands that support the HTTP fas
 | `--stream-quality` | auto/default          | Optional realtime stream quality profile: `quality`, `balanced`, `smooth`, `economy`, or `ci-software`. |
 | `--open`           | `false`               | `ui` only. Open the browser after the daemon is ready.                                                  |
 
+`studio expose` defaults to software H.264. Pass `--video-codec hardware` to
+opt into the hardware encoder when that is preferable.
+
 The public commands generate an access token automatically. Use `simdeck daemon status` to read it for direct API callers.
 
 ## `describe`

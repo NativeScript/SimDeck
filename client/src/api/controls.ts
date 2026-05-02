@@ -11,7 +11,13 @@ import type {
 
 export type ControlMessage =
   | ({ type: "touch" } & TouchPayload)
-  | ({ type: "key" } & KeyPayload);
+  | ({ type: "key" } & KeyPayload)
+  | { type: "dismissKeyboard" }
+  | { type: "home" }
+  | { type: "appSwitcher" }
+  | { type: "rotateLeft" }
+  | { type: "rotateRight" }
+  | { type: "toggleAppearance" };
 
 async function postSimulatorAction(
   udid: string,

@@ -111,6 +111,15 @@ function buildAuthenticatedAssetUrl(path: string, stamp: number): string {
   return url.toString();
 }
 
+function shouldUseRemoteStreamDefault(apiRoot: string): boolean {
+  if (apiRoot) {
+    return true;
+  }
+  return (
+    new URLSearchParams(window.location.search).get("remoteStream") === "1"
+  );
+}
+
 function shouldRenderNativeChrome(simulator: SimulatorMetadata): boolean {
   const identifier = simulator.deviceTypeIdentifier ?? "";
   const name = simulator.name ?? "";
@@ -177,6 +186,7 @@ export interface AppShellProps {
   fixedSimulatorUDID?: string | null;
   hideSimulatorSelection?: boolean;
   pairingEnabled?: boolean;
+  remoteStream?: boolean;
 }
 
 export function AppShell({
@@ -184,6 +194,7 @@ export function AppShell({
   fixedSimulatorUDID = null,
   hideSimulatorSelection = false,
   pairingEnabled = true,
+  remoteStream = shouldUseRemoteStreamDefault(apiRoot),
 }: AppShellProps = {}) {
   configureSimDeckClient({ apiRoot });
   const [initialUiState] = useState(readPersistedUiState);
@@ -201,7 +212,7 @@ export function AppShell({
     isLoading,
     refresh,
     simulators,
-  } = useSimulatorList();
+  } = useSimulatorList({ remote: remoteStream });
   const [debugVisible, setDebugVisible] = useState(false);
   const [hierarchyVisible, setHierarchyVisible] = useState(() =>
     readStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY),
@@ -370,6 +381,7 @@ export function AppShell({
     streamCanvasKey,
   } = useLiveStream({
     canvasElement: streamCanvasElement,
+    remote: remoteStream,
     simulator: selectedSimulator,
   });
 
@@ -843,9 +855,13 @@ export function AppShell({
     pairingEnabled &&
     listError === AUTH_REQUIRED_MESSAGE &&
     !accessTokenFromLocation();
+  const visibleListError =
+    remoteStream && hasFrame && listError === "Failed to fetch"
+      ? ""
+      : listError;
   const error = pairingRequired
     ? localError || streamError
-    : localError || streamError || listError;
+    : localError || streamError || visibleListError;
   const deviceTransform = `translate(${pan.x}px, ${pan.y + autoViewportOffsetY}px) scale(${effectiveZoom})`;
   const chromeScreenRect = computeChromeScreenRect(
     viewportChromeProfile,
@@ -979,11 +995,11 @@ export function AppShell({
     return state;
   }, []);
 
-  function sendControl(udid: string, message: ControlMessage) {
+  function sendControl(udid: string, message: ControlMessage): boolean {
     setLocalError("");
     const encoded = JSON.stringify(message);
     if (sendWebRtcControlMessage(encoded)) {
-      return;
+      return true;
     }
     const state = ensureControlSocket(udid);
     if (state.socket.readyState === WebSocket.OPEN) {
@@ -991,6 +1007,7 @@ export function AppShell({
     } else {
       state.pending.push(encoded);
     }
+    return true;
   }
 
   useEffect(() => closeControlSocket, [closeControlSocket]);
@@ -1281,7 +1298,14 @@ export function AppShell({
           if (!selectedSimulator) {
             return;
           }
-          void runAction(() => dismissKeyboard(selectedSimulator.udid), false);
+          if (
+            !sendControl(selectedSimulator.udid, { type: "dismissKeyboard" })
+          ) {
+            void runAction(
+              () => dismissKeyboard(selectedSimulator.udid),
+              false,
+            );
+          }
         }}
         onHome={() => {
           if (!selectedSimulator) {
@@ -1289,7 +1313,9 @@ export function AppShell({
           }
           setAccessibilitySelectedId("");
           setAccessibilityHoveredId(null);
-          void runAction(() => pressHome(selectedSimulator.udid), false);
+          if (!sendControl(selectedSimulator.udid, { type: "home" })) {
+            void runAction(() => pressHome(selectedSimulator.udid), false);
+          }
         }}
         onOpenAppSwitcher={() => {
           if (!selectedSimulator) {
@@ -1297,10 +1323,20 @@ export function AppShell({
           }
           setAccessibilitySelectedId("");
           setAccessibilityHoveredId(null);
-          void runAction(() => openAppSwitcher(selectedSimulator.udid), false);
+          if (!sendControl(selectedSimulator.udid, { type: "appSwitcher" })) {
+            void runAction(
+              () => openAppSwitcher(selectedSimulator.udid),
+              false,
+            );
+          }
         }}
         onRotateLeft={() => {
           if (!selectedSimulator) {
+            return;
+          }
+          if (sendControl(selectedSimulator.udid, { type: "rotateLeft" })) {
+            setRotationQuarterTurns((current) => (current + 3) % 4);
+            setStreamStamp(Date.now());
             return;
           }
           void runAction(async () => {
@@ -1313,6 +1349,11 @@ export function AppShell({
         onOpenUrlPrompt={promptForURL}
         onRotateRight={() => {
           if (!selectedSimulator) {
+            return;
+          }
+          if (sendControl(selectedSimulator.udid, { type: "rotateRight" })) {
+            setRotationQuarterTurns((current) => (current + 1) % 4);
+            setStreamStamp(Date.now());
             return;
           }
           void runAction(async () => {
@@ -1339,7 +1380,10 @@ export function AppShell({
           if (!selectedSimulator) {
             return;
           }
-          void runAction(() => toggleAppearance(selectedSimulator.udid));
+          const encoded = JSON.stringify({ type: "toggleAppearance" });
+          if (!sendWebRtcControlMessage(encoded)) {
+            void runAction(() => toggleAppearance(selectedSimulator.udid));
+          }
         }}
         onToggleDebug={() => setDebugVisible((current) => !current)}
         onToggleHierarchy={() => {

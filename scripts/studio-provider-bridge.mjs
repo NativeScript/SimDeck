@@ -17,12 +17,27 @@ let localToken = process.env.SIMDECK_LOCAL_TOKEN || providerToken;
 const registerIntervalMs = Number(
   process.env.SIMDECK_PROVIDER_REGISTER_INTERVAL_MS || 15000,
 );
+const maxConcurrentRequests = Math.max(
+  1,
+  Number(process.env.SIMDECK_PROVIDER_MAX_CONCURRENT_REQUESTS || 8),
+);
+const proxyTimeoutMs = Math.max(
+  1000,
+  Number(process.env.SIMDECK_PROVIDER_PROXY_TIMEOUT_MS || 25000),
+);
+const simulatorListCacheTtlMs = Math.max(
+  0,
+  Number(process.env.SIMDECK_PROVIDER_SIMULATORS_CACHE_MS || 5000),
+);
 const providerId =
   process.env.SIMDECK_STUDIO_PROVIDER_ID || stableLocalProviderId();
 
 let stopped = false;
 let lastRegisterAt = 0;
 let registered = false;
+const activeRequests = new Set();
+const responseCache = new Map();
+const inFlightCache = new Map();
 
 if (isMainModule()) {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
@@ -47,12 +62,15 @@ if (isMainModule()) {
       localToken = providerToken;
     }
 
-    console.log(`[simdeck-provider-bridge] ${publicUrl}`);
-
     await registerProvider();
+    console.log(`[simdeck-provider-bridge] ${publicUrl}`);
 
     while (!stopped) {
       try {
+        if (activeRequests.size >= maxConcurrentRequests) {
+          await Promise.race([...activeRequests, sleep(50)]);
+          continue;
+        }
         if (Date.now() - lastRegisterAt > registerIntervalMs) {
           await registerProvider();
         }
@@ -67,7 +85,7 @@ if (isMainModule()) {
           await sleep(250);
           continue;
         }
-        await handleRequest(next.request);
+        runProviderRequest(next.request);
       } catch (error) {
         console.error(
           `[simdeck-provider-bridge] ${error instanceof Error ? error.message : String(error)}`,
@@ -76,6 +94,9 @@ if (isMainModule()) {
       }
     }
   } finally {
+    if (activeRequests.size > 0) {
+      await Promise.allSettled(activeRequests);
+    }
     if (registered) {
       await markProviderExpired();
     }
@@ -93,6 +114,9 @@ async function registerProvider() {
       simulatorUdid: metadata.simulator?.udid,
       simulatorName: metadata.simulator?.name,
       runtimeName: metadata.simulator?.runtimeName,
+      videoCodec: metadata.health?.videoCodec,
+      realtimeStream: metadata.health?.realtimeStream,
+      streamQuality: metadata.health?.streamQuality,
     });
     registered = true;
     lastRegisterAt = Date.now();
@@ -131,61 +155,34 @@ async function markProviderExpired() {
 }
 
 async function localProviderMetadata() {
+  let health = null;
+  try {
+    health = await localJson("/api/health");
+  } catch {
+    health = null;
+  }
+
   try {
     const simulators = await localJson("/api/simulators");
     const selected =
       simulators.simulators?.find((simulator) => simulator.isBooted) ??
       simulators.simulators?.[0] ??
       null;
-    return { ok: true, simulator: selected };
+    return { health, ok: true, simulator: selected };
   } catch {
-    try {
-      await localJson("/api/health");
-      return { ok: true, simulator: null };
-    } catch {
-      return { ok: false, simulator: null };
+    if (health) {
+      return { health, ok: true, simulator: null };
     }
+    return { health: null, ok: false, simulator: null };
   }
 }
 
 async function handleRequest(request) {
   try {
-    const target = new URL(request.path, `${localUrl}/`);
-    if (!target.searchParams.has("simdeckToken")) {
-      target.searchParams.set("simdeckToken", localToken);
-    }
-    const headers = new Headers(request.headers || {});
-    headers.set("x-simdeck-token", localToken);
-    headers.delete("host");
-    headers.delete("content-length");
-    const response = await fetch(target, {
-      body: request.bodyBase64
-        ? Buffer.from(request.bodyBase64, "base64")
-        : undefined,
-      headers,
-      method: request.method,
-    });
-    const responseHeaders = {};
-    for (const [name, value] of response.headers.entries()) {
-      const lower = name.toLowerCase();
-      if (
-        lower === "connection" ||
-        lower === "content-encoding" ||
-        lower === "content-length" ||
-        lower === "transfer-encoding"
-      ) {
-        continue;
-      }
-      responseHeaders[name] = value;
-    }
-    const responseBodyBase64 = Buffer.from(
-      await response.arrayBuffer(),
-    ).toString("base64");
+    const responsePayload = await cachedProxyResponse(request);
     await complete({
       requestId: request.id,
-      responseStatus: response.status,
-      responseHeaders,
-      responseBodyBase64,
+      ...responsePayload,
     });
   } catch (error) {
     await complete({
@@ -195,11 +192,106 @@ async function handleRequest(request) {
   }
 }
 
+function runProviderRequest(request) {
+  const task = handleRequest(request).catch((error) => {
+    console.error(
+      `[simdeck-provider-bridge] request ${request.id} failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
+  activeRequests.add(task);
+  task.finally(() => {
+    activeRequests.delete(task);
+  });
+}
+
+async function cachedProxyResponse(request) {
+  const cacheKey = cacheKeyForRequest(request);
+  if (!cacheKey || simulatorListCacheTtlMs <= 0) {
+    return proxyLocalRequest(request);
+  }
+
+  const cached = responseCache.get(cacheKey);
+  if (cached && Date.now() - cached.updatedAt <= simulatorListCacheTtlMs) {
+    return cached.payload;
+  }
+
+  const pending = inFlightCache.get(cacheKey);
+  if (pending) {
+    return pending;
+  }
+
+  const pendingRequest = proxyLocalRequest(request)
+    .then((payload) => {
+      if (payload.responseStatus >= 200 && payload.responseStatus < 300) {
+        responseCache.set(cacheKey, { payload, updatedAt: Date.now() });
+      }
+      return payload;
+    })
+    .finally(() => {
+      inFlightCache.delete(cacheKey);
+    });
+  inFlightCache.set(cacheKey, pendingRequest);
+  return pendingRequest;
+}
+
+function cacheKeyForRequest(request) {
+  if (request.method !== "GET") {
+    return "";
+  }
+  const target = new URL(request.path, `${localUrl}/`);
+  target.searchParams.delete("simdeckToken");
+  if (target.pathname !== "/api/simulators") {
+    return "";
+  }
+  return `${target.pathname}?${target.searchParams.toString()}`;
+}
+
+async function proxyLocalRequest(request) {
+  const target = new URL(request.path, `${localUrl}/`);
+  if (!target.searchParams.has("simdeckToken")) {
+    target.searchParams.set("simdeckToken", localToken);
+  }
+  const headers = new Headers(request.headers || {});
+  headers.set("x-simdeck-token", localToken);
+  headers.delete("host");
+  headers.delete("content-length");
+  const response = await fetch(target, {
+    body: request.bodyBase64
+      ? Buffer.from(request.bodyBase64, "base64")
+      : undefined,
+    headers,
+    method: request.method,
+    signal: AbortSignal.timeout(proxyTimeoutMs),
+  });
+  const responseHeaders = {};
+  for (const [name, value] of response.headers.entries()) {
+    const lower = name.toLowerCase();
+    if (
+      lower === "connection" ||
+      lower === "content-encoding" ||
+      lower === "content-length" ||
+      lower === "transfer-encoding"
+    ) {
+      continue;
+    }
+    responseHeaders[name] = value;
+  }
+  const responseBodyBase64 = Buffer.from(await response.arrayBuffer()).toString(
+    "base64",
+  );
+  return {
+    responseStatus: response.status,
+    responseHeaders,
+    responseBodyBase64,
+  };
+}
+
 async function localJson(path) {
   const target = new URL(path, `${localUrl}/`);
   target.searchParams.set("simdeckToken", localToken);
   const response = await fetch(target, {
     headers: { "x-simdeck-token": localToken },
+    signal: AbortSignal.timeout(Math.min(proxyTimeoutMs, 5000)),
   });
   if (!response.ok) {
     throw new Error(

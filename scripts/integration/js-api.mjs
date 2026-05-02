@@ -123,7 +123,7 @@ async function main() {
         cliPath: simdeck,
         projectRoot: root,
         isolated: true,
-        videoCodec: "h264-software",
+        videoCodec: "software",
       }),
     { phase: phaseSetup },
   );

@@ -8,6 +8,7 @@ import { createEmptyStreamStats } from "./stats";
 import {
   buildStreamTarget,
   canUseWebRtc,
+  sendWebRtcClientStats,
   StreamWorkerClient,
   type StreamBackend,
 } from "./streamWorkerClient";
@@ -20,10 +21,12 @@ import type {
 
 const FPS_SAMPLE_INTERVAL_MS = 500;
 const CLIENT_TELEMETRY_INTERVAL_MS = 1000;
+const REMOTE_CLIENT_TELEMETRY_INTERVAL_MS = 5000;
 
 interface UseLiveStreamOptions {
   canvasElement: HTMLCanvasElement | null;
   paused?: boolean;
+  remote?: boolean;
   simulator: SimulatorMetadata | null;
 }
 
@@ -67,6 +70,7 @@ function buildClientTelemetryUrl(): string {
 export function useLiveStream({
   canvasElement,
   paused = false,
+  remote = false,
   simulator,
 }: UseLiveStreamOptions): UseLiveStreamResult {
   const clientTelemetryIdRef = useRef("");
@@ -237,11 +241,11 @@ export function useLiveStream({
       return;
     }
 
-    workerClient.connect(buildStreamTarget(simulator.udid));
+    workerClient.connect(buildStreamTarget(simulator.udid, { remote }));
     return () => {
       workerClient.disconnect();
     };
-  }, [canvasElement, simulator?.isBooted, simulator?.udid, paused]);
+  }, [canvasElement, simulator?.isBooted, simulator?.udid, paused, remote]);
 
   useEffect(() => {
     if (!simulator?.udid) {
@@ -251,21 +255,25 @@ export function useLiveStream({
     const postTelemetry = () => {
       const latestStats = latestStatsRef.current;
       const latestStatus = latestStatusRef.current;
+      const payload = {
+        ...latestStats,
+        appFps: latestFpsRef.current,
+        clientId: clientTelemetryIdRef.current,
+        focused: document.hasFocus(),
+        kind: "page",
+        pageFps: pageFpsRef.current,
+        status: latestStatus.state,
+        timestampMs: Date.now(),
+        udid: simulator.udid,
+        url: window.location.href,
+        userAgent: window.navigator.userAgent,
+        visibilityState: document.visibilityState,
+      };
+      if (sendWebRtcClientStats(payload) || remote) {
+        return;
+      }
       void fetch(buildClientTelemetryUrl(), {
-        body: JSON.stringify({
-          ...latestStats,
-          appFps: latestFpsRef.current,
-          clientId: clientTelemetryIdRef.current,
-          focused: document.hasFocus(),
-          kind: "page",
-          pageFps: pageFpsRef.current,
-          status: latestStatus.state,
-          timestampMs: Date.now(),
-          udid: simulator.udid,
-          url: window.location.href,
-          userAgent: window.navigator.userAgent,
-          visibilityState: document.visibilityState,
-        }),
+        body: JSON.stringify(payload),
         cache: "no-store",
         headers: apiHeaders(),
         method: "POST",
@@ -274,15 +282,15 @@ export function useLiveStream({
       });
     };
 
+    const intervalMs = remote
+      ? REMOTE_CLIENT_TELEMETRY_INTERVAL_MS
+      : CLIENT_TELEMETRY_INTERVAL_MS;
     postTelemetry();
-    const intervalId = window.setInterval(
-      postTelemetry,
-      CLIENT_TELEMETRY_INTERVAL_MS,
-    );
+    const intervalId = window.setInterval(postTelemetry, intervalMs);
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [simulator?.udid]);
+  }, [remote, simulator?.udid]);
 
   return {
     deviceNaturalSize,

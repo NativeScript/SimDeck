@@ -182,6 +182,22 @@ impl SimulatorSession {
         self.inner.native.send_key(key_code, modifiers)
     }
 
+    pub fn press_home(&self) -> Result<(), AppError> {
+        self.inner.native.press_home()
+    }
+
+    pub fn open_app_switcher(&self) -> Result<(), AppError> {
+        self.inner.native.open_app_switcher()
+    }
+
+    pub fn rotate_left(&self) -> Result<(), AppError> {
+        self.inner.native.rotate_left()
+    }
+
+    pub fn rotate_right(&self) -> Result<(), AppError> {
+        self.inner.native.rotate_right()
+    }
+
     pub fn snapshot(&self) -> serde_json::Value {
         serde_json::json!({
             "displayReady": self.inner.display_ready.load(Ordering::Relaxed),

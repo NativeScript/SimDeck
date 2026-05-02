@@ -77,11 +77,14 @@ simdeck studio expose "iPhone 17 Pro"
 
 The command starts or reuses the local daemon, creates an ephemeral Studio
 session, prints a unique `https://simdeck.djdev.me/simulator/...` URL, and keeps
-the outbound bridge alive until you press Ctrl-C. It uses `auto` mode by default,
-letting VideoToolbox choose the encoder. Pass `--video-codec software` when you
-need to force software encoding; Studio then defaults to the `ci-software`
-stream quality profile (`960` longest edge at `24` fps). Use
-`--stream-quality quality|balanced|smooth|economy|ci-software` to override it.
+the outbound bridge alive until you press Ctrl-C. It uses software H.264 by
+default with realtime stream settings for remote viewing, and prints the active
+codec/profile when it starts. Studio defaults to the `smooth` stream quality
+profile (`1170` longest edge, dynamic up to `60` fps). Use
+`--stream-quality quality|balanced|smooth|economy|ci-software` to override it,
+or pass `--video-codec hardware` when a dedicated hardware encoder is preferable.
+The remote viewer renders live video with the browser's native video element;
+the canvas is only used for input geometry.
 
 CLI commands automatically use the same warm daemon:
 

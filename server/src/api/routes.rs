@@ -28,10 +28,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::Command;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio::task;
 use tokio::time::timeout;
 use tower_http::trace::TraceLayer;
+
+const SIMULATOR_INVENTORY_CACHE_TTL: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -40,6 +42,18 @@ pub struct AppState {
     pub logs: LogRegistry,
     pub inspectors: InspectorHub,
     pub metrics: Arc<Metrics>,
+    pub simulator_inventory: SimulatorInventoryCache,
+}
+
+#[derive(Clone, Default)]
+pub struct SimulatorInventoryCache {
+    inner: Arc<Mutex<SimulatorInventoryState>>,
+}
+
+#[derive(Default)]
+struct SimulatorInventoryState {
+    simulators: Option<Vec<crate::native::bridge::Simulator>>,
+    updated_at: Option<Instant>,
 }
 
 #[derive(Deserialize)]
@@ -115,25 +129,25 @@ const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
         id: "quality",
         label: "Quality",
         max_edge: 1440,
-        fps: 30,
-        min_bitrate: 3_000_000,
-        bits_per_pixel: 4,
+        fps: 60,
+        min_bitrate: 8_000_000,
+        bits_per_pixel: 6,
     },
     StreamQualityProfile {
         id: "balanced",
         label: "Balanced",
         max_edge: 1280,
-        fps: 30,
-        min_bitrate: 2_500_000,
-        bits_per_pixel: 4,
+        fps: 60,
+        min_bitrate: 6_000_000,
+        bits_per_pixel: 5,
     },
     StreamQualityProfile {
         id: "smooth",
         label: "Smooth",
         max_edge: 1170,
-        fps: 30,
-        min_bitrate: 2_000_000,
-        bits_per_pixel: 3,
+        fps: 60,
+        min_bitrate: 4_000_000,
+        bits_per_pixel: 5,
     },
     StreamQualityProfile {
         id: "economy",
@@ -177,6 +191,12 @@ pub(crate) enum ControlMessage {
         key_code: u16,
         modifiers: Option<u32>,
     },
+    DismissKeyboard,
+    Home,
+    AppSwitcher,
+    RotateLeft,
+    RotateRight,
+    ToggleAppearance,
 }
 
 #[derive(Deserialize)]
@@ -786,7 +806,7 @@ async fn inspector_response(
 }
 
 async fn list_simulators(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
-    let simulators = run_bridge_action(state.clone(), |bridge| bridge.list_simulators()).await?;
+    let simulators = list_simulators_cached(state.clone(), false).await?;
     Ok(json(json_value!({
         "simulators": state.registry.enrich_simulators(simulators),
     })))
@@ -1265,6 +1285,14 @@ pub(crate) async fn run_control_message(
             key_code,
             modifiers,
         } => session.send_key(key_code, modifiers.unwrap_or(0)),
+        ControlMessage::DismissKeyboard => session.send_key(41, 0),
+        ControlMessage::Home => session.press_home(),
+        ControlMessage::AppSwitcher => session.open_app_switcher(),
+        ControlMessage::RotateLeft => session.rotate_left(),
+        ControlMessage::RotateRight => session.rotate_right(),
+        ControlMessage::ToggleAppearance => Err(AppError::bad_request(
+            "`toggleAppearance` requires the WebRTC control channel.",
+        )),
     })
     .await
     .map_err(|error| AppError::internal(format!("Failed to join control task: {error}")))?
@@ -3310,6 +3338,25 @@ where
         })?
 }
 
+async fn list_simulators_cached(
+    state: AppState,
+    force_refresh: bool,
+) -> Result<Vec<crate::native::bridge::Simulator>, AppError> {
+    let mut guard = state.simulator_inventory.inner.lock().await;
+    if !force_refresh {
+        if let (Some(simulators), Some(updated_at)) = (&guard.simulators, guard.updated_at) {
+            if updated_at.elapsed() <= SIMULATOR_INVENTORY_CACHE_TTL {
+                return Ok(simulators.clone());
+            }
+        }
+    }
+
+    let simulators = run_bridge_action(state.clone(), |bridge| bridge.list_simulators()).await?;
+    guard.simulators = Some(simulators.clone());
+    guard.updated_at = Some(Instant::now());
+    Ok(simulators)
+}
+
 async fn accessibility_snapshot(
     state: AppState,
     udid: String,
@@ -3323,7 +3370,7 @@ async fn accessibility_snapshot(
 }
 
 async fn simulator_payload(state: AppState, udid: String) -> Result<Json<Value>, AppError> {
-    let simulators = run_bridge_action(state.clone(), |bridge| bridge.list_simulators()).await?;
+    let simulators = list_simulators_cached(state.clone(), true).await?;
     let enriched = state.registry.enrich_simulators(simulators);
     let simulator = enriched
         .into_iter()

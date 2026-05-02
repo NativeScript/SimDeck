@@ -445,7 +445,7 @@ enum StudioCommand {
         bind: IpAddr,
         #[arg(long)]
         low_latency: bool,
-        #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Software)]
         video_codec: VideoCodecMode,
         #[arg(long, value_enum, conflicts_with = "low_latency")]
         stream_quality: Option<StreamQualityProfileArg>,
@@ -519,6 +519,7 @@ enum PasteboardCommand {
 enum VideoCodecMode {
     Auto,
     Hardware,
+    #[value(alias = "h264-software")]
     Software,
 }
 
@@ -627,23 +628,23 @@ fn stream_quality_env_for_profile(profile: &str) -> anyhow::Result<StreamQuality
         "quality" => Ok(StreamQualityEnvironment {
             profile: "quality",
             max_edge: 1440,
-            fps: 30,
-            min_bitrate: 3_000_000,
-            bits_per_pixel: 4,
+            fps: 60,
+            min_bitrate: 8_000_000,
+            bits_per_pixel: 6,
         }),
         "balanced" => Ok(StreamQualityEnvironment {
             profile: "balanced",
             max_edge: 1280,
-            fps: 30,
-            min_bitrate: 2_500_000,
-            bits_per_pixel: 4,
+            fps: 60,
+            min_bitrate: 6_000_000,
+            bits_per_pixel: 5,
         }),
         "smooth" => Ok(StreamQualityEnvironment {
             profile: "smooth",
             max_edge: 1170,
-            fps: 30,
-            min_bitrate: 2_000_000,
-            bits_per_pixel: 3,
+            fps: 60,
+            min_bitrate: 4_000_000,
+            bits_per_pixel: 5,
         }),
         "economy" => Ok(StreamQualityEnvironment {
             profile: "economy",
@@ -690,8 +691,7 @@ fn studio_stream_quality_profile(
     requested
         .map(|profile| profile.as_profile_id().to_owned())
         .or_else(|| {
-            (video_codec == VideoCodecMode::Software && !low_latency)
-                .then_some("ci-software".to_owned())
+            (video_codec == VideoCodecMode::Software && !low_latency).then_some("smooth".to_owned())
         })
 }
 
@@ -1288,7 +1288,7 @@ fn expose_to_studio(options: StudioExposeOptions) -> anyhow::Result<()> {
         video_codec: options.video_codec,
         low_latency: options.low_latency,
         realtime_stream: true,
-        stream_quality_profile,
+        stream_quality_profile: stream_quality_profile.clone(),
     })?;
     let selected = if let Some(selector) = options.simulator.as_deref() {
         select_studio_simulator(&metadata.http_url, selector)
@@ -1305,6 +1305,23 @@ fn expose_to_studio(options: StudioExposeOptions) -> anyhow::Result<()> {
                 .with_context(|| format!("boot simulator {}", simulator.name))?;
         }
     }
+    let health = service_get_json(&metadata.http_url, "/api/health").ok();
+    let active_codec = health
+        .as_ref()
+        .and_then(|value| value.get("videoCodec"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| options.video_codec.as_env_value());
+    let active_stream_quality = health
+        .as_ref()
+        .and_then(|value| value.get("streamQuality"))
+        .and_then(|value| value.get("profile"))
+        .and_then(Value::as_str)
+        .or(stream_quality_profile.as_deref());
+    let realtime_stream = health
+        .as_ref()
+        .and_then(|value| value.get("realtimeStream"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
 
     let bridge_script = studio_provider_bridge_script()?;
     println!(
@@ -1313,6 +1330,14 @@ fn expose_to_studio(options: StudioExposeOptions) -> anyhow::Result<()> {
             .as_ref()
             .map(|simulator| simulator.name.as_str())
             .unwrap_or("the selected simulator")
+    );
+    println!(
+        "Stream: {}{}{}",
+        active_codec,
+        if realtime_stream { ", realtime" } else { "" },
+        active_stream_quality
+            .map(|profile| format!(", quality={profile}"))
+            .unwrap_or_default()
     );
     println!("Press Ctrl-C to stop the Studio bridge.");
     let status = ProcessCommand::new("node")
@@ -4586,6 +4611,7 @@ async fn serve(
         logs,
         inspectors,
         metrics,
+        simulator_inventory: Default::default(),
     };
 
     let http_router = app_router(
@@ -4763,6 +4789,7 @@ mod tests {
             ("auto", VideoCodecMode::Auto),
             ("hardware", VideoCodecMode::Hardware),
             ("software", VideoCodecMode::Software),
+            ("h264-software", VideoCodecMode::Software),
         ] {
             let cli = Cli::parse_from(["simdeck", "daemon", "start", "--video-codec", mode]);
             let Command::Daemon {
@@ -4780,14 +4807,6 @@ mod tests {
         assert!(
             Cli::try_parse_from(["simdeck", "daemon", "start", "--video-codec", "h264"]).is_err()
         );
-        assert!(Cli::try_parse_from([
-            "simdeck",
-            "daemon",
-            "start",
-            "--video-codec",
-            "h264-software"
-        ])
-        .is_err());
     }
 
     #[test]
