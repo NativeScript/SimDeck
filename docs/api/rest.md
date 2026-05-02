@@ -157,9 +157,7 @@ messages, clients can tune the stream attached to that peer:
 ```
 
 Supported profiles are `thumb`/`thumbnail`, `focus`/`full`, and `paused`.
-Clients may also send `fps`, `forceKeyframe`, or `snapshot` fields. The farm UI
-uses this to keep background tiles low-rate while the focused simulator receives
-a full-rate stream.
+Clients may also send `fps`, `forceKeyframe`, or `snapshot` fields.
 
 ### `POST /api/simulators/{udid}/open-url`
 

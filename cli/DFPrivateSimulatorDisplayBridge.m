@@ -136,6 +136,39 @@ static NSString *DFSimulatorKitExecutablePath(void) {
     return @"/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit";
 }
 
+static NSInteger DFXcodeMajorVersion(void) {
+    NSString *developerPath = nil;
+    const char *developerDir = getenv("DEVELOPER_DIR");
+    if (developerDir != NULL && developerDir[0] != '\0') {
+        developerPath = [NSString stringWithUTF8String:developerDir];
+    } else {
+        FILE *pipe = popen("/usr/bin/xcode-select -p 2>/dev/null", "r");
+        if (pipe != NULL) {
+            char buffer[PATH_MAX] = {0};
+            if (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+                developerPath = [[NSString stringWithUTF8String:buffer] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            }
+            pclose(pipe);
+        }
+    }
+    if (developerPath.length == 0) {
+        return 0;
+    }
+
+    NSString *contentsPath = developerPath;
+    if ([contentsPath.lastPathComponent isEqualToString:@"Developer"]) {
+        contentsPath = contentsPath.stringByDeletingLastPathComponent;
+    }
+
+    NSDictionary *versionInfo = [NSDictionary dictionaryWithContentsOfFile:[contentsPath stringByAppendingPathComponent:@"version.plist"]];
+    NSString *version = versionInfo[@"CFBundleShortVersionString"];
+    if (version.length == 0) {
+        NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:[contentsPath stringByAppendingPathComponent:@"Info.plist"]];
+        version = info[@"CFBundleShortVersionString"];
+    }
+    return [[version componentsSeparatedByString:@"."].firstObject integerValue];
+}
+
 typedef struct {
     __unsafe_unretained id unit;
     double value;
@@ -207,20 +240,7 @@ static BOOL DFShouldUseIndigoMouse9Path(void) {
             return;
         }
 
-        FILE *pipe = popen("/usr/bin/xcodebuild -version 2>/dev/null", "r");
-        if (pipe == NULL) {
-            return;
-        }
-        char buffer[256] = {0};
-        if (fgets(buffer, sizeof(buffer), pipe) != NULL) {
-            NSString *line = [[NSString stringWithUTF8String:buffer] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            NSArray<NSString *> *parts = [line componentsSeparatedByString:@" "];
-            if (parts.count >= 2 && [parts[0] isEqualToString:@"Xcode"]) {
-                NSInteger major = [[parts[1] componentsSeparatedByString:@"."].firstObject integerValue];
-                enabled = major >= 26;
-            }
-        }
-        pclose(pipe);
+        enabled = DFXcodeMajorVersion() >= 26;
     });
     return enabled;
 }

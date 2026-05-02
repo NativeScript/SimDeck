@@ -37,9 +37,6 @@ simdeck ui [--port 4310] [--bind 127.0.0.1] [--advertise-host <host>]
 ```
 
 `--open` opens the authenticated local URL after the daemon is ready.
-The same React bundle also serves `/farm`, a multi-simulator dashboard with
-grid, wall, and list views. Booted simulators stream as low-rate thumbnails
-until selected; the focused simulator requests a full-rate WebRTC profile.
 
 ### `studio expose`
 
