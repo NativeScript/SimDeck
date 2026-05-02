@@ -9,8 +9,10 @@ import type {
   SimulatorsResponse,
 } from "./types";
 
-export async function listSimulators(): Promise<SimulatorMetadata[]> {
-  const data = await apiRequest<SimulatorsResponse>("/api/simulators");
+export async function listSimulators(
+  options: RequestInit = {},
+): Promise<SimulatorMetadata[]> {
+  const data = await apiRequest<SimulatorsResponse>("/api/simulators", options);
   return data.simulators ?? [];
 }
 

@@ -20,6 +20,7 @@ import type {
 
 const FPS_SAMPLE_INTERVAL_MS = 500;
 const CLIENT_TELEMETRY_INTERVAL_MS = 1000;
+const REMOTE_CLIENT_TELEMETRY_INTERVAL_MS = 5000;
 
 interface UseLiveStreamOptions {
   canvasElement: HTMLCanvasElement | null;
@@ -276,15 +277,15 @@ export function useLiveStream({
       });
     };
 
+    const intervalMs = remote
+      ? REMOTE_CLIENT_TELEMETRY_INTERVAL_MS
+      : CLIENT_TELEMETRY_INTERVAL_MS;
     postTelemetry();
-    const intervalId = window.setInterval(
-      postTelemetry,
-      CLIENT_TELEMETRY_INTERVAL_MS,
-    );
+    const intervalId = window.setInterval(postTelemetry, intervalMs);
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [simulator?.udid]);
+  }, [remote, simulator?.udid]);
 
   return {
     deviceNaturalSize,

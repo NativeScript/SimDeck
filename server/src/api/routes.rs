@@ -28,10 +28,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::Command;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio::task;
 use tokio::time::timeout;
 use tower_http::trace::TraceLayer;
+
+const SIMULATOR_INVENTORY_CACHE_TTL: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -40,6 +42,18 @@ pub struct AppState {
     pub logs: LogRegistry,
     pub inspectors: InspectorHub,
     pub metrics: Arc<Metrics>,
+    pub simulator_inventory: SimulatorInventoryCache,
+}
+
+#[derive(Clone, Default)]
+pub struct SimulatorInventoryCache {
+    inner: Arc<Mutex<SimulatorInventoryState>>,
+}
+
+#[derive(Default)]
+struct SimulatorInventoryState {
+    simulators: Option<Vec<crate::native::bridge::Simulator>>,
+    updated_at: Option<Instant>,
 }
 
 #[derive(Deserialize)]
@@ -786,7 +800,7 @@ async fn inspector_response(
 }
 
 async fn list_simulators(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
-    let simulators = run_bridge_action(state.clone(), |bridge| bridge.list_simulators()).await?;
+    let simulators = list_simulators_cached(state.clone(), false).await?;
     Ok(json(json_value!({
         "simulators": state.registry.enrich_simulators(simulators),
     })))
@@ -3310,6 +3324,25 @@ where
         })?
 }
 
+async fn list_simulators_cached(
+    state: AppState,
+    force_refresh: bool,
+) -> Result<Vec<crate::native::bridge::Simulator>, AppError> {
+    let mut guard = state.simulator_inventory.inner.lock().await;
+    if !force_refresh {
+        if let (Some(simulators), Some(updated_at)) = (&guard.simulators, guard.updated_at) {
+            if updated_at.elapsed() <= SIMULATOR_INVENTORY_CACHE_TTL {
+                return Ok(simulators.clone());
+            }
+        }
+    }
+
+    let simulators = run_bridge_action(state.clone(), |bridge| bridge.list_simulators()).await?;
+    guard.simulators = Some(simulators.clone());
+    guard.updated_at = Some(Instant::now());
+    Ok(simulators)
+}
+
 async fn accessibility_snapshot(
     state: AppState,
     udid: String,
@@ -3323,7 +3356,7 @@ async fn accessibility_snapshot(
 }
 
 async fn simulator_payload(state: AppState, udid: String) -> Result<Json<Value>, AppError> {
-    let simulators = run_bridge_action(state.clone(), |bridge| bridge.list_simulators()).await?;
+    let simulators = list_simulators_cached(state.clone(), true).await?;
     let enriched = state.registry.enrich_simulators(simulators);
     let simulator = enriched
         .into_iter()

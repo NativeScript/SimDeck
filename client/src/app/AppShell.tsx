@@ -212,7 +212,7 @@ export function AppShell({
     isLoading,
     refresh,
     simulators,
-  } = useSimulatorList();
+  } = useSimulatorList({ remote: remoteStream });
   const [debugVisible, setDebugVisible] = useState(false);
   const [hierarchyVisible, setHierarchyVisible] = useState(() =>
     readStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY),
