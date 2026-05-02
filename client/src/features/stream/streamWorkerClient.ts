@@ -12,8 +12,8 @@ const HAVE_CURRENT_DATA = 2;
 const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
 const WEBRTC_TELEMETRY_CHANNEL_LABEL = "simdeck-telemetry";
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 10000;
-const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 60000;
-const WEBRTC_RECEIVER_BUFFER_SECONDS = 0.06;
+const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 15000;
+const WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS = 0.06;
 const WEBRTC_DISCONNECTED_GRACE_MS = 30000;
 const WEBRTC_RECONNECT_BASE_DELAY_MS = 3000;
 const WEBRTC_RECONNECT_MAX_DELAY_MS = 10000;
@@ -146,7 +146,10 @@ class WebRtcStreamClient implements StreamClientBackend {
         direction: "recvonly",
       });
       configureReceiverCodecPreferences(transceiver);
-      configureLowLatencyReceiver(transceiver.receiver);
+      configureLowLatencyReceiver(
+        transceiver.receiver,
+        target.remote ? WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS : null,
+      );
       const controlChannel = peerConnection.createDataChannel(
         WEBRTC_CONTROL_CHANNEL_LABEL,
         {
@@ -181,7 +184,10 @@ class WebRtcStreamClient implements StreamClientBackend {
         }
         event.track.contentHint = "motion";
         for (const receiver of peerConnection.getReceivers()) {
-          configureLowLatencyReceiver(receiver);
+          configureLowLatencyReceiver(
+            receiver,
+            target.remote ? WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS : null,
+          );
         }
         const stream = event.streams[0] ?? new MediaStream([event.track]);
         const video = document.createElement("video");
@@ -441,7 +447,12 @@ class WebRtcStreamClient implements StreamClientBackend {
           return;
         }
         if (frameAgeMs > WEBRTC_STALLED_FRAME_TIMEOUT_MS) {
-          this.postDiagnostics(target, "video-frame-watchdog-stalled");
+          this.handleConnectionError(
+            target,
+            generation,
+            new Error("WebRTC video stalled after rendering frames."),
+          );
+          return;
         }
         this.scheduleFrameWatchdog(target, generation);
       },
@@ -782,16 +793,22 @@ function postWebRtcOffer(
   );
 }
 
-function configureLowLatencyReceiver(receiver: RTCRtpReceiver) {
+function configureLowLatencyReceiver(
+  receiver: RTCRtpReceiver,
+  bufferSeconds: number | null,
+) {
+  if (!bufferSeconds || bufferSeconds <= 0) {
+    return;
+  }
   const lowLatencyReceiver = receiver as RTCRtpReceiver & {
     jitterBufferTarget?: number;
     playoutDelayHint?: number;
   };
   if ("jitterBufferTarget" in lowLatencyReceiver) {
-    lowLatencyReceiver.jitterBufferTarget = WEBRTC_RECEIVER_BUFFER_SECONDS;
+    lowLatencyReceiver.jitterBufferTarget = bufferSeconds;
   }
   if ("playoutDelayHint" in lowLatencyReceiver) {
-    lowLatencyReceiver.playoutDelayHint = WEBRTC_RECEIVER_BUFFER_SECONDS;
+    lowLatencyReceiver.playoutDelayHint = bufferSeconds;
   }
 }
 

@@ -78,7 +78,7 @@ The WebRTC path favors freshness: stale frames are dropped and the sender reques
 A few practical guidelines:
 
 - **Start on the default for local preview.** `auto` lets VideoToolbox choose without requiring the shared hardware encoder.
-- **Switch to `software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 90 fps for local preview, and backs off dynamically under encode latency.
+- **Switch to `software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
 - **Studio providers default to software H.264 plus `--stream-quality smooth`.** This profile uses a 1170-pixel longest edge, allows up to 60 fps, raises the bitrate budget to reduce compression artifacts, and lets multiple provider sessions share CPU cores without depending on one hardware encoder.
 - **The remote browser renders the live stream as a native `<video>` element.** The canvas remains for input geometry, but it is not in the live per-frame render path and does not preserve stale frames during reconnects.
 - **Use `--stream-quality ci-software` for denser virtualized CI Macs.** This profile uses software H.264 at a 960-pixel longest edge, targets 24 fps, lowers bitrate pressure, and favors fresh frames over full-resolution sharpness.
