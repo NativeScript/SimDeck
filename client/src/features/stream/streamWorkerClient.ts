@@ -10,15 +10,12 @@ import type {
 
 const HAVE_CURRENT_DATA = 2;
 const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
-const WEBRTC_REALTIME_INPUT_CHANNEL_LABEL = "simdeck-input";
 const WEBRTC_TELEMETRY_CHANNEL_LABEL = "simdeck-telemetry";
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 10000;
 const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 8000;
 const WEBRTC_REMOTE_DISCONNECTED_GRACE_MS = 3000;
-const WEBRTC_REALTIME_INPUT_BUFFER_LIMIT = 1024;
 
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
-let activeWebRtcRealtimeInputChannel: RTCDataChannel | null = null;
 let activeWebRtcTelemetryChannel: RTCDataChannel | null = null;
 let activeStreamClient: StreamWorkerClient | null = null;
 
@@ -26,20 +23,6 @@ export type StreamBackend = "webrtc";
 
 export function sendWebRtcControlMessage(encoded: string): boolean {
   return sendDataChannelMessage(activeWebRtcControlChannel, encoded);
-}
-
-export function sendWebRtcRealtimeControlMessage(encoded: string): boolean {
-  if (activeWebRtcRealtimeInputChannel?.readyState !== "open") {
-    return false;
-  }
-  if (
-    activeWebRtcRealtimeInputChannel.bufferedAmount >
-    WEBRTC_REALTIME_INPUT_BUFFER_LIMIT
-  ) {
-    return true;
-  }
-  activeWebRtcRealtimeInputChannel.send(encoded);
-  return true;
 }
 
 export function sendWebRtcClientStats(stats: unknown): boolean {
@@ -90,7 +73,6 @@ class WebRtcStreamClient implements StreamClientBackend {
   private lastVideoFrameAt = 0;
   private peerConnection: RTCPeerConnection | null = null;
   private reconnectTimeout = 0;
-  private realtimeInputChannel: RTCDataChannel | null = null;
   private remoteMode = false;
   private reportedVideoConfig = false;
   private shouldReconnect = false;
@@ -157,20 +139,6 @@ class WebRtcStreamClient implements StreamClientBackend {
       controlChannel.addEventListener("close", () => {
         if (activeWebRtcControlChannel === controlChannel) {
           activeWebRtcControlChannel = null;
-        }
-      });
-      const realtimeInputChannel = peerConnection.createDataChannel(
-        WEBRTC_REALTIME_INPUT_CHANNEL_LABEL,
-        {
-          maxRetransmits: 1,
-          ordered: false,
-        },
-      );
-      this.realtimeInputChannel = realtimeInputChannel;
-      activeWebRtcRealtimeInputChannel = realtimeInputChannel;
-      realtimeInputChannel.addEventListener("close", () => {
-        if (activeWebRtcRealtimeInputChannel === realtimeInputChannel) {
-          activeWebRtcRealtimeInputChannel = null;
         }
       });
       const telemetryChannel = peerConnection.createDataChannel(
@@ -345,11 +313,6 @@ class WebRtcStreamClient implements StreamClientBackend {
       activeWebRtcControlChannel = null;
     }
     this.controlChannel = null;
-    this.realtimeInputChannel?.close();
-    if (activeWebRtcRealtimeInputChannel === this.realtimeInputChannel) {
-      activeWebRtcRealtimeInputChannel = null;
-    }
-    this.realtimeInputChannel = null;
     this.telemetryChannel?.close();
     if (activeWebRtcTelemetryChannel === this.telemetryChannel) {
       activeWebRtcTelemetryChannel = null;

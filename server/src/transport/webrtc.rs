@@ -36,7 +36,6 @@ use webrtc::track::track_local::TrackLocalWriter;
 const ANNEX_B_START_CODE: &[u8] = &[0, 0, 0, 1];
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
-const WEBRTC_REALTIME_INPUT_CHANNEL_LABEL: &str = "simdeck-input";
 const WEBRTC_TELEMETRY_CHANNEL_LABEL: &str = "simdeck-telemetry";
 const WEBRTC_BOOTSTRAP_KEYFRAME_INTERVAL: Duration = Duration::from_millis(150);
 const WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS: u8 = 3;
@@ -348,12 +347,7 @@ fn register_control_data_channel(
         let udid = udid.clone();
         Box::pin(async move {
             let label = channel.label();
-            if !matches!(
-                label.as_ref(),
-                WEBRTC_CONTROL_CHANNEL_LABEL
-                    | WEBRTC_REALTIME_INPUT_CHANNEL_LABEL
-                    | WEBRTC_TELEMETRY_CHANNEL_LABEL
-            ) {
+            if label != WEBRTC_CONTROL_CHANNEL_LABEL && label != WEBRTC_TELEMETRY_CHANNEL_LABEL {
                 return;
             }
             attach_control_data_channel(channel, session, state, udid);

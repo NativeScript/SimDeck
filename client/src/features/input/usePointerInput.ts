@@ -33,7 +33,6 @@ export function usePointerInput({
   onTouchPreview,
 }: UsePointerInputOptions) {
   const activePointerRef = useRef<number | null>(null);
-  const sentMoveThisFrameRef = useRef(false);
   const moveFrameRef = useRef<number>(0);
   const panningRef = useRef<{
     startX: number;
@@ -53,22 +52,6 @@ export function usePointerInput({
   }, []);
 
   function queueMove(coords: Point) {
-    if (!sentMoveThisFrameRef.current) {
-      sentMoveThisFrameRef.current = true;
-      onTouch("moved", coords);
-      if (!moveFrameRef.current) {
-        moveFrameRef.current = requestAnimationFrame(() => {
-          moveFrameRef.current = 0;
-          sentMoveThisFrameRef.current = false;
-          const nextCoords = queuedMoveRef.current;
-          queuedMoveRef.current = null;
-          if (nextCoords) {
-            queueMove(nextCoords);
-          }
-        });
-      }
-      return;
-    }
     queuedMoveRef.current = coords;
     if (moveFrameRef.current) {
       return;
@@ -76,11 +59,10 @@ export function usePointerInput({
 
     moveFrameRef.current = requestAnimationFrame(() => {
       moveFrameRef.current = 0;
-      sentMoveThisFrameRef.current = false;
       const nextCoords = queuedMoveRef.current;
       queuedMoveRef.current = null;
       if (nextCoords) {
-        queueMove(nextCoords);
+        onTouch("moved", nextCoords);
       }
     });
   }
@@ -91,7 +73,6 @@ export function usePointerInput({
       moveFrameRef.current = 0;
     }
     queuedMoveRef.current = null;
-    sentMoveThisFrameRef.current = false;
   }
 
   function startPanning(event: React.PointerEvent<HTMLElement>) {
