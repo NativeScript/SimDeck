@@ -67,6 +67,7 @@
     "test:integration:js-api:verbose": "SIMDECK_INTEGRATION_SHOW_SIMULATOR=1 node scripts/integration/js-api.mjs",
     "test:studio-provider": "node --test scripts/studio-provider-bridge.test.mjs",
     "test:stress": "node scripts/stress/simdeck.mjs",
+    "bench:encoder:build": "scripts/bench/build-encoder-benchmark.sh",
     "ci": "npm run lint && npm run build:all && npm run test && npm run package:vscode-extension",
     "dev": "npm run build:cli && node scripts/dev.mjs",
     "preview:swiftui": "node scripts/experimental/swiftui-preview.mjs",
