@@ -782,10 +782,14 @@ export function AppShell({
       }
     }
 
-    document.addEventListener("pointerdown", handleDocumentPointerDown);
+    document.addEventListener("pointerdown", handleDocumentPointerDown, true);
     window.addEventListener("keydown", handleWindowKeyDown);
     return () => {
-      document.removeEventListener("pointerdown", handleDocumentPointerDown);
+      document.removeEventListener(
+        "pointerdown",
+        handleDocumentPointerDown,
+        true,
+      );
       window.removeEventListener("keydown", handleWindowKeyDown);
     };
   }, [menuOpen]);
@@ -1477,6 +1481,7 @@ export function AppShell({
             <DebugPanel
               fps={fps}
               inline
+              onClose={() => setDebugVisible(false)}
               runtimeInfo={runtimeInfo}
               stats={stats}
               status={streamStatus}

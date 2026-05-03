@@ -170,12 +170,37 @@
 }
 
 .debug-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 10px;
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.debug-close {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -6px -4px -4px 0;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.debug-close:hover {
+  color: var(--text);
+  background: var(--surface-raised);
 }
 
 .debug-grid {
@@ -423,6 +448,7 @@
 
 .hierarchy-panel {
   position: relative;
+  box-sizing: border-box;
   flex: 0 0 auto;
   min-width: 240px;
   max-width: 55vw;
@@ -476,6 +502,7 @@
 
 .hierarchy-tree {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 4px;
   scrollbar-width: thin;

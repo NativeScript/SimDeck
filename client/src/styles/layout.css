@@ -83,6 +83,7 @@
 }
 
 .main {
+  position: relative;
   display: flex;
   overflow: hidden;
   min-height: 0;
@@ -145,10 +146,6 @@
     display: block;
   }
 
-  .main {
-    flex-direction: column;
-  }
-
   .debug-grid {
     grid-template-columns: 1fr;
   }
@@ -168,12 +165,19 @@
   }
 
   .hierarchy-panel {
-    width: 100%;
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    bottom: 8px;
+    z-index: 18;
+    width: min(360px, calc(100vw - 16px));
     min-width: 0;
-    max-width: none;
-    max-height: min(42dvh, 360px);
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+    max-width: calc(100vw - 16px);
+    max-height: none;
+    height: calc(100% - 16px);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
   }
 
   .toolbar-sim-detail {
