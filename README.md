@@ -152,6 +152,7 @@ simdeck toggle-appearance <udid>
 simdeck pasteboard set <udid> "hello"
 simdeck pasteboard get <udid>
 simdeck screenshot <udid> --output screen.png
+simdeck stream <udid> --frames 120 > stream.h264
 simdeck describe <udid>
 simdeck describe <udid> --format agent --max-depth 4
 simdeck describe <udid> --point 120,240
@@ -178,6 +179,13 @@ simdeck rotate-right <udid>
 simdeck chrome-profile <udid>
 simdeck logs <udid> --seconds 30 --limit 200
 ```
+
+`boot` prefers SimDeck's private CoreSimulator boot path so it can start devices
+without launching Simulator.app, then falls back to `xcrun simctl` when private
+booting is unavailable.
+
+`stream` writes an Annex B H.264 elementary stream to stdout for diagnostics or
+external tools such as `ffplay`.
 
 `describe` uses the project daemon to prefer React Native, NativeScript, or
 UIKit in-app inspectors, then falls back to the built-in private CoreSimulator

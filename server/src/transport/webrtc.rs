@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio::task;
 use tokio::time;
 use tracing::{info, warn};
@@ -166,11 +166,13 @@ pub async fn create_answer(
         .map_err(|error| AppError::internal(format!("create WebRTC peer connection: {error}")))?,
     );
     register_diagnostics(&peer_connection, &udid);
+    let (stream_control_tx, stream_control_rx) = mpsc::unbounded_channel();
     register_control_data_channel(
         &peer_connection,
         session.clone(),
         state.clone(),
         udid.clone(),
+        stream_control_tx,
     );
 
     let video_track = Arc::new(TrackLocalStaticRTP::new(
@@ -232,6 +234,7 @@ pub async fn create_answer(
             video_track,
             cancellation_token,
             cancellation,
+            stream_control_rx,
         }
         .run(),
     );
@@ -344,17 +347,19 @@ fn register_control_data_channel(
     session: crate::simulators::session::SimulatorSession,
     state: AppState,
     udid: String,
+    stream_control_tx: mpsc::UnboundedSender<WebRtcStreamCommand>,
 ) {
     peer_connection.on_data_channel(Box::new(move |channel: Arc<RTCDataChannel>| {
         let session = session.clone();
         let state = state.clone();
         let udid = udid.clone();
+        let stream_control_tx = stream_control_tx.clone();
         Box::pin(async move {
             let label = channel.label();
             if label != WEBRTC_CONTROL_CHANNEL_LABEL && label != WEBRTC_TELEMETRY_CHANNEL_LABEL {
                 return;
             }
-            attach_control_data_channel(channel, session, state, udid);
+            attach_control_data_channel(channel, session, state, udid, stream_control_tx);
         })
     }));
 }
@@ -364,11 +369,13 @@ fn attach_control_data_channel(
     session: crate::simulators::session::SimulatorSession,
     state: AppState,
     udid: String,
+    stream_control_tx: mpsc::UnboundedSender<WebRtcStreamCommand>,
 ) {
     channel.on_message(Box::new(move |message: DataChannelMessage| {
         let session = session.clone();
         let state = state.clone();
         let udid = udid.clone();
+        let stream_control_tx = stream_control_tx.clone();
         Box::pin(async move {
             let Ok(text) = std::str::from_utf8(&message.data) else {
                 warn!("Invalid WebRTC control message bytes for {udid}");
@@ -378,8 +385,25 @@ fn attach_control_data_channel(
                 match message {
                     WebRtcDataChannelMessage::ClientStats { stats } => {
                         if !stats.client_id.trim().is_empty() && !stats.kind.trim().is_empty() {
-                            state.metrics.record_client_stream_stats(stats);
+                            state.metrics.record_client_stream_stats(*stats);
                         }
+                    }
+                    WebRtcDataChannelMessage::StreamControl {
+                        fps,
+                        force_keyframe,
+                        profile,
+                        snapshot,
+                    } => {
+                        let command = WebRtcStreamCommand::from_payload(
+                            profile.as_deref(),
+                            fps,
+                            force_keyframe.unwrap_or(false),
+                            snapshot.unwrap_or(false),
+                        );
+                        if command.force_keyframe || command.snapshot {
+                            session.request_keyframe();
+                        }
+                        let _ = stream_control_tx.send(command);
                     }
                 }
                 return;
@@ -419,7 +443,45 @@ fn attach_control_data_channel(
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum WebRtcDataChannelMessage {
-    ClientStats { stats: ClientStreamStats },
+    ClientStats {
+        stats: Box<ClientStreamStats>,
+    },
+    StreamControl {
+        fps: Option<u32>,
+        #[serde(rename = "forceKeyframe")]
+        force_keyframe: Option<bool>,
+        profile: Option<String>,
+        snapshot: Option<bool>,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct WebRtcStreamCommand {
+    force_keyframe: bool,
+    snapshot: bool,
+    target_frame_interval: Option<Duration>,
+}
+
+impl WebRtcStreamCommand {
+    fn from_payload(
+        profile: Option<&str>,
+        fps: Option<u32>,
+        force_keyframe: bool,
+        snapshot: bool,
+    ) -> Self {
+        let profile_fps = match profile.map(str::trim) {
+            Some("thumbnail") | Some("thumb") => Some(8),
+            Some("paused") => Some(1),
+            Some("focus") | Some("full") => Some(60),
+            _ => None,
+        };
+        let fps = fps.or(profile_fps).map(|value| value.clamp(1, 60));
+        Self {
+            force_keyframe,
+            snapshot,
+            target_frame_interval: fps.map(|fps| Duration::from_micros(1_000_000 / fps as u64)),
+        }
+    }
 }
 
 fn is_h264_codec(codec: &str) -> bool {
@@ -660,6 +722,7 @@ struct WebRtcMediaStream {
     video_track: Arc<TrackLocalStaticRTP>,
     cancellation_token: broadcast::Sender<()>,
     cancellation: broadcast::Receiver<()>,
+    stream_control_rx: mpsc::UnboundedReceiver<WebRtcStreamCommand>,
 }
 
 impl WebRtcMediaStream {
@@ -673,6 +736,7 @@ impl WebRtcMediaStream {
             video_track,
             cancellation_token,
             mut cancellation,
+            mut stream_control_rx,
         } = self;
         let mut rx = session.subscribe();
         let mut latest_keyframe = first_frame.clone();
@@ -693,6 +757,8 @@ impl WebRtcMediaStream {
         let mut refresh_sleep = Box::pin(time::sleep(refresh_floor));
         let mut adaptive_refresh_interval = refresh_floor;
         let mut bootstrap_frames_remaining = WEBRTC_BOOTSTRAP_KEYFRAME_REPEATS;
+        let mut target_frame_interval: Option<Duration> = None;
+        let mut last_sent_at: Option<time::Instant> = None;
         let mut waiting_for_keyframe = false;
         let mut peer_disconnected_since: Option<time::Instant> = None;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
@@ -707,6 +773,7 @@ impl WebRtcMediaStream {
         .await
         {
             Ok(true) => {
+                last_sent_at = Some(time::Instant::now());
                 state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
             }
             Ok(false) => {
@@ -792,6 +859,18 @@ impl WebRtcMediaStream {
                         .as_mut()
                         .reset(time::Instant::now() + adaptive_refresh_interval);
                 }
+                command = stream_control_rx.recv() => {
+                    let Some(command) = command else {
+                        continue;
+                    };
+                    target_frame_interval = command.target_frame_interval;
+                    if command.force_keyframe || command.snapshot {
+                        waiting_for_keyframe = true;
+                        session.request_keyframe();
+                    } else {
+                        session.request_refresh();
+                    }
+                }
                 frame = rx.recv() => {
                     let frame = match frame {
                         Ok(frame) => frame,
@@ -829,6 +908,12 @@ impl WebRtcMediaStream {
                         latest_keyframe = frame.clone();
                         waiting_for_keyframe = false;
                     }
+                    if let (Some(interval), Some(previous)) = (target_frame_interval, last_sent_at) {
+                        if previous.elapsed() < interval && !frame.is_keyframe {
+                            state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                    }
                     let duration = send_timing.duration_for(&frame, realtime_stream);
                     let started_at = time::Instant::now();
                     let write_result = write_frame_sample_with_timeout(
@@ -843,6 +928,7 @@ impl WebRtcMediaStream {
                         adaptive_interval_for_write(started_at.elapsed(), refresh_floor, refresh_ceiling);
                     match write_result {
                         Ok(true) => {
+                            last_sent_at = Some(time::Instant::now());
                             state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
                         }
                         Ok(false) => {
@@ -1032,7 +1118,9 @@ pub fn realtime_stream_enabled() -> bool {
         })
 }
 
-fn h264_annex_b_sample(frame: &crate::transport::packet::FramePacket) -> anyhow::Result<Vec<u8>> {
+pub fn h264_annex_b_sample(
+    frame: &crate::transport::packet::FramePacket,
+) -> anyhow::Result<Vec<u8>> {
     let data = frame.data.as_ref();
     let description = frame.description.as_ref().map(bytes::Bytes::as_ref);
     let mut sample = Vec::with_capacity(data.len() + description.map_or(0, |bytes| bytes.len()));

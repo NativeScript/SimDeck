@@ -149,6 +149,16 @@ and the server responds with an SDP answer for a receive-only H.264 video track:
 The endpoint requires the active simulator stream to produce H.264-compatible
 samples. The bundled browser client always uses this endpoint.
 
+The browser also opens a `simdeck-control` data channel. In addition to input
+messages, clients can tune the stream attached to that peer:
+
+```json
+{ "type": "streamControl", "profile": "thumb" }
+```
+
+Supported profiles are `thumb`/`thumbnail`, `focus`/`full`, and `paused`.
+Clients may also send `fps`, `forceKeyframe`, or `snapshot` fields.
+
 ### `POST /api/simulators/{udid}/open-url`
 
 Opens a URL inside the simulator:

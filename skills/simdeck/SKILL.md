@@ -213,11 +213,13 @@ await simdeck.batch(udid, [
 ```bash
 simdeck screenshot <UDID> --output screen.png
 simdeck screenshot <UDID> --stdout > screen.png
+simdeck stream <UDID> --frames 120 > stream.h264
 simdeck logs <UDID> --seconds 30 --limit 200
 simdeck chrome-profile <UDID>
 ```
 
-Use screenshots for still evidence.
+Use screenshots for still evidence. Use `stream` when a diagnostic needs raw
+H.264 samples for an external player or capture pipeline.
 
 ## Default Loop
 
