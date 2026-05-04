@@ -1,6 +1,12 @@
 import { useEffect, useState, type RefObject } from "react";
 
 import type { SimulatorMetadata } from "../../api/types";
+import type {
+  StreamConfig,
+  StreamEncoder,
+  StreamFps,
+  StreamQualityPreset,
+} from "../stream/streamTypes";
 import { SimulatorMenu } from "../simulators/SimulatorMenu";
 
 interface ToolbarProps {
@@ -20,6 +26,9 @@ interface ToolbarProps {
   onRotateLeft: () => void;
   onRotateRight: () => void;
   onShutdown: () => void;
+  onStreamEncoderChange: (encoder: StreamEncoder) => void;
+  onStreamFpsChange: (fps: StreamFps) => void;
+  onStreamQualityChange: (quality: StreamQualityPreset) => void;
   onToggleAppearance: () => void;
   onToggleDebug: () => void;
   onToggleHierarchy: () => void;
@@ -31,6 +40,7 @@ interface ToolbarProps {
   setSelectedUDID: (udid: string) => void;
   showBootButton: boolean;
   showStopButton: boolean;
+  streamConfig: StreamConfig;
   touchOverlayVisible: boolean;
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
@@ -57,6 +67,9 @@ export function Toolbar({
   onRotateLeft,
   onRotateRight,
   onShutdown,
+  onStreamEncoderChange,
+  onStreamFpsChange,
+  onStreamQualityChange,
   onToggleAppearance,
   onToggleDebug,
   onToggleHierarchy,
@@ -68,6 +81,7 @@ export function Toolbar({
   setSelectedUDID,
   showBootButton,
   showStopButton,
+  streamConfig,
   touchOverlayVisible,
 }: ToolbarProps) {
   const [errorCopied, setErrorCopied] = useState(false);
@@ -114,6 +128,9 @@ export function Toolbar({
           onOpenBundlePrompt={onOpenBundlePrompt}
           onOpenUrlPrompt={onOpenUrlPrompt}
           onRotateLeft={onRotateLeft}
+          onStreamEncoderChange={onStreamEncoderChange}
+          onStreamFpsChange={onStreamFpsChange}
+          onStreamQualityChange={onStreamQualityChange}
           onToggleAppearance={onToggleAppearance}
           onToggleDebug={onToggleDebug}
           onToggleMenu={onToggleMenu}
@@ -121,6 +138,7 @@ export function Toolbar({
           search={search}
           selectedSimulator={selectedSimulator}
           setSelectedUDID={setSelectedUDID}
+          streamConfig={streamConfig}
           touchOverlayVisible={touchOverlayVisible}
         />
         {selectedSimulator ? (

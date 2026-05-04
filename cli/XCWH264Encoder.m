@@ -7,15 +7,15 @@
 #import <VideoToolbox/VideoToolbox.h>
 #include <stdlib.h>
 
-static const int32_t XCWMaximumEncodedDimension = 1920;
+static const int32_t XCWMaximumEncodedDimension = 4096;
 static const int32_t XCWMaximumRealtimeHardwareEncodedDimension = 1440;
 static const int32_t XCWMaximumSoftwareEncodedDimension = 1600;
 static const int32_t XCWMaximumLowLatencySoftwareEncodedDimension = 1170;
-static const int32_t XCWTargetRealTimeFrameRate = 60;
+static const int32_t XCWTargetRealTimeFrameRate = 120;
 static const int32_t XCWTargetRealtimeHardwareFrameRate = 30;
-static const int32_t XCWTargetSoftwareFrameRate = 60;
+static const int32_t XCWTargetSoftwareFrameRate = 120;
 static const int32_t XCWMinimumLocalStreamFrameRate = 15;
-static const int32_t XCWMaximumLocalStreamFrameRate = 120;
+static const int32_t XCWMaximumLocalStreamFrameRate = 240;
 static const int32_t XCWTargetLowLatencySoftwareFrameRate = 15;
 static const NSUInteger XCWMaximumInFlightFrames = 2;
 static const int32_t XCWMinimumAverageBitRate = 18000000;
@@ -127,7 +127,7 @@ static int32_t XCWRealtimeTargetFrameRate(void) {
     return XCWIntFromEnvironment(@"SIMDECK_REALTIME_FPS",
                                  XCWTargetRealtimeHardwareFrameRate,
                                  15,
-                                 60);
+                                 XCWMaximumLocalStreamFrameRate);
 }
 
 static uint64_t XCWRealtimeFrameIntervalUs(void) {
@@ -474,6 +474,11 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 - (nullable CVPixelBufferRef)copySoftwareScaledPixelBuffer:(CVPixelBufferRef)pixelBuffer
                                                targetWidth:(int32_t)targetWidth
                                               targetHeight:(int32_t)targetHeight;
+- (nullable CVPixelBufferRef)copyPixelBufferFromScalingPoolWithWidth:(int32_t)targetWidth
+                                                              height:(int32_t)targetHeight
+                                                         pixelFormat:(OSType)pixelFormat;
+- (void)handleCompressionOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+                              submittedAtUs:(uint64_t)submittedAtUs;
 
 @end
 
@@ -489,8 +494,11 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     int32_t _height;
     uint64_t _timestampOriginUs;
     VTPixelTransferSessionRef _pixelTransferSession;
-    CVPixelBufferRef _scaledPixelBuffer;
+    CVPixelBufferPoolRef _scaledPixelBufferPool;
+    int32_t _scaledPixelBufferWidth;
+    int32_t _scaledPixelBufferHeight;
     OSType _scaledPixelFormat;
+    BOOL _scalingActive;
     XCWVideoEncoderMode _encoderMode;
     BOOL _lowLatencyMode;
     BOOL _realtimeStreamMode;
@@ -582,6 +590,9 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 - (void)reconfigureForStreamQualityChange {
     dispatch_async(_queue, ^{
         [self invalidateCompressionSessionLocked];
+        self->_encoderMode = XCWVideoEncoderModeFromEnvironment();
+        self->_lowLatencyMode = (self->_encoderMode == XCWVideoEncoderModeH264Software) && XCWLowLatencyModeFromEnvironment();
+        self->_codecType = XCWVideoCodecTypeForMode(self->_encoderMode);
         self->_needsKeyFrame = YES;
         self->_softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
         self->_softwarePacedFrameCount = 0;
@@ -654,7 +665,10 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 }
 
 - (NSUInteger)maximumInFlightFrameCountLocked {
-    return (_realtimeStreamMode || (_encoderMode == XCWVideoEncoderModeH264Software && _lowLatencyMode)) ? 1 : XCWMaximumInFlightFrames;
+    if (_realtimeStreamMode || _lowLatencyMode) {
+        return 1;
+    }
+    return XCWMaximumInFlightFrames;
 }
 
 - (uint64_t)minimumSoftwareFrameIntervalUsLocked {
@@ -748,7 +762,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 }
 
 - (void)adaptSoftwarePacingForLatencyUs:(uint64_t)latencyUs {
-    if (_encoderMode != XCWVideoEncoderModeH264Software || latencyUs == 0) {
+    if (_encoderMode != XCWVideoEncoderModeH264Software || !_lowLatencyMode || latencyUs == 0) {
         return;
     }
     if (_softwareFrameIntervalUs == 0) {
@@ -787,7 +801,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 }
 
 - (void)adaptHardwarePacingForLatencyUs:(uint64_t)latencyUs {
-    if ((_encoderMode != XCWVideoEncoderModeAuto && _encoderMode != XCWVideoEncoderModeH264Hardware) || latencyUs == 0) {
+    if ((_encoderMode != XCWVideoEncoderModeAuto && _encoderMode != XCWVideoEncoderModeH264Hardware) || !_lowLatencyMode || latencyUs == 0) {
         return;
     }
     if (_hardwareFrameIntervalUs == 0) {
@@ -859,6 +873,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     if (targetWidth <= 0 || targetHeight <= 0) {
         return NO;
     }
+    _scalingActive = sourceWidth != targetWidth || sourceHeight != targetHeight;
 
     uint64_t nowUs = (uint64_t)(CACurrentMediaTime() * 1000000.0);
     if ([self shouldPaceSoftwareFrameAtTimeUs:nowUs] || [self shouldPaceHardwareFrameAtTimeUs:nowUs]) {
@@ -929,7 +944,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     if (encoderID.length > 0) {
         encoderSpecification[(__bridge NSString *)kVTVideoEncoderSpecification_EncoderID] = encoderID;
     }
-    if (_encoderMode != XCWVideoEncoderModeH264Software && _realtimeStreamMode) {
+    if (_encoderMode != XCWVideoEncoderModeH264Software && _lowLatencyMode) {
         if (@available(macOS 11.3, *)) {
             encoderSpecification[(__bridge NSString *)kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = @YES;
         }
@@ -938,6 +953,8 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         encoderSpecification[(__bridge NSString *)kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder] = @NO;
     } else if (_encoderMode == XCWVideoEncoderModeH264Hardware) {
         encoderSpecification[(__bridge NSString *)kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder] = @YES;
+    } else if (_encoderMode == XCWVideoEncoderModeAuto && _realtimeStreamMode) {
+        encoderSpecification[(__bridge NSString *)kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder] = @YES;
     }
 
     VTCompressionSessionRef session = NULL;
@@ -969,7 +986,9 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     if (@available(macOS 10.14, *)) {
         VTSessionSetProperty(session, kVTCompressionPropertyKey_MaximizePowerEfficiency, kCFBooleanFalse);
     }
-    XCWApplyCompressionPresetIfAvailable(session);
+    if (_lowLatencyMode) {
+        XCWApplyCompressionPresetIfAvailable(session);
+    }
     VTSessionSetProperty(session, kVTCompressionPropertyKey_AllowTemporalCompression, kCFBooleanTrue);
     VTSessionSetProperty(session, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
     if (@available(macOS 10.14, *)) {
@@ -984,7 +1003,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     }
     VTSessionSetProperty(session, kVTCompressionPropertyKey_H264EntropyMode, kVTH264EntropyMode_CAVLC);
     VTSessionSetProperty(session, kVTCompressionPropertyKey_ExpectedFrameRate, (__bridge CFTypeRef)@(expectedFrameRate));
-    BOOL shortKeyframeInterval = _lowLatencyMode || _realtimeStreamMode;
+    BOOL shortKeyframeInterval = _lowLatencyMode;
     VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(shortKeyframeInterval ? MAX(1, expectedFrameRate / 2) : expectedFrameRate * 2));
     VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, (__bridge CFTypeRef)@(shortKeyframeInterval ? 0.5 : 2.0));
     VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@(averageBitRate));
@@ -998,7 +1017,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     if (@available(macOS 11.0, *)) {
         VTSessionSetProperty(session,
                              kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
-                             kCFBooleanTrue);
+                             _lowLatencyMode ? kCFBooleanTrue : kCFBooleanFalse);
     }
     if (@available(macOS 15.0, *)) {
         VTSessionSetProperty(session,
@@ -1038,6 +1057,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _lastHardwareSubmissionUs = 0;
     _hardwareAccelerated = NO;
     _selectedEncoderID = nil;
+    _scalingActive = NO;
     [self invalidateScalingResourcesLocked];
 }
 
@@ -1051,15 +1071,14 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         return pixelBuffer;
     }
 
-    if (_encoderMode == XCWVideoEncoderModeH264Software) {
-        return [self copySoftwareScaledPixelBuffer:pixelBuffer
-                                       targetWidth:targetWidth
-                                      targetHeight:targetHeight];
-    }
-
     if (_pixelTransferSession == NULL) {
         OSStatus sessionStatus = VTPixelTransferSessionCreate(kCFAllocatorDefault, &_pixelTransferSession);
         if (sessionStatus != noErr || _pixelTransferSession == NULL) {
+            if (_encoderMode == XCWVideoEncoderModeH264Software) {
+                return [self copySoftwareScaledPixelBuffer:pixelBuffer
+                                               targetWidth:targetWidth
+                                              targetHeight:targetHeight];
+            }
             return NULL;
         }
 #ifdef kVTPixelTransferPropertyKey_RealTime
@@ -1075,43 +1094,28 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     }
 
     OSType sourcePixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
-    BOOL needsNewBuffer = (_scaledPixelBuffer == NULL)
-        || ((int32_t)CVPixelBufferGetWidth(_scaledPixelBuffer) != targetWidth)
-        || ((int32_t)CVPixelBufferGetHeight(_scaledPixelBuffer) != targetHeight)
-        || (_scaledPixelFormat != sourcePixelFormat);
-    if (needsNewBuffer) {
-        if (_scaledPixelBuffer != NULL) {
-            CVPixelBufferRelease(_scaledPixelBuffer);
-            _scaledPixelBuffer = NULL;
-        }
-
-        NSDictionary *attributes = @{
-            (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
-        };
-        CVPixelBufferRef scaledPixelBuffer = NULL;
-        OSStatus bufferStatus = CVPixelBufferCreate(kCFAllocatorDefault,
-                                                    targetWidth,
-                                                    targetHeight,
-                                                    sourcePixelFormat,
-                                                    (__bridge CFDictionaryRef)attributes,
-                                                    &scaledPixelBuffer);
-        if (bufferStatus != noErr || scaledPixelBuffer == NULL) {
-            return NULL;
-        }
-        _scaledPixelBuffer = scaledPixelBuffer;
-        _scaledPixelFormat = sourcePixelFormat;
+    CVPixelBufferRef scaledPixelBuffer = [self copyPixelBufferFromScalingPoolWithWidth:targetWidth
+                                                                                height:targetHeight
+                                                                           pixelFormat:sourcePixelFormat];
+    if (scaledPixelBuffer == NULL) {
+        return NULL;
     }
 
     OSStatus transferStatus = VTPixelTransferSessionTransferImage(_pixelTransferSession,
                                                                   pixelBuffer,
-                                                                  _scaledPixelBuffer);
+                                                                  scaledPixelBuffer);
     _lastScaleStatus = transferStatus;
     if (transferStatus != noErr) {
+        CVPixelBufferRelease(scaledPixelBuffer);
+        if (_encoderMode == XCWVideoEncoderModeH264Software) {
+            return [self copySoftwareScaledPixelBuffer:pixelBuffer
+                                           targetWidth:targetWidth
+                                          targetHeight:targetHeight];
+        }
         return NULL;
     }
 
-    CVPixelBufferRetain(_scaledPixelBuffer);
-    return _scaledPixelBuffer;
+    return scaledPixelBuffer;
 }
 
 - (nullable CVPixelBufferRef)copySoftwareScaledPixelBuffer:(CVPixelBufferRef)pixelBuffer
@@ -1123,43 +1127,24 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         return NULL;
     }
 
-    BOOL needsNewBuffer = (_scaledPixelBuffer == NULL)
-        || ((int32_t)CVPixelBufferGetWidth(_scaledPixelBuffer) != targetWidth)
-        || ((int32_t)CVPixelBufferGetHeight(_scaledPixelBuffer) != targetHeight)
-        || (_scaledPixelFormat != sourcePixelFormat);
-    if (needsNewBuffer) {
-        if (_scaledPixelBuffer != NULL) {
-            CVPixelBufferRelease(_scaledPixelBuffer);
-            _scaledPixelBuffer = NULL;
-        }
-
-        NSDictionary *attributes = @{
-            (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
-        };
-        CVPixelBufferRef scaledPixelBuffer = NULL;
-        OSStatus bufferStatus = CVPixelBufferCreate(kCFAllocatorDefault,
-                                                    targetWidth,
-                                                    targetHeight,
-                                                    sourcePixelFormat,
-                                                    (__bridge CFDictionaryRef)attributes,
-                                                    &scaledPixelBuffer);
-        if (bufferStatus != noErr || scaledPixelBuffer == NULL) {
-            _lastScaleStatus = bufferStatus;
-            return NULL;
-        }
-        _scaledPixelBuffer = scaledPixelBuffer;
-        _scaledPixelFormat = sourcePixelFormat;
+    CVPixelBufferRef scaledPixelBuffer = [self copyPixelBufferFromScalingPoolWithWidth:targetWidth
+                                                                                height:targetHeight
+                                                                           pixelFormat:sourcePixelFormat];
+    if (scaledPixelBuffer == NULL) {
+        return NULL;
     }
 
     CVReturn sourceLockStatus = CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
     if (sourceLockStatus != kCVReturnSuccess) {
+        CVPixelBufferRelease(scaledPixelBuffer);
         _lastScaleStatus = sourceLockStatus;
         return NULL;
     }
 
-    CVReturn targetLockStatus = CVPixelBufferLockBaseAddress(_scaledPixelBuffer, 0);
+    CVReturn targetLockStatus = CVPixelBufferLockBaseAddress(scaledPixelBuffer, 0);
     if (targetLockStatus != kCVReturnSuccess) {
         CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+        CVPixelBufferRelease(scaledPixelBuffer);
         _lastScaleStatus = targetLockStatus;
         return NULL;
     }
@@ -1171,32 +1156,79 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         .rowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer),
     };
     vImage_Buffer targetBuffer = {
-        .data = CVPixelBufferGetBaseAddress(_scaledPixelBuffer),
-        .height = (vImagePixelCount)CVPixelBufferGetHeight(_scaledPixelBuffer),
-        .width = (vImagePixelCount)CVPixelBufferGetWidth(_scaledPixelBuffer),
-        .rowBytes = CVPixelBufferGetBytesPerRow(_scaledPixelBuffer),
+        .data = CVPixelBufferGetBaseAddress(scaledPixelBuffer),
+        .height = (vImagePixelCount)CVPixelBufferGetHeight(scaledPixelBuffer),
+        .width = (vImagePixelCount)CVPixelBufferGetWidth(scaledPixelBuffer),
+        .rowBytes = CVPixelBufferGetBytesPerRow(scaledPixelBuffer),
     };
     vImage_Flags scaleFlags = _realtimeStreamMode ? kvImageNoFlags : kvImageHighQualityResampling;
     vImage_Error scaleStatus = vImageScale_ARGB8888(&sourceBuffer,
                                                     &targetBuffer,
                                                     NULL,
                                                     scaleFlags);
-    CVPixelBufferUnlockBaseAddress(_scaledPixelBuffer, 0);
+    CVPixelBufferUnlockBaseAddress(scaledPixelBuffer, 0);
     CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
     _lastScaleStatus = scaleStatus;
     if (scaleStatus != kvImageNoError) {
+        CVPixelBufferRelease(scaledPixelBuffer);
         return NULL;
     }
 
-    CVPixelBufferRetain(_scaledPixelBuffer);
-    return _scaledPixelBuffer;
+    return scaledPixelBuffer;
+}
+
+- (nullable CVPixelBufferRef)copyPixelBufferFromScalingPoolWithWidth:(int32_t)targetWidth
+                                                              height:(int32_t)targetHeight
+                                                         pixelFormat:(OSType)pixelFormat {
+    BOOL needsNewPool = (_scaledPixelBufferPool == NULL)
+        || (_scaledPixelBufferWidth != targetWidth)
+        || (_scaledPixelBufferHeight != targetHeight)
+        || (_scaledPixelFormat != pixelFormat);
+    if (needsNewPool) {
+        if (_scaledPixelBufferPool != NULL) {
+            CVPixelBufferPoolRelease(_scaledPixelBufferPool);
+            _scaledPixelBufferPool = NULL;
+        }
+
+        NSDictionary *attributes = @{
+            (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(pixelFormat),
+            (__bridge NSString *)kCVPixelBufferWidthKey: @(targetWidth),
+            (__bridge NSString *)kCVPixelBufferHeightKey: @(targetHeight),
+            (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
+        };
+        CVPixelBufferPoolRef pool = NULL;
+        CVReturn poolStatus = CVPixelBufferPoolCreate(kCFAllocatorDefault,
+                                                      NULL,
+                                                      (__bridge CFDictionaryRef)attributes,
+                                                      &pool);
+        if (poolStatus != kCVReturnSuccess || pool == NULL) {
+            _lastScaleStatus = poolStatus;
+            return NULL;
+        }
+        _scaledPixelBufferPool = pool;
+        _scaledPixelBufferWidth = targetWidth;
+        _scaledPixelBufferHeight = targetHeight;
+        _scaledPixelFormat = pixelFormat;
+    }
+
+    CVPixelBufferRef scaledPixelBuffer = NULL;
+    CVReturn bufferStatus = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault,
+                                                              _scaledPixelBufferPool,
+                                                              &scaledPixelBuffer);
+    if (bufferStatus != kCVReturnSuccess || scaledPixelBuffer == NULL) {
+        _lastScaleStatus = bufferStatus;
+        return NULL;
+    }
+    return scaledPixelBuffer;
 }
 
 - (void)invalidateScalingResourcesLocked {
-    if (_scaledPixelBuffer != NULL) {
-        CVPixelBufferRelease(_scaledPixelBuffer);
-        _scaledPixelBuffer = NULL;
+    if (_scaledPixelBufferPool != NULL) {
+        CVPixelBufferPoolRelease(_scaledPixelBufferPool);
+        _scaledPixelBufferPool = NULL;
     }
+    _scaledPixelBufferWidth = 0;
+    _scaledPixelBufferHeight = 0;
     _scaledPixelFormat = 0;
     if (_pixelTransferSession != NULL) {
         VTPixelTransferSessionInvalidate(_pixelTransferSession);
@@ -1300,6 +1332,24 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     });
 }
 
+- (void)handleCompressionOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+                              submittedAtUs:(uint64_t)submittedAtUs {
+    if (sampleBuffer == NULL) {
+        [self completeFailedFrame];
+        return;
+    }
+
+    CFRetain(sampleBuffer);
+    dispatch_async(_queue, ^{
+        [self handleEncodedSampleBuffer:sampleBuffer submittedAtUs:submittedAtUs];
+        CFRelease(sampleBuffer);
+        if (self->_inFlightFrameCount > 0) {
+            self->_inFlightFrameCount -= 1;
+        }
+        [self drainPendingFramesLocked];
+    });
+}
+
 @end
 
 static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
@@ -1314,7 +1364,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     }
 
     XCWH264Encoder *encoder = (__bridge XCWH264Encoder *)outputCallbackRefCon;
-    [encoder handleEncodedSampleBuffer:sampleBuffer
-                         submittedAtUs:(uint64_t)(uintptr_t)sourceFrameRefCon];
-    [encoder completeInFlightFrame];
+    [encoder handleCompressionOutputSampleBuffer:sampleBuffer
+                                   submittedAtUs:(uint64_t)(uintptr_t)sourceFrameRefCon];
 }

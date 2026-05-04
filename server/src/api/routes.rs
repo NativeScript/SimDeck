@@ -23,7 +23,7 @@ use serde_json::{json as json_value, Value};
 use std::collections::VecDeque;
 use std::env;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -100,6 +100,8 @@ struct TouchSequencePayload {
 #[serde(rename_all = "camelCase")]
 struct StreamQualityPayload {
     profile: Option<String>,
+    #[serde(rename = "videoCodec")]
+    video_codec: Option<String>,
     max_edge: Option<u32>,
     fps: Option<u32>,
     min_bitrate: Option<u32>,
@@ -128,10 +130,10 @@ const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
     StreamQualityProfile {
         id: "quality",
         label: "Quality",
-        max_edge: 1440,
+        max_edge: 4096,
         fps: 60,
-        min_bitrate: 8_000_000,
-        bits_per_pixel: 6,
+        min_bitrate: 60_000_000,
+        bits_per_pixel: 10,
     },
     StreamQualityProfile {
         id: "balanced",
@@ -140,6 +142,14 @@ const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
         fps: 60,
         min_bitrate: 6_000_000,
         bits_per_pixel: 5,
+    },
+    StreamQualityProfile {
+        id: "fast",
+        label: "Fast",
+        max_edge: 960,
+        fps: 30,
+        min_bitrate: 2_500_000,
+        bits_per_pixel: 3,
     },
     StreamQualityProfile {
         id: "smooth",
@@ -158,6 +168,8 @@ const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
         bits_per_pixel: 3,
     },
 ];
+
+static STREAM_CONFIG_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
 
 #[derive(Deserialize, Clone)]
 struct TouchSequenceEvent {
@@ -565,7 +577,7 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "videoCodec": active_video_codec(&state.config),
         "lowLatency": state.config.low_latency,
         "realtimeStream": crate::transport::webrtc::realtime_stream_enabled(),
-        "localStreamFps": env_u32("SIMDECK_LOCAL_STREAM_FPS", 60, 15, 120),
+        "localStreamFps": env_u32("SIMDECK_LOCAL_STREAM_FPS", 60, 15, 240),
         "streamQuality": stream_quality_state(),
         "webRtc": {
             "iceServers": crate::transport::webrtc::client_ice_servers(),
@@ -602,6 +614,16 @@ async fn set_stream_quality(
     State(state): State<AppState>,
     Json(payload): Json<StreamQualityPayload>,
 ) -> Result<Json<Value>, AppError> {
+    let video_codec = payload
+        .video_codec
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            normalize_video_codec(value)
+                .ok_or_else(|| AppError::bad_request(format!("Unknown video codec `{value}`.")))
+        })
+        .transpose()?;
     let profile = payload
         .profile
         .as_deref()
@@ -613,25 +635,30 @@ async fn set_stream_quality(
         .max_edge
         .or_else(|| profile.map(|profile| profile.max_edge))
         .unwrap_or(1440)
-        .clamp(320, 1920);
+        .clamp(320, 4096);
     let fps = payload
         .fps
         .or_else(|| profile.map(|profile| profile.fps))
         .unwrap_or(30)
-        .clamp(10, 60);
+        .clamp(10, 240);
     let min_bitrate = payload
         .min_bitrate
         .or_else(|| profile.map(|profile| profile.min_bitrate))
         .unwrap_or(3_000_000)
-        .clamp(200_000, 20_000_000);
+        .clamp(200_000, 60_000_000);
     let bits_per_pixel = payload
         .bits_per_pixel
         .or_else(|| profile.map(|profile| profile.bits_per_pixel))
         .unwrap_or(4)
         .clamp(1, 10);
 
+    let _stream_config_guard = STREAM_CONFIG_LOCK
+        .get_or_init(|| StdMutex::new(()))
+        .lock()
+        .unwrap();
     env::set_var("SIMDECK_REALTIME_MAX_EDGE", max_edge.to_string());
     env::set_var("SIMDECK_REALTIME_FPS", fps.to_string());
+    env::set_var("SIMDECK_LOCAL_STREAM_FPS", fps.to_string());
     env::set_var("SIMDECK_REALTIME_MIN_BITRATE", min_bitrate.to_string());
     env::set_var(
         "SIMDECK_REALTIME_BITS_PER_PIXEL",
@@ -642,6 +669,9 @@ async fn set_stream_quality(
     } else {
         env::set_var("SIMDECK_STREAM_QUALITY_PROFILE", "custom");
     }
+    if let Some(video_codec) = video_codec {
+        env::set_var("SIMDECK_VIDEO_CODEC", video_codec);
+    }
 
     state.registry.reconfigure_video_encoders();
     Ok(json(json_value!(stream_quality_response())))
@@ -651,6 +681,7 @@ fn stream_quality_response() -> Value {
     json_value!({
         "ok": true,
         "quality": stream_quality_state(),
+        "videoCodec": active_video_codec_for_env(),
         "profiles": STREAM_QUALITY_PROFILES.iter().map(stream_quality_profile_value).collect::<Vec<_>>()
     })
 }
@@ -667,13 +698,13 @@ fn stream_quality_state() -> Value {
         min_bitrate: 3_000_000,
         bits_per_pixel: 4,
     });
-    let max_edge = env_u32("SIMDECK_REALTIME_MAX_EDGE", fallback.max_edge, 320, 1920);
-    let fps = env_u32("SIMDECK_REALTIME_FPS", fallback.fps, 10, 60);
+    let max_edge = env_u32("SIMDECK_REALTIME_MAX_EDGE", fallback.max_edge, 320, 4096);
+    let fps = env_u32("SIMDECK_REALTIME_FPS", fallback.fps, 10, 240);
     let min_bitrate = env_u32(
         "SIMDECK_REALTIME_MIN_BITRATE",
         fallback.min_bitrate,
         200_000,
-        20_000_000,
+        60_000_000,
     );
     let bits_per_pixel = env_u32(
         "SIMDECK_REALTIME_BITS_PER_PIXEL",
@@ -702,7 +733,15 @@ fn stream_quality_state() -> Value {
         "fps": fps,
         "minBitrate": min_bitrate,
         "bitsPerPixel": bits_per_pixel,
+        "videoCodec": active_video_codec_for_env(),
     })
+}
+
+fn active_video_codec_for_env() -> String {
+    std::env::var("SIMDECK_VIDEO_CODEC")
+        .ok()
+        .and_then(|value| normalize_video_codec(&value).map(ToOwned::to_owned))
+        .unwrap_or_else(|| "auto".to_owned())
 }
 
 fn stream_quality_profile(id: &str) -> Result<StreamQualityProfile, AppError> {
@@ -1192,7 +1231,7 @@ async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket)
                 .into(),
         ))
         .await;
-    let (control_tx, control_rx) = mpsc::channel::<ControlMessage>(8);
+    let (control_tx, control_rx) = mpsc::unbounded_channel::<ControlMessage>();
     let control_task = task::spawn(run_control_queue(session, udid.clone(), control_rx));
 
     while let Some(message) = receiver.next().await {
@@ -1217,18 +1256,8 @@ async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket)
                 continue;
             }
         };
-        match control_tx.try_send(control_message) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(message)) if control_message_is_move(&message) => {
-                // Drag streams can outpace native HID injection. Prefer the
-                // newest position over building latency with obsolete moves.
-            }
-            Err(mpsc::error::TrySendError::Full(message)) => {
-                if control_tx.send(message).await.is_err() {
-                    break;
-                }
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => break,
+        if control_tx.send(control_message).is_err() {
+            break;
         }
     }
     drop(control_tx);
@@ -1238,7 +1267,7 @@ async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket)
 async fn run_control_queue(
     session: SimulatorSession,
     udid: String,
-    mut receiver: mpsc::Receiver<ControlMessage>,
+    mut receiver: mpsc::UnboundedReceiver<ControlMessage>,
 ) {
     let mut pending = VecDeque::new();
     loop {

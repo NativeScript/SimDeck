@@ -40,6 +40,12 @@ import { usePointerInput } from "../features/input/usePointerInput";
 import { simulatorRuntimeLabel } from "../features/simulators/simulatorDisplay";
 import { useSimulatorList } from "../features/simulators/useSimulatorList";
 import { sendWebRtcControlMessage } from "../features/stream/streamWorkerClient";
+import type {
+  StreamConfig,
+  StreamEncoder,
+  StreamFps,
+  StreamQualityPreset,
+} from "../features/stream/streamTypes";
 import { useLiveStream } from "../features/stream/useLiveStream";
 import { DebugPanel } from "../features/toolbar/DebugPanel";
 import { Toolbar } from "../features/toolbar/Toolbar";
@@ -86,6 +92,16 @@ const REACT_NATIVE_ACCESSIBILITY_REFRESH_MS = 500;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
+const LOCAL_STREAM_DEFAULTS: StreamConfig = {
+  encoder: "hardware",
+  fps: 120,
+  quality: "quality",
+};
+const REMOTE_STREAM_DEFAULTS: StreamConfig = {
+  encoder: "software",
+  fps: 30,
+  quality: "balanced",
+};
 clearLegacyVolatileUiState();
 
 function buildChromeUrl(udid: string, stamp: number): string {
@@ -277,6 +293,9 @@ export function AppShell({
   const [touchOverlayVisible, setTouchOverlayVisible] = useState(() =>
     readStoredFlag(TOUCH_OVERLAY_VISIBLE_STORAGE_KEY, true),
   );
+  const [streamConfig, setStreamConfig] = useState<StreamConfig>(() =>
+    remoteStream ? REMOTE_STREAM_DEFAULTS : LOCAL_STREAM_DEFAULTS,
+  );
   const [touchIndicators, setTouchIndicators] = useState<TouchIndicator[]>([]);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -390,7 +409,20 @@ export function AppShell({
     canvasElement: streamCanvasElement,
     remote: remoteStream,
     simulator: selectedSimulator,
+    streamConfig,
   });
+
+  const updateStreamEncoder = useCallback((encoder: StreamEncoder) => {
+    setStreamConfig((current) => ({ ...current, encoder }));
+  }, []);
+
+  const updateStreamFps = useCallback((fps: StreamFps) => {
+    setStreamConfig((current) => ({ ...current, fps }));
+  }, []);
+
+  const updateStreamQuality = useCallback((quality: StreamQualityPreset) => {
+    setStreamConfig((current) => ({ ...current, quality }));
+  }, []);
 
   useEffect(() => {
     if (
@@ -880,9 +912,7 @@ export function AppShell({
     ? streamStatus.detail
       ? `${streamStatus.error} ${streamStatus.detail}`
       : streamStatus.error
-    : streamStatus.state === "connecting" && !hasFrame
-      ? (streamStatus.detail ?? "")
-      : "";
+    : "";
   const viewportStatusOverlayLabel =
     simulatorStatusOverlayLabel ||
     streamStatusMessage ||
@@ -1392,6 +1422,9 @@ export function AppShell({
             setStreamStamp(Date.now());
           }, false);
         }}
+        onStreamEncoderChange={updateStreamEncoder}
+        onStreamFpsChange={updateStreamFps}
+        onStreamQualityChange={updateStreamQuality}
         onShutdown={() => {
           if (!selectedSimulator) {
             return;
@@ -1438,6 +1471,7 @@ export function AppShell({
           !selectedSimulator.isBooted &&
           !selectedSimulatorTransitionKind,
         )}
+        streamConfig={streamConfig}
         showStopButton={Boolean(
           selectedSimulator?.isBooted && !selectedSimulatorTransitionKind,
         )}

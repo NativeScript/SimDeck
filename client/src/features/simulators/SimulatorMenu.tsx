@@ -1,6 +1,12 @@
 import type { RefObject } from "react";
 
 import type { SimulatorMetadata } from "../../api/types";
+import type {
+  StreamConfig,
+  StreamEncoder,
+  StreamFps,
+  StreamQualityPreset,
+} from "../stream/streamTypes";
 import { SimulatorRow } from "./SimulatorRow";
 
 interface SimulatorMenuProps {
@@ -16,6 +22,9 @@ interface SimulatorMenuProps {
   onOpenBundlePrompt: () => void;
   onOpenUrlPrompt: () => void;
   onRotateLeft: () => void;
+  onStreamEncoderChange: (encoder: StreamEncoder) => void;
+  onStreamFpsChange: (fps: StreamFps) => void;
+  onStreamQualityChange: (quality: StreamQualityPreset) => void;
   onToggleAppearance: () => void;
   onToggleDebug: () => void;
   onToggleMenu: () => void;
@@ -23,6 +32,7 @@ interface SimulatorMenuProps {
   search: string;
   selectedSimulator: SimulatorMetadata | null;
   setSelectedUDID: (udid: string) => void;
+  streamConfig: StreamConfig;
   touchOverlayVisible: boolean;
 }
 
@@ -39,6 +49,9 @@ export function SimulatorMenu({
   onOpenBundlePrompt,
   onOpenUrlPrompt,
   onRotateLeft,
+  onStreamEncoderChange,
+  onStreamFpsChange,
+  onStreamQualityChange,
   onToggleAppearance,
   onToggleDebug,
   onToggleMenu,
@@ -46,6 +59,7 @@ export function SimulatorMenu({
   search,
   selectedSimulator,
   setSelectedUDID,
+  streamConfig,
   touchOverlayVisible,
 }: SimulatorMenuProps) {
   return (
@@ -94,6 +108,46 @@ export function SimulatorMenu({
           ) : null}
           {selectedSimulator ? (
             <>
+              <div className="menu-divider" />
+              <div className="menu-section">
+                <span className="menu-section-title">Stream</span>
+                <div aria-label="Encoder" className="menu-segment two">
+                  {STREAM_ENCODERS.map((option) => (
+                    <button
+                      className={`menu-option ${streamConfig.encoder === option.value ? "active" : ""}`}
+                      key={option.value}
+                      onClick={() => onStreamEncoderChange(option.value)}
+                      type="button"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <div aria-label="Frame rate" className="menu-segment">
+                  {STREAM_FPS_OPTIONS.map((option) => (
+                    <button
+                      className={`menu-option ${streamConfig.fps === option.value ? "active" : ""}`}
+                      key={option.value}
+                      onClick={() => onStreamFpsChange(option.value)}
+                      type="button"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <div aria-label="Quality" className="menu-segment">
+                  {STREAM_QUALITY_OPTIONS.map((option) => (
+                    <button
+                      className={`menu-option ${streamConfig.quality === option.value ? "active" : ""}`}
+                      key={option.value}
+                      onClick={() => onStreamQualityChange(option.value)}
+                      type="button"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="menu-divider" />
               <div className="menu-actions">
                 <button className="menu-action" onClick={onOpenUrlPrompt}>
@@ -147,6 +201,26 @@ export function SimulatorMenu({
     </div>
   );
 }
+
+const STREAM_ENCODERS: Array<{ label: string; value: StreamEncoder }> = [
+  { label: "Hardware", value: "hardware" },
+  { label: "Software", value: "software" },
+];
+
+const STREAM_FPS_OPTIONS: Array<{ label: string; value: StreamFps }> = [
+  { label: "30", value: 30 },
+  { label: "60", value: 60 },
+  { label: "120", value: 120 },
+];
+
+const STREAM_QUALITY_OPTIONS: Array<{
+  label: string;
+  value: StreamQualityPreset;
+}> = [
+  { label: "Quality", value: "quality" },
+  { label: "Balanced", value: "balanced" },
+  { label: "Fast", value: "fast" },
+];
 
 function MenuIcon() {
   return (

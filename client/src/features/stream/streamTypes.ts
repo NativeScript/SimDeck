@@ -3,7 +3,18 @@ import type { Size } from "../viewport/types";
 export interface StreamConnectTarget {
   clientId?: string;
   remote?: boolean;
+  streamConfig?: StreamConfig;
   udid: string;
+}
+
+export type StreamEncoder = "hardware" | "software";
+export type StreamFps = 30 | 60 | 120;
+export type StreamQualityPreset = "quality" | "balanced" | "fast";
+
+export interface StreamConfig {
+  encoder: StreamEncoder;
+  fps: StreamFps;
+  quality: StreamQualityPreset;
 }
 
 export interface StreamPacketMetadata extends Size {
@@ -24,11 +35,14 @@ export interface StreamStats extends Size {
   codec: string;
   decodeQueueSize: number;
   decodedFrames: number;
+  decoderDroppedFrames: number;
   droppedFrames: number;
   frameSequence: number;
   latestFrameGapMs: number;
   latestRenderMs: number;
   maxRenderMs: number;
+  packetsLost: number;
+  presentationDroppedFrames: number;
   receivedPackets: number;
   reconnects: number;
   renderedFrames: number;

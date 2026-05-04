@@ -4,6 +4,7 @@ import type { HealthResponse } from "../../api/types";
 import { createEmptyStreamStats } from "./stats";
 import type {
   StreamConnectTarget,
+  StreamConfig,
   StreamStats,
   WorkerToMainMessage,
 } from "./streamTypes";
@@ -12,11 +13,12 @@ const HAVE_CURRENT_DATA = 2;
 const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
 const WEBRTC_TELEMETRY_CHANNEL_LABEL = "simdeck-telemetry";
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 10000;
-const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 15000;
+const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 3000;
+const WEBRTC_LOCAL_RECEIVER_BUFFER_SECONDS: number | null = null;
 const WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS = 0.06;
-const WEBRTC_DISCONNECTED_GRACE_MS = 30000;
-const WEBRTC_RECONNECT_BASE_DELAY_MS = 3000;
-const WEBRTC_RECONNECT_MAX_DELAY_MS = 10000;
+const WEBRTC_DISCONNECTED_GRACE_MS = 1000;
+const WEBRTC_RECONNECT_BASE_DELAY_MS = 250;
+const WEBRTC_RECONNECT_MAX_DELAY_MS = 1000;
 
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
 let activeWebRtcTelemetryChannel: RTCDataChannel | null = null;
@@ -58,11 +60,103 @@ function sendDataChannelMessage(
   return true;
 }
 
+function compareVideoToImage(
+  video: HTMLVideoElement,
+  source: ImageBitmap,
+): VisualArtifactSample {
+  const width = Math.min(240, video.videoWidth, source.width);
+  const height = Math.max(
+    1,
+    Math.round(width * (video.videoHeight / video.videoWidth)),
+  );
+  const sourceCanvas = document.createElement("canvas");
+  sourceCanvas.width = width;
+  sourceCanvas.height = height;
+  const videoCanvas = document.createElement("canvas");
+  videoCanvas.width = width;
+  videoCanvas.height = height;
+  const sourceContext = sourceCanvas.getContext("2d", {
+    willReadFrequently: true,
+  });
+  const videoContext = videoCanvas.getContext("2d", {
+    willReadFrequently: true,
+  });
+  if (!sourceContext || !videoContext) {
+    return {
+      badPixelRatio: 1,
+      maxPixelDiff: 255,
+      maxTileMeanDiff: 255,
+      meanDiff: 255,
+    };
+  }
+  sourceContext.imageSmoothingEnabled = true;
+  videoContext.imageSmoothingEnabled = true;
+  sourceContext.drawImage(source, 0, 0, width, height);
+  videoContext.drawImage(video, 0, 0, width, height);
+
+  const sourceData = sourceContext.getImageData(0, 0, width, height).data;
+  const videoData = videoContext.getImageData(0, 0, width, height).data;
+  const tileSize = 16;
+  const tileColumns = Math.ceil(width / tileSize);
+  const tileRows = Math.ceil(height / tileSize);
+  const tileSums = new Float64Array(tileColumns * tileRows);
+  const tileCounts = new Uint32Array(tileColumns * tileRows);
+  let badPixels = 0;
+  let maxPixelDiff = 0;
+  let sum = 0;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
+      const diff =
+        (Math.abs(sourceData[offset] - videoData[offset]) +
+          Math.abs(sourceData[offset + 1] - videoData[offset + 1]) +
+          Math.abs(sourceData[offset + 2] - videoData[offset + 2])) /
+        3;
+      sum += diff;
+      maxPixelDiff = Math.max(maxPixelDiff, diff);
+      if (diff > 48) {
+        badPixels += 1;
+      }
+      const tileIndex =
+        Math.floor(y / tileSize) * tileColumns + Math.floor(x / tileSize);
+      tileSums[tileIndex] += diff;
+      tileCounts[tileIndex] += 1;
+    }
+  }
+
+  let maxTileMeanDiff = 0;
+  for (let index = 0; index < tileSums.length; index += 1) {
+    if (tileCounts[index] > 0) {
+      maxTileMeanDiff = Math.max(
+        maxTileMeanDiff,
+        tileSums[index] / tileCounts[index],
+      );
+    }
+  }
+
+  return {
+    badPixelRatio: badPixels / (width * height),
+    maxPixelDiff,
+    maxTileMeanDiff,
+    meanDiff: sum / (width * height),
+  };
+}
+
 export function buildStreamTarget(
   udid: string,
-  options: { clientId?: string; remote?: boolean } = {},
+  options: {
+    clientId?: string;
+    remote?: boolean;
+    streamConfig?: StreamConfig;
+  } = {},
 ): StreamConnectTarget {
-  return { clientId: options.clientId, remote: options.remote, udid };
+  return {
+    clientId: options.clientId,
+    remote: options.remote,
+    streamConfig: options.streamConfig,
+    udid,
+  };
 }
 
 export function canUseWebRtc(): boolean {
@@ -73,9 +167,17 @@ interface StreamClientBackend {
   attachCanvas(canvasElement: HTMLCanvasElement): void;
   clear(): void;
   connect(target: StreamConnectTarget): void | Promise<void>;
+  collectVisualArtifactSample?(udid: string): Promise<VisualArtifactSample | null>;
   destroy(): void;
   disconnect(): void;
   sendControl?(payload: unknown): boolean;
+}
+
+export interface VisualArtifactSample {
+  badPixelRatio: number;
+  maxPixelDiff: number;
+  maxTileMeanDiff: number;
+  meanDiff: number;
 }
 
 class WebRtcStreamClient implements StreamClientBackend {
@@ -94,6 +196,8 @@ class WebRtcStreamClient implements StreamClientBackend {
   private reconnecting = false;
   private remoteMode = false;
   private reportedVideoConfig = false;
+  private receiverStatsInterval = 0;
+  private receiverStatsSeen = false;
   private shouldReconnect = false;
   private telemetryChannel: RTCDataChannel | null = null;
   private stats: StreamStats = createEmptyStreamStats();
@@ -112,6 +216,35 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.canvas
       ?.getContext("2d")
       ?.clearRect(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  async collectVisualArtifactSample(
+    udid: string,
+  ): Promise<VisualArtifactSample | null> {
+    if (
+      !this.video ||
+      this.video.readyState < HAVE_CURRENT_DATA ||
+      this.video.videoWidth <= 0 ||
+      this.video.videoHeight <= 0
+    ) {
+      return null;
+    }
+    const response = await fetch(
+      new URL(
+        apiUrl(`/api/simulators/${encodeURIComponent(udid)}/screenshot.png`),
+        window.location.href,
+      ),
+      { cache: "no-store", headers: apiHeaders() },
+    );
+    if (!response.ok) {
+      return null;
+    }
+    const source = await createImageBitmap(await response.blob());
+    try {
+      return compareVideoToImage(this.video, source);
+    } finally {
+      source.close();
+    }
   }
 
   async connect(target: StreamConnectTarget) {
@@ -133,18 +266,22 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.shouldReconnect = true;
     this.remoteMode = Boolean(target.remote);
     if (!wasReconnecting) {
-      this.hasRenderedFrame = false;
       this.reconnectDelayMs = WEBRTC_RECONNECT_BASE_DELAY_MS;
-      this.stats = createEmptyStreamStats();
     }
+    this.resetFrameStateForNewConnection();
     this.diagnostics = createWebRtcDiagnostics();
     this.reportedVideoConfig = false;
+    this.receiverStatsSeen = false;
     this.onMessage({
       type: "status",
       status: { detail: "Creating WebRTC offer", state: "connecting" },
     });
 
     try {
+      await postStreamConfigWithAuthRetry(target);
+      if (generation !== this.connectGeneration) {
+        return;
+      }
       const health = await fetchHealth().catch(() => null);
       if (generation !== this.connectGeneration) {
         return;
@@ -155,13 +292,14 @@ class WebRtcStreamClient implements StreamClientBackend {
       });
       this.peerConnection = peerConnection;
       this.attachDiagnostics(peerConnection, target, generation);
+      this.startReceiverStatsPolling(peerConnection, target, generation);
       const transceiver = peerConnection.addTransceiver("video", {
         direction: "recvonly",
       });
       configureReceiverCodecPreferences(transceiver);
       configureLowLatencyReceiver(
         transceiver.receiver,
-        target.remote ? WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS : null,
+        receiverBufferSeconds(target),
       );
       const controlChannel = peerConnection.createDataChannel(
         WEBRTC_CONTROL_CHANNEL_LABEL,
@@ -199,7 +337,7 @@ class WebRtcStreamClient implements StreamClientBackend {
         for (const receiver of peerConnection.getReceivers()) {
           configureLowLatencyReceiver(
             receiver,
-            target.remote ? WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS : null,
+            receiverBufferSeconds(target),
           );
         }
         const stream = event.streams[0] ?? new MediaStream([event.track]);
@@ -209,6 +347,8 @@ class WebRtcStreamClient implements StreamClientBackend {
         video.disablePictureInPicture = true;
         video.muted = true;
         video.playsInline = true;
+        video.defaultPlaybackRate = 1;
+        video.playbackRate = 1;
         video.setAttribute("playsinline", "");
         video.setAttribute("webkit-playsinline", "");
         video.preload = "auto";
@@ -302,7 +442,7 @@ class WebRtcStreamClient implements StreamClientBackend {
       this.postDiagnostics(target, "local-offer");
 
       const response = await postWebRtcOfferWithAuthRetry(
-        target.udid,
+        target,
         localDescription,
       );
       const answer = (await response.json()) as RTCSessionDescriptionInit;
@@ -344,6 +484,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.animationFrame = 0;
     this.clearFrameWatchdog();
     this.clearDisconnectGraceTimeout();
+    this.clearReceiverStatsPolling();
     this.cancelVideoFrameCallback();
     this.captureCurrentVideoFrame();
     this.video?.pause();
@@ -438,6 +579,15 @@ class WebRtcStreamClient implements StreamClientBackend {
         void this.connect(target);
       }
     }, delayMs);
+  }
+
+  private resetFrameStateForNewConnection() {
+    const reconnects = this.stats.reconnects;
+    this.hasRenderedFrame = false;
+    this.lastVideoFrameAt = 0;
+    this.stats = createEmptyStreamStats();
+    this.stats.reconnects = reconnects;
+    this.onMessage({ type: "stats", stats: { ...this.stats } });
   }
 
   private scheduleFrameWatchdog(
@@ -654,26 +804,17 @@ class WebRtcStreamClient implements StreamClientBackend {
     ) {
       this.syncCanvasSize(this.video.videoWidth, this.video.videoHeight);
       this.reportVideoConfig(this.video.videoWidth, this.video.videoHeight);
-      const renderStartedAt = performance.now();
-      const context = this.canvas.getContext("2d");
-      context?.drawImage(
-        this.video,
-        0,
-        0,
-        this.canvas.width,
-        this.canvas.height,
-      );
       const now = performance.now();
-      const latestRenderMs = performance.now() - renderStartedAt;
-      this.stats.decodedFrames += 1;
+      if (!this.receiverStatsSeen) {
+        this.stats.decodedFrames += 1;
+        this.stats.receivedPackets += 1;
+      }
       this.stats.renderedFrames += 1;
-      this.stats.receivedPackets += 1;
       this.stats.width = this.canvas.width;
       this.stats.height = this.canvas.height;
       this.stats.codec = "webrtc";
       this.hasRenderedFrame = true;
-      this.stats.latestRenderMs = latestRenderMs;
-      this.stats.maxRenderMs = Math.max(this.stats.maxRenderMs, latestRenderMs);
+      this.stats.latestRenderMs = 0;
       if (this.lastVideoFrameAt > 0) {
         this.stats.latestFrameGapMs = now - this.lastVideoFrameAt;
       }
@@ -714,6 +855,105 @@ class WebRtcStreamClient implements StreamClientBackend {
       type: "status",
       status: { detail: "WebRTC media connected", state: "streaming" },
     });
+  }
+
+  private startReceiverStatsPolling(
+    peerConnection: RTCPeerConnection,
+    target: StreamConnectTarget,
+    generation: number,
+  ) {
+    this.clearReceiverStatsPolling();
+    const poll = () => {
+      if (
+        generation !== this.connectGeneration ||
+        this.peerConnection !== peerConnection
+      ) {
+        return;
+      }
+      void this.updateReceiverStats(peerConnection, target);
+    };
+    poll();
+    this.receiverStatsInterval = window.setInterval(poll, 1000);
+  }
+
+  private clearReceiverStatsPolling() {
+    if (this.receiverStatsInterval) {
+      window.clearInterval(this.receiverStatsInterval);
+      this.receiverStatsInterval = 0;
+    }
+  }
+
+  private async updateReceiverStats(
+    peerConnection: RTCPeerConnection,
+    target: StreamConnectTarget,
+  ) {
+    try {
+      const reports = await peerConnection.getStats();
+      let inbound: RTCStats | undefined;
+      let codec: RTCStats | undefined;
+      reports.forEach((report) => {
+        const typed = report as RTCStats & {
+          kind?: string;
+          mediaType?: string;
+          codecId?: string;
+        };
+        if (
+          report.type === "inbound-rtp" &&
+          (typed.kind === "video" || typed.mediaType === "video")
+        ) {
+          inbound = report;
+          codec = typed.codecId ? reports.get(typed.codecId) : codec;
+        }
+      });
+      if (!inbound) {
+        return;
+      }
+      const video = inbound as RTCStats & {
+        framesDecoded?: number;
+        framesDropped?: number;
+        packetsLost?: number;
+        packetsReceived?: number;
+      };
+      const playbackQuality = this.video?.getVideoPlaybackQuality?.();
+      this.receiverStatsSeen = true;
+      if (typeof video.framesDecoded === "number") {
+        this.stats.decodedFrames = video.framesDecoded;
+      }
+      if (typeof playbackQuality?.totalVideoFrames === "number") {
+        this.stats.renderedFrames = playbackQuality.totalVideoFrames;
+      }
+      if (typeof playbackQuality?.droppedVideoFrames === "number") {
+        this.stats.presentationDroppedFrames =
+          playbackQuality.droppedVideoFrames;
+      }
+      if (typeof video.packetsReceived === "number") {
+        this.stats.receivedPackets = video.packetsReceived;
+      }
+      if (typeof video.framesDropped === "number") {
+        this.stats.decoderDroppedFrames = video.framesDropped;
+        this.stats.droppedFrames = Math.max(
+          this.stats.droppedFrames,
+          video.framesDropped,
+        );
+      }
+      if (typeof video.packetsLost === "number") {
+        this.stats.packetsLost = Math.max(0, video.packetsLost);
+      }
+      const codecStats = codec as
+        | (RTCStats & { mimeType?: string; payloadType?: number })
+        | undefined;
+      if (codecStats?.mimeType) {
+        this.stats.codec = codecStats.payloadType
+          ? `${codecStats.mimeType}/${codecStats.payloadType}`
+          : codecStats.mimeType;
+      } else if (!this.stats.codec) {
+        this.stats.codec = "webrtc";
+      }
+      this.onMessage({ type: "stats", stats: { ...this.stats } });
+      this.postDiagnostics(target, "receiver-stats");
+    } catch {
+      // Receiver stats are diagnostics only; drawing should continue.
+    }
   }
 
   private cancelVideoFrameCallback() {
@@ -775,10 +1015,10 @@ function streamErrorIsServerUnreachable(message: string): boolean {
 }
 
 async function postWebRtcOfferWithAuthRetry(
-  udid: string,
+  target: StreamConnectTarget,
   localDescription: RTCSessionDescription,
 ): Promise<Response> {
-  const response = await postWebRtcOffer(udid, localDescription);
+  const response = await postWebRtcOffer(target, localDescription);
   if (response.status !== 401) {
     if (!response.ok) {
       throw new Error(await response.text());
@@ -786,21 +1026,54 @@ async function postWebRtcOfferWithAuthRetry(
     return response;
   }
   await fetchHealth();
-  const retry = await postWebRtcOffer(udid, localDescription);
+  const retry = await postWebRtcOffer(target, localDescription);
   if (!retry.ok) {
     throw new Error(await retry.text());
   }
   return retry;
 }
 
+async function postStreamConfigWithAuthRetry(
+  target: StreamConnectTarget,
+): Promise<void> {
+  if (!target.streamConfig) {
+    return;
+  }
+  const response = await postStreamConfig(target.streamConfig);
+  if (response.status !== 401) {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return;
+  }
+  await fetchHealth();
+  const retry = await postStreamConfig(target.streamConfig);
+  if (!retry.ok) {
+    throw new Error(await retry.text());
+  }
+}
+
+function postStreamConfig(config: StreamConfig): Promise<Response> {
+  return fetch(apiUrl("/api/stream-quality"), {
+    body: JSON.stringify({
+      fps: config.fps,
+      profile: config.quality,
+      videoCodec: config.encoder,
+    }),
+    headers: apiHeaders(),
+    method: "POST",
+  });
+}
+
 function postWebRtcOffer(
-  udid: string,
+  target: StreamConnectTarget,
   localDescription: RTCSessionDescription,
 ): Promise<Response> {
   return fetch(
-    apiUrl(`/api/simulators/${encodeURIComponent(udid)}/webrtc/offer`),
+    apiUrl(`/api/simulators/${encodeURIComponent(target.udid)}/webrtc/offer`),
     {
       body: JSON.stringify({
+        clientId: target.clientId,
         sdp: localDescription.sdp,
         type: localDescription.type,
       }),
@@ -827,6 +1100,12 @@ function configureLowLatencyReceiver(
   if ("playoutDelayHint" in lowLatencyReceiver) {
     lowLatencyReceiver.playoutDelayHint = bufferSeconds;
   }
+}
+
+function receiverBufferSeconds(target: StreamConnectTarget): number | null {
+  return target.remote
+    ? WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS
+    : WEBRTC_LOCAL_RECEIVER_BUFFER_SECONDS;
 }
 
 function configureReceiverCodecPreferences(transceiver: RTCRtpTransceiver) {
@@ -1003,10 +1282,16 @@ export class StreamWorkerClient {
   private backend: StreamClientBackend | null = null;
   private attachedCanvas = false;
   private disposed = false;
+  private readonly destroyOnPageExit = () => {
+    this.destroy();
+  };
 
   constructor(onMessage: (message: WorkerToMainMessage) => void) {
     this.onMessage = onMessage;
+    activeStreamClient?.destroy();
     activeStreamClient = this;
+    window.addEventListener("pagehide", this.destroyOnPageExit);
+    window.addEventListener("beforeunload", this.destroyOnPageExit);
   }
 
   attachCanvas(canvasElement: HTMLCanvasElement) {
@@ -1052,6 +1337,10 @@ export class StreamWorkerClient {
     this.backend?.clear();
   }
 
+  async collectVisualArtifactSample(udid: string) {
+    return (await this.backend?.collectVisualArtifactSample?.(udid)) ?? null;
+  }
+
   sendStreamControl(options: {
     forceKeyframe?: boolean;
     fps?: number;
@@ -1068,6 +1357,8 @@ export class StreamWorkerClient {
       return;
     }
     this.disposed = true;
+    window.removeEventListener("pagehide", this.destroyOnPageExit);
+    window.removeEventListener("beforeunload", this.destroyOnPageExit);
     this.backend?.destroy();
     this.backend = null;
     if (activeStreamClient === this) {

@@ -62,8 +62,8 @@ This starts or reuses the project daemon, serves the bundled browser client, and
 | `--client-root`      | bundled `client/dist` | Override the static browser client directory.                                       |
 | `--video-codec`      | `auto`                | One of `auto`, `hardware`, or `software`. See [Video](/guide/video).                |
 | `--low-latency`      | `false`               | Software H.264 profile for slower runners; caps at 15 fps and drops stale frames.   |
-| `--stream-quality`   | auto/default          | Optional realtime stream quality profile, including `ci-software` for CI providers. |
-| `--local-stream-fps` | `60`                  | Local quality stream frame cap, from 15 to 120 fps.                                 |
+| `--stream-quality`   | `smooth`              | Realtime stream quality profile, including `ci-software` for CI providers.          |
+| `--local-stream-fps` | `60`                  | Local quality stream frame target, from 15 to 240 fps.                              |
 | `--open`             | `false`               | `ui` only. Open the browser after the daemon is ready.                              |
 
 Example:
