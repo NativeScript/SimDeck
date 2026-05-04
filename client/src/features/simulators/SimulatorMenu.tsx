@@ -111,7 +111,7 @@ export function SimulatorMenu({
               <div className="menu-divider" />
               <div className="menu-section">
                 <span className="menu-section-title">Stream</span>
-                <div aria-label="Encoder" className="menu-segment two">
+                <div aria-label="Encoder" className="menu-segment">
                   {STREAM_ENCODERS.map((option) => (
                     <button
                       className={`menu-option ${streamConfig.encoder === option.value ? "active" : ""}`}
@@ -203,6 +203,7 @@ export function SimulatorMenu({
 }
 
 const STREAM_ENCODERS: Array<{ label: string; value: StreamEncoder }> = [
+  { label: "Auto", value: "auto" },
   { label: "Hardware", value: "hardware" },
   { label: "Software", value: "software" },
 ];

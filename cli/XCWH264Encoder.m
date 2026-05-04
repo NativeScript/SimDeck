@@ -38,6 +38,8 @@ static const uint64_t XCWLowLatencySoftwareFrameIntervalStepUs = 11111;
 static const NSUInteger XCWLowLatencySoftwareHealthyFrameWindow = 8;
 static const uint64_t XCWRealtimeHardwareFrameIntervalStepUs = 5556;
 static const NSUInteger XCWRealtimeHardwareHealthyFrameWindow = 6;
+static const NSUInteger XCWMaximumRealtimeInFlightFrames = 3;
+static const int32_t XCWRealtimeKeyFrameIntervalSeconds = 5;
 
 typedef NS_ENUM(NSUInteger, XCWVideoEncoderMode) {
     XCWVideoEncoderModeAuto,
@@ -231,11 +233,12 @@ static NSString *XCWCodecStringFromSPS(NSData *spsData) {
     return [NSString stringWithFormat:@"avc1.%02x%02x%02x", bytes[1], bytes[2], bytes[3]];
 }
 
-static NSData *XCWAVCDecoderConfigurationRecord(NSData *spsData, NSData *ppsData) {
+static NSData *XCWAVCDecoderConfigurationRecord(NSData *spsData, NSData *ppsData, int nalLengthHeader) {
     if (spsData.length == 0 || ppsData.length == 0) {
         return nil;
     }
 
+    uint8_t lengthSizeMinusOne = (uint8_t)MIN(MAX(nalLengthHeader, 1), 4) - 1;
     const uint8_t *spsBytes = spsData.bytes;
     NSMutableData *record = [NSMutableData data];
     uint8_t header[6] = {
@@ -243,7 +246,7 @@ static NSData *XCWAVCDecoderConfigurationRecord(NSData *spsData, NSData *ppsData
         spsBytes[1],
         spsBytes[2],
         spsBytes[3],
-        0xFF,
+        (uint8_t)(0xFC | lengthSizeMinusOne),
         0xE1,
     };
     [record appendBytes:header length:sizeof(header)];
@@ -665,8 +668,11 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 }
 
 - (NSUInteger)maximumInFlightFrameCountLocked {
-    if (_realtimeStreamMode || _lowLatencyMode) {
+    if (_lowLatencyMode) {
         return 1;
+    }
+    if (_realtimeStreamMode) {
+        return XCWMaximumRealtimeInFlightFrames;
     }
     return XCWMaximumInFlightFrames;
 }
@@ -897,8 +903,9 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     uint64_t relativeTimestampUs = nowUs - _timestampOriginUs;
     CMTime presentationTime = CMTimeMake((int64_t)relativeTimestampUs, 1000000);
 
+    BOOL forceKeyFrame = _needsKeyFrame;
     NSDictionary *frameOptions = nil;
-    if (_needsKeyFrame) {
+    if (forceKeyFrame) {
         frameOptions = @{ (__bridge NSString *)kVTEncodeFrameOptionKey_ForceKeyFrame: @YES };
         _needsKeyFrame = NO;
     }
@@ -1004,10 +1011,14 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     VTSessionSetProperty(session, kVTCompressionPropertyKey_H264EntropyMode, kVTH264EntropyMode_CAVLC);
     VTSessionSetProperty(session, kVTCompressionPropertyKey_ExpectedFrameRate, (__bridge CFTypeRef)@(expectedFrameRate));
     BOOL shortKeyframeInterval = _lowLatencyMode;
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(shortKeyframeInterval ? MAX(1, expectedFrameRate / 2) : expectedFrameRate * 2));
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, (__bridge CFTypeRef)@(shortKeyframeInterval ? 0.5 : 2.0));
+    int keyFrameInterval = shortKeyframeInterval
+        ? MAX(1, expectedFrameRate / 2)
+        : MAX(1, expectedFrameRate * XCWRealtimeKeyFrameIntervalSeconds);
+    double keyFrameIntervalDuration = shortKeyframeInterval ? 0.5 : (double)XCWRealtimeKeyFrameIntervalSeconds;
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(keyFrameInterval));
+    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, (__bridge CFTypeRef)@(keyFrameIntervalDuration));
     VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@(averageBitRate));
-    if (_realtimeStreamMode) {
+    if (_lowLatencyMode) {
         NSArray *dataRateLimits = @[
             @(MAX(1, averageBitRate / 8)),
             @1,
@@ -1066,7 +1077,8 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
                                               targetHeight:(int32_t)targetHeight {
     int32_t sourceWidth = (int32_t)CVPixelBufferGetWidth(pixelBuffer);
     int32_t sourceHeight = (int32_t)CVPixelBufferGetHeight(pixelBuffer);
-    if (sourceWidth == targetWidth && sourceHeight == targetHeight) {
+    BOOL shouldCopyStableRealtimeBuffer = _realtimeStreamMode || _lowLatencyMode;
+    if (sourceWidth == targetWidth && sourceHeight == targetHeight && !shouldCopyStableRealtimeBuffer) {
         CVPixelBufferRetain(pixelBuffer);
         return pixelBuffer;
     }
@@ -1296,7 +1308,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
                         NSData *spsData = [NSData dataWithBytes:spsBytes length:spsLength];
                         NSData *ppsData = [NSData dataWithBytes:ppsBytes length:ppsLength];
                         codec = XCWCodecStringFromSPS(spsData);
-                        decoderConfig = XCWAVCDecoderConfigurationRecord(spsData, ppsData);
+                        decoderConfig = XCWAVCDecoderConfigurationRecord(spsData, ppsData, nalLengthHeader);
                     }
                 }
             }
