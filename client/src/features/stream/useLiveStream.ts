@@ -33,7 +33,6 @@ interface UseLiveStreamOptions {
   remote?: boolean;
   simulator: SimulatorMetadata | null;
   streamConfig?: StreamConfig;
-  streamProfile?: "focus" | "full" | "paused" | "thumb" | "thumbnail";
 }
 
 interface UseLiveStreamResult {
@@ -94,7 +93,6 @@ export function useLiveStream({
   remote = false,
   simulator,
   streamConfig,
-  streamProfile = "focus",
 }: UseLiveStreamOptions): UseLiveStreamResult {
   const clientTelemetryIdRef = useRef("");
   const workerClientRef = useRef<StreamWorkerClient | null>(null);
@@ -297,30 +295,6 @@ export function useLiveStream({
     streamConfig?.fps,
     streamConfig?.quality,
   ]);
-
-  useEffect(() => {
-    if (paused || !simulator?.isBooted) {
-      return;
-    }
-    let attempts = 0;
-    const send = () => {
-      attempts += 1;
-      return Boolean(
-        workerClientRef.current?.sendStreamControl({
-          profile: streamProfile,
-        }),
-      );
-    };
-    if (send()) {
-      return;
-    }
-    const interval = window.setInterval(() => {
-      if (send() || attempts >= 8) {
-        window.clearInterval(interval);
-      }
-    }, 250);
-    return () => window.clearInterval(interval);
-  }, [paused, simulator?.isBooted, simulator?.udid, streamProfile]);
 
   useEffect(() => {
     if (!simulator?.udid) {

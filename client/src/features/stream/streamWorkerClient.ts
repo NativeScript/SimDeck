@@ -39,8 +39,6 @@ export function sendWebRtcClientStats(stats: unknown): boolean {
 
 export function sendWebRtcStreamControl(options: {
   forceKeyframe?: boolean;
-  fps?: number;
-  profile?: "focus" | "full" | "paused" | "thumb" | "thumbnail";
   snapshot?: boolean;
 }): boolean {
   return sendDataChannelMessage(
@@ -1340,12 +1338,7 @@ export class StreamWorkerClient {
     return (await this.backend?.collectVisualArtifactSample?.(udid)) ?? null;
   }
 
-  sendStreamControl(options: {
-    forceKeyframe?: boolean;
-    fps?: number;
-    profile?: "focus" | "full" | "paused" | "thumb" | "thumbnail";
-    snapshot?: boolean;
-  }) {
+  sendStreamControl(options: { forceKeyframe?: boolean; snapshot?: boolean }) {
     return Boolean(
       this.backend?.sendControl?.({ ...options, type: "streamControl" }),
     );

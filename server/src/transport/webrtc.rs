@@ -409,17 +409,13 @@ fn attach_control_data_channel(
                         }
                     }
                     WebRtcDataChannelMessage::StreamControl {
-                        fps,
                         force_keyframe,
-                        profile,
                         snapshot,
                     } => {
-                        let command = WebRtcStreamCommand::from_payload(
-                            profile.as_deref(),
-                            fps,
-                            force_keyframe.unwrap_or(false),
-                            snapshot.unwrap_or(false),
-                        );
+                        let command = WebRtcStreamCommand {
+                            force_keyframe: force_keyframe.unwrap_or(false),
+                            snapshot: snapshot.unwrap_or(false),
+                        };
                         if command.force_keyframe || command.snapshot {
                             session.request_keyframe();
                         }
@@ -499,10 +495,8 @@ enum WebRtcDataChannelMessage {
         stats: Box<ClientStreamStats>,
     },
     StreamControl {
-        fps: Option<u32>,
         #[serde(rename = "forceKeyframe")]
         force_keyframe: Option<bool>,
-        profile: Option<String>,
         snapshot: Option<bool>,
     },
 }
@@ -511,21 +505,6 @@ enum WebRtcDataChannelMessage {
 struct WebRtcStreamCommand {
     force_keyframe: bool,
     snapshot: bool,
-}
-
-impl WebRtcStreamCommand {
-    fn from_payload(
-        profile: Option<&str>,
-        fps: Option<u32>,
-        force_keyframe: bool,
-        snapshot: bool,
-    ) -> Self {
-        let _ = (profile, fps);
-        Self {
-            force_keyframe,
-            snapshot,
-        }
-    }
 }
 
 fn webrtc_control_message_is_move(message: &ControlMessage) -> bool {
