@@ -207,7 +207,7 @@ export function SimulatorViewport({
             className="canvas-loading"
             role="status"
           >
-            Loading simulator chrome...
+            <span className="loading-spinner" aria-hidden="true" />
           </div>
         ) : null}
         {debugPanel ? <div className="debug-overlay">{debugPanel}</div> : null}

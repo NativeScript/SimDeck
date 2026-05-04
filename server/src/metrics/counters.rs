@@ -65,7 +65,10 @@ pub struct ClientStreamStats {
     pub received_packets: Option<u64>,
     pub decoded_frames: Option<u64>,
     pub rendered_frames: Option<u64>,
+    pub decoder_dropped_frames: Option<u64>,
     pub dropped_frames: Option<u64>,
+    pub packets_lost: Option<u64>,
+    pub presentation_dropped_frames: Option<u64>,
     pub reconnects: Option<u64>,
     pub frame_sequence: Option<u64>,
     pub decode_queue_size: Option<u64>,
@@ -79,6 +82,11 @@ pub struct ClientStreamStats {
     pub max_render_ms: Option<f64>,
     pub average_render_ms: Option<f64>,
     pub latest_frame_gap_ms: Option<f64>,
+    pub visual_bad_pixel_ratio: Option<f64>,
+    pub visual_max_pixel_diff: Option<f64>,
+    pub visual_max_tile_diff: Option<f64>,
+    pub visual_mean_diff: Option<f64>,
+    pub visual_sample_count: Option<u64>,
 }
 
 impl ClientStreamStats {
@@ -184,7 +192,10 @@ mod tests {
             received_packets: None,
             decoded_frames: None,
             rendered_frames: None,
+            decoder_dropped_frames: None,
             dropped_frames: None,
+            packets_lost: None,
+            presentation_dropped_frames: None,
             reconnects: None,
             frame_sequence: None,
             decode_queue_size: None,
@@ -198,6 +209,11 @@ mod tests {
             max_render_ms: None,
             average_render_ms: None,
             latest_frame_gap_ms: None,
+            visual_bad_pixel_ratio: None,
+            visual_max_pixel_diff: None,
+            visual_max_tile_diff: None,
+            visual_mean_diff: None,
+            visual_sample_count: None,
         }
     }
 

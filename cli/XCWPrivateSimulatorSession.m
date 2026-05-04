@@ -163,8 +163,8 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
 }
 
 - (void)requestKeyFrameRefresh {
-    [self refreshCurrentFrame];
     [_videoEncoder requestKeyFrame];
+    [self refreshCurrentFrame];
 }
 
 - (void)requestFrameRefresh {
@@ -189,18 +189,9 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
     NSUUID *token = [NSUUID UUID];
     dispatch_sync(_stateQueue, ^{
         self->_encodedFrameListeners[token] = [handler copy];
-        if (self->_latestKeyFrameData.length > 0) {
-            handler(self->_latestKeyFrameData,
-                    self->_latestKeyFrameSequenceValue,
-                    self->_latestKeyFrameTimestampUs,
-                    YES,
-                    self->_latestKeyFrameCodec,
-                    self->_latestKeyFrameDecoderConfig,
-                    self->_latestKeyFrameDimensions);
-        }
     });
-    [self refreshCurrentFrame];
     [_videoEncoder requestKeyFrame];
+    [self refreshCurrentFrame];
     return token;
 }
 
@@ -209,7 +200,7 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
         return;
     }
 
-    dispatch_async(_stateQueue, ^{
+    dispatch_sync(_stateQueue, ^{
         [self->_encodedFrameListeners removeObjectForKey:(NSUUID *)token];
     });
 }

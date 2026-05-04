@@ -85,7 +85,7 @@ enum Command {
         low_latency: bool,
         #[arg(long, value_enum)]
         stream_quality: Option<StreamQualityProfileArg>,
-        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=120))]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=240))]
         local_stream_fps: Option<u32>,
         #[arg(long)]
         open: bool,
@@ -114,7 +114,7 @@ enum Command {
         low_latency: bool,
         #[arg(long, value_enum)]
         stream_quality: Option<StreamQualityProfileArg>,
-        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=120))]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=240))]
         local_stream_fps: Option<u32>,
         #[arg(long)]
         access_token: Option<String>,
@@ -395,7 +395,7 @@ enum DaemonCommand {
         low_latency: bool,
         #[arg(long, value_enum)]
         stream_quality: Option<StreamQualityProfileArg>,
-        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=120))]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=240))]
         local_stream_fps: Option<u32>,
     },
     Restart {
@@ -413,7 +413,7 @@ enum DaemonCommand {
         low_latency: bool,
         #[arg(long, value_enum)]
         stream_quality: Option<StreamQualityProfileArg>,
-        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=120))]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=240))]
         local_stream_fps: Option<u32>,
     },
     Stop,
@@ -439,7 +439,7 @@ enum DaemonCommand {
         low_latency: bool,
         #[arg(long, value_enum)]
         stream_quality: Option<StreamQualityProfileArg>,
-        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=120))]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=240))]
         local_stream_fps: Option<u32>,
         #[arg(long)]
         access_token: String,
@@ -484,7 +484,7 @@ enum ServiceCommand {
         low_latency: bool,
         #[arg(long, value_enum)]
         stream_quality: Option<StreamQualityProfileArg>,
-        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=120))]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=240))]
         local_stream_fps: Option<u32>,
         #[arg(long)]
         access_token: Option<String>,
@@ -504,7 +504,7 @@ enum ServiceCommand {
         low_latency: bool,
         #[arg(long, value_enum)]
         stream_quality: Option<StreamQualityProfileArg>,
-        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=120))]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=240))]
         local_stream_fps: Option<u32>,
         #[arg(long)]
         access_token: Option<String>,
@@ -546,6 +546,7 @@ enum VideoCodecMode {
 enum StreamQualityProfileArg {
     Quality,
     Balanced,
+    Fast,
     Smooth,
     Economy,
     CiSoftware,
@@ -556,6 +557,7 @@ impl StreamQualityProfileArg {
         match self {
             Self::Quality => "quality",
             Self::Balanced => "balanced",
+            Self::Fast => "fast",
             Self::Smooth => "smooth",
             Self::Economy => "economy",
             Self::CiSoftware => "ci-software",
@@ -646,14 +648,25 @@ struct StreamQualityEnvironment {
     bits_per_pixel: u32,
 }
 
+const DEFAULT_LOCAL_STREAM_QUALITY_PROFILE: &str = "quality";
+
+fn local_stream_quality_profile(
+    low_latency: bool,
+    requested: Option<StreamQualityProfileArg>,
+) -> Option<String> {
+    requested
+        .map(|profile| profile.as_profile_id().to_owned())
+        .or_else(|| (!low_latency).then_some(DEFAULT_LOCAL_STREAM_QUALITY_PROFILE.to_owned()))
+}
+
 fn stream_quality_env_for_profile(profile: &str) -> anyhow::Result<StreamQualityEnvironment> {
     match profile {
         "quality" => Ok(StreamQualityEnvironment {
             profile: "quality",
-            max_edge: 1440,
+            max_edge: 4096,
             fps: 60,
-            min_bitrate: 8_000_000,
-            bits_per_pixel: 6,
+            min_bitrate: 60_000_000,
+            bits_per_pixel: 10,
         }),
         "balanced" => Ok(StreamQualityEnvironment {
             profile: "balanced",
@@ -661,6 +674,13 @@ fn stream_quality_env_for_profile(profile: &str) -> anyhow::Result<StreamQuality
             fps: 60,
             min_bitrate: 6_000_000,
             bits_per_pixel: 5,
+        }),
+        "fast" => Ok(StreamQualityEnvironment {
+            profile: "fast",
+            max_edge: 960,
+            fps: 30,
+            min_bitrate: 2_500_000,
+            bits_per_pixel: 3,
         }),
         "smooth" => Ok(StreamQualityEnvironment {
             profile: "smooth",
@@ -738,7 +758,7 @@ impl Default for DaemonLaunchOptions {
             video_codec: VideoCodecMode::Auto,
             low_latency: false,
             realtime_stream: false,
-            stream_quality_profile: None,
+            stream_quality_profile: Some(DEFAULT_LOCAL_STREAM_QUALITY_PROFILE.to_owned()),
             local_stream_fps: None,
         }
     }
@@ -868,6 +888,9 @@ done
             "SIMDECK_REALTIME_BITS_PER_PIXEL",
             stream_quality_env.bits_per_pixel.to_string(),
         );
+    }
+    if let Some(local_stream_fps) = options.local_stream_fps {
+        command.env("SIMDECK_REALTIME_FPS", local_stream_fps.to_string());
     }
     command
         .stdin(Stdio::null())
@@ -1230,6 +1253,7 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
     let port = choose_daemon_port_for_bind(4310, bind)?;
     let video_codec = VideoCodecMode::Auto;
     let low_latency = false;
+    let stream_quality_profile = Some(DEFAULT_LOCAL_STREAM_QUALITY_PROFILE.to_owned());
     let advertise_host = detect_lan_ip()
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
         .to_string();
@@ -1247,8 +1271,8 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
         log_path: None,
         video_codec: Some(video_codec.as_env_value().to_owned()),
         low_latency,
-        realtime_stream: false,
-        stream_quality_profile: None,
+        realtime_stream: true,
+        stream_quality_profile: stream_quality_profile.clone(),
         local_stream_fps: None,
     };
     write_daemon_metadata(&metadata)?;
@@ -1271,7 +1295,7 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
         None,
         video_codec,
         low_latency,
-        None,
+        stream_quality_profile,
         None,
         Some(access_token),
         Some(pairing_code),
@@ -1547,8 +1571,7 @@ fn main() -> anyhow::Result<()> {
                 video_codec,
                 low_latency,
                 realtime_stream: false,
-                stream_quality_profile: stream_quality
-                    .map(|profile| profile.as_profile_id().to_owned()),
+                stream_quality_profile: local_stream_quality_profile(low_latency, stream_quality),
                 local_stream_fps,
             })?;
             if open {
@@ -1576,8 +1599,10 @@ fn main() -> anyhow::Result<()> {
                     video_codec,
                     low_latency,
                     realtime_stream: false,
-                    stream_quality_profile: stream_quality
-                        .map(|profile| profile.as_profile_id().to_owned()),
+                    stream_quality_profile: local_stream_quality_profile(
+                        low_latency,
+                        stream_quality,
+                    ),
                     local_stream_fps,
                 })?;
                 print_daemon_start_result(&metadata, started)
@@ -1599,8 +1624,7 @@ fn main() -> anyhow::Result<()> {
                 video_codec,
                 low_latency,
                 realtime_stream: false,
-                stream_quality_profile: stream_quality
-                    .map(|profile| profile.as_profile_id().to_owned()),
+                stream_quality_profile: local_stream_quality_profile(low_latency, stream_quality),
                 local_stream_fps,
             }),
             DaemonCommand::Stop => stop_project_daemon(),
@@ -1704,7 +1728,7 @@ fn main() -> anyhow::Result<()> {
             client_root,
             video_codec,
             low_latency,
-            stream_quality.map(|profile| profile.as_profile_id().to_owned()),
+            local_stream_quality_profile(low_latency, stream_quality),
             local_stream_fps,
             access_token,
             pairing_code,
@@ -1727,8 +1751,7 @@ fn main() -> anyhow::Result<()> {
                 client_root,
                 video_codec,
                 low_latency,
-                stream_quality_profile: stream_quality
-                    .map(|profile| profile.as_profile_id().to_owned()),
+                stream_quality_profile: local_stream_quality_profile(low_latency, stream_quality),
                 local_stream_fps,
                 access_token,
                 pairing_code: None,
@@ -1750,8 +1773,7 @@ fn main() -> anyhow::Result<()> {
                 client_root,
                 video_codec,
                 low_latency,
-                stream_quality_profile: stream_quality
-                    .map(|profile| profile.as_profile_id().to_owned()),
+                stream_quality_profile: local_stream_quality_profile(low_latency, stream_quality),
                 local_stream_fps,
                 access_token,
                 pairing_code: None,
@@ -2476,6 +2498,9 @@ fn serve_with_appkit(
     }
     if let Some(profile) = stream_quality_profile.as_deref() {
         apply_stream_quality_environment(profile)?;
+    }
+    if let Some(local_stream_fps) = local_stream_fps {
+        std::env::set_var("SIMDECK_REALTIME_FPS", local_stream_fps.to_string());
     }
     let stream_quality_realtime = stream_quality_profile.is_some();
     let inherited_realtime_stream = crate::transport::webrtc::realtime_stream_enabled();
@@ -4909,7 +4934,7 @@ mod tests {
 
     #[test]
     fn local_daemon_start_accepts_local_stream_fps_range() {
-        let cli = Cli::parse_from(["simdeck", "daemon", "start", "--local-stream-fps", "120"]);
+        let cli = Cli::parse_from(["simdeck", "daemon", "start", "--local-stream-fps", "240"]);
         let Command::Daemon {
             command: DaemonCommand::Start {
                 local_stream_fps, ..
@@ -4918,9 +4943,9 @@ mod tests {
         else {
             panic!("expected daemon start command");
         };
-        assert_eq!(local_stream_fps, Some(120));
+        assert_eq!(local_stream_fps, Some(240));
         assert!(
-            Cli::try_parse_from(["simdeck", "daemon", "start", "--local-stream-fps", "121"])
+            Cli::try_parse_from(["simdeck", "daemon", "start", "--local-stream-fps", "241"])
                 .is_err()
         );
     }

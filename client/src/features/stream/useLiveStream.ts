@@ -11,24 +11,28 @@ import {
   sendWebRtcClientStats,
   StreamWorkerClient,
   type StreamBackend,
+  type VisualArtifactSample,
 } from "./streamWorkerClient";
 import type {
   StreamRuntimeInfo,
+  StreamConfig,
   StreamStats,
   StreamStatus,
   WorkerToMainMessage,
 } from "./streamTypes";
 
-const FPS_SAMPLE_INTERVAL_MS = 500;
+const FPS_SAMPLE_INTERVAL_MS = 1000;
 const CLIENT_TELEMETRY_INTERVAL_MS = 1000;
 const REMOTE_CLIENT_TELEMETRY_INTERVAL_MS = 5000;
+const CLIENT_TELEMETRY_ID_STORAGE_KEY = "simdeck.streamClientId";
+const VISUAL_ARTIFACT_TELEMETRY_INTERVAL_MS = 1000;
 
 interface UseLiveStreamOptions {
   canvasElement: HTMLCanvasElement | null;
   paused?: boolean;
   remote?: boolean;
   simulator: SimulatorMetadata | null;
-  streamProfile?: "focus" | "full" | "paused" | "thumb" | "thumbnail";
+  streamConfig?: StreamConfig;
 }
 
 interface UseLiveStreamResult {
@@ -55,10 +59,25 @@ function detectRuntimeInfo(): StreamRuntimeInfo {
 }
 
 function createClientTelemetryId(): string {
-  return (
+  try {
+    const stored = window.sessionStorage.getItem(
+      CLIENT_TELEMETRY_ID_STORAGE_KEY,
+    );
+    if (stored) {
+      return stored;
+    }
+  } catch {
+    // Some embedded browsers can deny sessionStorage; fall back to an in-memory ID.
+  }
+  const id =
     window.crypto?.randomUUID?.() ??
-    `page-${Math.random().toString(36).slice(2)}`
-  );
+    `page-${Math.random().toString(36).slice(2)}`;
+  try {
+    window.sessionStorage.setItem(CLIENT_TELEMETRY_ID_STORAGE_KEY, id);
+  } catch {
+    // Best effort only.
+  }
+  return id;
 }
 
 function buildClientTelemetryUrl(): string {
@@ -73,14 +92,18 @@ export function useLiveStream({
   paused = false,
   remote = false,
   simulator,
-  streamProfile = "focus",
+  streamConfig,
 }: UseLiveStreamOptions): UseLiveStreamResult {
   const clientTelemetryIdRef = useRef("");
   const workerClientRef = useRef<StreamWorkerClient | null>(null);
   const latestDecodedFramesRef = useRef(0);
   const latestFpsRef = useRef(0);
+  const latestRenderedFramesRef = useRef(0);
   const latestStatsRef = useRef<StreamStats>(createEmptyStreamStats());
   const latestStatusRef = useRef<StreamStatus>({ state: "idle" });
+  const latestVisualArtifactRef = useRef<VisualArtifactSample | null>(null);
+  const latestVisualArtifactSampleCountRef = useRef(0);
+  const lastVisualArtifactSampleAtRef = useRef(0);
   const pageFpsRef = useRef(0);
   const [deviceNaturalSize, setDeviceNaturalSize] = useState<Size | null>(null);
   const [stats, setStats] = useState<StreamStats>(createEmptyStreamStats);
@@ -169,9 +192,11 @@ export function useLiveStream({
       }
     };
     window.addEventListener("pagehide", destroyOnPageHide);
+    window.addEventListener("beforeunload", destroyOnPageHide);
 
     return () => {
       window.removeEventListener("pagehide", destroyOnPageHide);
+      window.removeEventListener("beforeunload", destroyOnPageHide);
       workerClient.destroy();
       workerClientRef.current = null;
     };
@@ -179,6 +204,7 @@ export function useLiveStream({
 
   useEffect(() => {
     latestDecodedFramesRef.current = stats.decodedFrames;
+    latestRenderedFramesRef.current = stats.renderedFrames;
     latestStatsRef.current = stats;
   }, [stats]);
 
@@ -195,21 +221,29 @@ export function useLiveStream({
   }, [simulator?.udid]);
 
   useEffect(() => {
-    let lastSampleFrames = latestDecodedFramesRef.current;
+    let lastSampleDecodedFrames = latestDecodedFramesRef.current;
+    let lastSampleRenderedFrames = latestRenderedFramesRef.current;
     let lastSampleAt = performance.now();
     setFps(0);
 
     const intervalId = window.setInterval(() => {
       const now = performance.now();
       const decodedFrames = latestDecodedFramesRef.current;
+      const renderedFrames = latestRenderedFramesRef.current;
       const elapsedMs = now - lastSampleAt;
       if (elapsedMs <= 0) {
         return;
       }
 
-      const nextFps = ((decodedFrames - lastSampleFrames) * 1000) / elapsedMs;
-      setFps(Math.max(0, nextFps));
-      lastSampleFrames = decodedFrames;
+      const decodedDelta = decodedFrames - lastSampleDecodedFrames;
+      const renderedDelta = renderedFrames - lastSampleRenderedFrames;
+      const frameDelta = decodedDelta > 0 ? decodedDelta : renderedDelta;
+      const nextFps = Math.max(0, (frameDelta * 1000) / elapsedMs);
+      setFps((current) =>
+        current <= 0 ? nextFps : current * 0.65 + nextFps * 0.35,
+      );
+      lastSampleDecodedFrames = decodedFrames;
+      lastSampleRenderedFrames = renderedFrames;
       lastSampleAt = now;
     }, FPS_SAMPLE_INTERVAL_MS);
 
@@ -248,46 +282,46 @@ export function useLiveStream({
       buildStreamTarget(simulator.udid, {
         clientId: clientTelemetryIdRef.current,
         remote,
+        streamConfig,
       }),
     );
     return () => {
       workerClient.disconnect();
     };
-  }, [canvasElement, simulator?.isBooted, simulator?.udid, paused, remote]);
-
-  useEffect(() => {
-    if (paused || !simulator?.isBooted) {
-      return;
-    }
-    let attempts = 0;
-    const send = () => {
-      attempts += 1;
-      return Boolean(
-        workerClientRef.current?.sendStreamControl({
-          forceKeyframe: streamProfile === "focus" || streamProfile === "full",
-          profile: streamProfile,
-        }),
-      );
-    };
-    if (send()) {
-      return;
-    }
-    const interval = window.setInterval(() => {
-      if (send() || attempts >= 8) {
-        window.clearInterval(interval);
-      }
-    }, 250);
-    return () => window.clearInterval(interval);
-  }, [paused, simulator?.isBooted, simulator?.udid, streamProfile]);
+  }, [
+    canvasElement,
+    simulator?.isBooted,
+    simulator?.udid,
+    paused,
+    remote,
+    streamConfig?.encoder,
+    streamConfig?.fps,
+    streamConfig?.quality,
+  ]);
 
   useEffect(() => {
     if (!simulator?.udid) {
       return;
     }
 
-    const postTelemetry = () => {
+    const postTelemetry = async () => {
       const latestStats = latestStatsRef.current;
       const latestStatus = latestStatusRef.current;
+      const now = Date.now();
+      if (
+        now - lastVisualArtifactSampleAtRef.current >=
+        VISUAL_ARTIFACT_TELEMETRY_INTERVAL_MS
+      ) {
+        lastVisualArtifactSampleAtRef.current = now;
+        const visualSample = await workerClientRef.current
+          ?.collectVisualArtifactSample?.(simulator.udid)
+          .catch(() => null);
+        if (visualSample) {
+          latestVisualArtifactRef.current = visualSample;
+          latestVisualArtifactSampleCountRef.current += 1;
+        }
+      }
+      const latestVisualArtifact = latestVisualArtifactRef.current;
       const payload = {
         ...latestStats,
         appFps: latestFpsRef.current,
@@ -300,6 +334,11 @@ export function useLiveStream({
         udid: simulator.udid,
         url: window.location.href,
         userAgent: window.navigator.userAgent,
+        visualBadPixelRatio: latestVisualArtifact?.badPixelRatio,
+        visualMaxPixelDiff: latestVisualArtifact?.maxPixelDiff,
+        visualMaxTileDiff: latestVisualArtifact?.maxTileMeanDiff,
+        visualMeanDiff: latestVisualArtifact?.meanDiff,
+        visualSampleCount: latestVisualArtifactSampleCountRef.current,
         visibilityState: document.visibilityState,
       };
       if (sendWebRtcClientStats(payload) || remote) {
@@ -318,7 +357,7 @@ export function useLiveStream({
     const intervalMs = remote
       ? REMOTE_CLIENT_TELEMETRY_INTERVAL_MS
       : CLIENT_TELEMETRY_INTERVAL_MS;
-    postTelemetry();
+    void postTelemetry();
     const intervalId = window.setInterval(postTelemetry, intervalMs);
     return () => {
       window.clearInterval(intervalId);

@@ -81,7 +81,7 @@ the outbound bridge alive until you press Ctrl-C. It uses software H.264 by
 default with realtime stream settings for remote viewing, and prints the active
 codec/profile when it starts. Studio defaults to the `smooth` stream quality
 profile (`1170` longest edge, dynamic up to `60` fps). Use
-`--stream-quality quality|balanced|smooth|economy|ci-software` to override it,
+`--stream-quality quality|balanced|fast|smooth|economy|ci-software` to override it,
 or pass `--video-codec hardware` when a dedicated hardware encoder is preferable.
 The remote viewer renders live video with the browser's native video element;
 the canvas is only used for input geometry.
@@ -116,11 +116,12 @@ more important than full-resolution smoothness:
 simdeck daemon start --video-codec software --low-latency
 ```
 
-Local browser streams default to 60 fps. On high-refresh local displays, opt in
-to a paced hardware stream up to 120 fps:
+Local browser streams default to realtime WebRTC delivery with the `quality`
+profile on VideoToolbox H.264: full resolution, 120 fps, and a high bitrate floor. On
+high-refresh local displays, raise the local stream target explicitly:
 
 ```sh
-simdeck daemon restart --local-stream-fps 120
+simdeck daemon restart --local-stream-fps 240
 ```
 
 Restart the CoreSimulator service layer when `simctl` reports a stale service
