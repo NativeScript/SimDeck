@@ -221,26 +221,29 @@ export function useLiveStream({
   }, [simulator?.udid]);
 
   useEffect(() => {
-    let lastSampleFrames = latestRenderedFramesRef.current;
+    let lastSampleDecodedFrames = latestDecodedFramesRef.current;
+    let lastSampleRenderedFrames = latestRenderedFramesRef.current;
     let lastSampleAt = performance.now();
     setFps(0);
 
     const intervalId = window.setInterval(() => {
       const now = performance.now();
+      const decodedFrames = latestDecodedFramesRef.current;
       const renderedFrames = latestRenderedFramesRef.current;
       const elapsedMs = now - lastSampleAt;
       if (elapsedMs <= 0) {
         return;
       }
 
-      const nextFps = Math.max(
-        0,
-        ((renderedFrames - lastSampleFrames) * 1000) / elapsedMs,
-      );
+      const decodedDelta = decodedFrames - lastSampleDecodedFrames;
+      const renderedDelta = renderedFrames - lastSampleRenderedFrames;
+      const frameDelta = decodedDelta > 0 ? decodedDelta : renderedDelta;
+      const nextFps = Math.max(0, (frameDelta * 1000) / elapsedMs);
       setFps((current) =>
         current <= 0 ? nextFps : current * 0.65 + nextFps * 0.35,
       );
-      lastSampleFrames = renderedFrames;
+      lastSampleDecodedFrames = decodedFrames;
+      lastSampleRenderedFrames = renderedFrames;
       lastSampleAt = now;
     }, FPS_SAMPLE_INTERVAL_MS);
 

@@ -45,6 +45,7 @@ const WEBRTC_MAX_LOCAL_STREAM_FPS: u32 = 240;
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
 const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(90);
+const WEBRTC_INITIAL_KEYFRAME_TIMEOUT: Duration = Duration::from_secs(5);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 const WEBRTC_PEER_DISCONNECTED_TIMEOUT: Duration = Duration::from_secs(2);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<WebRtcMediaStreamToken>>>> =
@@ -117,9 +118,9 @@ pub async fn create_answer(
         ice_transport_policy_label()
     );
 
-    let first_frame = wait_for_idr_keyframe(&session, Duration::from_secs(3))
+    let first_frame = wait_for_h264_sync_keyframe(&session, WEBRTC_INITIAL_KEYFRAME_TIMEOUT)
         .await
-        .ok_or_else(|| AppError::native("Timed out waiting for a simulator IDR keyframe."))?;
+        .ok_or_else(|| AppError::native("Timed out waiting for a simulator H.264 keyframe."))?;
     let codec = first_frame
         .codec
         .as_deref()
@@ -801,7 +802,7 @@ fn ice_transport_policy() -> RTCIceTransportPolicy {
     }
 }
 
-async fn wait_for_idr_keyframe(
+async fn wait_for_h264_sync_keyframe(
     session: &crate::simulators::session::SimulatorSession,
     timeout_duration: Duration,
 ) -> Option<crate::transport::packet::SharedFrame> {
@@ -809,7 +810,7 @@ async fn wait_for_idr_keyframe(
     loop {
         let remaining = deadline.checked_duration_since(time::Instant::now())?;
         let frame = session.wait_for_keyframe(remaining).await?;
-        if h264_frame_has_idr(&frame) {
+        if h264_frame_is_decoder_sync(&frame) {
             return Some(frame);
         }
         session.request_keyframe();
@@ -954,7 +955,7 @@ impl WebRtcMediaStream {
                         state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
-                    if frame.is_keyframe && h264_frame_has_idr(&frame) {
+                    if h264_frame_is_decoder_sync(&frame) {
                         waiting_for_keyframe = false;
                     } else if frame.is_keyframe {
                         waiting_for_keyframe = true;
@@ -1119,8 +1120,22 @@ pub fn h264_annex_b_sample(
         return Ok(sample);
     }
 
-    let nal_length_size = description.and_then(avcc_nal_length_size).unwrap_or(4);
-    append_length_prefixed_nalus(data, nal_length_size, &mut sample)?;
+    let sample_len_before_data = sample.len();
+    let preferred_nal_length_size = description.and_then(avcc_nal_length_size);
+    let fallback_nal_length_size = detect_length_prefixed_nal_length_size(data);
+    let nal_length_size = preferred_nal_length_size
+        .or(fallback_nal_length_size)
+        .unwrap_or(4);
+    if let Err(error) = append_length_prefixed_nalus(data, nal_length_size, &mut sample) {
+        let Some(fallback_nal_length_size) = fallback_nal_length_size else {
+            return Err(error);
+        };
+        if Some(fallback_nal_length_size) == preferred_nal_length_size {
+            return Err(error);
+        }
+        sample.truncate(sample_len_before_data);
+        append_length_prefixed_nalus(data, fallback_nal_length_size, &mut sample)?;
+    }
     Ok(sample)
 }
 
@@ -1129,12 +1144,23 @@ fn h264_frame_has_idr(frame: &crate::transport::packet::FramePacket) -> bool {
     if is_annex_b(data) {
         return annex_b_sample_has_idr(data);
     }
-    let nal_length_size = frame
+    let preferred_nal_length_size = frame
         .description
         .as_ref()
-        .and_then(|description| avcc_nal_length_size(description.as_ref()))
-        .unwrap_or(4);
-    length_prefixed_sample_has_idr(data, nal_length_size)
+        .and_then(|description| avcc_nal_length_size(description.as_ref()));
+    if preferred_nal_length_size
+        .map(|nal_length_size| length_prefixed_sample_has_idr(data, nal_length_size))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    detect_length_prefixed_nal_length_size(data)
+        .map(|nal_length_size| length_prefixed_sample_has_idr(data, nal_length_size))
+        .unwrap_or(false)
+}
+
+fn h264_frame_is_decoder_sync(frame: &crate::transport::packet::FramePacket) -> bool {
+    frame.is_keyframe && h264_frame_has_idr(frame)
 }
 
 fn annex_b_sample_has_idr(data: &[u8]) -> bool {
@@ -1199,8 +1225,42 @@ fn length_prefixed_sample_has_idr(data: &[u8], nal_length_size: usize) -> bool {
     false
 }
 
+fn detect_length_prefixed_nal_length_size(data: &[u8]) -> Option<usize> {
+    [4usize, 2, 1, 3]
+        .into_iter()
+        .find(|nal_length_size| length_prefixed_sample_is_well_formed(data, *nal_length_size))
+}
+
+fn length_prefixed_sample_is_well_formed(data: &[u8], nal_length_size: usize) -> bool {
+    if data.is_empty() || !(1..=4).contains(&nal_length_size) {
+        return false;
+    }
+    let mut offset = 0usize;
+    let mut nal_count = 0usize;
+    while offset + nal_length_size <= data.len() {
+        let mut length = 0usize;
+        for byte in &data[offset..offset + nal_length_size] {
+            length = (length << 8) | (*byte as usize);
+        }
+        offset += nal_length_size;
+        if length == 0 || offset + length > data.len() {
+            return false;
+        }
+        if !is_plausible_h264_nal_type(h264_nal_type(data[offset])) {
+            return false;
+        }
+        offset += length;
+        nal_count += 1;
+    }
+    offset == data.len() && nal_count > 0
+}
+
 fn h264_nal_type(header: u8) -> u8 {
     header & 0x1f
+}
+
+fn is_plausible_h264_nal_type(nal_type: u8) -> bool {
+    (1..=23).contains(&nal_type)
 }
 
 fn is_annex_b(data: &[u8]) -> bool {
@@ -1303,20 +1363,24 @@ impl WebRtcSendTiming {
         frame: &crate::transport::packet::FramePacket,
         realtime_stream: bool,
     ) -> Duration {
-        if realtime_stream {
-            self.last_timestamp_us = Some(frame.timestamp_us);
-            return realtime_sample_duration();
-        }
-
         const MIN_FRAME_DURATION_US: u64 = 1_000;
         const DEFAULT_FRAME_DURATION_US: u64 = 16_667;
         const MAX_FRAME_DURATION_US: u64 = 100_000;
+        let default_duration = if realtime_stream {
+            realtime_sample_duration()
+        } else {
+            Duration::from_micros(DEFAULT_FRAME_DURATION_US)
+        };
+        let default_duration_us = default_duration
+            .as_micros()
+            .try_into()
+            .unwrap_or(DEFAULT_FRAME_DURATION_US);
 
         let duration_us = self
             .last_timestamp_us
             .and_then(|previous| frame.timestamp_us.checked_sub(previous))
             .filter(|duration| *duration > 0)
-            .unwrap_or(DEFAULT_FRAME_DURATION_US)
+            .unwrap_or(default_duration_us)
             .clamp(MIN_FRAME_DURATION_US, MAX_FRAME_DURATION_US);
         self.last_timestamp_us = Some(frame.timestamp_us);
         Duration::from_micros(duration_us)
@@ -1363,9 +1427,9 @@ impl Drop for WebRtcMetricsGuard {
 mod tests {
     use super::{
         append_avcc_parameter_sets, append_length_prefixed_nalus, h264_annex_b_sample,
-        h264_frame_has_idr, h264_sdp_fmtp_line, is_annex_b, is_h264_codec,
-        rtcp_packet_requests_keyframe, rtp_packet_pacing, WebRtcMetricsGuard, WebRtcSendTiming,
-        ANNEX_B_START_CODE,
+        h264_frame_has_idr, h264_frame_is_decoder_sync, h264_sdp_fmtp_line, is_annex_b,
+        is_h264_codec, rtcp_packet_requests_keyframe, rtp_packet_pacing, WebRtcMetricsGuard,
+        WebRtcSendTiming, ANNEX_B_START_CODE,
     };
     use crate::metrics::counters::Metrics;
     use crate::transport::packet::FramePacket;
@@ -1600,9 +1664,9 @@ mod tests {
     }
 
     #[test]
-    fn realtime_send_timing_uses_configured_live_cadence() {
+    fn realtime_send_timing_uses_frame_timestamps_after_first_frame() {
         let mut timing = WebRtcSendTiming::new();
-        let frame = FramePacket {
+        let first = FramePacket {
             frame_sequence: 1,
             timestamp_us: 10_000,
             is_keyframe: true,
@@ -1612,10 +1676,24 @@ mod tests {
             description: None,
             data: Bytes::from_static(&[0, 0, 1, 0x65]),
         };
+        let second = FramePacket {
+            frame_sequence: 2,
+            timestamp_us: 25_500,
+            is_keyframe: false,
+            width: 100,
+            height: 100,
+            codec: Some("h264".to_owned()),
+            description: None,
+            data: Bytes::from_static(&[0, 0, 1, 0x41]),
+        };
 
         assert_eq!(
-            timing.duration_for(&frame, true),
+            timing.duration_for(&first, true),
             super::realtime_sample_duration()
+        );
+        assert_eq!(
+            timing.duration_for(&second, true),
+            Duration::from_micros(15_500)
         );
     }
 
@@ -1710,6 +1788,34 @@ mod tests {
         assert!(h264_frame_has_idr(&avcc_frame));
         assert!(h264_frame_has_idr(&annex_b_frame));
         assert!(!h264_frame_has_idr(&non_idr_frame));
+    }
+
+    #[test]
+    fn detects_length_prefixed_idr_when_avcc_length_size_is_wrong() {
+        let two_byte_length_prefixed_idr = FramePacket {
+            codec: Some("avc1.42e01f".to_owned()),
+            data: Bytes::from_static(&[0, 2, 0x65, 0x88, 0, 2, 0x41, 0x9a]),
+            description: Some(Bytes::from_static(&[1, 0x42, 0xe0, 0x1f, 0xff])),
+            frame_sequence: 1,
+            height: 1,
+            is_keyframe: true,
+            timestamp_us: 0,
+            width: 1,
+        };
+        let annex_b = h264_annex_b_sample(&two_byte_length_prefixed_idr).unwrap();
+
+        assert!(h264_frame_has_idr(&two_byte_length_prefixed_idr));
+        assert!(h264_frame_is_decoder_sync(&two_byte_length_prefixed_idr));
+        assert_eq!(
+            annex_b,
+            [
+                ANNEX_B_START_CODE,
+                &[0x65, 0x88],
+                ANNEX_B_START_CODE,
+                &[0x41, 0x9a],
+            ]
+            .concat()
+        );
     }
 
     #[test]

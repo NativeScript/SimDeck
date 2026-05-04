@@ -7,7 +7,7 @@ export interface StreamConnectTarget {
   udid: string;
 }
 
-export type StreamEncoder = "hardware" | "software";
+export type StreamEncoder = "auto" | "hardware" | "software";
 export type StreamFps = 30 | 60 | 120;
 export type StreamQualityPreset = "quality" | "balanced" | "fast";
 

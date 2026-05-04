@@ -93,12 +93,12 @@ const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
 const LOCAL_STREAM_DEFAULTS: StreamConfig = {
-  encoder: "hardware",
+  encoder: "auto",
   fps: 120,
   quality: "quality",
 };
 const REMOTE_STREAM_DEFAULTS: StreamConfig = {
-  encoder: "software",
+  encoder: "auto",
   fps: 30,
   quality: "balanced",
 };
