@@ -167,7 +167,9 @@ interface StreamClientBackend {
   attachCanvas(canvasElement: HTMLCanvasElement): void;
   clear(): void;
   connect(target: StreamConnectTarget): void | Promise<void>;
-  collectVisualArtifactSample?(udid: string): Promise<VisualArtifactSample | null>;
+  collectVisualArtifactSample?(
+    udid: string,
+  ): Promise<VisualArtifactSample | null>;
   destroy(): void;
   disconnect(): void;
   sendControl?(payload: unknown): boolean;
@@ -335,10 +337,7 @@ class WebRtcStreamClient implements StreamClientBackend {
         }
         event.track.contentHint = "motion";
         for (const receiver of peerConnection.getReceivers()) {
-          configureLowLatencyReceiver(
-            receiver,
-            receiverBufferSeconds(target),
-          );
+          configureLowLatencyReceiver(receiver, receiverBufferSeconds(target));
         }
         const stream = event.streams[0] ?? new MediaStream([event.track]);
         const video = document.createElement("video");

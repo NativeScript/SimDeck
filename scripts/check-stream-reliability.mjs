@@ -3,9 +3,13 @@
 const serverUrl = new URL(
   process.env.SIMDECK_SERVER_URL ?? process.argv[2] ?? "http://127.0.0.1:4310",
 );
-const durationMs = Number(process.env.SIMDECK_STREAM_CHECK_MS ?? process.argv[3] ?? 15000);
+const durationMs = Number(
+  process.env.SIMDECK_STREAM_CHECK_MS ?? process.argv[3] ?? 15000,
+);
 const pollMs = Number(process.env.SIMDECK_STREAM_CHECK_POLL_MS ?? 1000);
-const maxFrameGapMs = Number(process.env.SIMDECK_STREAM_CHECK_MAX_GAP_MS ?? 250);
+const maxFrameGapMs = Number(
+  process.env.SIMDECK_STREAM_CHECK_MAX_GAP_MS ?? 250,
+);
 const failOnServerDrops =
   (process.env.SIMDECK_STREAM_CHECK_FAIL_SERVER_DROPS ?? "0").trim() === "1";
 
@@ -16,7 +20,9 @@ function endpoint(path) {
 async function fetchJson(path) {
   const response = await fetch(endpoint(path), { cache: "no-store" });
   if (!response.ok) {
-    throw new Error(`${path} returned ${response.status}: ${await response.text()}`);
+    throw new Error(
+      `${path} returned ${response.status}: ${await response.text()}`,
+    );
   }
   return response.json();
 }
@@ -42,7 +48,10 @@ function numeric(value) {
 const startedAt = Date.now();
 const initial = await fetchJson("/api/metrics");
 const initialStreams = new Map(
-  freshClientStreams(initial, startedAt).map((stream) => [streamKey(stream), stream]),
+  freshClientStreams(initial, startedAt).map((stream) => [
+    streamKey(stream),
+    stream,
+  ]),
 );
 let latest = initial;
 const failures = [];
@@ -67,9 +76,12 @@ while (Date.now() - startedAt < durationMs) {
 
 const endedAt = Date.now();
 const finalStreams = freshClientStreams(latest, endedAt);
-const finalByKey = new Map(finalStreams.map((stream) => [streamKey(stream), stream]));
+const finalByKey = new Map(
+  finalStreams.map((stream) => [streamKey(stream), stream]),
+);
 const serverDropDelta =
-  numeric(latest.frames_dropped_server) - numeric(initial.frames_dropped_server);
+  numeric(latest.frames_dropped_server) -
+  numeric(initial.frames_dropped_server);
 if (serverDropDelta > 0) {
   const message = `server dropped ${serverDropDelta} stale frames during check`;
   if (failOnServerDrops) {
@@ -88,10 +100,12 @@ for (const [key, finalStream] of finalByKey) {
   const decodedDelta =
     numeric(finalStream.decodedFrames) - numeric(initialStream.decodedFrames);
   const receivedDelta =
-    numeric(finalStream.receivedPackets) - numeric(initialStream.receivedPackets);
+    numeric(finalStream.receivedPackets) -
+    numeric(initialStream.receivedPackets);
   const droppedDelta =
     numeric(finalStream.droppedFrames) - numeric(initialStream.droppedFrames);
-  const reconnectDelta = numeric(finalStream.reconnects) - numeric(initialStream.reconnects);
+  const reconnectDelta =
+    numeric(finalStream.reconnects) - numeric(initialStream.reconnects);
 
   if (finalStream.kind === "page" && (renderedDelta > 0 || decodedDelta > 0)) {
     advancingPageStreams += 1;
@@ -115,7 +129,8 @@ const summary = {
   activeStreams: latest.active_streams,
   durationMs: endedAt - startedAt,
   framesDroppedServerDelta: serverDropDelta,
-  framesEncodedDelta: numeric(latest.frames_encoded) - numeric(initial.frames_encoded),
+  framesEncodedDelta:
+    numeric(latest.frames_encoded) - numeric(initial.frames_encoded),
   framesSentDelta: numeric(latest.frames_sent) - numeric(initial.frames_sent),
   streams: finalStreams.map((stream) => ({
     clientId: stream.clientId,

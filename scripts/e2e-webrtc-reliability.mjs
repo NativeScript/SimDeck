@@ -5,20 +5,36 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
-const serverUrl = new URL(process.env.SIMDECK_SERVER_URL ?? process.argv[2] ?? "http://127.0.0.1:4310");
-const durationMs = Number(process.env.SIMDECK_E2E_WEBRTC_MS ?? process.argv[3] ?? 60_000);
+const serverUrl = new URL(
+  process.env.SIMDECK_SERVER_URL ?? process.argv[2] ?? "http://127.0.0.1:4310",
+);
+const durationMs = Number(
+  process.env.SIMDECK_E2E_WEBRTC_MS ?? process.argv[3] ?? 60_000,
+);
 const pollMs = Number(process.env.SIMDECK_E2E_WEBRTC_POLL_MS ?? 1000);
 const chromePath =
   process.env.CHROME_PATH ??
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const debugPort = Number(process.env.SIMDECK_E2E_CHROME_PORT ?? 9339);
 const maxFrameGapMs = Number(process.env.SIMDECK_E2E_MAX_FRAME_GAP_MS ?? 250);
-const maxInteractionLatencyMs = Number(process.env.SIMDECK_E2E_MAX_INTERACTION_LATENCY_MS ?? 750);
-const maxPeerDisconnectedMs = Number(process.env.SIMDECK_E2E_MAX_PEER_DISCONNECTED_MS ?? 1000);
-const visualSampleIntervalMs = Number(process.env.SIMDECK_E2E_VISUAL_SAMPLE_INTERVAL_MS ?? 1000);
-const maxVisualMeanDiff = Number(process.env.SIMDECK_E2E_MAX_VISUAL_MEAN_DIFF ?? 18);
-const maxVisualBadPixelRatio = Number(process.env.SIMDECK_E2E_MAX_VISUAL_BAD_PIXEL_RATIO ?? 0.08);
-const maxVisualTileDiff = Number(process.env.SIMDECK_E2E_MAX_VISUAL_TILE_DIFF ?? 42);
+const maxInteractionLatencyMs = Number(
+  process.env.SIMDECK_E2E_MAX_INTERACTION_LATENCY_MS ?? 750,
+);
+const maxPeerDisconnectedMs = Number(
+  process.env.SIMDECK_E2E_MAX_PEER_DISCONNECTED_MS ?? 1000,
+);
+const visualSampleIntervalMs = Number(
+  process.env.SIMDECK_E2E_VISUAL_SAMPLE_INTERVAL_MS ?? 1000,
+);
+const maxVisualMeanDiff = Number(
+  process.env.SIMDECK_E2E_MAX_VISUAL_MEAN_DIFF ?? 18,
+);
+const maxVisualBadPixelRatio = Number(
+  process.env.SIMDECK_E2E_MAX_VISUAL_BAD_PIXEL_RATIO ?? 0.08,
+);
+const maxVisualTileDiff = Number(
+  process.env.SIMDECK_E2E_MAX_VISUAL_TILE_DIFF ?? 42,
+);
 
 function endpoint(path) {
   return new URL(path, serverUrl).toString();
@@ -27,7 +43,9 @@ function endpoint(path) {
 async function fetchJson(url, init) {
   const response = await fetch(url, init);
   if (!response.ok) {
-    throw new Error(`${url} returned ${response.status}: ${await response.text()}`);
+    throw new Error(
+      `${url} returned ${response.status}: ${await response.text()}`,
+    );
   }
   return response.json();
 }
@@ -102,7 +120,9 @@ async function evaluate(cdp, expression, awaitPromise = true) {
     returnByValue: true,
   });
   if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.text ?? "Runtime evaluation failed.");
+    throw new Error(
+      result.exceptionDetails.text ?? "Runtime evaluation failed.",
+    );
   }
   return result.result.value;
 }
@@ -116,7 +136,9 @@ function numeric(value) {
 }
 
 function findClientStreams(metrics, clientId) {
-  return (metrics.client_streams ?? []).filter((stream) => stream.clientId === clientId);
+  return (metrics.client_streams ?? []).filter(
+    (stream) => stream.clientId === clientId,
+  );
 }
 
 function latestByKind(streams, kind) {
@@ -174,19 +196,29 @@ try {
   });
   await cdp.send("Page.navigate", { url: serverUrl.toString() });
 
-  const clientId = await waitForValue(cdp, `
+  const clientId = await waitForValue(
+    cdp,
+    `
     (() => {
       try { return window.sessionStorage.getItem("simdeck.streamClientId") || ""; }
       catch { return ""; }
     })()
-  `, Boolean, 15_000);
+  `,
+    Boolean,
+    15_000,
+  );
 
-  await waitForValue(cdp, `
+  await waitForValue(
+    cdp,
+    `
     (() => {
       const videos = [...document.querySelectorAll("video.stream-video")];
       return videos.some((video) => video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0);
     })()
-  `, Boolean, 20_000);
+  `,
+    Boolean,
+    20_000,
+  );
 
   const initialMetrics = await fetchJson(endpoint("/api/metrics"));
   const initialStreams = findClientStreams(initialMetrics, clientId);
@@ -211,7 +243,9 @@ try {
     const streams = findClientStreams(metrics, clientId);
     const webrtcStream = latestByKind(streams, "webrtc");
     const peerState =
-      webrtcStream?.peerConnectionState ?? webrtcStream?.iceConnectionState ?? "";
+      webrtcStream?.peerConnectionState ??
+      webrtcStream?.iceConnectionState ??
+      "";
     if (peerState === "disconnected" || peerState === "failed") {
       peerDisconnectedSince ||= Date.now();
       maxPeerDisconnectedObservedMs = Math.max(
@@ -222,13 +256,24 @@ try {
       peerDisconnectedSince = 0;
     }
     for (const stream of streams) {
-      maxObservedFrameGapMs = Math.max(maxObservedFrameGapMs, numeric(stream.latestFrameGapMs));
-      maxObservedDecodeQueue = Math.max(maxObservedDecodeQueue, numeric(stream.decodeQueueSize));
+      maxObservedFrameGapMs = Math.max(
+        maxObservedFrameGapMs,
+        numeric(stream.latestFrameGapMs),
+      );
+      maxObservedDecodeQueue = Math.max(
+        maxObservedDecodeQueue,
+        numeric(stream.decodeQueueSize),
+      );
     }
-    const visualUdid = latestByKind(streams, "webrtc")?.udid ?? latestByKind(streams, "page")?.udid;
+    const visualUdid =
+      latestByKind(streams, "webrtc")?.udid ??
+      latestByKind(streams, "page")?.udid;
     if (visualUdid && elapsed - lastVisualSampleAt >= visualSampleIntervalMs) {
       lastVisualSampleAt = elapsed;
-      const visualSample = await collectVisualArtifactSample(cdp, visualUdid).catch(() => null);
+      const visualSample = await collectVisualArtifactSample(
+        cdp,
+        visualUdid,
+      ).catch(() => null);
       if (visualSample) {
         visualSamples.push(visualSample);
       }
@@ -238,7 +283,11 @@ try {
       const beforeInteraction = await collectDirectWebRtcStats(cdp);
       await interactWithSimulatorViewport(cdp, elapsed);
       interactionLatencies.push(
-        await waitForDecodedFrameAfterInteraction(cdp, beforeInteraction.framesDecoded, maxInteractionLatencyMs),
+        await waitForDecodedFrameAfterInteraction(
+          cdp,
+          beforeInteraction.framesDecoded,
+          maxInteractionLatencyMs,
+        ),
       );
       presentedInteractionLatencies.push(
         await waitForPresentedFrameAfterInteraction(
@@ -257,26 +306,44 @@ try {
   const directStatsEnd = await collectDirectWebRtcStats(cdp);
   const failures = [];
 
-  const renderedDelta = numeric(finalPage.renderedFrames) - numeric(initialPage.renderedFrames);
-  const decodedDelta = numeric(finalWebRtc.decodedFrames) - numeric(initialWebRtc.decodedFrames);
-  const receivedDelta = numeric(finalWebRtc.receivedPackets) - numeric(initialWebRtc.receivedPackets);
-  const droppedDelta = numeric(finalWebRtc.droppedFrames) - numeric(initialWebRtc.droppedFrames);
-  const reconnectDelta = numeric(finalWebRtc.reconnects) - numeric(initialWebRtc.reconnects);
-  const directDroppedDelta = directStatsEnd.framesDropped - directStatsStart.framesDropped;
-  const directDecodedDelta = directStatsEnd.framesDecoded - directStatsStart.framesDecoded;
-  const directPacketsDelta = directStatsEnd.packetsReceived - directStatsStart.packetsReceived;
-  const directPresentedDelta = directStatsEnd.totalVideoFrames - directStatsStart.totalVideoFrames;
+  const renderedDelta =
+    numeric(finalPage.renderedFrames) - numeric(initialPage.renderedFrames);
+  const decodedDelta =
+    numeric(finalWebRtc.decodedFrames) - numeric(initialWebRtc.decodedFrames);
+  const receivedDelta =
+    numeric(finalWebRtc.receivedPackets) -
+    numeric(initialWebRtc.receivedPackets);
+  const droppedDelta =
+    numeric(finalWebRtc.droppedFrames) - numeric(initialWebRtc.droppedFrames);
+  const reconnectDelta =
+    numeric(finalWebRtc.reconnects) - numeric(initialWebRtc.reconnects);
+  const directDroppedDelta =
+    directStatsEnd.framesDropped - directStatsStart.framesDropped;
+  const directDecodedDelta =
+    directStatsEnd.framesDecoded - directStatsStart.framesDecoded;
+  const directPacketsDelta =
+    directStatsEnd.packetsReceived - directStatsStart.packetsReceived;
+  const directPresentedDelta =
+    directStatsEnd.totalVideoFrames - directStatsStart.totalVideoFrames;
 
   if (decodedDelta <= 0 || receivedDelta <= 0) {
-    failures.push(`SimDeck metrics did not advance decoded/RTP frames: decoded=${decodedDelta} received=${receivedDelta}`);
+    failures.push(
+      `SimDeck metrics did not advance decoded/RTP frames: decoded=${decodedDelta} received=${receivedDelta}`,
+    );
   }
-  if (directDecodedDelta <= 0 || directPacketsDelta <= 0 || directPresentedDelta <= 0) {
+  if (
+    directDecodedDelta <= 0 ||
+    directPacketsDelta <= 0 ||
+    directPresentedDelta <= 0
+  ) {
     failures.push(
       `browser stats did not advance decoded/presented/RTP frames: decoded=${directDecodedDelta} presented=${directPresentedDelta} received=${directPacketsDelta}`,
     );
   }
   if (droppedDelta > 0 || directDroppedDelta > 0) {
-    failures.push(`decoder dropped frames: metrics=${droppedDelta} getStats=${directDroppedDelta}`);
+    failures.push(
+      `decoder dropped frames: metrics=${droppedDelta} getStats=${directDroppedDelta}`,
+    );
   }
   if (reconnectDelta > 0) {
     failures.push(`peer reconnected ${reconnectDelta} times`);
@@ -286,7 +353,9 @@ try {
       `peer disconnected for ${maxPeerDisconnectedObservedMs}ms, exceeded ${maxPeerDisconnectedMs}ms`,
     );
   }
-  const slowInteractions = interactionLatencies.filter((latency) => latency > maxInteractionLatencyMs);
+  const slowInteractions = interactionLatencies.filter(
+    (latency) => latency > maxInteractionLatencyMs,
+  );
   if (slowInteractions.length > 0) {
     failures.push(
       `decode did not advance within ${maxInteractionLatencyMs}ms after ${slowInteractions.length} interactions`,
@@ -378,7 +447,11 @@ async function stopChrome(chromeProcess) {
     new Promise((resolve) => chromeProcess.once("exit", () => resolve(true))),
     sleep(1500).then(() => false),
   ]);
-  if (exited || chromeProcess.exitCode !== null || chromeProcess.signalCode !== null) {
+  if (
+    exited ||
+    chromeProcess.exitCode !== null ||
+    chromeProcess.signalCode !== null
+  ) {
     return;
   }
   chromeProcess.kill("SIGKILL");
@@ -397,7 +470,9 @@ async function waitForValue(cdp, expression, predicate, timeoutMs) {
     }
     await sleep(250);
   }
-  throw new Error(`Timed out waiting for expression: ${expression}\n${chromeStderr}`);
+  throw new Error(
+    `Timed out waiting for expression: ${expression}\n${chromeStderr}`,
+  );
 }
 
 async function createPageTarget(url) {
@@ -406,13 +481,17 @@ async function createPageTarget(url) {
     { method: "PUT" },
   );
   if (!response.ok) {
-    throw new Error(`Failed to create Chrome target: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to create Chrome target: ${response.status} ${await response.text()}`,
+    );
   }
   return response.json();
 }
 
 async function collectDirectWebRtcStats(cdp) {
-  return evaluate(cdp, `
+  return evaluate(
+    cdp,
+    `
     (async () => {
       const totals = {
         framesDecoded: 0,
@@ -440,10 +519,15 @@ async function collectDirectWebRtcStats(cdp) {
       }
       return totals;
     })()
-  `);
+  `,
+  );
 }
 
-async function waitForDecodedFrameAfterInteraction(cdp, baselineFramesDecoded, timeoutMs) {
+async function waitForDecodedFrameAfterInteraction(
+  cdp,
+  baselineFramesDecoded,
+  timeoutMs,
+) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const stats = await collectDirectWebRtcStats(cdp);
@@ -455,7 +539,11 @@ async function waitForDecodedFrameAfterInteraction(cdp, baselineFramesDecoded, t
   return Date.now() - startedAt;
 }
 
-async function waitForPresentedFrameAfterInteraction(cdp, baselinePresentedFrames, timeoutMs) {
+async function waitForPresentedFrameAfterInteraction(
+  cdp,
+  baselinePresentedFrames,
+  timeoutMs,
+) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const stats = await collectDirectWebRtcStats(cdp);
@@ -468,7 +556,9 @@ async function waitForPresentedFrameAfterInteraction(cdp, baselinePresentedFrame
 }
 
 async function collectVisualArtifactSample(cdp, udid) {
-  return evaluate(cdp, `
+  return evaluate(
+    cdp,
+    `
     (async () => {
       const video = document.querySelector("video.stream-video");
       if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
@@ -544,11 +634,14 @@ async function collectVisualArtifactSample(cdp, udid) {
         width,
       };
     })()
-  `);
+  `,
+  );
 }
 
 async function interactWithSimulatorViewport(cdp, elapsedMs) {
-  const point = await evaluate(cdp, `
+  const point = await evaluate(
+    cdp,
+    `
     (() => {
       const target = document.querySelector("canvas.stream-canvas") || document.querySelector(".device-screen");
       if (!target) return null;
@@ -557,7 +650,8 @@ async function interactWithSimulatorViewport(cdp, elapsedMs) {
       const y = rect.top + rect.height * 0.55;
       return { x, y };
     })()
-  `);
+  `,
+  );
   if (!point) {
     return;
   }
