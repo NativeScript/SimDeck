@@ -8,7 +8,12 @@ import {
   type FormEvent,
 } from "react";
 
-import { ApiError, accessTokenFromLocation, pairBrowser } from "../api/client";
+import {
+  ApiError,
+  accessTokenFromLocation,
+  apiRequest,
+  pairBrowser,
+} from "../api/client";
 import { apiUrl, configureSimDeckClient } from "../api/config";
 import {
   bootSimulator,
@@ -98,11 +103,37 @@ const LOCAL_STREAM_DEFAULTS: StreamConfig = {
   quality: "quality",
 };
 const REMOTE_STREAM_DEFAULTS: StreamConfig = {
-  encoder: "auto",
+  encoder: "software",
   fps: 30,
   quality: "balanced",
 };
+const STREAM_CONFIG_SYNC_INTERVAL_MS = 5000;
+const STREAM_CONFIG_USER_CHANGE_GRACE_MS = 1000;
+const STREAM_ENCODER_VALUES = new Set<StreamEncoder>([
+  "auto",
+  "hardware",
+  "software",
+]);
+const STREAM_QUALITY_VALUES = new Set<StreamQualityPreset>([
+  "balanced",
+  "ci-software",
+  "economy",
+  "fast",
+  "quality",
+  "smooth",
+]);
 clearLegacyVolatileUiState();
+
+interface StreamQualityResponse {
+  ok?: boolean;
+  quality?: {
+    fps?: number;
+    maxEdge?: number;
+    profile?: string;
+    videoCodec?: string;
+  };
+  videoCodec?: string;
+}
 
 function buildChromeUrl(udid: string, stamp: number): string {
   return buildAuthenticatedAssetUrl(
@@ -296,6 +327,8 @@ export function AppShell({
   const [streamConfig, setStreamConfig] = useState<StreamConfig>(() =>
     remoteStream ? REMOTE_STREAM_DEFAULTS : LOCAL_STREAM_DEFAULTS,
   );
+  const [streamConfigApplyKey, setStreamConfigApplyKey] = useState(0);
+  const [streamConfigReady, setStreamConfigReady] = useState(false);
   const [touchIndicators, setTouchIndicators] = useState<TouchIndicator[]>([]);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -313,6 +346,8 @@ export function AppShell({
   const gestureStartZoomRef = useRef(1);
   const accessibilityRequestIdRef = useRef(0);
   const accessibilityLoadingRef = useRef(false);
+  const streamConfigRequestIdRef = useRef(0);
+  const streamConfigUserChangeAtRef = useRef(0);
   const controlSocketRef = useRef<{
     udid: string;
     socket: WebSocket;
@@ -395,6 +430,52 @@ export function AppShell({
     [],
   );
 
+  const syncStreamConfig = useCallback(async () => {
+    const requestId = ++streamConfigRequestIdRef.current;
+    try {
+      const response = await apiRequest<StreamQualityResponse>(
+        "/api/stream-quality",
+      );
+      if (requestId !== streamConfigRequestIdRef.current) {
+        return;
+      }
+      if (
+        Date.now() - streamConfigUserChangeAtRef.current <
+        STREAM_CONFIG_USER_CHANGE_GRACE_MS
+      ) {
+        return;
+      }
+      setStreamConfig((current) =>
+        mergeStreamQualityResponse(current, response),
+      );
+    } catch {
+      // Keep the existing local/default selection; the stream path will surface
+      // provider reachability errors separately.
+    } finally {
+      if (requestId === streamConfigRequestIdRef.current) {
+        setStreamConfigReady(true);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setStreamConfigReady(false);
+
+    const run = () => {
+      if (!cancelled) {
+        void syncStreamConfig();
+      }
+    };
+
+    run();
+    const intervalId = window.setInterval(run, STREAM_CONFIG_SYNC_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [remoteStream, syncStreamConfig]);
+
   const {
     deviceNaturalSize,
     error: streamError,
@@ -407,20 +488,31 @@ export function AppShell({
     streamCanvasKey,
   } = useLiveStream({
     canvasElement: streamCanvasElement,
+    paused: !streamConfigReady,
     remote: remoteStream,
     simulator: selectedSimulator,
     streamConfig,
+    streamConfigApplyKey,
   });
 
   const updateStreamEncoder = useCallback((encoder: StreamEncoder) => {
+    streamConfigUserChangeAtRef.current = Date.now();
+    setStreamConfigReady(true);
+    setStreamConfigApplyKey((current) => current + 1);
     setStreamConfig((current) => ({ ...current, encoder }));
   }, []);
 
   const updateStreamFps = useCallback((fps: StreamFps) => {
+    streamConfigUserChangeAtRef.current = Date.now();
+    setStreamConfigReady(true);
+    setStreamConfigApplyKey((current) => current + 1);
     setStreamConfig((current) => ({ ...current, fps }));
   }, []);
 
   const updateStreamQuality = useCallback((quality: StreamQualityPreset) => {
+    streamConfigUserChangeAtRef.current = Date.now();
+    setStreamConfigReady(true);
+    setStreamConfigApplyKey((current) => current + 1);
     setStreamConfig((current) => ({ ...current, quality }));
   }, []);
 
@@ -899,19 +991,26 @@ export function AppShell({
   });
 
   const pairingRequired =
+    !remoteStream &&
     pairingEnabled &&
     listError === AUTH_REQUIRED_MESSAGE &&
     !accessTokenFromLocation();
-  const visibleListError = selectedSimulator
-    ? friendlyClientError(listError)
-    : listError;
+  const visibleListError =
+    remoteStream && listError === AUTH_REQUIRED_MESSAGE
+      ? ""
+      : selectedSimulator
+        ? friendlyClientError(listError)
+        : listError;
   const toolbarError = pairingRequired
     ? localError
     : localError || (selectedSimulator ? "" : visibleListError);
-  const streamStatusMessage = streamStatus.error
+  const visibleStreamError = friendlyStreamError(streamStatus.error, {
+    remote: remoteStream,
+  });
+  const streamStatusMessage = visibleStreamError
     ? streamStatus.detail
-      ? `${streamStatus.error} ${streamStatus.detail}`
-      : streamStatus.error
+      ? `${visibleStreamError} ${streamStatus.detail}`
+      : visibleStreamError
     : "";
   const viewportStatusOverlayLabel =
     simulatorStatusOverlayLabel ||
@@ -919,7 +1018,7 @@ export function AppShell({
     (selectedSimulator ? visibleListError : "");
   const viewportHasStreamError = Boolean(
     streamStatus.state === "error" ||
-    streamStatus.error ||
+    visibleStreamError ||
     (selectedSimulator && visibleListError),
   );
   const deviceTransform = `translate(${pan.x}px, ${pan.y + autoViewportOffsetY}px) scale(${effectiveZoom})`;
@@ -1060,6 +1159,9 @@ export function AppShell({
     const encoded = JSON.stringify(message);
     if (sendWebRtcControlMessage(encoded)) {
       return true;
+    }
+    if (remoteStream) {
+      return false;
     }
     const state = ensureControlSocket(udid);
     if (state.socket.readyState === WebSocket.OPEN) {
@@ -1462,6 +1564,7 @@ export function AppShell({
         onToggleTouchOverlay={() =>
           setTouchOverlayVisible((current) => !current)
         }
+        remoteStream={remoteStream}
         search={search}
         selectedSimulator={selectedSimulator}
         selectedSimulatorIdentifier={selectedSimulatorDetail}
@@ -1606,4 +1709,88 @@ function friendlyClientError(message: string): string {
     return "SimDeck server is unreachable. Reconnecting in the background.";
   }
   return message;
+}
+
+function friendlyStreamError(
+  message: string | undefined,
+  options: { remote: boolean },
+): string {
+  const normalized = message?.trim() ?? "";
+  if (!normalized) {
+    return "";
+  }
+  if (
+    options.remote &&
+    normalized.toLowerCase().includes(AUTH_REQUIRED_MESSAGE.toLowerCase())
+  ) {
+    return "";
+  }
+  return friendlyClientError(normalized);
+}
+
+function mergeStreamQualityResponse(
+  current: StreamConfig,
+  response: StreamQualityResponse,
+): StreamConfig {
+  const quality = response.quality ?? {};
+  const next: StreamConfig = {
+    ...current,
+    encoder: normalizeStreamEncoder(
+      quality.videoCodec ?? response.videoCodec,
+      current.encoder,
+    ),
+    fps: normalizeStreamFps(quality.fps, current.fps),
+    maxEdge: normalizeMaxEdge(quality.maxEdge, current.maxEdge),
+    quality: normalizeStreamQuality(quality.profile, current.quality),
+  };
+  return streamConfigsEqual(current, next) ? current : next;
+}
+
+function normalizeStreamEncoder(
+  value: string | undefined,
+  fallback: StreamEncoder,
+): StreamEncoder {
+  const normalized = value?.trim().toLowerCase() as StreamEncoder | undefined;
+  return normalized && STREAM_ENCODER_VALUES.has(normalized)
+    ? normalized
+    : fallback;
+}
+
+function normalizeStreamQuality(
+  value: string | undefined,
+  fallback: StreamQualityPreset,
+): StreamQualityPreset {
+  const normalized = value?.trim().toLowerCase() as
+    | StreamQualityPreset
+    | undefined;
+  return normalized && STREAM_QUALITY_VALUES.has(normalized)
+    ? normalized
+    : fallback;
+}
+
+function normalizeStreamFps(
+  value: number | undefined,
+  fallback: StreamFps,
+): StreamFps {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : fallback;
+}
+
+function normalizeMaxEdge(
+  value: number | undefined,
+  fallback: number | undefined,
+): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : fallback;
+}
+
+function streamConfigsEqual(left: StreamConfig, right: StreamConfig): boolean {
+  return (
+    left.encoder === right.encoder &&
+    left.fps === right.fps &&
+    left.maxEdge === right.maxEdge &&
+    left.quality === right.quality
+  );
 }

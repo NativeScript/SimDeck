@@ -33,6 +33,7 @@ interface UseLiveStreamOptions {
   remote?: boolean;
   simulator: SimulatorMetadata | null;
   streamConfig?: StreamConfig;
+  streamConfigApplyKey?: number;
 }
 
 interface UseLiveStreamResult {
@@ -93,6 +94,7 @@ export function useLiveStream({
   remote = false,
   simulator,
   streamConfig,
+  streamConfigApplyKey = 0,
 }: UseLiveStreamOptions): UseLiveStreamResult {
   const clientTelemetryIdRef = useRef("");
   const workerClientRef = useRef<StreamWorkerClient | null>(null);
@@ -295,6 +297,22 @@ export function useLiveStream({
     paused,
     remote,
     streamConfig?.encoder,
+  ]);
+
+  useEffect(() => {
+    if (
+      streamConfigApplyKey <= 0 ||
+      paused ||
+      !simulator?.isBooted ||
+      !streamConfig
+    ) {
+      return;
+    }
+    workerClientRef.current?.applyStreamConfig(streamConfig);
+  }, [
+    paused,
+    simulator?.isBooted,
+    streamConfigApplyKey,
     streamConfig?.fps,
     streamConfig?.quality,
   ]);
@@ -309,8 +327,9 @@ export function useLiveStream({
       const latestStatus = latestStatusRef.current;
       const now = Date.now();
       if (
+        !remote &&
         now - lastVisualArtifactSampleAtRef.current >=
-        VISUAL_ARTIFACT_TELEMETRY_INTERVAL_MS
+          VISUAL_ARTIFACT_TELEMETRY_INTERVAL_MS
       ) {
         lastVisualArtifactSampleAtRef.current = now;
         const visualSample = await workerClientRef.current

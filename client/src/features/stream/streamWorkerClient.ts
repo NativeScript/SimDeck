@@ -16,7 +16,8 @@ const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 10000;
 const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 3000;
 const WEBRTC_LOCAL_RECEIVER_BUFFER_SECONDS = 0.001;
 const WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS = 0.06;
-const WEBRTC_DISCONNECTED_GRACE_MS = 1000;
+const WEBRTC_LOCAL_DISCONNECTED_GRACE_MS = 1000;
+const WEBRTC_REMOTE_DISCONNECTED_GRACE_MS = 10000;
 const WEBRTC_RECONNECT_BASE_DELAY_MS = 250;
 const WEBRTC_RECONNECT_MAX_DELAY_MS = 1000;
 
@@ -170,6 +171,7 @@ interface StreamClientBackend {
   ): Promise<VisualArtifactSample | null>;
   destroy(): void;
   disconnect(): void;
+  applyStreamConfig?(config?: StreamConfig): void | Promise<void>;
   sendControl?(payload: unknown): boolean;
 }
 
@@ -199,6 +201,7 @@ class WebRtcStreamClient implements StreamClientBackend {
   private receiverStatsInterval = 0;
   private receiverStatsSeen = false;
   private shouldReconnect = false;
+  private streamConfigGeneration = 0;
   private telemetryChannel: RTCDataChannel | null = null;
   private stats: StreamStats = createEmptyStreamStats();
   private video: HTMLVideoElement | null = null;
@@ -278,7 +281,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     });
 
     try {
-      await postStreamConfigWithAuthRetry(target);
+      await postStreamConfigWithAuthRetry(target.streamConfig);
       if (generation !== this.connectGeneration) {
         return;
       }
@@ -472,6 +475,18 @@ class WebRtcStreamClient implements StreamClientBackend {
     return sendDataChannelMessage(this.controlChannel, JSON.stringify(payload));
   }
 
+  async applyStreamConfig(config?: StreamConfig) {
+    if (!config) {
+      return;
+    }
+    const generation = ++this.streamConfigGeneration;
+    await postStreamConfigWithAuthRetry(config);
+    if (generation !== this.streamConfigGeneration) {
+      return;
+    }
+    this.sendControl({ forceKeyframe: true, type: "streamControl" });
+  }
+
   destroy() {
     this.disconnect();
   }
@@ -551,7 +566,7 @@ class WebRtcStreamClient implements StreamClientBackend {
         generation,
         new Error("WebRTC connection disconnected."),
       );
-    }, WEBRTC_DISCONNECTED_GRACE_MS);
+    }, disconnectedGraceMs(target));
   }
 
   private scheduleReconnect(target: StreamConnectTarget, generation: number) {
@@ -611,11 +626,8 @@ class WebRtcStreamClient implements StreamClientBackend {
           return;
         }
         if (frameAgeMs > WEBRTC_STALLED_FRAME_TIMEOUT_MS) {
-          this.handleConnectionError(
-            target,
-            generation,
-            new Error("WebRTC video stalled after rendering frames."),
-          );
+          this.sendControl({ snapshot: true, type: "streamControl" });
+          this.scheduleFrameWatchdog(target, generation);
           return;
         }
         this.scheduleFrameWatchdog(target, generation);
@@ -1031,12 +1043,12 @@ async function postWebRtcOfferWithAuthRetry(
 }
 
 async function postStreamConfigWithAuthRetry(
-  target: StreamConnectTarget,
+  config: StreamConfig | undefined,
 ): Promise<void> {
-  if (!target.streamConfig) {
+  if (!config) {
     return;
   }
-  const response = await postStreamConfig(target.streamConfig);
+  const response = await postStreamConfig(config);
   if (response.status !== 401) {
     if (!response.ok) {
       throw new Error(await response.text());
@@ -1044,7 +1056,7 @@ async function postStreamConfigWithAuthRetry(
     return;
   }
   await fetchHealth();
-  const retry = await postStreamConfig(target.streamConfig);
+  const retry = await postStreamConfig(config);
   if (!retry.ok) {
     throw new Error(await retry.text());
   }
@@ -1054,6 +1066,7 @@ function postStreamConfig(config: StreamConfig): Promise<Response> {
   return fetch(apiUrl("/api/stream-quality"), {
     body: JSON.stringify({
       fps: config.fps,
+      maxEdge: config.maxEdge,
       profile: config.quality,
       videoCodec: config.encoder,
     }),
@@ -1103,6 +1116,12 @@ function receiverBufferSeconds(target: StreamConnectTarget): number | null {
   return target.remote
     ? WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS
     : WEBRTC_LOCAL_RECEIVER_BUFFER_SECONDS;
+}
+
+function disconnectedGraceMs(target: StreamConnectTarget): number {
+  return target.remote
+    ? WEBRTC_REMOTE_DISCONNECTED_GRACE_MS
+    : WEBRTC_LOCAL_DISCONNECTED_GRACE_MS;
 }
 
 function configureReceiverCodecPreferences(transceiver: RTCRtpTransceiver) {
@@ -1342,6 +1361,19 @@ export class StreamWorkerClient {
     return Boolean(
       this.backend?.sendControl?.({ ...options, type: "streamControl" }),
     );
+  }
+
+  applyStreamConfig(config?: StreamConfig) {
+    try {
+      const result = this.backend?.applyStreamConfig?.(config);
+      if (result && typeof result.catch === "function") {
+        result.catch((error: unknown) => {
+          console.warn("Failed to apply stream configuration.", error);
+        });
+      }
+    } catch (error) {
+      console.warn("Failed to apply stream configuration.", error);
+    }
   }
 
   destroy() {

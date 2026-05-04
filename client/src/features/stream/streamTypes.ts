@@ -8,12 +8,19 @@ export interface StreamConnectTarget {
 }
 
 export type StreamEncoder = "auto" | "hardware" | "software";
-export type StreamFps = 30 | 60 | 120;
-export type StreamQualityPreset = "quality" | "balanced" | "fast";
+export type StreamFps = number;
+export type StreamQualityPreset =
+  | "balanced"
+  | "ci-software"
+  | "economy"
+  | "fast"
+  | "quality"
+  | "smooth";
 
 export interface StreamConfig {
   encoder: StreamEncoder;
   fps: StreamFps;
+  maxEdge?: number;
   quality: StreamQualityPreset;
 }
 
