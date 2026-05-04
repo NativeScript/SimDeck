@@ -3372,13 +3372,15 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             self->_latestPixelBuffer = nil;
         }
 
-        [self->_headlessHostWindow orderOut:nil];
-        [self->_headlessHostWindow close];
-        self->_headlessHostWindow = nil;
-        self->_headlessHostView = nil;
+        DFRunOnMainSync(^{
+            [self->_headlessHostWindow orderOut:nil];
+            [self->_headlessHostWindow close];
+            self->_headlessHostWindow = nil;
+            self->_headlessHostView = nil;
+            [self.displayView removeFromSuperview];
+        });
 
         [self updateStatus:@"Disconnected"];
-        [self.displayView removeFromSuperview];
     };
 
     if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import type { ChromeProfile, TouchPhase } from "../../api/types";
 import { normalizedPointerCoordinatesForOrientation } from "./gestureMath";
@@ -33,47 +33,13 @@ export function usePointerInput({
   onTouchPreview,
 }: UsePointerInputOptions) {
   const activePointerRef = useRef<number | null>(null);
-  const moveFrameRef = useRef<number>(0);
   const panningRef = useRef<{
     startX: number;
     startY: number;
     startPanX: number;
     startPanY: number;
   } | null>(null);
-  const queuedMoveRef = useRef<Point | null>(null);
   const [isPanning, setIsPanning] = useState(false);
-
-  useEffect(() => {
-    return () => {
-      if (moveFrameRef.current) {
-        cancelAnimationFrame(moveFrameRef.current);
-      }
-    };
-  }, []);
-
-  function queueMove(coords: Point) {
-    queuedMoveRef.current = coords;
-    if (moveFrameRef.current) {
-      return;
-    }
-
-    moveFrameRef.current = requestAnimationFrame(() => {
-      moveFrameRef.current = 0;
-      const nextCoords = queuedMoveRef.current;
-      queuedMoveRef.current = null;
-      if (nextCoords) {
-        onTouch("moved", nextCoords);
-      }
-    });
-  }
-
-  function clearQueuedMove() {
-    if (moveFrameRef.current) {
-      cancelAnimationFrame(moveFrameRef.current);
-      moveFrameRef.current = 0;
-    }
-    queuedMoveRef.current = null;
-  }
 
   function startPanning(event: React.PointerEvent<HTMLElement>) {
     if (event.pointerType !== "mouse") {
@@ -155,7 +121,7 @@ export function usePointerInput({
     );
     if (coords) {
       onTouchPreview?.("moved", coords);
-      queueMove(coords);
+      onTouch("moved", coords);
     }
   }
 
@@ -168,7 +134,6 @@ export function usePointerInput({
       return;
     }
     activePointerRef.current = null;
-    clearQueuedMove();
     const coords = normalizedPointerCoordinatesForOrientation(
       event,
       rotationQuarterTurns,

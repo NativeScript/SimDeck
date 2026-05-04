@@ -32,6 +32,7 @@ It is CLI-only because it is meant for less capable machines where freshness
 matters more than maximum smoothness.
 
 The requested encoder mode is reported to clients in the JSON `videoCodec` field on `GET /api/health`.
+The browser UI exposes stream controls for encoder, FPS, and quality. Local browser sessions default to hardware H.264, 120 fps, and `quality`/full resolution; remote browser sessions default to software H.264, 30 fps, and `balanced`.
 
 ## Remote WebRTC ICE
 
@@ -77,8 +78,8 @@ The WebRTC path favors freshness: stale frames are dropped and the sender reques
 
 A few practical guidelines:
 
-- **Start on the default for local preview.** `auto` lets VideoToolbox choose without requiring the shared hardware encoder.
-- **Use `--local-stream-fps 120` only for local high-refresh testing.** The local quality stream defaults to 60 fps; higher caps pace both capture refresh and hardware encode submission so the stream does not build delay by pushing unbounded frames.
+- **Start on the default for local preview.** Browser realtime mode uses VideoToolbox H.264 with the `quality` profile: full resolution, 120 fps, and a high bitrate floor. Pass `--video-codec software` only when the shared hardware encoder is unavailable or performs worse on that host.
+- **Use `--local-stream-fps` above 60 only for local high-refresh testing.** The local quality stream defaults to 60 fps; higher targets pace both capture refresh and hardware encode submission so the stream does not build delay by pushing unbounded frames.
 - **Switch to `software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
 - **Studio providers default to software H.264 plus `--stream-quality smooth`.** This profile uses a 1170-pixel longest edge, allows up to 60 fps, raises the bitrate budget to reduce compression artifacts, and lets multiple provider sessions share CPU cores without depending on one hardware encoder.
 - **The remote browser renders the live stream as a native `<video>` element.** The canvas remains for input geometry, but it is not in the live per-frame render path and does not preserve stale frames during reconnects.

@@ -283,7 +283,7 @@ function ScreenLayer({
           className="screen-overlay screen-loading"
           role="status"
         >
-          Connecting to simulator...
+          <span className="loading-spinner" aria-hidden="true" />
         </div>
       ) : null}
       {isBooted &&

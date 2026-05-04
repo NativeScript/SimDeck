@@ -7,14 +7,17 @@ use crate::transport::packet::{FramePacket, SharedFrame};
 use bytes::Bytes;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tokio::task;
 use tokio::time::{timeout, Instant};
 use tracing::debug;
 
-const FRAME_BROADCAST_CAPACITY: usize = 4;
+// This channel carries encoded H.264 access units. Subscribers must not miss
+// ordinary P-frames: dropping compressed references creates decoder artifacts
+// even on a perfect localhost link. Coalescing is only safe before encoding.
+const FRAME_BROADCAST_CAPACITY: usize = 128;
 const MIN_REFRESH_INTERVAL_MS: u64 = 16;
 const MIN_KEYFRAME_INTERVAL_MS: u64 = 250;
 
@@ -30,6 +33,7 @@ struct SimulatorSessionInner {
     sender: broadcast::Sender<SharedFrame>,
     latest_keyframe: RwLock<Option<SharedFrame>>,
     state: Mutex<SessionState>,
+    start_condvar: Condvar,
     display_ready: AtomicBool,
     display_width: AtomicU64,
     display_height: AtomicU64,
@@ -53,6 +57,7 @@ impl SimulatorSession {
             sender,
             latest_keyframe: RwLock::new(None),
             state: Mutex::new(SessionState::Detached),
+            start_condvar: Condvar::new(),
             display_ready: AtomicBool::new(false),
             display_width: AtomicU64::new(0),
             display_height: AtomicU64::new(0),
@@ -75,19 +80,27 @@ impl SimulatorSession {
     }
 
     pub fn ensure_started(&self) -> Result<(), AppError> {
-        {
+        loop {
             let mut state = self.inner.state.lock().unwrap();
-            if matches!(*state, SessionState::Ready | SessionState::Streaming) {
-                return Ok(());
+            match *state {
+                SessionState::Ready | SessionState::Streaming => return Ok(()),
+                SessionState::Attaching => {
+                    drop(self.inner.start_condvar.wait(state).unwrap());
+                }
+                _ => {
+                    *state = SessionState::Attaching;
+                    break;
+                }
             }
-            *state = SessionState::Attaching;
         }
 
         if let Err(error) = self.inner.native.start() {
             *self.inner.state.lock().unwrap() = SessionState::Failed;
+            self.inner.start_condvar.notify_all();
             return Err(error);
         }
         *self.inner.state.lock().unwrap() = SessionState::Ready;
+        self.inner.start_condvar.notify_all();
         Ok(())
     }
 
@@ -108,32 +121,35 @@ impl SimulatorSession {
     }
 
     pub async fn wait_for_keyframe(&self, timeout_duration: Duration) -> Option<SharedFrame> {
-        if let Some(frame) = self.latest_keyframe() {
-            return Some(frame);
-        }
-
         let deadline = Instant::now() + timeout_duration;
+        let baseline_sequence = self
+            .latest_keyframe()
+            .map_or(0, |frame| frame.frame_sequence);
         let mut rx = self.inner.sender.subscribe();
-        self.request_refresh();
+        self.request_keyframe_immediate();
 
         loop {
             if let Some(frame) = self.latest_keyframe() {
-                return Some(frame);
+                if frame.frame_sequence > baseline_sequence {
+                    return Some(frame);
+                }
             }
 
             let now = Instant::now();
             if now >= deadline {
-                return self.latest_keyframe();
+                return None;
             }
 
             let remaining = deadline - now;
             match timeout(remaining, rx.recv()).await {
-                Ok(Ok(frame)) if frame.is_keyframe => return Some(frame),
-                Ok(Ok(_)) => self.request_refresh(),
-                Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
-                    self.request_refresh();
+                Ok(Ok(frame)) if frame.is_keyframe && frame.frame_sequence > baseline_sequence => {
+                    return Some(frame)
                 }
-                Ok(Err(_)) | Err(_) => return self.latest_keyframe(),
+                Ok(Ok(_)) => self.request_keyframe(),
+                Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
+                    self.request_keyframe();
+                }
+                Ok(Err(_)) | Err(_) => return None,
             }
         }
     }
@@ -145,10 +161,6 @@ impl SimulatorSession {
             return;
         }
         self.inner.last_refresh_ms.store(now, Ordering::Relaxed);
-        self.inner
-            .metrics
-            .keyframe_requests
-            .fetch_add(1, Ordering::Relaxed);
         self.inner.native.request_refresh();
     }
 
@@ -159,6 +171,17 @@ impl SimulatorSession {
             self.request_refresh();
             return;
         }
+        self.inner.last_keyframe_ms.store(now, Ordering::Relaxed);
+        self.inner.last_refresh_ms.store(now, Ordering::Relaxed);
+        self.inner
+            .metrics
+            .keyframe_requests
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner.native.request_keyframe();
+    }
+
+    fn request_keyframe_immediate(&self) {
+        let now = now_ms();
         self.inner.last_keyframe_ms.store(now, Ordering::Relaxed);
         self.inner.last_refresh_ms.store(now, Ordering::Relaxed);
         self.inner
@@ -289,6 +312,7 @@ impl SimulatorSessionInner {
         let _ = self.sender.send(packet);
         if matches!(*self.state.lock().unwrap(), SessionState::Attaching) {
             *self.state.lock().unwrap() = SessionState::Ready;
+            self.start_condvar.notify_all();
         }
     }
 }

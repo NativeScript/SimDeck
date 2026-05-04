@@ -68,6 +68,28 @@ Content-Type: application/json
 
 Required fields: `clientId` and `kind`. Every other field is optional but typed in `ClientStreamStats`.
 
+### `GET /api/stream-quality`
+
+Returns the active stream encoder settings and available quality profiles.
+
+### `POST /api/stream-quality`
+
+Updates the active stream encoder settings for newly encoded frames. The browser
+UI uses this before WebRTC negotiation when the user selects encoder, FPS, or
+quality.
+
+```json
+{
+  "videoCodec": "hardware",
+  "fps": 120,
+  "profile": "quality"
+}
+```
+
+`videoCodec` accepts `hardware` or `software` from the UI, and the API also
+accepts `auto`. `fps` is clamped to the local stream range. `profile` accepts
+`quality`, `balanced`, `fast`, `smooth`, `economy`, or `ci-software`.
+
 ## Simulator inventory
 
 ### `GET /api/simulators`
