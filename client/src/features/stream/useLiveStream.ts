@@ -61,7 +61,9 @@ function detectRuntimeInfo(): StreamRuntimeInfo {
 
 function createClientTelemetryId(): string {
   try {
-    const stored = window.sessionStorage.getItem(CLIENT_TELEMETRY_ID_STORAGE_KEY);
+    const stored = window.sessionStorage.getItem(
+      CLIENT_TELEMETRY_ID_STORAGE_KEY,
+    );
     if (stored) {
       return stored;
     }
@@ -237,7 +239,9 @@ export function useLiveStream({
         0,
         ((renderedFrames - lastSampleFrames) * 1000) / elapsedMs,
       );
-      setFps((current) => (current <= 0 ? nextFps : current * 0.65 + nextFps * 0.35));
+      setFps((current) =>
+        current <= 0 ? nextFps : current * 0.65 + nextFps * 0.35,
+      );
       lastSampleFrames = renderedFrames;
       lastSampleAt = now;
     }, FPS_SAMPLE_INTERVAL_MS);
