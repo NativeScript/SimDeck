@@ -47,10 +47,10 @@ const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
 const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(90);
 const WEBRTC_INITIAL_KEYFRAME_TIMEOUT: Duration = Duration::from_secs(5);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
-const WEBRTC_PEER_DISCONNECTED_TIMEOUT: Duration = Duration::from_secs(2);
+const WEBRTC_PEER_DISCONNECTED_TIMEOUT: Duration = Duration::from_secs(12);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<WebRtcMediaStreamToken>>>> =
     OnceLock::new();
-const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 4;
+const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 16;
 
 #[derive(Clone)]
 struct WebRtcMediaStreamToken {
@@ -606,7 +606,7 @@ fn offer_h264_profile_level_ids(sdp: &str) -> Vec<String> {
 }
 
 fn h264_rtcp_feedback() -> Vec<RTCPFeedback> {
-    let mut feedback = vec![
+    vec![
         RTCPFeedback {
             typ: "goog-remb".to_owned(),
             parameter: String::new(),
@@ -621,19 +621,13 @@ fn h264_rtcp_feedback() -> Vec<RTCPFeedback> {
         },
         RTCPFeedback {
             typ: "nack".to_owned(),
+            parameter: String::new(),
+        },
+        RTCPFeedback {
+            typ: "nack".to_owned(),
             parameter: "pli".to_owned(),
         },
-    ];
-    if !realtime_stream_enabled() {
-        feedback.insert(
-            3,
-            RTCPFeedback {
-                typ: "nack".to_owned(),
-                parameter: String::new(),
-            },
-        );
-    }
-    feedback
+    ]
 }
 
 fn rtcp_packet_requests_keyframe(packet: &(dyn RtcpPacket + Send + Sync)) -> bool {
@@ -856,8 +850,6 @@ impl WebRtcMediaStream {
         );
         let mut waiting_for_keyframe = false;
         let mut peer_disconnected_since: Option<time::Instant> = None;
-        let live_refresh_interval = realtime_sample_duration();
-        let mut live_refresh_sleep = Box::pin(time::sleep(live_refresh_interval));
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
         let first_frame_duration = send_timing.duration_for(&first_frame, realtime_stream);
 
@@ -916,12 +908,6 @@ impl WebRtcMediaStream {
                     } else {
                         peer_disconnected_since = None;
                     }
-                }
-                _ = &mut live_refresh_sleep => {
-                    session.request_refresh();
-                    live_refresh_sleep
-                        .as_mut()
-                        .reset(time::Instant::now() + live_refresh_interval);
                 }
                 command = stream_control_rx.recv() => {
                     let Some(command) = command else {
@@ -1481,6 +1467,28 @@ mod tests {
     }
 
     #[test]
+    fn realtime_h264_advertises_retransmission_feedback() {
+        let feedback = super::h264_rtcp_feedback();
+        assert!(feedback
+            .iter()
+            .any(|item| item.typ == "nack" && item.parameter.is_empty()));
+        assert!(feedback
+            .iter()
+            .any(|item| item.typ == "nack" && item.parameter == "pli"));
+        assert!(feedback
+            .iter()
+            .any(|item| item.typ == "ccm" && item.parameter == "fir"));
+        assert!(feedback
+            .iter()
+            .any(|item| item.typ == "transport-cc" && item.parameter.is_empty()));
+    }
+
+    #[test]
+    fn peer_disconnected_grace_covers_remote_ice_wobbles() {
+        assert!(super::WEBRTC_PEER_DISCONNECTED_TIMEOUT >= Duration::from_secs(10));
+    }
+
+    #[test]
     fn registering_second_webrtc_stream_does_not_cancel_first() {
         let udid = format!("test-{}", std::process::id());
         super::reset_webrtc_media_streams_for_test(&udid);
@@ -1532,26 +1540,27 @@ mod tests {
     }
 
     #[test]
-    fn registering_fifth_webrtc_stream_cancels_oldest() {
+    fn registering_more_than_max_webrtc_streams_cancels_oldest() {
         let udid = format!("test-cap-{}", std::process::id());
         super::reset_webrtc_media_streams_for_test(&udid);
         let (_first_token, mut first_rx) = super::register_webrtc_media_stream_for_test(&udid);
-        let (second_token, mut second_rx) = super::register_webrtc_media_stream_for_test(&udid);
-        let (third_token, mut third_rx) = super::register_webrtc_media_stream_for_test(&udid);
-        let (fourth_token, mut fourth_rx) = super::register_webrtc_media_stream_for_test(&udid);
-        let (fifth_token, mut fifth_rx) = super::register_webrtc_media_stream_for_test(&udid);
+        let mut retained = Vec::new();
+        for _ in 0..super::MAX_WEBRTC_MEDIA_STREAMS_PER_UDID {
+            retained.push(super::register_webrtc_media_stream_for_test(&udid));
+        }
 
         assert!(first_rx.try_recv().is_ok());
-        assert!(second_rx.try_recv().is_err());
-        assert!(third_rx.try_recv().is_err());
-        assert!(fourth_rx.try_recv().is_err());
-        assert!(fifth_rx.try_recv().is_err());
-        assert_eq!(super::active_webrtc_media_stream_count(&udid), 4);
+        for (_token, rx) in retained.iter_mut() {
+            assert!(rx.try_recv().is_err());
+        }
+        assert_eq!(
+            super::active_webrtc_media_stream_count(&udid),
+            super::MAX_WEBRTC_MEDIA_STREAMS_PER_UDID
+        );
 
-        super::clear_webrtc_media_stream_for_test(&udid, &second_token);
-        super::clear_webrtc_media_stream_for_test(&udid, &third_token);
-        super::clear_webrtc_media_stream_for_test(&udid, &fourth_token);
-        super::clear_webrtc_media_stream_for_test(&udid, &fifth_token);
+        for (token, _rx) in retained {
+            super::clear_webrtc_media_stream_for_test(&udid, &token);
+        }
         assert!(!super::has_media_stream(&udid));
     }
 

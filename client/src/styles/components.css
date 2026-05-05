@@ -321,12 +321,30 @@
   padding-top: 0;
 }
 
+.menu-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .menu-section-title {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0;
   text-transform: uppercase;
+}
+
+.menu-section-meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .menu-segment {

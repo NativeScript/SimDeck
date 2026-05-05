@@ -34,6 +34,7 @@ interface ToolbarProps {
   onToggleHierarchy: () => void;
   onToggleMenu: () => void;
   onToggleTouchOverlay: () => void;
+  remoteStream?: boolean;
   search: string;
   selectedSimulator: SimulatorMetadata | null;
   selectedSimulatorIdentifier: string;
@@ -75,6 +76,7 @@ export function Toolbar({
   onToggleHierarchy,
   onToggleMenu,
   onToggleTouchOverlay,
+  remoteStream = false,
   search,
   selectedSimulator,
   selectedSimulatorIdentifier,
@@ -135,6 +137,7 @@ export function Toolbar({
           onToggleDebug={onToggleDebug}
           onToggleMenu={onToggleMenu}
           onToggleTouchOverlay={onToggleTouchOverlay}
+          remoteStream={remoteStream}
           search={search}
           selectedSimulator={selectedSimulator}
           setSelectedUDID={setSelectedUDID}

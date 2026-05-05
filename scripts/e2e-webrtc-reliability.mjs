@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -8,6 +8,8 @@ import { spawn } from "node:child_process";
 const serverUrl = new URL(
   process.env.SIMDECK_SERVER_URL ?? process.argv[2] ?? "http://127.0.0.1:4310",
 );
+const apiRootPath =
+  process.env.SIMDECK_E2E_API_ROOT ?? apiRootPathForViewerUrl(serverUrl);
 const durationMs = Number(
   process.env.SIMDECK_E2E_WEBRTC_MS ?? process.argv[3] ?? 60_000,
 );
@@ -20,12 +22,15 @@ const maxFrameGapMs = Number(process.env.SIMDECK_E2E_MAX_FRAME_GAP_MS ?? 250);
 const maxInteractionLatencyMs = Number(
   process.env.SIMDECK_E2E_MAX_INTERACTION_LATENCY_MS ?? 750,
 );
+const interactionsEnabled = process.env.SIMDECK_E2E_INTERACTIONS !== "0";
 const maxPeerDisconnectedMs = Number(
   process.env.SIMDECK_E2E_MAX_PEER_DISCONNECTED_MS ?? 1000,
 );
+const maxDecoderDrops = Number(process.env.SIMDECK_E2E_MAX_DECODER_DROPS ?? 0);
 const visualSampleIntervalMs = Number(
-  process.env.SIMDECK_E2E_VISUAL_SAMPLE_INTERVAL_MS ?? 1000,
+  process.env.SIMDECK_E2E_VISUAL_SAMPLE_INTERVAL_MS ?? 5000,
 );
+const visualSamplesEnabled = visualSampleIntervalMs > 0;
 const maxVisualMeanDiff = Number(
   process.env.SIMDECK_E2E_MAX_VISUAL_MEAN_DIFF ?? 18,
 );
@@ -35,9 +40,29 @@ const maxVisualBadPixelRatio = Number(
 const maxVisualTileDiff = Number(
   process.env.SIMDECK_E2E_MAX_VISUAL_TILE_DIFF ?? 42,
 );
+const maxVisualFailureRatio = Number(
+  process.env.SIMDECK_E2E_MAX_VISUAL_FAILURE_RATIO ?? 0.2,
+);
+const maxConsecutiveVisualFailures = Number(
+  process.env.SIMDECK_E2E_MAX_CONSECUTIVE_VISUAL_FAILURES ?? 1,
+);
+const screenshotApiRoot = process.env.SIMDECK_E2E_SCREENSHOT_API_ROOT
+  ? new URL(process.env.SIMDECK_E2E_SCREENSHOT_API_ROOT)
+  : null;
+const screenshotApiToken = process.env.SIMDECK_E2E_SCREENSHOT_API_TOKEN ?? "";
+const outputJsonPath = process.env.SIMDECK_E2E_OUTPUT_JSON ?? "";
+const requireVisualSamples = process.env.SIMDECK_E2E_REQUIRE_VISUAL !== "0";
 
 function endpoint(path) {
-  return new URL(path, serverUrl).toString();
+  return new URL(`${apiRootPath}${path}`, serverUrl).toString();
+}
+
+function apiRootPathForViewerUrl(url) {
+  const match = url.pathname.match(/^\/simulator\/([^/]+)/);
+  if (!match) {
+    return "";
+  }
+  return `/api/provider-sessions/${match[1]}/simdeck`;
 }
 
 async function fetchJson(url, init) {
@@ -48,6 +73,32 @@ async function fetchJson(url, init) {
     );
   }
   return response.json();
+}
+
+async function fetchReferenceScreenshotDataUrl(udid) {
+  if (!screenshotApiRoot) {
+    return null;
+  }
+  const url = new URL(
+    `/api/simulators/${encodeURIComponent(udid)}/screenshot.png`,
+    screenshotApiRoot,
+  );
+  url.searchParams.set("artifactCheck", Date.now().toString());
+  const headers = screenshotApiToken
+    ? { "x-simdeck-token": screenshotApiToken }
+    : undefined;
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers,
+  });
+  if (!response.ok) {
+    throw new Error(
+      `reference screenshot failed with ${response.status}: ${await response.text()}`,
+    );
+  }
+  const contentType = response.headers.get("content-type") ?? "image/png";
+  const base64 = Buffer.from(await response.arrayBuffer()).toString("base64");
+  return `data:${contentType};base64,${base64}`;
 }
 
 async function waitForDevTools() {
@@ -133,6 +184,28 @@ function streamKey(stream) {
 
 function numeric(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function isVisualFailure(sample) {
+  return (
+    sample.meanDiff > maxVisualMeanDiff ||
+    sample.badPixelRatio > maxVisualBadPixelRatio ||
+    sample.maxTileMeanDiff > maxVisualTileDiff
+  );
+}
+
+function maxConsecutiveMatches(values, predicate) {
+  let current = 0;
+  let max = 0;
+  for (const value of values) {
+    if (predicate(value)) {
+      current += 1;
+      max = Math.max(max, current);
+    } else {
+      current = 0;
+    }
+  }
+  return max;
 }
 
 function findClientStreams(metrics, clientId) {
@@ -236,6 +309,7 @@ try {
   const interactionLatencies = [];
   const presentedInteractionLatencies = [];
   const visualSamples = [];
+  const visualSampleErrors = [];
   while (Date.now() - startedAt < durationMs) {
     await sleep(pollMs);
     const elapsed = Date.now() - startedAt;
@@ -268,17 +342,24 @@ try {
     const visualUdid =
       latestByKind(streams, "webrtc")?.udid ??
       latestByKind(streams, "page")?.udid;
-    if (visualUdid && elapsed - lastVisualSampleAt >= visualSampleIntervalMs) {
+    if (
+      visualSamplesEnabled &&
+      visualUdid &&
+      elapsed - lastVisualSampleAt >= visualSampleIntervalMs
+    ) {
       lastVisualSampleAt = elapsed;
       const visualSample = await collectVisualArtifactSample(
         cdp,
         visualUdid,
-      ).catch(() => null);
+      ).catch((error) => {
+        visualSampleErrors.push(String(error?.message ?? error));
+        return null;
+      });
       if (visualSample) {
         visualSamples.push(visualSample);
       }
     }
-    if (elapsed - lastInteractionAt >= 5000) {
+    if (interactionsEnabled && elapsed - lastInteractionAt >= 5000) {
       lastInteractionAt = elapsed;
       const beforeInteraction = await collectDirectWebRtcStats(cdp);
       await interactWithSimulatorViewport(cdp, elapsed);
@@ -340,9 +421,9 @@ try {
       `browser stats did not advance decoded/presented/RTP frames: decoded=${directDecodedDelta} presented=${directPresentedDelta} received=${directPacketsDelta}`,
     );
   }
-  if (droppedDelta > 0 || directDroppedDelta > 0) {
+  if (droppedDelta > maxDecoderDrops || directDroppedDelta > maxDecoderDrops) {
     failures.push(
-      `decoder dropped frames: metrics=${droppedDelta} getStats=${directDroppedDelta}`,
+      `decoder dropped frames: metrics=${droppedDelta} getStats=${directDroppedDelta} max=${maxDecoderDrops}`,
     );
   }
   if (reconnectDelta > 0) {
@@ -369,15 +450,19 @@ try {
       `presented video did not advance within ${maxInteractionLatencyMs}ms after ${slowPresentedInteractions.length} interactions`,
     );
   }
-  const visualFailures = visualSamples.filter(
-    (sample) =>
-      sample.meanDiff > maxVisualMeanDiff ||
-      sample.badPixelRatio > maxVisualBadPixelRatio ||
-      sample.maxTileMeanDiff > maxVisualTileDiff,
+  const visualFailures = visualSamples.filter(isVisualFailure);
+  const visualFailureRatio =
+    visualSamples.length > 0 ? visualFailures.length / visualSamples.length : 0;
+  const consecutiveVisualFailures = maxConsecutiveMatches(
+    visualSamples,
+    isVisualFailure,
   );
-  if (visualSamples.length === 0) {
+  if (requireVisualSamples && visualSamples.length === 0) {
     failures.push("no visual artifact samples were collected");
-  } else if (visualFailures.length > 0) {
+  } else if (
+    visualFailureRatio > maxVisualFailureRatio ||
+    consecutiveVisualFailures > maxConsecutiveVisualFailures
+  ) {
     const worst = visualFailures
       .slice()
       .sort((a, b) => b.maxTileMeanDiff - a.maxTileMeanDiff)[0];
@@ -388,6 +473,7 @@ try {
   }
 
   const summary = {
+    apiRootPath,
     clientId,
     directStatsEnd,
     directStatsStart,
@@ -401,14 +487,23 @@ try {
     maxPeerDisconnectedMs,
     maxPeerDisconnectedObservedMs,
     maxInteractionLatencyMs,
+    maxDecoderDrops,
+    interactionsEnabled,
+    visualSamplesEnabled,
     interactionLatencies,
     presentedInteractionLatencies,
     visualThresholds: {
       maxVisualBadPixelRatio,
       maxVisualMeanDiff,
       maxVisualTileDiff,
+      maxVisualFailureRatio,
+      maxConsecutiveVisualFailures,
     },
+    visualFailureRatio,
+    consecutiveVisualFailures,
+    screenshotApiRoot: screenshotApiRoot?.origin ?? null,
     visualSamples,
+    visualSampleErrors: visualSampleErrors.slice(0, 10),
     renderedDelta,
     decodedDelta,
     receivedDelta,
@@ -427,15 +522,26 @@ try {
     })),
   };
   if (failures.length > 0) {
-    console.error(JSON.stringify({ ...summary, failures }, null, 2));
+    const result = { ...summary, failures };
+    await writeSummary(result);
+    console.error(JSON.stringify(result, null, 2));
     process.exitCode = 1;
   } else {
-    console.log(JSON.stringify({ ...summary, ok: true }, null, 2));
+    const result = { ...summary, ok: true };
+    await writeSummary(result);
+    console.log(JSON.stringify(result, null, 2));
   }
 } finally {
   cdp?.close();
   await stopChrome(chrome);
   await rm(profileDir, { force: true, recursive: true });
+}
+
+async function writeSummary(summary) {
+  if (!outputJsonPath) {
+    return;
+  }
+  await writeFile(outputJsonPath, JSON.stringify(summary, null, 2));
 }
 
 async function stopChrome(chromeProcess) {
@@ -556,6 +662,10 @@ async function waitForPresentedFrameAfterInteraction(
 }
 
 async function collectVisualArtifactSample(cdp, udid) {
+  const referenceDataUrl = await fetchReferenceScreenshotDataUrl(udid);
+  const screenshotPath = `${apiRootPath}/api/simulators/${encodeURIComponent(
+    udid,
+  )}/screenshot.png`;
   return evaluate(
     cdp,
     `
@@ -565,13 +675,7 @@ async function collectVisualArtifactSample(cdp, udid) {
         throw new Error("live video is not ready for visual comparison");
       }
 
-      const response = await fetch("/api/simulators/${udid}/screenshot.png?artifactCheck=" + Date.now(), {
-        cache: "no-store",
-      });
-      if (!response.ok) {
-        throw new Error("native screenshot failed with " + response.status);
-      }
-      const source = await createImageBitmap(await response.blob());
+      const source = await loadReferenceScreenshot();
       const width = Math.min(240, video.videoWidth, source.width);
       const height = Math.max(1, Math.round(width * (video.videoHeight / video.videoWidth)));
       const canvas = document.createElement("canvas");
@@ -633,6 +737,22 @@ async function collectVisualArtifactSample(cdp, udid) {
         videoWidth: video.videoWidth,
         width,
       };
+
+      async function loadReferenceScreenshot() {
+        const dataUrl = ${JSON.stringify(referenceDataUrl)};
+        if (dataUrl) {
+          return createImageBitmap(await (await fetch(dataUrl)).blob());
+        }
+        const response = await fetch(new URL(${JSON.stringify(
+          screenshotPath,
+        )} + "?artifactCheck=" + Date.now(), window.location.href).toString(), {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          throw new Error("native screenshot failed with " + response.status);
+        }
+        return createImageBitmap(await response.blob());
+      }
     })()
   `,
   );

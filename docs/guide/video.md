@@ -32,7 +32,7 @@ It is CLI-only because it is meant for less capable machines where freshness
 matters more than maximum smoothness.
 
 The requested encoder mode is reported to clients in the JSON `videoCodec` field on `GET /api/health`.
-The browser UI exposes stream controls for encoder, FPS, and quality. Local browser sessions default to hardware H.264, 120 fps, and `quality`/full resolution; remote browser sessions default to software H.264, 30 fps, and `balanced`.
+The browser UI exposes stream controls for encoder, FPS, and quality. Local browser sessions default to hardware H.264, 120 fps, and `quality`/full resolution with FPS choices of 30, 60, and 120. Remote browser sessions default to software H.264, 30 fps, and `balanced` with FPS choices of 15, 30, and 60.
 
 ## Remote WebRTC ICE
 
