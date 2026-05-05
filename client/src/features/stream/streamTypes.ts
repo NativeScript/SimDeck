@@ -45,12 +45,15 @@ export interface StreamStats extends Size {
   decoderDroppedFrames: number;
   droppedFrames: number;
   frameSequence: number;
+  iceRestartReason: string;
+  iceRestarts: number;
   latestFrameGapMs: number;
   latestRenderMs: number;
   maxRenderMs: number;
   packetsLost: number;
   presentationDroppedFrames: number;
   receivedPackets: number;
+  reconnectReason: string;
   reconnects: number;
   renderedFrames: number;
   waitingForKeyFrame: boolean;
