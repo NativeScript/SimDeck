@@ -785,6 +785,10 @@ fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMe
     let project_root = project_root()?;
     let metadata_path = daemon_metadata_path_for_root(&project_root)?;
     let log_path = daemon_log_path_for_root(&project_root)?;
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create daemon log directory {}", parent.display()))?;
+    }
     let port = choose_daemon_port(options.port)?;
     let access_token = auth::generate_access_token();
     let pairing_code = auth::generate_pairing_code();
