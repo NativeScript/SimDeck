@@ -258,6 +258,7 @@ impl SimulatorSession {
             "displayWidth": self.inner.display_width.load(Ordering::Relaxed),
             "displayHeight": self.inner.display_height.load(Ordering::Relaxed),
             "frameSequence": self.inner.frame_sequence.load(Ordering::Relaxed),
+            "rotationQuarterTurns": self.inner.native.rotation_quarter_turns(),
             "encoder": self.inner.native.video_encoder_stats(),
         })
     }

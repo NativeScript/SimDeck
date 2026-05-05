@@ -106,6 +106,10 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
     return [self.session videoEncoderStats];
 }
 
+- (NSInteger)rotationQuarterTurns {
+    return self.session.rotationQuarterTurns;
+}
+
 - (BOOL)sendTouchAtX:(double)x
                    y:(double)y
                phase:(NSString *)phase

@@ -36,11 +36,12 @@ view inside the editor.
 ## Features
 
 - Local simulator video stream over browser-native WebRTC H.264
-- Full simulator control & inspection using private accessibility APIs
+- Full simulator control & inspection using private accessibility APIs - available using `simdeck` CLI
+- Real-time screen `describe` command using accessibility view tree - available in token-efficient format for agents
 - CoreSimulator chrome asset rendering for device bezels
 - NativeScript, React Native, UIKit and SwiftUI runtime inspector plugins to view app's view hierarchy live
 - `simdeck/test` for fast JS/TS app tests that can query accessibility state and drive simulator controls.
-- SimDeck Studio for automatic PR deployments to on-demand simulators
+- SimDeck Studio for sharing Simulator streams & automatic PR deployments to on-demand simulators
 
 ## Documentation
 
@@ -59,9 +60,10 @@ To focus a specific simulator by name or UDID, pass it as the only argument:
 simdeck "iPhone 17 Pro Max"
 ```
 
-Use `simdeck ui --open` or `simdeck daemon start` when you want a reusable background daemon instead.
-The no-subcommand lifecycle shortcuts are `simdeck -d` for detached start, `simdeck -k` to kill the background daemon, and `simdeck -r` to restart it.
-The served loopback browser UI receives the generated API access token automatically. LAN browsers pair with the printed code before receiving the API cookie.
+`simdeck -d` for detached start, `simdeck -k` to kill the background daemon, and `simdeck -r` to restart it.
+
+The served loopback browser UI receives the generated API access token automatically.
+LAN clients should pair with the printed code before receiving the API cookie.
 
 SimDeck Studio providers run the daemon on loopback and use
 `scripts/studio-provider-bridge.mjs` for outbound control-plane communication
@@ -69,7 +71,7 @@ with Studio. Studio hosts the browser UI and proxies SimDeck REST requests over
 that bridge while WebRTC media still negotiates directly between the browser and
 runner through ICE.
 
-Expose a local simulator through Studio with one command:
+Expose a local simulator through SimDeck Studio with one command:
 
 ```sh
 simdeck studio expose "iPhone 17 Pro"
@@ -77,15 +79,7 @@ simdeck studio expose "iPhone 17 Pro"
 
 The command starts or reuses the local daemon, creates an ephemeral Studio
 session, prints a unique `https://simdeck.djdev.me/simulator/...` URL, and keeps
-the outbound bridge alive until you press Ctrl-C. It uses software H.264 by
-default with realtime stream settings for remote viewing, and prints the active
-codec/profile when it starts. Studio defaults to the `smooth` stream quality
-profile (`1170` longest edge, dynamic up to `60` fps). Use
-`--stream-quality quality|balanced|fast|smooth|economy|ci-software` to override it,
-or pass `--video-codec hardware` when a dedicated hardware encoder is preferable.
-The remote viewer renders live video with the browser's native video element;
-the canvas is only used for input geometry. Remote viewers can choose 15, 30,
-or 60 fps in the browser stream menu.
+the outbound bridge alive until you press Ctrl-C.
 
 CLI commands automatically use the same warm daemon:
 
@@ -115,14 +109,6 @@ more important than full-resolution smoothness:
 
 ```sh
 simdeck daemon start --video-codec software --low-latency
-```
-
-Local browser streams default to realtime WebRTC delivery with the `quality`
-profile on VideoToolbox H.264: full resolution, 120 fps, and a high bitrate floor. On
-high-refresh local displays, raise the local stream target explicitly:
-
-```sh
-simdeck daemon restart --local-stream-fps 240
 ```
 
 Restart the CoreSimulator service layer when `simctl` reports a stale service
@@ -255,7 +241,7 @@ React Fiber commits.
 
 ## VS Code
 
-Install the `nativescript.simdeck` extension from the VS Code Marketplace, then
+Install the `nativescript.simdeck-vscode` extension from the VS Code Marketplace, then
 run `SimDeck: Open Simulator View` from the Command Palette. The extension
 opens the simulator inside a VS Code panel and auto-starts the local daemon
 when it is not already reachable.

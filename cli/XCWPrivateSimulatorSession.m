@@ -229,6 +229,10 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
     return size;
 }
 
+- (NSInteger)rotationQuarterTurns {
+    return _displayBridge.rotationQuarterTurns;
+}
+
 - (NSUInteger)frameSequence {
     __block NSUInteger sequence = 0;
     dispatch_sync(_stateQueue, ^{

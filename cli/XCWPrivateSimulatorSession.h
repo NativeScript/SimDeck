@@ -23,6 +23,7 @@ typedef void (^XCWPrivateSimulatorEncodedFrameHandler)(NSData *sampleData,
 @property (nonatomic, readonly, getter=isDisplayReady) BOOL displayReady;
 @property (nonatomic, copy, readonly) NSString *displayStatus;
 @property (nonatomic, readonly) CGSize displaySize;
+@property (nonatomic, readonly) NSInteger rotationQuarterTurns;
 @property (nonatomic, readonly) NSUInteger frameSequence;
 
 - (BOOL)waitUntilReadyWithTimeout:(NSTimeInterval)timeout;

@@ -1455,6 +1455,32 @@ static double DFNormalizedDegrees(double value) {
     return normalized;
 }
 
+static NSInteger DFRotationQuarterTurnsForDegrees(double degrees) {
+    NSInteger turns = (NSInteger)llround(DFNormalizedDegrees(degrees) / 90.0) % 4;
+    if (turns < 0) {
+        turns += 4;
+    }
+    return turns;
+}
+
+static void DFReconcileRotationWithDisplaySize(double *rotationDegrees, CGSize displaySize) {
+    if (rotationDegrees == NULL || displaySize.width <= 0.0 || displaySize.height <= 0.0) {
+        return;
+    }
+
+    double aspectDelta = fabs(displaySize.width - displaySize.height);
+    if (aspectDelta < 1.0) {
+        return;
+    }
+
+    NSInteger currentTurns = DFRotationQuarterTurnsForDegrees(*rotationDegrees);
+    BOOL displayIsLandscape = displaySize.width > displaySize.height;
+    BOOL rotationIsLandscape = (currentTurns % 2) != 0;
+    if (displayIsLandscape != rotationIsLandscape) {
+        *rotationDegrees = displayIsLandscape ? 90.0 : 0.0;
+    }
+}
+
 static NSArray<NSString *> * DFInterestingSelectorsForObject(id object) {
     if (object == nil) {
         return @[];
@@ -2758,6 +2784,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             size_t width = CVPixelBufferGetWidth(pixelBuffer);
             size_t height = CVPixelBufferGetHeight(pixelBuffer);
             strongSelf->_displayPixelSize = CGSizeMake((CGFloat)width, (CGFloat)height);
+            DFReconcileRotationWithDisplaySize(&strongSelf->_deviceRotationDegrees, strongSelf->_displayPixelSize);
             [strongSelf notifyDelegateOfFrame:pixelBuffer];
             DFRunOnMainAsync(^{
                 if (strongSelf->_headlessHostWindow != nil) {
@@ -3433,6 +3460,21 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     }
 
     return size;
+}
+
+- (NSInteger)rotationQuarterTurns {
+    __block NSInteger turns = 0;
+    dispatch_block_t work = ^{
+        turns = DFRotationQuarterTurnsForDegrees(self->_deviceRotationDegrees);
+    };
+
+    if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {
+        work();
+    } else {
+        dispatch_sync(_callbackQueue, work);
+    }
+
+    return turns;
 }
 
 - (BOOL)sendTouchAtNormalizedX:(double)normalizedX

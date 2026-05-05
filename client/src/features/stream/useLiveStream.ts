@@ -290,14 +290,7 @@ export function useLiveStream({
     return () => {
       workerClient.disconnect();
     };
-  }, [
-    canvasElement,
-    simulator?.isBooted,
-    simulator?.udid,
-    paused,
-    remote,
-    streamConfig?.encoder,
-  ]);
+  }, [canvasElement, simulator?.isBooted, simulator?.udid, paused, remote]);
 
   useEffect(() => {
     if (
@@ -313,7 +306,9 @@ export function useLiveStream({
     paused,
     simulator?.isBooted,
     streamConfigApplyKey,
+    streamConfig?.encoder,
     streamConfig?.fps,
+    streamConfig?.maxEdge,
     streamConfig?.quality,
   ]);
 

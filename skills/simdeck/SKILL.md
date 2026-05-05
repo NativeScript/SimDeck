@@ -1,13 +1,11 @@
 ---
 name: simdeck
-description: Agent guide for SimDeck, iOS Simulator control panel. Use for simulator lifecycle, app install/launch, live viewing, UI inspection, touch/keyboard automation, screenshots, logs, pasteboard, hardware controls, and repeatable simulator flows.
+description: Use for simulator lifecycle, app install/launch, live viewing, UI inspection, touch/keyboard automation, screenshots, logs, pasteboard, hardware controls, and repeatable simulator flows.
 ---
 
 # SimDeck Agent Guide
 
 SimDeck automates iOS Simulators. Use the CLI for automation and the browser UI for live human visibility. Works with UIKit, SwiftUI, React Native, Expo, and NativeScript apps.
-
-## Start And View
 
 SimDeck uses one warm daemon per project. Check it with `simdeck daemon status`; start it or open the browser UI when needed:
 
@@ -27,47 +25,9 @@ simdeck daemon start --video-codec software --low-latency
 simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 ```
 
-`simdeck` without a subcommand starts a foreground workspace daemon, prints local and LAN HTTP URLs, prints a six-digit pairing code for LAN browsers, and stops on `q` or Ctrl-C. The optional single argument is a simulator name or UDID to select by default. Use `-d` for detached start, `-k` to kill the background daemon, and `-r` to restart it.
+`simdeck` alone starts a foreground workspace daemon, prints URLs. The optional single argument is a simulator name or UDID to select by default. Use `-d` for detached start, `-k` to kill the background daemon, and `-r` to restart it.
 
-Viewer: `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
-The browser uses WebRTC H.264 video for both hardware and software encoders.
-Local browser streams default to realtime WebRTC delivery with the `quality`
-profile on VideoToolbox H.264: full resolution, 120 fps, and a high bitrate floor.
-Add `--low-latency` on less capable runners to cap software H.264 at 15 fps,
-drop stale pending frames more aggressively, and cap the longest edge at 1170 px
-before latency piles up.
-For local high-refresh testing, pass `--local-stream-fps <15-240>` on `ui`,
-`daemon start`, or `daemon restart`. The default stays 60 fps; higher values are
-for local high-refresh displays.
-For remote browsers where Safari stalls but Chrome works, run the daemon with a
-TURN server and relay-only ICE:
-`SIMDECK_WEBRTC_ICE_SERVERS=turns:turn.example.com:5349?transport=tcp`,
-`SIMDECK_WEBRTC_ICE_USERNAME`, `SIMDECK_WEBRTC_ICE_CREDENTIAL`, and
-`SIMDECK_WEBRTC_ICE_TRANSPORT_POLICY=relay`.
-SimDeck Studio provider runners keep SimDeck bound to loopback and run
-`scripts/studio-provider-bridge.mjs` as an outbound bridge; Studio hosts the UI
-and proxies REST requests through that bridge while WebRTC media negotiates
-directly with the runner.
-For an ad-hoc local provider that can be opened from another browser or phone,
-run `simdeck studio expose "iPhone 17 Pro"` and keep that process running. It
-prints the unique Studio simulator URL and active stream settings. This defaults
-to software H.264 with realtime stream settings so remote viewers drop stale
-frames instead of building latency. Studio providers default to the `smooth`
-stream quality profile (1170 px, dynamic up to 60 fps, higher bitrate to reduce
-artifacts); override with
-`--stream-quality quality|balanced|fast|smooth|economy|ci-software`, or pass
-`--video-codec hardware` when a dedicated hardware encoder is preferable. The
-remote Studio viewer exposes 15, 30, and 60 fps choices in the stream menu.
-
-The local viewer gets the API token automatically. LAN browsers pair with the printed code before receiving the API cookie. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
-
-For fastest agent loops against a known daemon, export:
-
-```bash
-export SIMDECK_SERVER_URL=http://127.0.0.1:4310
-```
-
-Hot controls then delegate through the selected daemon instead of cold-starting native control each time. This is supported for launch/open-url, normalized touch/tap/swipe/gesture, key/key-sequence/key-combo, hardware buttons, dismiss-keyboard, home/app-switcher, rotate, and appearance toggles. Use direct commands when you need screen-coordinate selector resolution, install/uninstall, screenshots, pasteboard, or batch.
+Viewer: usually `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
 
 ## Device And App
 
@@ -87,7 +47,7 @@ simdeck open-url <UDID> https://example.com
 simdeck toggle-appearance <UDID>
 ```
 
-Build apps with project tooling. SimDeck controls the simulator.
+Build apps with project tooling.
 
 ## Fast Agent Inspection
 
@@ -175,7 +135,7 @@ simdeck pasteboard get <UDID>
 
 Use `--stdin` or `--file` for text with quotes, newlines, shell variables, or shell-sensitive characters.
 
-## Timing And Batch
+## Timing, Batch
 
 Input dispatch success does not prove the app reacted. Prefer selector waits/asserts, then use screenshot/logs/viewer when visual evidence matters.
 
@@ -216,21 +176,56 @@ await simdeck.batch(udid, [
 ```bash
 simdeck screenshot <UDID> --output screen.png
 simdeck screenshot <UDID> --stdout > screen.png
-simdeck stream <UDID> --frames 120 > stream.h264
 simdeck logs <UDID> --seconds 30 --limit 200
 simdeck chrome-profile <UDID>
 ```
 
-Use screenshots for still evidence. Use `stream` when a diagnostic needs raw
-H.264 samples for an external player or capture pipeline.
+Use screenshots for still evidence. Prefer describe for token-efficient state dumps, if they have enough context.
 
 ## Default Loop
 
-1. Serve, list, boot/select `<UDID>`, optionally open viewer.
+1. Serve, list, boot/select `<UDID>`, optionally open viewer if in-app browser available
 2. Build with project tools; install and launch with SimDeck.
 3. Use one `describe --format agent --max-depth 4` to understand an unfamiliar screen.
 4. Interact with selectors first; use coordinates only when needed.
 5. Verify with `waitFor`/`assert`/`query`, not repeated full `describe` dumps.
 6. Batch known flows; keep `describe` as a failure/debug artifact.
 
-Final check: UDID explicit, daemon URL set for fast loops when targeting a specific daemon, selectors/coordinates inspected, timing intentional, complex text uses `--stdin`/`--file`, results verified, CLI/API/inspector changes reflected here and in docs.
+### Optional inspector plugins
+
+For a richer hierarchy, if user wants to opt-in
+
+### NativeScript Inspector
+
+NativeScript apps can connect directly to the running server from JS and expose
+their view hierarchy plus raw UIKit backing views
+
+```ts
+import { startSimDeckInspector } from "@nativescript/simdeck-inspector";
+
+if (__DEV__) {
+  startSimDeckInspector({ port: 4310 });
+}
+```
+
+The runtime connects to `GET /api/inspector/connect` as a WebSocket
+
+### React Native Inspector
+
+React Native apps can expose their component tree and Metro dev-mode source
+locations with the inspector package:
+
+```ts
+import { AppRegistry } from "react-native";
+import { startSimDeckReactNativeInspector } from "react-native-simdeck";
+import App from "./App";
+
+if (__DEV__) {
+  startSimDeckReactNativeInspector({ port: 4310 });
+}
+
+AppRegistry.registerComponent("Example", () => App);
+```
+
+Call it before `AppRegistry.registerComponent(...)` so the package can capture
+React Fiber commits.

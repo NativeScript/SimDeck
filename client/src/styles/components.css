@@ -1157,7 +1157,17 @@
 }
 
 .device-anchor.animated {
-  transition: transform 180ms ease;
+  transition: transform 240ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.device-anchor.animated .device-frame {
+  transition:
+    width 240ms cubic-bezier(0.2, 0, 0, 1),
+    height 240ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.device-anchor.animated .device-presentation {
+  transition: transform 240ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .device-bezel {

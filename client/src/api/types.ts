@@ -4,6 +4,7 @@ export interface PrivateDisplayInfo {
   displayWidth: number;
   displayHeight: number;
   frameSequence: number;
+  rotationQuarterTurns?: number;
 }
 
 export interface SimulatorMetadata {

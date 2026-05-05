@@ -200,11 +200,13 @@ class WebRtcStreamClient implements StreamClientBackend {
   private reconnectDelayMs = WEBRTC_RECONNECT_BASE_DELAY_MS;
   private reconnecting = false;
   private remoteMode = false;
-  private reportedVideoConfig = false;
+  private reportedVideoHeight = 0;
+  private reportedVideoWidth = 0;
   private receiverStatsInterval = 0;
   private receiverStatsSeen = false;
   private shouldReconnect = false;
   private streamConfigGeneration = 0;
+  private streamTarget: StreamConnectTarget | null = null;
   private telemetryChannel: RTCDataChannel | null = null;
   private stats: StreamStats = createEmptyStreamStats();
   private video: HTMLVideoElement | null = null;
@@ -272,12 +274,14 @@ class WebRtcStreamClient implements StreamClientBackend {
     const generation = ++this.connectGeneration;
     this.shouldReconnect = true;
     this.remoteMode = Boolean(target.remote);
+    this.streamTarget = target;
     if (!wasReconnecting) {
       this.reconnectDelayMs = WEBRTC_RECONNECT_BASE_DELAY_MS;
     }
     this.resetFrameStateForNewConnection();
     this.diagnostics = createWebRtcDiagnostics();
-    this.reportedVideoConfig = false;
+    this.reportedVideoHeight = 0;
+    this.reportedVideoWidth = 0;
     this.receiverStatsSeen = false;
     this.onMessage({
       type: "status",
@@ -285,11 +289,17 @@ class WebRtcStreamClient implements StreamClientBackend {
     });
 
     try {
-      if (!target.remote) {
-        await postStreamConfigWithAuthRetry(target.streamConfig);
-        if (generation !== this.connectGeneration) {
-          return;
+      try {
+        await postStreamConfigWithAuthRetry(target.streamConfig, {
+          remote: target.remote,
+        });
+      } catch (error) {
+        if (!target.remote) {
+          throw error;
         }
+      }
+      if (generation !== this.connectGeneration) {
+        return;
       }
       const health = await fetchHealth().catch(() => null);
       if (generation !== this.connectGeneration) {
@@ -401,7 +411,7 @@ class WebRtcStreamClient implements StreamClientBackend {
           this.clearIceRestartTimeout();
           this.iceRestartInFlight = false;
           this.reconnectDelayMs = WEBRTC_RECONNECT_BASE_DELAY_MS;
-          if (this.reportedVideoConfig) {
+          if (this.reportedVideoWidth > 0 && this.reportedVideoHeight > 0) {
             this.onMessage({
               type: "status",
               status: { detail: "WebRTC media connected", state: "streaming" },
@@ -450,6 +460,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.shouldReconnect = false;
     this.reconnecting = false;
     this.connectGeneration += 1;
+    this.streamTarget = null;
     this.clearReconnectTimeout();
     this.clearDisconnectGraceTimeout();
     this.clearIceRestartTimeout();
@@ -469,6 +480,11 @@ class WebRtcStreamClient implements StreamClientBackend {
     const generation = ++this.streamConfigGeneration;
     await postStreamConfigWithAuthRetry(config, { remote: this.remoteMode });
     if (generation !== this.streamConfigGeneration) {
+      return;
+    }
+    const target = this.streamTarget;
+    if (target && this.shouldReconnect) {
+      await this.connect({ ...target, streamConfig: config });
       return;
     }
     this.sendControl({ forceKeyframe: true, type: "streamControl" });
@@ -535,7 +551,8 @@ class WebRtcStreamClient implements StreamClientBackend {
       this.video.remove();
     }
     this.video = null;
-    this.reportedVideoConfig = false;
+    this.reportedVideoHeight = 0;
+    this.reportedVideoWidth = 0;
     this.controlChannel?.close();
     if (activeWebRtcControlChannel === this.controlChannel) {
       activeWebRtcControlChannel = null;
@@ -1001,10 +1018,14 @@ class WebRtcStreamClient implements StreamClientBackend {
   }
 
   private reportVideoConfig(width: number, height: number) {
-    if (this.reportedVideoConfig) {
+    if (
+      this.reportedVideoWidth === width &&
+      this.reportedVideoHeight === height
+    ) {
       return;
     }
-    this.reportedVideoConfig = true;
+    this.reportedVideoWidth = width;
+    this.reportedVideoHeight = height;
     this.onMessage({
       type: "video-config",
       size: { height, width },
@@ -1222,7 +1243,6 @@ function postStreamConfig(config: StreamConfig): Promise<Response> {
   return fetch(apiUrl("/api/stream-quality"), {
     body: JSON.stringify({
       fps: config.fps,
-      maxEdge: config.maxEdge,
       profile: config.quality,
       videoCodec: config.encoder,
     }),
