@@ -1,7 +1,8 @@
 # SimDeck Release Workflow
 #
 # Triggered manually from the Actions tab. Picks one package, bumps its version
-# locally with `npm version`, commits + tags, builds, and publishes:
+# locally with `npm version` or reuses the current version, commits + tags,
+# builds, and publishes:
 #   - npm packages publish over OIDC trusted publishing (no NPM_TOKEN).
 #   - The VS Code extension publishes via vsce + VSCE_PAT (no OIDC option).
 #
@@ -40,11 +41,12 @@ on:
           - "@nativescript/simdeck-inspector"
           - simdeck-vscode
       bump:
-        description: "Version bump"
+        description: "Version bump (use current to publish the checked-in version without bumping)"
         required: true
         type: choice
         default: prerelease
         options:
+          - current
           - prerelease
           - patch
           - minor
@@ -179,18 +181,25 @@ jobs:
           set -euo pipefail
           cd "$PKG_DIR"
 
-          if [[ "$BUMP" == "prerelease" ]]; then
+          if [[ "$BUMP" == "current" ]]; then
+            version="$(node -p "require('./package.json').version")"
+          elif [[ "$BUMP" == "prerelease" ]]; then
             new="$(npm version prerelease --preid "$PREID" --no-git-tag-version)"
+            version="${new#v}"
           else
             new="$(npm version "$BUMP" --no-git-tag-version)"
+            version="${new#v}"
           fi
 
-          version="${new#v}"
           tag="${SLUG}-v${version}"
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}"         >> "$GITHUB_OUTPUT"
-          echo "Bumped to ${version} (tag ${tag})"
+          if [[ "$BUMP" == "current" ]]; then
+            echo "Using current version ${version} (tag ${tag})"
+          else
+            echo "Bumped to ${version} (tag ${tag})"
+          fi
 
       - name: Resolve dist-tag
         id: tag
@@ -218,8 +227,15 @@ jobs:
           INPUT_PACKAGE: ${{ inputs.package }}
           NEW_VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
+          BUMP: ${{ inputs.bump }}
         run: |
           set -euo pipefail
+          if [[ "$BUMP" == "current" ]]; then
+            git tag -f "${TAG}"
+            git push --force origin "${TAG}"
+            exit 0
+          fi
+
           git add "${PKG_DIR}/package.json"
           if [[ -f "${PKG_DIR}/package-lock.json" ]]; then
             git add "${PKG_DIR}/package-lock.json"

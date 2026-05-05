@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Debug-only NativeScript runtime inspector for simdeck",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NativeScript/SimDeck",
+    "directory": "packages/nativescript-inspector"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
