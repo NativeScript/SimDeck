@@ -49,6 +49,7 @@ const SERVER_HEALTH_WATCHDOG_INTERVAL: Duration = Duration::from_secs(5);
 const SERVER_HEALTH_WATCHDOG_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const SERVER_HEALTH_WATCHDOG_STALE_HEARTBEAT: Duration = Duration::from_secs(60);
 const SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD: usize = 12;
+const SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD: usize = 3;
 
 #[derive(Parser)]
 #[command(name = "simdeck")]
@@ -1384,6 +1385,9 @@ fn expose_to_studio(options: StudioExposeOptions) -> anyhow::Result<()> {
         .unwrap_or(true);
 
     let bridge_script = studio_provider_bridge_script()?;
+    let executable = env::current_exe().context("resolve simdeck executable")?;
+    let restart_args = studio_daemon_restart_args(&options);
+    let status_args = vec!["daemon".to_owned(), "status".to_owned()];
     println!(
         "Exposing {} through SimDeck Studio...",
         selected
@@ -1408,6 +1412,28 @@ fn expose_to_studio(options: StudioExposeOptions) -> anyhow::Result<()> {
         )
         .env("SIMDECK_LOCAL_URL", &metadata.http_url)
         .env("SIMDECK_LOCAL_TOKEN", &metadata.access_token)
+        .env("SIMDECK_LOCAL_DAEMON_PID", metadata.pid.to_string())
+        .env("SIMDECK_LOCAL_DAEMON_COMMAND", &executable)
+        .env(
+            "SIMDECK_LOCAL_DAEMON_RESTART_ARGS_JSON",
+            serde_json::to_string(&restart_args)?,
+        )
+        .env(
+            "SIMDECK_LOCAL_DAEMON_STATUS_ARGS_JSON",
+            serde_json::to_string(&status_args)?,
+        )
+        .env(
+            "SIMDECK_PROVIDER_PARENT_PID",
+            std::process::id().to_string(),
+        )
+        .env(
+            "SIMDECK_LOCAL_DAEMON_LOG",
+            metadata
+                .log_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        )
         .env(
             "SIMDECK_STUDIO_SIMULATOR_NAME",
             selected
@@ -1436,6 +1462,37 @@ fn expose_to_studio(options: StudioExposeOptions) -> anyhow::Result<()> {
         anyhow::bail!("Studio provider bridge exited with status {status}");
     }
     Ok(())
+}
+
+fn studio_daemon_restart_args(options: &StudioExposeOptions) -> Vec<String> {
+    let mut args = vec![
+        "daemon".to_owned(),
+        "restart".to_owned(),
+        "--port".to_owned(),
+        options.port.to_string(),
+        "--bind".to_owned(),
+        options.bind.to_string(),
+        "--video-codec".to_owned(),
+        options.video_codec.as_env_value().to_owned(),
+    ];
+    if options.low_latency {
+        args.push("--low-latency".to_owned());
+    } else if let Some(profile) = options.stream_quality {
+        args.push("--stream-quality".to_owned());
+        args.push(profile.as_profile_id().to_owned());
+    } else if let Some(profile) = studio_stream_quality_profile(
+        options.video_codec,
+        options.low_latency,
+        options.stream_quality,
+    ) {
+        args.push("--stream-quality".to_owned());
+        args.push(profile);
+    }
+    if let Some(local_stream_fps) = options.local_stream_fps {
+        args.push("--local-stream-fps".to_owned());
+        args.push(local_stream_fps.to_string());
+    }
+    args
 }
 
 #[derive(Clone, Debug)]
@@ -2577,6 +2634,7 @@ fn start_server_health_watchdog(http_addr: SocketAddr, heartbeat: Arc<AtomicU64>
     std::thread::spawn(move || {
         std::thread::sleep(SERVER_HEALTH_WATCHDOG_INITIAL_DELAY);
         let mut consecutive_failures = 0usize;
+        let mut consecutive_http_probe_failures = 0usize;
 
         loop {
             std::thread::sleep(SERVER_HEALTH_WATCHDOG_INTERVAL);
@@ -2585,21 +2643,38 @@ fn start_server_health_watchdog(http_addr: SocketAddr, heartbeat: Arc<AtomicU64>
             let heartbeat_stale = heartbeat_age > SERVER_HEALTH_WATCHDOG_STALE_HEARTBEAT.as_secs();
             let health_ok = http_health_probe(http_addr, SERVER_HEALTH_WATCHDOG_PROBE_TIMEOUT);
 
-            if heartbeat_stale || !health_ok {
+            if heartbeat_stale {
                 consecutive_failures += 1;
             } else {
                 consecutive_failures = 0;
             }
+            if health_ok {
+                consecutive_http_probe_failures = 0;
+            } else {
+                consecutive_http_probe_failures += 1;
+            }
 
-            if consecutive_failures >= SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD {
+            if server_health_watchdog_should_restart(
+                consecutive_failures,
+                consecutive_http_probe_failures,
+            ) {
                 eprintln!(
-                    "SimDeck server health watchdog failed {consecutive_failures} consecutive checks \
-(heartbeat_age={heartbeat_age}s, http_health_ok={health_ok}); restarting server process."
+                    "SimDeck server health watchdog failed \
+(heartbeat_failures={consecutive_failures}, http_probe_failures={consecutive_http_probe_failures}, \
+heartbeat_age={heartbeat_age}s, http_health_ok={health_ok}); restarting server process."
                 );
                 std::process::exit(RECOVERABLE_RESTART_EXIT_CODE);
             }
         }
     });
+}
+
+fn server_health_watchdog_should_restart(
+    consecutive_heartbeat_failures: usize,
+    consecutive_http_probe_failures: usize,
+) -> bool {
+    consecutive_heartbeat_failures >= SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD
+        || consecutive_http_probe_failures >= SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD
 }
 
 fn http_health_probe(address: SocketAddr, timeout: Duration) -> bool {
@@ -4895,8 +4970,10 @@ fn default_client_root() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_accessibility_point_for_display, service_post_error_is_retryable, Cli, Command,
-        DaemonCommand, VideoCodecMode,
+        normalize_accessibility_point_for_display, server_health_watchdog_should_restart,
+        service_post_error_is_retryable, studio_daemon_restart_args, Cli, Command, DaemonCommand,
+        StreamQualityProfileArg, StudioExposeOptions, VideoCodecMode,
+        SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD, SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
     };
     use clap::Parser;
 
@@ -4971,6 +5048,79 @@ mod tests {
             "touch",
             "Connection reset by peer (os error 54)"
         ));
+    }
+
+    #[test]
+    fn server_health_watchdog_restarts_when_http_listener_is_unhealthy() {
+        assert!(server_health_watchdog_should_restart(
+            0,
+            SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD
+        ));
+    }
+
+    #[test]
+    fn server_health_watchdog_waits_for_transient_http_probe_failures() {
+        assert!(!server_health_watchdog_should_restart(
+            0,
+            SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD - 1
+        ));
+    }
+
+    #[test]
+    fn server_health_watchdog_restarts_when_runtime_heartbeat_is_stale() {
+        assert!(server_health_watchdog_should_restart(
+            SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD,
+            0
+        ));
+    }
+
+    #[test]
+    fn studio_daemon_restart_args_preserve_remote_stream_defaults() {
+        let args = studio_daemon_restart_args(&StudioExposeOptions {
+            simulator: None,
+            studio_url: "https://simdeck.djdev.me".to_owned(),
+            port: 4310,
+            bind: "127.0.0.1".parse().unwrap(),
+            video_codec: VideoCodecMode::Software,
+            low_latency: false,
+            stream_quality: None,
+            local_stream_fps: None,
+        });
+        assert_eq!(
+            args,
+            [
+                "daemon",
+                "restart",
+                "--port",
+                "4310",
+                "--bind",
+                "127.0.0.1",
+                "--video-codec",
+                "software",
+                "--stream-quality",
+                "smooth",
+            ]
+        );
+    }
+
+    #[test]
+    fn studio_daemon_restart_args_preserve_explicit_quality() {
+        let args = studio_daemon_restart_args(&StudioExposeOptions {
+            simulator: None,
+            studio_url: "https://simdeck.djdev.me".to_owned(),
+            port: 4310,
+            bind: "127.0.0.1".parse().unwrap(),
+            video_codec: VideoCodecMode::Hardware,
+            low_latency: false,
+            stream_quality: Some(StreamQualityProfileArg::Balanced),
+            local_stream_fps: None,
+        });
+        assert!(args.ends_with(&[
+            "--video-codec".to_owned(),
+            "hardware".to_owned(),
+            "--stream-quality".to_owned(),
+            "balanced".to_owned(),
+        ]));
     }
 
     #[test]

@@ -16,7 +16,9 @@ const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 10000;
 const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 3000;
 const WEBRTC_LOCAL_RECEIVER_BUFFER_SECONDS = 0.001;
 const WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS = 0.06;
-const WEBRTC_DISCONNECTED_GRACE_MS = 1000;
+const WEBRTC_LOCAL_DISCONNECTED_GRACE_MS = 1000;
+const WEBRTC_REMOTE_DISCONNECTED_GRACE_MS = 10000;
+const WEBRTC_REMOTE_ICE_RESTART_GRACE_MS = 1500;
 const WEBRTC_RECONNECT_BASE_DELAY_MS = 250;
 const WEBRTC_RECONNECT_MAX_DELAY_MS = 1000;
 
@@ -170,6 +172,7 @@ interface StreamClientBackend {
   ): Promise<VisualArtifactSample | null>;
   destroy(): void;
   disconnect(): void;
+  applyStreamConfig?(config?: StreamConfig): void | Promise<void>;
   sendControl?(payload: unknown): boolean;
 }
 
@@ -189,6 +192,8 @@ class WebRtcStreamClient implements StreamClientBackend {
   private disconnectGraceTimeout = 0;
   private frameWatchdogTimeout = 0;
   private hasRenderedFrame = false;
+  private iceRestartInFlight = false;
+  private iceRestartTimeout = 0;
   private lastVideoFrameAt = 0;
   private peerConnection: RTCPeerConnection | null = null;
   private reconnectTimeout = 0;
@@ -199,6 +204,7 @@ class WebRtcStreamClient implements StreamClientBackend {
   private receiverStatsInterval = 0;
   private receiverStatsSeen = false;
   private shouldReconnect = false;
+  private streamConfigGeneration = 0;
   private telemetryChannel: RTCDataChannel | null = null;
   private stats: StreamStats = createEmptyStreamStats();
   private video: HTMLVideoElement | null = null;
@@ -253,6 +259,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     if (wasReconnecting) {
       this.clearReconnectTimeout();
       this.clearDisconnectGraceTimeout();
+      this.clearIceRestartTimeout();
       this.clearFrameWatchdog();
       this.closeActiveConnection();
     } else {
@@ -278,9 +285,11 @@ class WebRtcStreamClient implements StreamClientBackend {
     });
 
     try {
-      await postStreamConfigWithAuthRetry(target);
-      if (generation !== this.connectGeneration) {
-        return;
+      if (!target.remote) {
+        await postStreamConfigWithAuthRetry(target.streamConfig);
+        if (generation !== this.connectGeneration) {
+          return;
+        }
       }
       const health = await fetchHealth().catch(() => null);
       if (generation !== this.connectGeneration) {
@@ -389,6 +398,8 @@ class WebRtcStreamClient implements StreamClientBackend {
         }
         if (peerConnection.connectionState === "connected") {
           this.clearDisconnectGraceTimeout();
+          this.clearIceRestartTimeout();
+          this.iceRestartInFlight = false;
           this.reconnectDelayMs = WEBRTC_RECONNECT_BASE_DELAY_MS;
           if (this.reportedVideoConfig) {
             this.onMessage({
@@ -400,6 +411,11 @@ class WebRtcStreamClient implements StreamClientBackend {
         }
         if (peerConnection.connectionState === "disconnected") {
           if (this.hasRenderedFrame) {
+            this.scheduleIceRestart(
+              target,
+              generation,
+              "connection-disconnected",
+            );
             this.scheduleDisconnectedGrace(target, generation);
             return;
           }
@@ -407,50 +423,23 @@ class WebRtcStreamClient implements StreamClientBackend {
             target,
             generation,
             new Error("WebRTC connection disconnected."),
+            "connection-disconnected-before-first-frame",
           );
           return;
         }
         if (peerConnection.connectionState === "failed") {
           void this.updateSelectedCandidatePair(peerConnection, target);
-          this.handleConnectionError(
+          void this.restartIceOrReconnect(
             target,
             generation,
-            new Error("WebRTC connection failed."),
+            "connection-failed",
           );
         }
       };
 
-      const offer = safariBaselineH264Offer(await peerConnection.createOffer());
-      if (generation !== this.connectGeneration) {
-        return;
-      }
-      await peerConnection.setLocalDescription(offer);
-      await waitForIceGathering(peerConnection);
-      if (generation !== this.connectGeneration) {
-        return;
-      }
-      const localDescription = peerConnection.localDescription;
-      if (!localDescription) {
-        throw new Error("WebRTC local offer was not created.");
-      }
-      this.diagnostics.localCandidateSummary = summarizeSdpCandidates(
-        localDescription.sdp,
-      );
-      this.postDiagnostics(target, "local-offer");
-
-      const response = await postWebRtcOfferWithAuthRetry(
-        target,
-        localDescription,
-      );
-      const answer = (await response.json()) as RTCSessionDescriptionInit;
-      if (generation !== this.connectGeneration) {
-        return;
-      }
-      this.diagnostics.remoteCandidateSummary = summarizeSdpCandidates(
-        answer.sdp ?? "",
-      );
-      this.postDiagnostics(target, "remote-answer");
-      await peerConnection.setRemoteDescription(answer);
+      await this.negotiatePeerConnection(peerConnection, target, generation, {
+        detailPrefix: "local",
+      });
       this.scheduleFrameWatchdog(target, generation);
     } catch (error) {
       this.handleConnectionError(target, generation, error);
@@ -463,6 +452,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.connectGeneration += 1;
     this.clearReconnectTimeout();
     this.clearDisconnectGraceTimeout();
+    this.clearIceRestartTimeout();
     this.clearFrameWatchdog();
     this.closeActiveConnection();
     this.onMessage({ type: "status", status: { state: "idle" } });
@@ -470,6 +460,59 @@ class WebRtcStreamClient implements StreamClientBackend {
 
   sendControl(payload: unknown): boolean {
     return sendDataChannelMessage(this.controlChannel, JSON.stringify(payload));
+  }
+
+  async applyStreamConfig(config?: StreamConfig) {
+    if (!config) {
+      return;
+    }
+    const generation = ++this.streamConfigGeneration;
+    await postStreamConfigWithAuthRetry(config, { remote: this.remoteMode });
+    if (generation !== this.streamConfigGeneration) {
+      return;
+    }
+    this.sendControl({ forceKeyframe: true, type: "streamControl" });
+  }
+
+  private async negotiatePeerConnection(
+    peerConnection: RTCPeerConnection,
+    target: StreamConnectTarget,
+    generation: number,
+    options: { detailPrefix: string; iceRestart?: boolean },
+  ) {
+    const offer = safariBaselineH264Offer(
+      await peerConnection.createOffer({ iceRestart: options.iceRestart }),
+    );
+    if (generation !== this.connectGeneration) {
+      return;
+    }
+    await peerConnection.setLocalDescription(offer);
+    await waitForIceGathering(peerConnection);
+    if (generation !== this.connectGeneration) {
+      return;
+    }
+    const localDescription = peerConnection.localDescription;
+    if (!localDescription) {
+      throw new Error("WebRTC local offer was not created.");
+    }
+    this.diagnostics.localCandidateSummary = summarizeSdpCandidates(
+      localDescription.sdp,
+    );
+    this.postDiagnostics(target, `${options.detailPrefix}-offer`);
+
+    const response = await postWebRtcOfferWithAuthRetry(
+      target,
+      localDescription,
+    );
+    const answer = (await response.json()) as RTCSessionDescriptionInit;
+    if (generation !== this.connectGeneration) {
+      return;
+    }
+    this.diagnostics.remoteCandidateSummary = summarizeSdpCandidates(
+      answer.sdp ?? "",
+    );
+    this.postDiagnostics(target, `${options.detailPrefix}-answer`);
+    await peerConnection.setRemoteDescription(answer);
   }
 
   destroy() {
@@ -481,6 +524,8 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.animationFrame = 0;
     this.clearFrameWatchdog();
     this.clearDisconnectGraceTimeout();
+    this.clearIceRestartTimeout();
+    this.iceRestartInFlight = false;
     this.clearReceiverStatsPolling();
     this.cancelVideoFrameCallback();
     this.captureCurrentVideoFrame();
@@ -509,12 +554,14 @@ class WebRtcStreamClient implements StreamClientBackend {
     target: StreamConnectTarget,
     generation: number,
     error: unknown,
+    reason = "connection-error",
   ) {
     if (generation !== this.connectGeneration || !this.shouldReconnect) {
       return;
     }
     const message = error instanceof Error ? error.message : String(error);
     const friendlyMessage = friendlyStreamError(message);
+    this.stats.reconnectReason = reason;
     this.closeActiveConnection();
     this.onMessage({
       type: "status",
@@ -531,7 +578,7 @@ class WebRtcStreamClient implements StreamClientBackend {
             }
         : { error: friendlyMessage, state: "error" },
     });
-    this.scheduleReconnect(target, generation);
+    this.scheduleReconnect(target, generation, reason);
   }
 
   private scheduleDisconnectedGrace(
@@ -550,11 +597,16 @@ class WebRtcStreamClient implements StreamClientBackend {
         target,
         generation,
         new Error("WebRTC connection disconnected."),
+        "connection-disconnected-grace-expired",
       );
-    }, WEBRTC_DISCONNECTED_GRACE_MS);
+    }, disconnectedGraceMs(target));
   }
 
-  private scheduleReconnect(target: StreamConnectTarget, generation: number) {
+  private scheduleReconnect(
+    target: StreamConnectTarget,
+    generation: number,
+    reason: string,
+  ) {
     if (
       this.reconnectTimeout ||
       generation !== this.connectGeneration ||
@@ -563,6 +615,7 @@ class WebRtcStreamClient implements StreamClientBackend {
       return;
     }
     this.stats.reconnects += 1;
+    this.stats.reconnectReason = reason;
     this.onMessage({ type: "stats", stats: { ...this.stats } });
     const delayMs = this.reconnectDelayMs;
     this.reconnectDelayMs = Math.min(
@@ -579,10 +632,16 @@ class WebRtcStreamClient implements StreamClientBackend {
   }
 
   private resetFrameStateForNewConnection() {
+    const iceRestartReason = this.stats.iceRestartReason;
+    const iceRestarts = this.stats.iceRestarts;
+    const reconnectReason = this.stats.reconnectReason;
     const reconnects = this.stats.reconnects;
     this.hasRenderedFrame = false;
     this.lastVideoFrameAt = 0;
     this.stats = createEmptyStreamStats();
+    this.stats.iceRestartReason = iceRestartReason;
+    this.stats.iceRestarts = iceRestarts;
+    this.stats.reconnectReason = reconnectReason;
     this.stats.reconnects = reconnects;
     this.onMessage({ type: "stats", stats: { ...this.stats } });
   }
@@ -607,15 +666,13 @@ class WebRtcStreamClient implements StreamClientBackend {
             target,
             generation,
             new Error("WebRTC video stalled before rendering fresh frames."),
+            "first-frame-timeout",
           );
           return;
         }
         if (frameAgeMs > WEBRTC_STALLED_FRAME_TIMEOUT_MS) {
-          this.handleConnectionError(
-            target,
-            generation,
-            new Error("WebRTC video stalled after rendering frames."),
-          );
+          this.sendControl({ snapshot: true, type: "streamControl" });
+          this.scheduleFrameWatchdog(target, generation);
           return;
         }
         this.scheduleFrameWatchdog(target, generation);
@@ -648,6 +705,110 @@ class WebRtcStreamClient implements StreamClientBackend {
     }
     window.clearTimeout(this.disconnectGraceTimeout);
     this.disconnectGraceTimeout = 0;
+  }
+
+  private clearIceRestartTimeout() {
+    if (!this.iceRestartTimeout) {
+      return;
+    }
+    window.clearTimeout(this.iceRestartTimeout);
+    this.iceRestartTimeout = 0;
+  }
+
+  private scheduleIceRestart(
+    target: StreamConnectTarget,
+    generation: number,
+    reason: string,
+  ) {
+    if (
+      !target.remote ||
+      this.iceRestartTimeout ||
+      this.iceRestartInFlight ||
+      generation !== this.connectGeneration ||
+      !this.shouldReconnect
+    ) {
+      return;
+    }
+    this.iceRestartTimeout = window.setTimeout(() => {
+      this.iceRestartTimeout = 0;
+      void this.restartIceOrReconnect(target, generation, reason);
+    }, WEBRTC_REMOTE_ICE_RESTART_GRACE_MS);
+  }
+
+  private async restartIceOrReconnect(
+    target: StreamConnectTarget,
+    generation: number,
+    reason: string,
+  ) {
+    if (generation !== this.connectGeneration || !this.shouldReconnect) {
+      return;
+    }
+    if (!target.remote) {
+      this.handleConnectionError(
+        target,
+        generation,
+        new Error("WebRTC connection failed."),
+        reason,
+      );
+      return;
+    }
+    if (this.iceRestartInFlight) {
+      return;
+    }
+    const restarted = await this.tryIceRestart(target, generation, reason);
+    if (
+      !restarted &&
+      generation === this.connectGeneration &&
+      this.shouldReconnect
+    ) {
+      this.handleConnectionError(
+        target,
+        generation,
+        new Error("WebRTC ICE restart failed."),
+        `${reason}-ice-restart-failed`,
+      );
+    }
+  }
+
+  private async tryIceRestart(
+    target: StreamConnectTarget,
+    generation: number,
+    reason: string,
+  ): Promise<boolean> {
+    const peerConnection = this.peerConnection;
+    if (
+      !peerConnection ||
+      peerConnection.connectionState === "closed" ||
+      peerConnection.signalingState !== "stable" ||
+      this.iceRestartInFlight ||
+      generation !== this.connectGeneration ||
+      !this.shouldReconnect
+    ) {
+      return false;
+    }
+    this.iceRestartInFlight = true;
+    this.stats.iceRestartReason = reason;
+    this.stats.iceRestarts += 1;
+    this.onMessage({ type: "stats", stats: { ...this.stats } });
+    this.postDiagnostics(target, "ice-restart-start");
+    try {
+      await this.negotiatePeerConnection(peerConnection, target, generation, {
+        detailPrefix: "ice-restart",
+        iceRestart: true,
+      });
+      if (generation !== this.connectGeneration || !this.shouldReconnect) {
+        return true;
+      }
+      this.iceRestartInFlight = false;
+      this.scheduleFrameWatchdog(target, generation);
+      this.postDiagnostics(target, "ice-restart-complete");
+      return true;
+    } catch (error) {
+      this.iceRestartInFlight = false;
+      this.diagnostics.selectedCandidatePair = `ice-restart-error:${error instanceof Error ? error.message : String(error)}`;
+      this.postDiagnostics(target, "ice-restart-error");
+      return false;
+    }
   }
 
   private attachDiagnostics(
@@ -1022,6 +1183,9 @@ async function postWebRtcOfferWithAuthRetry(
     }
     return response;
   }
+  if (target.remote) {
+    throw new Error(await response.text());
+  }
   await fetchHealth();
   const retry = await postWebRtcOffer(target, localDescription);
   if (!retry.ok) {
@@ -1031,20 +1195,24 @@ async function postWebRtcOfferWithAuthRetry(
 }
 
 async function postStreamConfigWithAuthRetry(
-  target: StreamConnectTarget,
+  config: StreamConfig | undefined,
+  options: { remote?: boolean } = {},
 ): Promise<void> {
-  if (!target.streamConfig) {
+  if (!config) {
     return;
   }
-  const response = await postStreamConfig(target.streamConfig);
+  const response = await postStreamConfig(config);
   if (response.status !== 401) {
     if (!response.ok) {
       throw new Error(await response.text());
     }
     return;
   }
+  if (options.remote) {
+    throw new Error(await response.text());
+  }
   await fetchHealth();
-  const retry = await postStreamConfig(target.streamConfig);
+  const retry = await postStreamConfig(config);
   if (!retry.ok) {
     throw new Error(await retry.text());
   }
@@ -1054,6 +1222,7 @@ function postStreamConfig(config: StreamConfig): Promise<Response> {
   return fetch(apiUrl("/api/stream-quality"), {
     body: JSON.stringify({
       fps: config.fps,
+      maxEdge: config.maxEdge,
       profile: config.quality,
       videoCodec: config.encoder,
     }),
@@ -1103,6 +1272,12 @@ function receiverBufferSeconds(target: StreamConnectTarget): number | null {
   return target.remote
     ? WEBRTC_REMOTE_RECEIVER_BUFFER_SECONDS
     : WEBRTC_LOCAL_RECEIVER_BUFFER_SECONDS;
+}
+
+function disconnectedGraceMs(target: StreamConnectTarget): number {
+  return target.remote
+    ? WEBRTC_REMOTE_DISCONNECTED_GRACE_MS
+    : WEBRTC_LOCAL_DISCONNECTED_GRACE_MS;
 }
 
 function configureReceiverCodecPreferences(transceiver: RTCRtpTransceiver) {
@@ -1342,6 +1517,19 @@ export class StreamWorkerClient {
     return Boolean(
       this.backend?.sendControl?.({ ...options, type: "streamControl" }),
     );
+  }
+
+  applyStreamConfig(config?: StreamConfig) {
+    try {
+      const result = this.backend?.applyStreamConfig?.(config);
+      if (result && typeof result.catch === "function") {
+        result.catch((error: unknown) => {
+          console.warn("Failed to apply stream configuration.", error);
+        });
+      }
+    } catch (error) {
+      console.warn("Failed to apply stream configuration.", error);
+    }
   }
 
   destroy() {

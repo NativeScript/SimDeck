@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tokio::task;
-use tokio::time::{timeout, Instant};
+use tokio::time::{sleep, timeout, Instant};
 use tracing::debug;
 
 // This channel carries encoded H.264 access units. Subscribers must not miss
@@ -20,6 +20,9 @@ use tracing::debug;
 const FRAME_BROADCAST_CAPACITY: usize = 128;
 const MIN_REFRESH_INTERVAL_MS: u64 = 16;
 const MIN_KEYFRAME_INTERVAL_MS: u64 = 250;
+const DEFAULT_SHARED_REFRESH_FPS: u64 = 60;
+const MIN_SHARED_REFRESH_FPS: u64 = 15;
+const MAX_SHARED_REFRESH_FPS: u64 = 240;
 
 pub struct SimulatorSession {
     inner: Arc<SimulatorSessionInner>,
@@ -40,6 +43,30 @@ struct SimulatorSessionInner {
     frame_sequence: AtomicU64,
     last_refresh_ms: AtomicU64,
     last_keyframe_ms: AtomicU64,
+    active_frame_subscribers: AtomicU64,
+    refresh_pump_running: AtomicBool,
+}
+
+pub struct FrameSubscription {
+    inner: Arc<SimulatorSessionInner>,
+    receiver: broadcast::Receiver<SharedFrame>,
+}
+
+impl FrameSubscription {
+    pub async fn recv(&mut self) -> Result<SharedFrame, broadcast::error::RecvError> {
+        self.receiver.recv().await
+    }
+}
+
+impl Drop for FrameSubscription {
+    fn drop(&mut self) {
+        self.inner
+            .active_frame_subscribers
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                Some(value.saturating_sub(1))
+            })
+            .ok();
+    }
 }
 
 impl SimulatorSession {
@@ -64,6 +91,8 @@ impl SimulatorSession {
             frame_sequence: AtomicU64::new(0),
             last_refresh_ms: AtomicU64::new(0),
             last_keyframe_ms: AtomicU64::new(0),
+            active_frame_subscribers: AtomicU64::new(0),
+            refresh_pump_running: AtomicBool::new(false),
         });
 
         let user_data = Weak::into_raw(Arc::downgrade(&inner)) as *mut c_void;
@@ -111,9 +140,16 @@ impl SimulatorSession {
             .map_err(|error| AppError::internal(format!("Failed to join start task: {error}")))?
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<SharedFrame> {
+    pub fn subscribe(&self) -> FrameSubscription {
         *self.inner.state.lock().unwrap() = SessionState::Streaming;
-        self.inner.sender.subscribe()
+        self.inner
+            .active_frame_subscribers
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner.start_refresh_pump();
+        FrameSubscription {
+            inner: self.inner.clone(),
+            receiver: self.inner.sender.subscribe(),
+        }
     }
 
     pub fn latest_keyframe(&self) -> Option<SharedFrame> {
@@ -155,13 +191,7 @@ impl SimulatorSession {
     }
 
     pub fn request_refresh(&self) {
-        let now = now_ms();
-        let previous = self.inner.last_refresh_ms.load(Ordering::Relaxed);
-        if now.saturating_sub(previous) < MIN_REFRESH_INTERVAL_MS {
-            return;
-        }
-        self.inner.last_refresh_ms.store(now, Ordering::Relaxed);
-        self.inner.native.request_refresh();
+        self.inner.request_refresh();
     }
 
     pub fn request_keyframe(&self) {
@@ -272,6 +302,48 @@ unsafe extern "C" fn native_frame_callback(
 }
 
 impl SimulatorSessionInner {
+    fn start_refresh_pump(self: &Arc<Self>) {
+        if self
+            .refresh_pump_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let inner = self.clone();
+        tokio::spawn(async move {
+            loop {
+                if inner.active_frame_subscribers.load(Ordering::Relaxed) == 0 {
+                    inner.refresh_pump_running.store(false, Ordering::Release);
+                    if inner.active_frame_subscribers.load(Ordering::Relaxed) == 0 {
+                        break;
+                    }
+                    if inner
+                        .refresh_pump_running
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+
+                inner.request_refresh();
+                sleep(shared_refresh_interval()).await;
+            }
+        });
+    }
+
+    fn request_refresh(&self) {
+        let now = now_ms();
+        let previous = self.last_refresh_ms.load(Ordering::Relaxed);
+        if now.saturating_sub(previous) < MIN_REFRESH_INTERVAL_MS {
+            return;
+        }
+        self.last_refresh_ms.store(now, Ordering::Relaxed);
+        self.native.request_refresh();
+    }
+
     fn handle_frame(&self, frame: &ffi::xcw_native_frame) {
         let description = unsafe { copy_ffi_bytes(frame.description) };
         let Some(data) = (unsafe { copy_ffi_bytes(frame.data) }) else {
@@ -355,4 +427,14 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_millis() as u64
+}
+
+fn shared_refresh_interval() -> Duration {
+    let fps = std::env::var("SIMDECK_REALTIME_FPS")
+        .or_else(|_| std::env::var("SIMDECK_LOCAL_STREAM_FPS"))
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_SHARED_REFRESH_FPS)
+        .clamp(MIN_SHARED_REFRESH_FPS, MAX_SHARED_REFRESH_FPS);
+    Duration::from_micros(1_000_000 / fps)
 }

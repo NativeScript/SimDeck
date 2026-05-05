@@ -118,6 +118,16 @@ struct StreamQualityProfile {
     bits_per_pixel: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ActiveStreamQualityState {
+    profile: String,
+    max_edge: u32,
+    fps: u32,
+    min_bitrate: u32,
+    bits_per_pixel: u32,
+    video_codec: String,
+}
+
 const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
     StreamQualityProfile {
         id: "ci-software",
@@ -570,15 +580,18 @@ fn is_inspector_agent_transport_path(path: &str) -> bool {
 }
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
+    let video_codec = active_video_codec(&state.config);
+    let stream_quality =
+        stream_quality_state_value(&current_stream_quality_state(video_codec.clone()));
     json(json_value!({
         "ok": true,
         "httpPort": state.config.http_port,
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64(),
-        "videoCodec": active_video_codec(&state.config),
+        "videoCodec": video_codec,
         "lowLatency": state.config.low_latency,
         "realtimeStream": crate::transport::webrtc::realtime_stream_enabled(),
         "localStreamFps": env_u32("SIMDECK_LOCAL_STREAM_FPS", 60, 15, 240),
-        "streamQuality": stream_quality_state(),
+        "streamQuality": stream_quality,
         "webRtc": {
             "iceServers": crate::transport::webrtc::client_ice_servers(),
             "iceTransportPolicy": crate::transport::webrtc::ice_transport_policy_label()
@@ -606,8 +619,8 @@ async fn metrics(State(state): State<AppState>) -> Json<Value> {
     json(json_value!(state.metrics.snapshot()))
 }
 
-async fn stream_quality() -> Json<Value> {
-    json(json_value!(stream_quality_response()))
+async fn stream_quality(State(state): State<AppState>) -> Json<Value> {
+    json(json_value!(stream_quality_response(&state.config)))
 }
 
 async fn set_stream_quality(
@@ -656,6 +669,19 @@ async fn set_stream_quality(
         .get_or_init(|| StdMutex::new(()))
         .lock()
         .unwrap();
+    let current = current_stream_quality_state(active_video_codec(&state.config));
+    let next_video_codec = video_codec.unwrap_or(current.video_codec.as_str());
+    let next_profile = profile.map(|profile| profile.id).unwrap_or("custom");
+    if current.max_edge == max_edge
+        && current.fps == fps
+        && current.min_bitrate == min_bitrate
+        && current.bits_per_pixel == bits_per_pixel
+        && current.profile == next_profile
+        && current.video_codec == next_video_codec
+    {
+        return Ok(json(json_value!(stream_quality_response(&state.config))));
+    }
+
     env::set_var("SIMDECK_REALTIME_MAX_EDGE", max_edge.to_string());
     env::set_var("SIMDECK_REALTIME_FPS", fps.to_string());
     env::set_var("SIMDECK_LOCAL_STREAM_FPS", fps.to_string());
@@ -674,19 +700,21 @@ async fn set_stream_quality(
     }
 
     state.registry.reconfigure_video_encoders();
-    Ok(json(json_value!(stream_quality_response())))
+    Ok(json(json_value!(stream_quality_response(&state.config))))
 }
 
-fn stream_quality_response() -> Value {
+fn stream_quality_response(config: &Config) -> Value {
+    let video_codec = active_video_codec(config);
+    let quality = current_stream_quality_state(video_codec.clone());
     json_value!({
         "ok": true,
-        "quality": stream_quality_state(),
-        "videoCodec": active_video_codec_for_env(),
+        "quality": stream_quality_state_value(&quality),
+        "videoCodec": video_codec,
         "profiles": STREAM_QUALITY_PROFILES.iter().map(stream_quality_profile_value).collect::<Vec<_>>()
     })
 }
 
-fn stream_quality_state() -> Value {
+fn current_stream_quality_state(video_codec: String) -> ActiveStreamQualityState {
     let configured_profile = env::var("SIMDECK_STREAM_QUALITY_PROFILE")
         .ok()
         .and_then(|value| stream_quality_profile(value.trim()).ok());
@@ -727,21 +755,25 @@ fn stream_quality_state() -> Value {
                 .map(|candidate| candidate.id.to_owned())
                 .unwrap_or_else(|| "custom".to_owned())
         });
-    json_value!({
-        "profile": profile,
-        "maxEdge": max_edge,
-        "fps": fps,
-        "minBitrate": min_bitrate,
-        "bitsPerPixel": bits_per_pixel,
-        "videoCodec": active_video_codec_for_env(),
-    })
+    ActiveStreamQualityState {
+        profile,
+        max_edge,
+        fps,
+        min_bitrate,
+        bits_per_pixel,
+        video_codec,
+    }
 }
 
-fn active_video_codec_for_env() -> String {
-    std::env::var("SIMDECK_VIDEO_CODEC")
-        .ok()
-        .and_then(|value| normalize_video_codec(&value).map(ToOwned::to_owned))
-        .unwrap_or_else(|| "auto".to_owned())
+fn stream_quality_state_value(state: &ActiveStreamQualityState) -> Value {
+    json_value!({
+        "profile": state.profile,
+        "maxEdge": state.max_edge,
+        "fps": state.fps,
+        "minBitrate": state.min_bitrate,
+        "bitsPerPixel": state.bits_per_pixel,
+        "videoCodec": state.video_codec,
+    })
 }
 
 fn stream_quality_profile(id: &str) -> Result<StreamQualityProfile, AppError> {

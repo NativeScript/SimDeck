@@ -56,7 +56,8 @@ frames instead of building latency. Studio providers default to the `smooth`
 stream quality profile (1170 px, dynamic up to 60 fps, higher bitrate to reduce
 artifacts); override with
 `--stream-quality quality|balanced|fast|smooth|economy|ci-software`, or pass
-`--video-codec hardware` when a dedicated hardware encoder is preferable.
+`--video-codec hardware` when a dedicated hardware encoder is preferable. The
+remote Studio viewer exposes 15, 30, and 60 fps choices in the stream menu.
 
 The local viewer gets the API token automatically. LAN browsers pair with the printed code before receiving the API cookie. Direct HTTP calls need `X-SimDeck-Token` or `Authorization: Bearer <token>`.
 
