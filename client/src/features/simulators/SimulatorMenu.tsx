@@ -211,14 +211,12 @@ export function SimulatorMenu({
                 >
                   Rotate Left
                 </button>
+                <button className="menu-action" onClick={onToggleDebug}>
+                  {debugVisible ? "Hide Debug Info" : "Show Debug Info"}
+                </button>
               </div>
             </>
           ) : null}
-          <div className="menu-actions">
-            <button className="menu-action" onClick={onToggleDebug}>
-              {debugVisible ? "Hide Debug Info" : "Show Debug Info"}
-            </button>
-          </div>
         </div>
       ) : null}
     </div>
