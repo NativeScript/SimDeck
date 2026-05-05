@@ -702,6 +702,14 @@ char *xcw_native_session_video_encoder_stats(void *handle, char **error_message)
     }
 }
 
+int32_t xcw_native_session_rotation_quarter_turns(void *handle) {
+    @autoreleasepool {
+        NSInteger turns = [XCWNativeSessionFromHandle(handle) rotationQuarterTurns];
+        NSInteger normalized = ((turns % 4) + 4) % 4;
+        return (int32_t)normalized;
+    }
+}
+
 bool xcw_native_session_send_touch(void *handle, double x, double y, const char *phase, char **error_message) {
     @autoreleasepool {
         NSError *error = nil;

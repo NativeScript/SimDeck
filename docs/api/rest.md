@@ -87,8 +87,11 @@ quality.
 ```
 
 `videoCodec` accepts `hardware` or `software` from the UI, and the API also
-accepts `auto`. `fps` is clamped to the local stream range. `profile` accepts
-`quality`, `balanced`, `fast`, `smooth`, `economy`, or `ci-software`.
+accepts `auto`. `fps` is clamped to the local stream range. Browser viewers show
+three profiles: `quality`, `balanced`, and `economy`. The API still accepts the
+legacy `fast`, `smooth`, and `ci-software` profiles for CLI/provider
+compatibility. When `profile` is provided, its resolution preset is applied;
+send `maxEdge` without `profile` for a custom resolution cap.
 
 ## Simulator inventory
 
@@ -110,7 +113,8 @@ Returns every simulator known to the native bridge, enriched with any session st
         "displayStatus": "running",
         "displayWidth": 1170,
         "displayHeight": 2532,
-        "frameSequence": 8124
+        "frameSequence": 8124,
+        "rotationQuarterTurns": 0
       }
     }
   ]

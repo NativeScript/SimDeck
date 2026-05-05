@@ -658,6 +658,10 @@ impl NativeSession {
         }
     }
 
+    pub fn rotation_quarter_turns(&self) -> i32 {
+        unsafe { ffi::xcw_native_session_rotation_quarter_turns(self.handle).rem_euclid(4) }
+    }
+
     pub unsafe fn set_frame_callback(
         &self,
         callback: Option<ffi::xcw_native_frame_callback>,

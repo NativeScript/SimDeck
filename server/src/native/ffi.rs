@@ -184,6 +184,7 @@ unsafe extern "C" {
         handle: *mut c_void,
         error_message: *mut *mut c_char,
     ) -> *mut c_char;
+    pub fn xcw_native_session_rotation_quarter_turns(handle: *mut c_void) -> i32;
     pub fn xcw_native_session_set_frame_callback(
         handle: *mut c_void,
         callback: Option<xcw_native_frame_callback>,

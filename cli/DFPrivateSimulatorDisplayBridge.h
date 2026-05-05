@@ -38,6 +38,7 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
 @property (nonatomic, readonly, getter=isDisplayReady) BOOL displayReady;
 @property (nonatomic, readonly) NSString *displayStatus;
 @property (nonatomic, readonly) CGSize displaySize;
+@property (nonatomic, readonly) NSInteger rotationQuarterTurns;
 
 - (nullable CVPixelBufferRef)copyPixelBuffer CF_RETURNS_RETAINED;
 

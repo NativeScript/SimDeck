@@ -128,6 +128,14 @@ struct ActiveStreamQualityState {
     video_codec: String,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct StreamQualityLimits {
+    max_edge: u32,
+    fps: u32,
+    min_bitrate: u32,
+    bits_per_pixel: u32,
+}
+
 const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
     StreamQualityProfile {
         id: "ci-software",
@@ -178,6 +186,8 @@ const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
         bits_per_pixel: 3,
     },
 ];
+
+const VISIBLE_STREAM_QUALITY_PROFILE_IDS: &[&str] = &["quality", "balanced", "economy"];
 
 static STREAM_CONFIG_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
 
@@ -644,26 +654,7 @@ async fn set_stream_quality(
         .filter(|value| !value.is_empty())
         .map(stream_quality_profile)
         .transpose()?;
-    let max_edge = payload
-        .max_edge
-        .or_else(|| profile.map(|profile| profile.max_edge))
-        .unwrap_or(1440)
-        .clamp(320, 4096);
-    let fps = payload
-        .fps
-        .or_else(|| profile.map(|profile| profile.fps))
-        .unwrap_or(30)
-        .clamp(10, 240);
-    let min_bitrate = payload
-        .min_bitrate
-        .or_else(|| profile.map(|profile| profile.min_bitrate))
-        .unwrap_or(3_000_000)
-        .clamp(200_000, 60_000_000);
-    let bits_per_pixel = payload
-        .bits_per_pixel
-        .or_else(|| profile.map(|profile| profile.bits_per_pixel))
-        .unwrap_or(4)
-        .clamp(1, 10);
+    let limits = resolved_stream_quality_limits(&payload, profile);
 
     let _stream_config_guard = STREAM_CONFIG_LOCK
         .get_or_init(|| StdMutex::new(()))
@@ -672,23 +663,26 @@ async fn set_stream_quality(
     let current = current_stream_quality_state(active_video_codec(&state.config));
     let next_video_codec = video_codec.unwrap_or(current.video_codec.as_str());
     let next_profile = profile.map(|profile| profile.id).unwrap_or("custom");
-    if current.max_edge == max_edge
-        && current.fps == fps
-        && current.min_bitrate == min_bitrate
-        && current.bits_per_pixel == bits_per_pixel
+    if current.max_edge == limits.max_edge
+        && current.fps == limits.fps
+        && current.min_bitrate == limits.min_bitrate
+        && current.bits_per_pixel == limits.bits_per_pixel
         && current.profile == next_profile
         && current.video_codec == next_video_codec
     {
         return Ok(json(json_value!(stream_quality_response(&state.config))));
     }
 
-    env::set_var("SIMDECK_REALTIME_MAX_EDGE", max_edge.to_string());
-    env::set_var("SIMDECK_REALTIME_FPS", fps.to_string());
-    env::set_var("SIMDECK_LOCAL_STREAM_FPS", fps.to_string());
-    env::set_var("SIMDECK_REALTIME_MIN_BITRATE", min_bitrate.to_string());
+    env::set_var("SIMDECK_REALTIME_MAX_EDGE", limits.max_edge.to_string());
+    env::set_var("SIMDECK_REALTIME_FPS", limits.fps.to_string());
+    env::set_var("SIMDECK_LOCAL_STREAM_FPS", limits.fps.to_string());
+    env::set_var(
+        "SIMDECK_REALTIME_MIN_BITRATE",
+        limits.min_bitrate.to_string(),
+    );
     env::set_var(
         "SIMDECK_REALTIME_BITS_PER_PIXEL",
-        bits_per_pixel.to_string(),
+        limits.bits_per_pixel.to_string(),
     );
     if let Some(profile) = profile {
         env::set_var("SIMDECK_STREAM_QUALITY_PROFILE", profile.id);
@@ -710,7 +704,11 @@ fn stream_quality_response(config: &Config) -> Value {
         "ok": true,
         "quality": stream_quality_state_value(&quality),
         "videoCodec": video_codec,
-        "profiles": STREAM_QUALITY_PROFILES.iter().map(stream_quality_profile_value).collect::<Vec<_>>()
+        "profiles": STREAM_QUALITY_PROFILES
+            .iter()
+            .filter(|profile| VISIBLE_STREAM_QUALITY_PROFILE_IDS.contains(&profile.id))
+            .map(stream_quality_profile_value)
+            .collect::<Vec<_>>()
     })
 }
 
@@ -793,6 +791,34 @@ fn stream_quality_profile_value(profile: &StreamQualityProfile) -> Value {
         "minBitrate": profile.min_bitrate,
         "bitsPerPixel": profile.bits_per_pixel,
     })
+}
+
+fn resolved_stream_quality_limits(
+    payload: &StreamQualityPayload,
+    profile: Option<StreamQualityProfile>,
+) -> StreamQualityLimits {
+    StreamQualityLimits {
+        max_edge: profile
+            .map(|profile| profile.max_edge)
+            .or(payload.max_edge)
+            .unwrap_or(1440)
+            .clamp(320, 4096),
+        fps: payload
+            .fps
+            .or_else(|| profile.map(|profile| profile.fps))
+            .unwrap_or(30)
+            .clamp(10, 240),
+        min_bitrate: payload
+            .min_bitrate
+            .or_else(|| profile.map(|profile| profile.min_bitrate))
+            .unwrap_or(3_000_000)
+            .clamp(200_000, 60_000_000),
+        bits_per_pixel: payload
+            .bits_per_pixel
+            .or_else(|| profile.map(|profile| profile.bits_per_pixel))
+            .unwrap_or(4)
+            .clamp(1, 10),
+    }
 }
 
 fn env_u32(name: &str, fallback: u32, minimum: u32, maximum: u32) -> u32 {
@@ -3448,9 +3474,10 @@ mod tests {
         compact_accessibility_snapshot, element_matches_selector, first_matching_element,
         inspector_available_sources, normalize_inspector_node,
         normalize_screen_point_from_snapshot, normalized_gesture_coordinates,
-        parse_lsof_tcp_listener, split_filter_values, suppress_native_ax_translation_error,
-        tap_point_from_snapshot, trim_tree_depth, AccessibilityHierarchySource,
-        ElementSelectorPayload, InspectorSession, InspectorSessionTransport, SOURCE_NATIVE_AX,
+        parse_lsof_tcp_listener, resolved_stream_quality_limits, split_filter_values,
+        stream_quality_profile, suppress_native_ax_translation_error, tap_point_from_snapshot,
+        trim_tree_depth, AccessibilityHierarchySource, ElementSelectorPayload, InspectorSession,
+        InspectorSessionTransport, StreamQualityLimits, StreamQualityPayload, SOURCE_NATIVE_AX,
         SOURCE_NATIVE_SCRIPT, SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
     };
     use serde_json::{json, Value};
@@ -3493,6 +3520,31 @@ mod tests {
                 ..selector()
             }
         ));
+    }
+
+    #[test]
+    fn named_stream_quality_profile_controls_resolution_over_stale_max_edge() {
+        let payload = StreamQualityPayload {
+            profile: Some("quality".to_owned()),
+            video_codec: None,
+            max_edge: Some(1280),
+            fps: None,
+            min_bitrate: None,
+            bits_per_pixel: None,
+        };
+
+        assert_eq!(
+            resolved_stream_quality_limits(
+                &payload,
+                Some(stream_quality_profile("quality").unwrap())
+            ),
+            StreamQualityLimits {
+                max_edge: 4096,
+                fps: 60,
+                min_bitrate: 60_000_000,
+                bits_per_pixel: 10,
+            }
+        );
     }
 
     #[test]

@@ -147,6 +147,7 @@ impl SessionRegistry<SimulatorSession> {
                             "displayWidth": 0,
                             "displayHeight": 0,
                             "frameSequence": 0,
+                            "rotationQuarterTurns": 0,
                         })
                     });
                 json!({

@@ -40,6 +40,7 @@ import type {
   TouchPhase,
 } from "../api/types";
 import { AccessibilityInspector } from "../features/accessibility/AccessibilityInspector";
+import { isEditableTarget } from "../features/input/keycodes";
 import { useKeyboardInput } from "../features/input/useKeyboardInput";
 import { usePointerInput } from "../features/input/usePointerInput";
 import { simulatorRuntimeLabel } from "../features/simulators/simulatorDisplay";
@@ -68,6 +69,7 @@ import {
   clampZoom,
   computeChromeScreenBorderRadius,
   computeChromeScreenRect,
+  normalizeQuarterTurns,
   screenAspectRatio,
   shellSize,
 } from "../features/viewport/viewportMath";
@@ -81,6 +83,7 @@ import {
   ACCESSIBILITY_SOURCE_STORAGE_KEY,
   clearLegacyVolatileUiState,
   DEFAULT_VIEWPORT_STATE,
+  DEBUG_VISIBLE_STORAGE_KEY,
   HIERARCHY_VISIBLE_STORAGE_KEY,
   readPersistedUiState,
   readStoredAccessibilitySource,
@@ -107,20 +110,12 @@ const REMOTE_STREAM_DEFAULTS: StreamConfig = {
   fps: 30,
   quality: "balanced",
 };
-const STREAM_CONFIG_SYNC_INTERVAL_MS = 5000;
+const STREAM_CONFIG_SYNC_INTERVAL_MS = 1500;
 const STREAM_CONFIG_USER_CHANGE_GRACE_MS = 1000;
 const STREAM_ENCODER_VALUES = new Set<StreamEncoder>([
   "auto",
   "hardware",
   "software",
-]);
-const STREAM_QUALITY_VALUES = new Set<StreamQualityPreset>([
-  "balanced",
-  "ci-software",
-  "economy",
-  "fast",
-  "quality",
-  "smooth",
 ]);
 clearLegacyVolatileUiState();
 
@@ -202,6 +197,20 @@ function simulatorDisplayReady(simulator: SimulatorMetadata): boolean {
   );
 }
 
+function normalizeSimulatorRotationQuarterTurns(
+  simulator: SimulatorMetadata | null,
+): number | null {
+  const display = simulator?.privateDisplay;
+  if (
+    !simulator?.isBooted ||
+    !display?.displayReady ||
+    !Number.isFinite(display.rotationQuarterTurns)
+  ) {
+    return null;
+  }
+  return normalizeQuarterTurns(display.rotationQuarterTurns ?? 0);
+}
+
 function mergeAccessibilitySources(
   ...sources: unknown[]
 ): AccessibilitySource[] {
@@ -261,7 +270,9 @@ export function AppShell({
     refresh,
     simulators,
   } = useSimulatorList({ remote: remoteStream });
-  const [debugVisible, setDebugVisible] = useState(false);
+  const [debugVisible, setDebugVisible] = useState(() =>
+    readStoredFlag(DEBUG_VISIBLE_STORAGE_KEY),
+  );
   const [hierarchyVisible, setHierarchyVisible] = useState(() =>
     readStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY),
   );
@@ -513,7 +524,7 @@ export function AppShell({
     streamConfigUserChangeAtRef.current = Date.now();
     setStreamConfigReady(true);
     setStreamConfigApplyKey((current) => current + 1);
-    setStreamConfig((current) => ({ ...current, quality }));
+    setStreamConfig((current) => ({ ...current, maxEdge: undefined, quality }));
   }, []);
 
   useEffect(() => {
@@ -597,6 +608,12 @@ export function AppShell({
     (shouldRenderChrome && !chromeProfileReady) ||
     (viewportChromeProfile && chromeUrl),
   );
+  const simulatorRotationQuarterTurns =
+    normalizeSimulatorRotationQuarterTurns(selectedSimulator);
+
+  useEffect(() => {
+    writeStoredFlag(DEBUG_VISIBLE_STORAGE_KEY, debugVisible);
+  }, [debugVisible]);
 
   useEffect(() => {
     writeStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY, hierarchyVisible);
@@ -856,6 +873,20 @@ export function AppShell({
   }, [isBooted]);
 
   useEffect(() => {
+    if (simulatorRotationQuarterTurns == null) {
+      return;
+    }
+    setRotationQuarterTurns((current) => {
+      const normalizedCurrent = normalizeQuarterTurns(current);
+      if (normalizedCurrent === simulatorRotationQuarterTurns) {
+        return current;
+      }
+      beginZoomAnimation();
+      return simulatorRotationQuarterTurns;
+    });
+  }, [simulatorRotationQuarterTurns]);
+
+  useEffect(() => {
     setChromeLoaded(!chromeRequired);
   }, [chromeRequired, chromeUrl]);
 
@@ -917,6 +948,30 @@ export function AppShell({
       window.removeEventListener("keydown", handleWindowKeyDown);
     };
   }, [menuOpen]);
+
+  useEffect(() => {
+    function handleWindowKeyDown(event: KeyboardEvent) {
+      if (
+        isEditableTarget(event.target) ||
+        event.altKey ||
+        event.metaKey ||
+        !event.ctrlKey ||
+        !event.shiftKey ||
+        event.key.toLowerCase() !== "d"
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setDebugVisible((current) => !current);
+    }
+
+    window.addEventListener("keydown", handleWindowKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleWindowKeyDown);
+    };
+  }, []);
 
   useEffect(() => {
     setPan((currentPan) => {
@@ -1496,15 +1551,14 @@ export function AppShell({
           if (!selectedSimulator) {
             return;
           }
+          beginZoomAnimation();
           if (sendControl(selectedSimulator.udid, { type: "rotateLeft" })) {
             setRotationQuarterTurns((current) => (current + 3) % 4);
-            setStreamStamp(Date.now());
             return;
           }
           void runAction(async () => {
             await rotateLeft(selectedSimulator.udid);
             setRotationQuarterTurns((current) => (current + 3) % 4);
-            setStreamStamp(Date.now());
           }, false);
         }}
         onOpenBundlePrompt={promptForBundleID}
@@ -1513,15 +1567,14 @@ export function AppShell({
           if (!selectedSimulator) {
             return;
           }
+          beginZoomAnimation();
           if (sendControl(selectedSimulator.udid, { type: "rotateRight" })) {
             setRotationQuarterTurns((current) => (current + 1) % 4);
-            setStreamStamp(Date.now());
             return;
           }
           void runAction(async () => {
             await rotateRight(selectedSimulator.udid);
             setRotationQuarterTurns((current) => (current + 1) % 4);
-            setStreamStamp(Date.now());
           }, false);
         }}
         onStreamEncoderChange={updateStreamEncoder}
@@ -1760,12 +1813,21 @@ function normalizeStreamQuality(
   value: string | undefined,
   fallback: StreamQualityPreset,
 ): StreamQualityPreset {
-  const normalized = value?.trim().toLowerCase() as
-    | StreamQualityPreset
-    | undefined;
-  return normalized && STREAM_QUALITY_VALUES.has(normalized)
-    ? normalized
-    : fallback;
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "quality") {
+    return "quality";
+  }
+  if (
+    normalized === "balanced" ||
+    normalized === "smooth" ||
+    normalized === "fast"
+  ) {
+    return "balanced";
+  }
+  if (normalized === "economy" || normalized === "ci-software") {
+    return "economy";
+  }
+  return fallback;
 }
 
 function normalizeStreamFps(

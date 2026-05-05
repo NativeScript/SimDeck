@@ -72,12 +72,6 @@ export function SimulatorMenu({
   )
     ? []
     : [{ label: String(streamConfig.fps), value: streamConfig.fps }];
-  const activeQualityOption = STREAM_QUALITY_OPTIONS.some(
-    (option) => option.value === streamConfig.quality,
-  )
-    ? []
-    : [{ label: streamConfig.quality, value: streamConfig.quality }];
-
   return (
     <div className="menu-wrap" ref={menuRef}>
       <button
@@ -157,18 +151,16 @@ export function SimulatorMenu({
                   ))}
                 </div>
                 <div aria-label="Quality" className="menu-segment">
-                  {[...activeQualityOption, ...STREAM_QUALITY_OPTIONS].map(
-                    (option) => (
-                      <button
-                        className={`menu-option ${streamConfig.quality === option.value ? "active" : ""}`}
-                        key={option.value}
-                        onClick={() => onStreamQualityChange(option.value)}
-                        type="button"
-                      >
-                        {option.label}
-                      </button>
-                    ),
-                  )}
+                  {STREAM_QUALITY_OPTIONS.map((option) => (
+                    <button
+                      className={`menu-option ${streamConfig.quality === option.value ? "active" : ""}`}
+                      key={option.value}
+                      onClick={() => onStreamQualityChange(option.value)}
+                      type="button"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
                 </div>
               </div>
               <div className="menu-divider" />
@@ -246,9 +238,7 @@ const STREAM_QUALITY_OPTIONS: Array<{
   value: StreamQualityPreset;
 }> = [
   { label: "Quality", value: "quality" },
-  { label: "Smooth", value: "smooth" },
   { label: "Balanced", value: "balanced" },
-  { label: "Fast", value: "fast" },
   { label: "Economy", value: "economy" },
 ];
 

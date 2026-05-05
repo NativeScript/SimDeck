@@ -124,12 +124,18 @@ if (isMainModule()) {
             providerToken,
           },
         );
+        if (stopped) {
+          break;
+        }
         if (!next || !next.request) {
           await sleep(250);
           continue;
         }
         runProviderRequest(next.request);
       } catch (error) {
+        if (stopped) {
+          break;
+        }
         console.error(
           `[simdeck-provider-bridge] ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -169,7 +175,10 @@ async function registerProvider() {
     });
     registered = true;
     lastRegisterAt = Date.now();
-    if (shouldStopForLocalMetadata(metadata, localDaemonProcessExited())) {
+    if (
+      !stopped &&
+      shouldStopForLocalMetadata(metadata, localDaemonProcessExited())
+    ) {
       providerMarkedTerminal = true;
       stopped = true;
       await markProviderFailed(
@@ -204,6 +213,9 @@ function localDaemonProcessExited() {
 }
 
 function updateLocalAvailability(metadata) {
+  if (stopped) {
+    return;
+  }
   if (metadata.ok) {
     localUnavailableSince = 0;
     return;

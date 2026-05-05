@@ -81,7 +81,6 @@ export function clearLegacyVolatileUiState(): void {
     return;
   }
 
-  window.localStorage.removeItem(DEBUG_VISIBLE_STORAGE_KEY);
   try {
     const parsed = JSON.parse(
       window.localStorage.getItem(UI_STATE_STORAGE_KEY) ?? "{}",
