@@ -105,10 +105,10 @@ Returns a snapshot of every server-side counter and the rolling buffer of client
 `encoders` contains one entry per active simulator session. `encoder.overloadState`
 is derived from native VideoToolbox submit-to-output latency:
 
-| State        | Meaning                                                                                  |
-| ------------ | ---------------------------------------------------------------------------------------- |
-| `nominal`    | Smoothed encode latency is comfortably below the active frame budget.                    |
-| `strained`   | Smoothed latency is near the frame budget or several frames are close to budget.         |
+| State        | Meaning                                                                                 |
+| ------------ | --------------------------------------------------------------------------------------- |
+| `nominal`    | Smoothed encode latency is comfortably below the active frame budget.                   |
+| `strained`   | Smoothed latency is near the frame budget or several frames are close to budget.        |
 | `overloaded` | Smoothed latency exceeds the budget or several frames in a row took longer than budget. |
 
 This is an inferred pressure signal rather than a private macOS hardware queue

@@ -645,7 +645,10 @@ fn normalize_video_codec(codec: &str) -> Option<&'static str> {
 async fn metrics(State(state): State<AppState>) -> Json<Value> {
     let mut snapshot = json_value!(state.metrics.snapshot());
     if let Some(object) = snapshot.as_object_mut() {
-        object.insert("encoders".to_owned(), json_value!(state.registry.encoder_snapshots()));
+        object.insert(
+            "encoders".to_owned(),
+            json_value!(state.registry.encoder_snapshots()),
+        );
     }
     json(snapshot)
 }
