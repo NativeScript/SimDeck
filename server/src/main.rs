@@ -3365,7 +3365,7 @@ fn http_request(
     let endpoint = HttpEndpoint::parse(server_url)?;
     let mut stream = std::net::TcpStream::connect((endpoint.host.as_str(), endpoint.port))
         .with_context(|| format!("connect to SimDeck service at {server_url}"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(120)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(180)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let body = body.map(serde_json::to_vec).transpose()?;
     let request = if let Some(body) = body.as_ref() {
@@ -5397,7 +5397,7 @@ mod tests {
         ));
         assert!(service_post_error_is_retryable(
             "launch",
-            "SimDeck service returned HTTP 500: xcrun simctl launch timed out after 45s."
+            "SimDeck service returned HTTP 500: xcrun simctl launch timed out after 120s."
         ));
         assert!(service_post_error_is_retryable(
             "open-url",

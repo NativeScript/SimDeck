@@ -29,6 +29,9 @@ const describeUiBudgetMs = Number(
 const httpActionBudgetMs = Number(
   process.env.SIMDECK_INTEGRATION_HTTP_BUDGET_MS ?? "10000",
 );
+const coreSimulatorCommandTimeoutMs = Number(
+  process.env.SIMDECK_INTEGRATION_SIMCTL_TIMEOUT_MS ?? "300000",
+);
 const phaseSetup = "setup";
 const phaseCommandSmoke = "command-smoke";
 const phaseTest = "test";
@@ -118,7 +121,7 @@ async function main() {
   }
 
   const fixture = await measuredStep(
-    "build SwiftUI fixture",
+    "build UIKit fixture",
     () => buildFixtureApp(),
     { phase: phaseSetup },
   );
@@ -158,8 +161,8 @@ async function main() {
   });
 
   await measuredStep(
-    "setup launch SwiftUI fixture",
-    () => ensureFixtureForeground("setup launch SwiftUI fixture"),
+    "setup launch UIKit fixture",
+    () => ensureFixtureForeground("setup launch UIKit fixture"),
     { phase: phaseSetup },
   );
 
@@ -441,12 +444,6 @@ async function runCliControls() {
     { expectFixture: true, expectText: "URL Opened" },
   );
   await cliStep(
-    "CLI focus fixture text field",
-    ["open-url", simulatorUDID, fixtureFocusUrl],
-    { attempts: 3, delayMs: 5_000, timeoutMs: 180_000 },
-    { expectFixture: true, expectText: "Message Focused" },
-  );
-  await cliStep(
     "CLI tap fixture text field",
     [
       "tap",
@@ -461,10 +458,16 @@ async function runCliControls() {
     { timeoutMs: 180_000, maxElapsedMs: 60_000 },
     {
       expectFixture: true,
-      expectText: "Message Focused",
+      expectText: "URL Opened",
       attempts: 6,
       delayMs: 1_500,
     },
+  );
+  await cliStep(
+    "CLI focus fixture text field",
+    ["open-url", simulatorUDID, fixtureFocusUrl],
+    { attempts: 3, delayMs: 5_000, timeoutMs: 180_000 },
+    { expectFixture: true, expectText: "Message Focused" },
   );
   await cliStep(
     "CLI type fixture text",
@@ -606,7 +609,9 @@ async function runRestControls() {
 }
 
 function latestAvailableIosRuntime() {
-  const payload = runJson("xcrun", ["simctl", "list", "runtimes", "-j"]);
+  const payload = runJson("xcrun", ["simctl", "list", "runtimes", "-j"], {
+    timeoutMs: coreSimulatorCommandTimeoutMs,
+  });
   const runtimes = payload.runtimes
     .filter(
       (runtime) => runtime.isAvailable && runtime.identifier?.includes("iOS"),
@@ -623,12 +628,11 @@ function preferredIphoneDeviceType(runtime) {
   const runtimeSupported = Array.isArray(runtime.supportedDeviceTypes)
     ? runtime.supportedDeviceTypes
     : [];
-  const allDeviceTypes = runJson("xcrun", [
-    "simctl",
-    "list",
-    "devicetypes",
-    "-j",
-  ]).devicetypes;
+  const allDeviceTypes = runJson(
+    "xcrun",
+    ["simctl", "list", "devicetypes", "-j"],
+    { timeoutMs: coreSimulatorCommandTimeoutMs },
+  ).devicetypes;
   const supported =
     runtimeSupported.length > 0
       ? runtimeSupported

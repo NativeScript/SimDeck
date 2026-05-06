@@ -19,18 +19,18 @@ export function buildCachedFixtureApp({
     "iphonesimulator",
     "--show-sdk-version",
   ]);
-  const swiftVersion = commandOutput("xcrun", [
+  const clangVersion = commandOutput("xcrun", [
     "--sdk",
     "iphonesimulator",
-    "swiftc",
+    "clang",
     "--version",
   ]);
   const plist = fixtureInfoPlist(bundleId, urlScheme);
-  const source = fixtureSwiftSource();
+  const source = fixtureSource();
   const fingerprint = crypto
     .createHash("sha256")
     .update(
-      JSON.stringify({ targetArch, sdkVersion, swiftVersion, plist, source }),
+      JSON.stringify({ targetArch, sdkVersion, clangVersion, plist, source }),
     )
     .digest("hex")
     .slice(0, 16);
@@ -45,7 +45,7 @@ export function buildCachedFixtureApp({
   const appPath = path.join(tempRoot, `${executable}.app`);
 
   if (!isUsableApp(cachedAppPath)) {
-    log(`building cached SwiftUI fixture ${fingerprint}`);
+    log(`building cached UIKit fixture ${fingerprint}`);
     buildFixtureIntoCache({
       cacheRoot,
       cachedAppPath,
@@ -54,7 +54,7 @@ export function buildCachedFixtureApp({
       targetArch,
     });
   } else {
-    log(`using cached SwiftUI fixture ${fingerprint}`);
+    log(`using cached UIKit fixture ${fingerprint}`);
   }
 
   fs.rmSync(appPath, { recursive: true, force: true });
@@ -75,22 +75,22 @@ function buildFixtureIntoCache({
   fs.mkdirSync(stagingApp, { recursive: true });
 
   const plistPath = path.join(stagingApp, "Info.plist");
-  const sourcePath = path.join(stagingRoot, `${executable}.swift`);
+  const sourcePath = path.join(stagingRoot, `${executable}.m`);
   fs.writeFileSync(plistPath, plist);
   fs.writeFileSync(sourcePath, source);
 
   run("xcrun", [
     "--sdk",
     "iphonesimulator",
-    "swiftc",
+    "clang",
     "-target",
     `${targetArch}-apple-ios${minimumIosVersion}-simulator`,
-    "-parse-as-library",
-    "-Onone",
-    "-framework",
-    "SwiftUI",
+    "-fobjc-arc",
+    "-fmodules",
     "-framework",
     "UIKit",
+    "-framework",
+    "Foundation",
     sourcePath,
     "-o",
     path.join(stagingApp, executable),
@@ -134,57 +134,127 @@ function fixtureInfoPlist(bundleId, urlScheme) {
 `;
 }
 
-function fixtureSwiftSource() {
-  return `import SwiftUI
+function fixtureSource() {
+  return `#import <UIKit/UIKit.h>
 
-struct FixtureView: View {
-  @State private var status = "Integration Ready"
-  @State private var tapCount = 0
-  @State private var message = ""
-  @FocusState private var messageFocused: Bool
+@interface FixtureViewController : UIViewController <UITextFieldDelegate>
+@property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) UITextField *messageField;
+@property (nonatomic) NSInteger tapCount;
+- (void)openFixtureURL:(NSURL *)url;
+@end
 
-  var body: some View {
-    VStack(spacing: 24) {
-      Text("SimDeck Fixture")
-        .font(.title2)
-        .accessibilityIdentifier("fixture.title")
+@implementation FixtureViewController
 
-      Text(status)
-        .accessibilityIdentifier("fixture.status")
+- (void)viewDidLoad {
+  [super viewDidLoad];
+  self.view.backgroundColor = UIColor.systemBackgroundColor;
 
-      Button("Continue") {
-        tapCount += 1
-        status = "Continue Tapped \\(tapCount)"
-      }
-        .buttonStyle(.borderedProminent)
-        .accessibilityIdentifier("fixture.continue")
+  UILabel *titleLabel = [[UILabel alloc] init];
+  titleLabel.text = @"SimDeck Fixture";
+  titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle2];
+  titleLabel.textAlignment = NSTextAlignmentCenter;
+  titleLabel.accessibilityIdentifier = @"fixture.title";
 
-      TextField("Message", text: $message)
-        .textFieldStyle(.roundedBorder)
-        .accessibilityIdentifier("fixture.message")
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled(true)
-        .focused($messageFocused)
-        .frame(width: 240)
-    }
-    .padding()
-    .onOpenURL { url in
-      if url.host == "focus-message" {
-        status = "Message Focused"
-        messageFocused = true
-      } else {
-        status = "URL Opened"
-      }
-    }
+  self.statusLabel = [[UILabel alloc] init];
+  self.statusLabel.text = @"Integration Ready";
+  self.statusLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+  self.statusLabel.textAlignment = NSTextAlignmentCenter;
+  self.statusLabel.accessibilityIdentifier = @"fixture.status";
+
+  UIButton *continueButton = [UIButton buttonWithType:UIButtonTypeSystem];
+  [continueButton setTitle:@"Continue" forState:UIControlStateNormal];
+  continueButton.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
+  continueButton.accessibilityIdentifier = @"fixture.continue";
+  [continueButton addTarget:self action:@selector(continueTapped:) forControlEvents:UIControlEventTouchUpInside];
+
+  self.messageField = [[UITextField alloc] init];
+  self.messageField.placeholder = @"Message";
+  self.messageField.borderStyle = UITextBorderStyleRoundedRect;
+  self.messageField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+  self.messageField.autocorrectionType = UITextAutocorrectionTypeNo;
+  self.messageField.accessibilityIdentifier = @"fixture.message";
+  self.messageField.delegate = self;
+  [self.messageField addTarget:self action:@selector(messageChanged:) forControlEvents:UIControlEventEditingChanged];
+  [self.messageField.widthAnchor constraintEqualToConstant:240.0].active = YES;
+
+  UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[
+    titleLabel,
+    self.statusLabel,
+    continueButton,
+    self.messageField,
+  ]];
+  stack.axis = UILayoutConstraintAxisVertical;
+  stack.alignment = UIStackViewAlignmentCenter;
+  stack.spacing = 24.0;
+  stack.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.view addSubview:stack];
+
+  [NSLayoutConstraint activateConstraints:@[
+    [stack.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+    [stack.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
+    [stack.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:24.0],
+    [stack.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-24.0],
+  ]];
+}
+
+- (void)continueTapped:(id)sender {
+  self.tapCount += 1;
+  self.statusLabel.text = [NSString stringWithFormat:@"Continue Tapped %ld", (long)self.tapCount];
+}
+
+- (void)messageChanged:(UITextField *)sender {
+  self.statusLabel.text = sender.text ?: @"";
+}
+
+- (void)openFixtureURL:(NSURL *)url {
+  if ([url.host isEqualToString:@"focus-message"]) {
+    self.statusLabel.text = @"Message Focused";
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self.messageField becomeFirstResponder];
+    });
+  } else {
+    self.statusLabel.text = @"URL Opened";
   }
 }
 
-@main
-struct SimDeckFixtureApp: App {
-  var body: some Scene {
-    WindowGroup {
-      FixtureView()
-    }
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+  [textField resignFirstResponder];
+  return YES;
+}
+
+@end
+
+@interface AppDelegate : UIResponder <UIApplicationDelegate>
+@property (nonatomic, strong) UIWindow *window;
+@property (nonatomic, strong) FixtureViewController *fixtureViewController;
+@end
+
+@implementation AppDelegate
+
+- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+  self.fixtureViewController = [[FixtureViewController alloc] init];
+  self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+  self.window.rootViewController = self.fixtureViewController;
+  [self.window makeKeyAndVisible];
+
+  NSURL *launchURL = launchOptions[UIApplicationLaunchOptionsURLKey];
+  if ([launchURL isKindOfClass:NSURL.class]) {
+    [self.fixtureViewController openFixtureURL:launchURL];
+  }
+  return YES;
+}
+
+- (BOOL)application:(UIApplication *)application openURL:(NSURL *)url options:(NSDictionary<UIApplicationOpenURLOptionsKey, id> *)options {
+  [self.fixtureViewController openFixtureURL:url];
+  return YES;
+}
+
+@end
+
+int main(int argc, char *argv[]) {
+  @autoreleasepool {
+    return UIApplicationMain(argc, argv, nil, NSStringFromClass(AppDelegate.class));
   }
 }
 `;

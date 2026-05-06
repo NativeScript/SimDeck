@@ -116,7 +116,7 @@ npm run build:simdeck-test
 
 The simulator-backed CLI integration suite is separate because it creates,
 boots, drives, erases, and deletes a temporary iOS simulator. The suite also
-builds and installs a tiny SwiftUI fixture app directly with `swiftc` so install,
+builds and installs a tiny UIKit fixture app directly with `clang` so install,
 uninstall, and opt-in launch checks use a deterministic local app bundle:
 
 ```sh

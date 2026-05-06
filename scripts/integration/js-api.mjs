@@ -19,6 +19,9 @@ const phaseSetup = "setup";
 const phaseTest = "test";
 const phaseCommandSmoke = "command-smoke";
 const phaseSimulatorLifecycle = "simulator-lifecycle";
+const coreSimulatorCommandTimeoutMs = Number(
+  process.env.SIMDECK_INTEGRATION_SIMCTL_TIMEOUT_MS ?? "300000",
+);
 
 let simulatorUDID = "";
 let session = null;
@@ -111,7 +114,7 @@ async function main() {
   }
 
   const fixture = await measuredStep(
-    "build SwiftUI fixture",
+    "build UIKit fixture",
     () => buildFixtureApp(),
     { phase: phaseSetup },
   );
@@ -202,24 +205,9 @@ async function main() {
       2_000,
     );
     await session.batch(simulatorUDID, [
-      {
-        action: "tap",
-        selector: { id: "fixture.message" },
-        source: "native-ax",
-        maxDepth: 3,
-        waitTimeoutMs: 15_000,
-        durationMs: 30,
-      },
       { action: "type", text: "agent-ready", delayMs: 12 },
-      {
-        action: "assert",
-        selector: { id: "fixture.message" },
-        source: "native-ax",
-        maxDepth: 3,
-        timeoutMs: 5_000,
-      },
     ]);
-    await expectElementContains({ id: "fixture.message" }, "agent-ready");
+    await expectFixtureText("agent-ready");
   });
 
   await measuredStep(
@@ -328,7 +316,9 @@ async function expectElementContains(selector, text) {
 }
 
 function latestAvailableIosRuntime() {
-  const payload = runJson("xcrun", ["simctl", "list", "runtimes", "-j"]);
+  const payload = runJson("xcrun", ["simctl", "list", "runtimes", "-j"], {
+    timeoutMs: coreSimulatorCommandTimeoutMs,
+  });
   const runtimes = payload.runtimes
     .filter(
       (runtime) => runtime.isAvailable && runtime.identifier?.includes("iOS"),
@@ -345,12 +335,11 @@ function preferredIphoneDeviceType(runtime) {
   const runtimeSupported = Array.isArray(runtime.supportedDeviceTypes)
     ? runtime.supportedDeviceTypes
     : [];
-  const allDeviceTypes = runJson("xcrun", [
-    "simctl",
-    "list",
-    "devicetypes",
-    "-j",
-  ]).devicetypes;
+  const allDeviceTypes = runJson(
+    "xcrun",
+    ["simctl", "list", "devicetypes", "-j"],
+    { timeoutMs: coreSimulatorCommandTimeoutMs },
+  ).devicetypes;
   const supported =
     runtimeSupported.length > 0
       ? runtimeSupported

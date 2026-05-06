@@ -48,7 +48,7 @@ Selectors can match `id`, `label`, `value`, or `type`. Query options accept `sou
 
 ## Repository Integration Suite
 
-The repo includes a macOS-only integration runner that creates a temporary simulator, builds and installs a small SwiftUI fixture app, then sweeps the CLI and REST control surface.
+The repo includes a macOS-only integration runner that creates a temporary simulator, builds and installs a small UIKit fixture app, then sweeps the CLI and REST control surface.
 
 ```sh
 npm run build:cli
@@ -65,16 +65,17 @@ npm run test:integration:cli:verbose
 
 Useful environment variables:
 
-| Variable                               | Purpose                                               |
-| -------------------------------------- | ----------------------------------------------------- |
-| `SIMDECK_INTEGRATION_VERBOSE=1`        | Print commands, outputs, timings, and UI checkpoints. |
-| `SIMDECK_INTEGRATION_TRACE_HTTP=1`     | Print raw HTTP request logs.                          |
-| `SIMDECK_INTEGRATION_SHOW_SIMULATOR=1` | Open Simulator.app during the run.                    |
-| `SIMDECK_INTEGRATION_KEEP_SIMULATOR=1` | Leave the temporary simulator after exit.             |
+| Variable                                | Purpose                                               |
+| --------------------------------------- | ----------------------------------------------------- |
+| `SIMDECK_INTEGRATION_VERBOSE=1`         | Print commands, outputs, timings, and UI checkpoints. |
+| `SIMDECK_INTEGRATION_TRACE_HTTP=1`      | Print raw HTTP request logs.                          |
+| `SIMDECK_INTEGRATION_SHOW_SIMULATOR=1`  | Open Simulator.app during the run.                    |
+| `SIMDECK_INTEGRATION_KEEP_SIMULATOR=1`  | Leave the temporary simulator after exit.             |
+| `SIMDECK_INTEGRATION_SIMCTL_TIMEOUT_MS` | Override the cold CoreSimulator command timeout.      |
 
 The integration suite is separate from `npm run test` because it boots and drives a real iOS simulator.
-The SwiftUI fixture app is cached under `.cache/simdeck/fixture` using a hash
-of its generated source, plist, simulator SDK, Swift compiler, and host
+The UIKit fixture app is cached under `.cache/simdeck/fixture` using a hash
+of its generated source, plist, simulator SDK, Clang version, and host
 architecture.
 
 ## Stress and Leak Checks

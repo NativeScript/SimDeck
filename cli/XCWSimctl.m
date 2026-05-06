@@ -263,7 +263,7 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 
 - (BOOL)openURL:(NSString *)urlString simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
     XCWProcessResult *result = [self.class runSimctl:@[@"openurl", udid, urlString]
-                                          timeoutSec:30
+                                          timeoutSec:90
                                                error:error];
     if (result == nil) {
         return NO;
@@ -279,7 +279,7 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 
 - (BOOL)launchBundleID:(NSString *)bundleID simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
     XCWProcessResult *result = [self.class runSimctl:@[@"launch", @"--stdout=/dev/null", @"--stderr=/dev/null", udid, bundleID]
-                                          timeoutSec:45
+                                          timeoutSec:120
                                                error:error];
     if (result == nil) {
         return NO;
