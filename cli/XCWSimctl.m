@@ -7,6 +7,16 @@
 
 static NSString * const XCWSimctlErrorDomain = @"SimDeck.Simctl";
 
+@interface XCWSimctl ()
+
++ (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
+                                   error:(NSError * _Nullable __autoreleasing *)error;
++ (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
+                              timeoutSec:(NSTimeInterval)timeoutSec
+                                   error:(NSError * _Nullable __autoreleasing *)error;
+
+@end
+
 static NSArray *XCWArrayPayload(id payload, NSString *nestedKey) {
     if ([payload isKindOfClass:[NSArray class]]) {
         return payload;
@@ -252,7 +262,9 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 }
 
 - (BOOL)openURL:(NSString *)urlString simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
-    XCWProcessResult *result = [self.class runSimctl:@[@"openurl", udid, urlString] error:error];
+    XCWProcessResult *result = [self.class runSimctl:@[@"openurl", udid, urlString]
+                                          timeoutSec:30
+                                               error:error];
     if (result == nil) {
         return NO;
     }
@@ -266,7 +278,9 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 }
 
 - (BOOL)launchBundleID:(NSString *)bundleID simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
-    XCWProcessResult *result = [self.class runSimctl:@[@"launch", @"--stdout=/dev/null", @"--stderr=/dev/null", udid, bundleID] error:error];
+    XCWProcessResult *result = [self.class runSimctl:@[@"launch", @"--stdout=/dev/null", @"--stderr=/dev/null", udid, bundleID]
+                                          timeoutSec:45
+                                               error:error];
     if (result == nil) {
         return NO;
     }
@@ -444,9 +458,16 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 
 + (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
                                    error:(NSError * _Nullable __autoreleasing *)error {
+    return [self runSimctl:arguments timeoutSec:0 error:error];
+}
+
++ (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
+                              timeoutSec:(NSTimeInterval)timeoutSec
+                                   error:(NSError * _Nullable __autoreleasing *)error {
     return [XCWProcessRunner runLaunchPath:@"/usr/bin/xcrun"
                                  arguments:[@[@"simctl"] arrayByAddingObjectsFromArray:arguments]
                                  inputData:nil
+                                timeoutSec:timeoutSec
                                      error:error];
 }
 

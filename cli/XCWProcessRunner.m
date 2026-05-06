@@ -2,6 +2,8 @@
 
 #import <errno.h>
 #import <fcntl.h>
+#import <math.h>
+#import <signal.h>
 #import <spawn.h>
 #import <string.h>
 #import <sys/wait.h>
@@ -44,6 +46,12 @@ static NSError *XCWProcessRunnerError(NSInteger code, NSString *description) {
     return [NSError errorWithDomain:XCWProcessRunnerErrorDomain
                                code:code
                            userInfo:@{ NSLocalizedDescriptionKey: description ?: @"Process failed." }];
+}
+
+static NSString *XCWCommandDescription(NSString *launchPath, NSArray<NSString *> *arguments) {
+    NSMutableArray<NSString *> *parts = [NSMutableArray arrayWithObject:launchPath.lastPathComponent ?: launchPath];
+    [parts addObjectsFromArray:arguments];
+    return [parts componentsJoinedByString:@" "];
 }
 
 static int XCWCreateTemporaryOutputFile(NSString **path, NSError * _Nullable __autoreleasing *error) {
@@ -98,6 +106,18 @@ static int XCWCreateTemporaryOutputFile(NSString **path, NSError * _Nullable __a
 + (XCWProcessResult *)runLaunchPath:(NSString *)launchPath
                           arguments:(NSArray<NSString *> *)arguments
                           inputData:(NSData *)inputData
+                              error:(NSError * _Nullable __autoreleasing *)error {
+    return [self runLaunchPath:launchPath
+                     arguments:arguments
+                     inputData:inputData
+                    timeoutSec:0
+                         error:error];
+}
+
++ (XCWProcessResult *)runLaunchPath:(NSString *)launchPath
+                          arguments:(NSArray<NSString *> *)arguments
+                          inputData:(NSData *)inputData
+                         timeoutSec:(NSTimeInterval)timeoutSec
                               error:(NSError * _Nullable __autoreleasing *)error {
     int stdoutFD = -1;
     int stderrFD = -1;
@@ -208,14 +228,52 @@ static int XCWCreateTemporaryOutputFile(NSString **path, NSError * _Nullable __a
 
     int waitStatus = 0;
     pid_t waitResult = -1;
+    BOOL timedOut = NO;
+    BOOL hasTimeout = timeoutSec > 0;
+    NSDate *deadline = hasTimeout ? [NSDate dateWithTimeIntervalSinceNow:timeoutSec] : nil;
     do {
-        waitResult = waitpid(pid, &waitStatus, 0);
-    } while (waitResult < 0 && errno == EINTR);
+        waitResult = waitpid(pid, &waitStatus, hasTimeout ? WNOHANG : 0);
+        if (waitResult == pid) {
+            break;
+        }
+        if (waitResult < 0 && errno == EINTR) {
+            continue;
+        }
+        if (waitResult < 0) {
+            break;
+        }
+        if (hasTimeout && [deadline timeIntervalSinceNow] <= 0) {
+            timedOut = YES;
+            kill(pid, SIGTERM);
+            NSDate *killDeadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
+            do {
+                waitResult = waitpid(pid, &waitStatus, WNOHANG);
+                if (waitResult == pid || (waitResult < 0 && errno != EINTR)) {
+                    break;
+                }
+                usleep(10 * 1000);
+            } while ([killDeadline timeIntervalSinceNow] > 0);
+            if (waitResult != pid) {
+                kill(pid, SIGKILL);
+                do {
+                    waitResult = waitpid(pid, &waitStatus, 0);
+                } while (waitResult < 0 && errno == EINTR);
+            }
+            break;
+        }
+        usleep(10 * 1000);
+    } while (YES);
     if (writeGroup != nil) {
         dispatch_group_wait(writeGroup, DISPATCH_TIME_FOREVER);
     }
     int terminationStatus = 1;
-    if (waitResult < 0) {
+    NSString *timeoutMessage = nil;
+    if (timedOut) {
+        terminationStatus = 124;
+        timeoutMessage = [NSString stringWithFormat:@"%@ timed out after %.0fs.",
+                                                    XCWCommandDescription(launchPath, arguments),
+                                                    ceil(timeoutSec)];
+    } else if (waitResult < 0) {
         if (error != NULL) {
             *error = XCWProcessRunnerError(5, [NSString stringWithFormat:@"Failed to wait for %@: %s", launchPath, strerror(errno)]);
         }
@@ -232,6 +290,15 @@ static int XCWCreateTemporaryOutputFile(NSString **path, NSError * _Nullable __a
 
     NSData *stdoutData = [NSData dataWithContentsOfFile:stdoutPath] ?: [NSData data];
     NSData *stderrData = [NSData dataWithContentsOfFile:stderrPath] ?: [NSData data];
+    if (timeoutMessage.length > 0) {
+        NSMutableData *combinedStderr = [stderrData mutableCopy];
+        if (combinedStderr.length > 0) {
+            const char newline = '\n';
+            [combinedStderr appendBytes:&newline length:1];
+        }
+        [combinedStderr appendData:[timeoutMessage dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data]];
+        stderrData = combinedStderr;
+    }
     [[NSFileManager defaultManager] removeItemAtPath:stdoutPath error:nil];
     [[NSFileManager defaultManager] removeItemAtPath:stderrPath error:nil];
 

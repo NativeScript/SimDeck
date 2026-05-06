@@ -25,6 +25,12 @@ NS_ASSUME_NONNULL_BEGIN
                           inputData:(nullable NSData *)inputData
                               error:(NSError * _Nullable * _Nullable)error;
 
++ (XCWProcessResult *)runLaunchPath:(NSString *)launchPath
+                          arguments:(NSArray<NSString *> *)arguments
+                          inputData:(nullable NSData *)inputData
+                         timeoutSec:(NSTimeInterval)timeoutSec
+                              error:(NSError * _Nullable * _Nullable)error;
+
 @end
 
 NS_ASSUME_NONNULL_END
