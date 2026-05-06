@@ -550,6 +550,8 @@ enum StreamQualityProfileArg {
     Fast,
     Smooth,
     Economy,
+    Low,
+    Tiny,
     CiSoftware,
 }
 
@@ -561,6 +563,8 @@ impl StreamQualityProfileArg {
             Self::Fast => "fast",
             Self::Smooth => "smooth",
             Self::Economy => "economy",
+            Self::Low => "low",
+            Self::Tiny => "tiny",
             Self::CiSoftware => "ci-software",
         }
     }
@@ -696,6 +700,20 @@ fn stream_quality_env_for_profile(profile: &str) -> anyhow::Result<StreamQuality
             fps: 24,
             min_bitrate: 1_500_000,
             bits_per_pixel: 3,
+        }),
+        "low" => Ok(StreamQualityEnvironment {
+            profile: "low",
+            max_edge: 720,
+            fps: 30,
+            min_bitrate: 900_000,
+            bits_per_pixel: 2,
+        }),
+        "tiny" => Ok(StreamQualityEnvironment {
+            profile: "tiny",
+            max_edge: 540,
+            fps: 24,
+            min_bitrate: 600_000,
+            bits_per_pixel: 2,
         }),
         "ci-software" => Ok(StreamQualityEnvironment {
             profile: "ci-software",

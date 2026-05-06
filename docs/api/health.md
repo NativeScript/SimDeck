@@ -52,6 +52,20 @@ Returns a snapshot of every server-side counter and the rolling buffer of client
   "avg_send_queue_depth": 0.91,
   "max_send_queue_depth": 2,
   "latest_first_frame_ms": 412,
+  "encoders": [
+    {
+      "udid": "9D7E5BB7-...",
+      "encoder": {
+        "encoderMode": "hardware",
+        "hardwareAccelerated": true,
+        "overloadState": "nominal",
+        "averageEncoderLoadPercent": 42.1,
+        "averageEncodeLatencyUs": 7021.0,
+        "encoderBudgetUs": 16667,
+        "overloadEvents": 0
+      }
+    }
+  ],
   "client_streams": [
     {
       "clientId": "browser-ABC",
@@ -85,6 +99,21 @@ Returns a snapshot of every server-side counter and the rolling buffer of client
 | `avg_send_queue_depth`     | Running average of broadcast channel pressure.                                          |
 | `max_send_queue_depth`     | Peak broadcast channel pressure.                                                        |
 | `latest_first_frame_ms`    | First-frame latency for the most recent connect, in milliseconds.                       |
+
+### Encoder overload state
+
+`encoders` contains one entry per active simulator session. `encoder.overloadState`
+is derived from native VideoToolbox submit-to-output latency:
+
+| State        | Meaning                                                                                  |
+| ------------ | ---------------------------------------------------------------------------------------- |
+| `nominal`    | Smoothed encode latency is comfortably below the active frame budget.                    |
+| `strained`   | Smoothed latency is near the frame budget or several frames are close to budget.         |
+| `overloaded` | Smoothed latency exceeds the budget or several frames in a row took longer than budget. |
+
+This is an inferred pressure signal rather than a private macOS hardware queue
+counter. It is useful for deciding when to lower stream resolution/FPS or switch
+from hardware to software encoding.
 
 ### Client stream stats
 

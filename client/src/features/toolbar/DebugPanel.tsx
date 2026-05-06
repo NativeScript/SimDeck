@@ -1,3 +1,4 @@
+import type { EncoderStats } from "../../api/types";
 import type {
   StreamRuntimeInfo,
   StreamStats,
@@ -5,6 +6,7 @@ import type {
 } from "../stream/streamTypes";
 
 interface DebugPanelProps {
+  encoder?: EncoderStats | null;
   fps: number;
   inline?: boolean;
   onClose?: () => void;
@@ -27,6 +29,20 @@ function formatMs(value: number): string {
   return `${value.toFixed(1)} ms`;
 }
 
+function formatUsAsMs(value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return "—";
+  }
+  return `${(value / 1000).toFixed(1)} ms`;
+}
+
+function formatPercent(value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "—";
+  }
+  return `${value.toFixed(0)}%`;
+}
+
 function formatResolution(stats: StreamStats): string {
   if (!stats.width || !stats.height) {
     return "—";
@@ -35,6 +51,7 @@ function formatResolution(stats: StreamStats): string {
 }
 
 export function DebugPanel({
+  encoder,
   fps,
   inline = false,
   onClose,
@@ -60,6 +77,26 @@ export function DebugPanel({
     { label: "Frame Gap", value: formatMs(stats.latestFrameGapMs) },
     { label: "Path", value: runtimeInfo.streamBackend },
   ];
+  if (encoder) {
+    rows.push(
+      { label: "Encoder", value: encoder.encoderMode ?? "—" },
+      { label: "Encoder State", value: encoder.overloadState ?? "—" },
+      {
+        label: "Encoder Load",
+        value: formatPercent(encoder.averageEncoderLoadPercent),
+      },
+      {
+        label: "Encode Latency",
+        value: formatUsAsMs(encoder.averageEncodeLatencyUs),
+      },
+      { label: "Encode Budget", value: formatUsAsMs(encoder.encoderBudgetUs) },
+      { label: "Encoder Reason", value: encoder.overloadReason ?? "—" },
+      {
+        label: "Overload Events",
+        value: String(encoder.overloadEvents ?? 0),
+      },
+    );
+  }
 
   return (
     <section

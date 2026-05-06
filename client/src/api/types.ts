@@ -1,8 +1,26 @@
+export interface EncoderStats {
+  averageEncodeLatencyUs?: number;
+  averageEncoderLoadPercent?: number;
+  consecutiveOverBudgetFrames?: number;
+  encoderBudgetUs?: number;
+  encoderLoadPercent?: number;
+  encoderMode?: string;
+  hardwareAccelerated?: boolean;
+  latestEncodeLatencyUs?: number;
+  overloadEvents?: number;
+  overloaded?: boolean;
+  overloadReason?: string;
+  overloadState?: "nominal" | "strained" | "overloaded" | string;
+  peakEncodeLatencyUs?: number;
+  selectedEncoderId?: string | null;
+}
+
 export interface PrivateDisplayInfo {
   displayReady: boolean;
   displayStatus: string;
   displayWidth: number;
   displayHeight: number;
+  encoder?: EncoderStats;
   frameSequence: number;
   rotationQuarterTurns?: number;
 }

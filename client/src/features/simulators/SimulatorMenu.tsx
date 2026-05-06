@@ -237,9 +237,11 @@ const STREAM_QUALITY_OPTIONS: Array<{
   label: string;
   value: StreamQualityPreset;
 }> = [
-  { label: "Quality", value: "quality" },
-  { label: "Balanced", value: "balanced" },
-  { label: "Economy", value: "economy" },
+  { label: "Full", value: "quality" },
+  { label: "1280", value: "balanced" },
+  { label: "1080", value: "economy" },
+  { label: "720", value: "low" },
+  { label: "540", value: "tiny" },
 ];
 
 function MenuIcon() {

@@ -36,7 +36,7 @@ Targets a specific running SimDeck daemon for commands that support the HTTP fas
 | `--client-root`      | bundled `client/dist` | Override the static browser client directory.                                                          |
 | `--video-codec`      | `auto`                | One of `auto`, `hardware`, or `software`. See [Video Pipeline](/guide/video).                          |
 | `--low-latency`      | `false`               | Software H.264 profile for slower runners: caps at 15 fps and favors freshness.                        |
-| `--stream-quality`   | `smooth`              | Realtime stream quality profile: `quality`, `balanced`, `fast`, `smooth`, `economy`, or `ci-software`. |
+| `--stream-quality`   | `smooth`              | Realtime stream quality profile: `quality`, `balanced`, `fast`, `smooth`, `economy`, `low`, `tiny`, or `ci-software`. |
 | `--local-stream-fps` | `60`                  | Local quality stream frame target, from 15 to 240 fps.                                                 |
 | `--open`             | `false`               | `ui` only. Open the browser after the daemon is ready.                                                 |
 
