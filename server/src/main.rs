@@ -3160,7 +3160,10 @@ fn service_post_ok(server_url: &str, udid: &str, action: &str, body: &Value) -> 
 }
 
 fn service_post_error_is_retryable(action: &str, message: &str) -> bool {
-    if !matches!(action, "boot" | "shutdown" | "erase") {
+    if !matches!(
+        action,
+        "boot" | "shutdown" | "erase" | "launch" | "open-url"
+    ) {
         return false;
     }
     let message = message.to_lowercase();
@@ -3168,6 +3171,7 @@ fn service_post_error_is_retryable(action: &str, message: &str) -> bool {
         || message.contains("connection reset by peer")
         || message.contains("broken pipe")
         || message.contains("unexpected eof")
+        || message.contains("timed out")
 }
 
 fn http_request_json(
@@ -5047,6 +5051,14 @@ mod tests {
         assert!(service_post_error_is_retryable(
             "boot",
             "Resource temporarily unavailable"
+        ));
+        assert!(service_post_error_is_retryable(
+            "launch",
+            "SimDeck service returned HTTP 500: xcrun simctl launch timed out after 45s."
+        ));
+        assert!(service_post_error_is_retryable(
+            "open-url",
+            "Resource temporarily unavailable (os error 35)"
         ));
         assert!(!service_post_error_is_retryable(
             "touch",
