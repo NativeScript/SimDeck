@@ -3,11 +3,13 @@
 #import "DFPrivateSimulatorDisplayBridge.h"
 #import "XCWAccessibilityBridge.h"
 #import "XCWChromeRenderer.h"
+#import "XCWH264Encoder.h"
 #import "XCWNativeSession.h"
 #import "XCWSimctl.h"
 
 #import <AppKit/AppKit.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <CoreVideo/CoreVideo.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -63,8 +65,188 @@ static xcw_native_owned_bytes XCWOwnedBytesFromData(NSData *data) {
     return bytes;
 }
 
+static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
+    if (data.length == 0) {
+        return (xcw_native_shared_bytes){0};
+    }
+
+    CFTypeRef owner = CFRetain((__bridge CFTypeRef)data);
+    return (xcw_native_shared_bytes){
+        .data = data.bytes,
+        .length = data.length,
+        .owner = (const void *)owner,
+    };
+}
+
 static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
     return (__bridge XCWNativeSession *)handle;
+}
+
+@interface XCWNativeH264Encoder : NSObject
+
+- (instancetype)initWithFrameCallback:(xcw_native_frame_callback)callback
+                             userData:(void *)userData;
+- (BOOL)encodeRGBA:(const uint8_t *)rgba
+            length:(size_t)length
+             width:(uint32_t)width
+            height:(uint32_t)height
+             error:(NSError * _Nullable __autoreleasing *)error;
+- (void)requestKeyFrame;
+- (void)invalidate;
+
+@end
+
+@implementation XCWNativeH264Encoder {
+    XCWH264Encoder *_encoder;
+    xcw_native_frame_callback _callback;
+    void *_callbackUserData;
+    uint64_t _frameSequence;
+}
+
+- (instancetype)initWithFrameCallback:(xcw_native_frame_callback)callback
+                             userData:(void *)userData {
+    self = [super init];
+    if (self == nil) {
+        return nil;
+    }
+
+    _callback = callback;
+    _callbackUserData = userData;
+    __weak typeof(self) weakSelf = self;
+    @synchronized (XCWNativeH264Encoder.class) {
+        const char *previousCodec = getenv("SIMDECK_VIDEO_CODEC");
+        char *previousCodecCopy = previousCodec != NULL ? strdup(previousCodec) : NULL;
+        const char *androidCodec = getenv("SIMDECK_ANDROID_VIDEO_CODEC");
+        if (androidCodec == NULL || strlen(androidCodec) == 0) {
+            androidCodec = "software";
+        }
+        setenv("SIMDECK_VIDEO_CODEC", androidCodec, 1);
+        _encoder = [[XCWH264Encoder alloc] initWithOutputHandler:^(NSData *sampleData,
+                                                                   uint64_t timestampUs,
+                                                                   BOOL isKeyFrame,
+                                                                   NSString * _Nullable codec,
+                                                                   NSData * _Nullable decoderConfig,
+                                                                   CGSize dimensions) {
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (strongSelf == nil || strongSelf->_callback == NULL || sampleData.length == 0) {
+                return;
+            }
+            strongSelf->_frameSequence += 1;
+            xcw_native_frame frame = {
+                .frame_sequence = strongSelf->_frameSequence,
+                .timestamp_us = timestampUs,
+                .is_keyframe = isKeyFrame,
+                .width = (uint32_t)llround(dimensions.width),
+                .height = (uint32_t)llround(dimensions.height),
+                .codec = codec.UTF8String,
+                .description = XCWSharedBytesFromData(decoderConfig),
+                .data = XCWSharedBytesFromData(sampleData),
+            };
+            strongSelf->_callback(&frame, strongSelf->_callbackUserData);
+        }];
+        if (previousCodecCopy != NULL) {
+            setenv("SIMDECK_VIDEO_CODEC", previousCodecCopy, 1);
+            free(previousCodecCopy);
+        } else {
+            unsetenv("SIMDECK_VIDEO_CODEC");
+        }
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [self invalidate];
+}
+
+- (BOOL)encodeRGBA:(const uint8_t *)rgba
+            length:(size_t)length
+             width:(uint32_t)width
+            height:(uint32_t)height
+             error:(NSError * _Nullable __autoreleasing *)error {
+    if (rgba == NULL || width == 0 || height == 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"SimDeck.NativeH264Encoder"
+                                         code:1
+                                     userInfo:@{ NSLocalizedDescriptionKey: @"RGBA frame input was empty." }];
+        }
+        return NO;
+    }
+    size_t expectedLength = (size_t)width * (size_t)height * 4;
+    if (length < expectedLength) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"SimDeck.NativeH264Encoder"
+                                         code:2
+                                     userInfo:@{ NSLocalizedDescriptionKey: @"RGBA frame input was truncated." }];
+        }
+        return NO;
+    }
+
+    NSDictionary *attributes = @{
+        (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+        (__bridge NSString *)kCVPixelBufferWidthKey: @(width),
+        (__bridge NSString *)kCVPixelBufferHeightKey: @(height),
+        (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
+    };
+    CVPixelBufferRef pixelBuffer = NULL;
+    CVReturn createStatus = CVPixelBufferCreate(kCFAllocatorDefault,
+                                                (size_t)width,
+                                                (size_t)height,
+                                                kCVPixelFormatType_32BGRA,
+                                                (__bridge CFDictionaryRef)attributes,
+                                                &pixelBuffer);
+    if (createStatus != kCVReturnSuccess || pixelBuffer == NULL) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"SimDeck.NativeH264Encoder"
+                                         code:createStatus
+                                     userInfo:@{ NSLocalizedDescriptionKey: @"Unable to allocate a VideoToolbox pixel buffer." }];
+        }
+        return NO;
+    }
+
+    CVReturn lockStatus = CVPixelBufferLockBaseAddress(pixelBuffer, 0);
+    if (lockStatus != kCVReturnSuccess) {
+        CVPixelBufferRelease(pixelBuffer);
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"SimDeck.NativeH264Encoder"
+                                         code:lockStatus
+                                     userInfo:@{ NSLocalizedDescriptionKey: @"Unable to lock a VideoToolbox pixel buffer." }];
+        }
+        return NO;
+    }
+
+    uint8_t *dst = CVPixelBufferGetBaseAddress(pixelBuffer);
+    size_t dstRowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer);
+    size_t srcRowBytes = (size_t)width * 4;
+    for (uint32_t y = 0; y < height; y += 1) {
+        const uint8_t *srcRow = rgba + ((size_t)y * srcRowBytes);
+        uint8_t *dstRow = dst + ((size_t)y * dstRowBytes);
+        for (uint32_t x = 0; x < width; x += 1) {
+            const uint8_t *src = srcRow + ((size_t)x * 4);
+            uint8_t *pixel = dstRow + ((size_t)x * 4);
+            pixel[0] = src[2];
+            pixel[1] = src[1];
+            pixel[2] = src[0];
+            pixel[3] = src[3];
+        }
+    }
+    CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
+    [_encoder encodePixelBuffer:pixelBuffer];
+    CVPixelBufferRelease(pixelBuffer);
+    return YES;
+}
+
+- (void)requestKeyFrame {
+    [_encoder requestKeyFrame];
+}
+
+- (void)invalidate {
+    [_encoder invalidate];
+}
+
+@end
+
+static XCWNativeH264Encoder *XCWNativeH264EncoderFromHandle(void *handle) {
+    return (__bridge XCWNativeH264Encoder *)handle;
 }
 
 static BOOL XCWPerformSimctlAction(char **errorMessage, BOOL (^action)(XCWSimctl *simctl, NSError **error)) {
@@ -886,6 +1068,58 @@ bool xcw_native_session_rotate_left(void *handle, char **error_message) {
 void xcw_native_session_set_frame_callback(void *handle, xcw_native_frame_callback callback, void *user_data) {
     @autoreleasepool {
         [XCWNativeSessionFromHandle(handle) setFrameCallback:callback userData:user_data];
+    }
+}
+
+void *xcw_native_h264_encoder_create(xcw_native_frame_callback callback, void *user_data, char **error_message) {
+    @autoreleasepool {
+        XCWNativeH264Encoder *encoder = [[XCWNativeH264Encoder alloc] initWithFrameCallback:callback
+                                                                                  userData:user_data];
+        if (encoder == nil) {
+            if (error_message != NULL) {
+                *error_message = XCWCopyCString(@"Unable to create the native H.264 encoder.");
+            }
+            return NULL;
+        }
+        return (__bridge_retained void *)encoder;
+    }
+}
+
+void xcw_native_h264_encoder_destroy(void *handle) {
+    if (handle == NULL) {
+        return;
+    }
+    @autoreleasepool {
+        XCWNativeH264Encoder *encoder = CFBridgingRelease(handle);
+        [encoder invalidate];
+    }
+}
+
+bool xcw_native_h264_encoder_encode_rgba(void *handle,
+                                         const uint8_t *rgba,
+                                         size_t length,
+                                         uint32_t width,
+                                         uint32_t height,
+                                         uint64_t timestamp_us,
+                                         char **error_message) {
+    (void)timestamp_us;
+    @autoreleasepool {
+        NSError *error = nil;
+        BOOL ok = [XCWNativeH264EncoderFromHandle(handle) encodeRGBA:rgba
+                                                              length:length
+                                                               width:width
+                                                              height:height
+                                                               error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+void xcw_native_h264_encoder_request_keyframe(void *handle) {
+    @autoreleasepool {
+        [XCWNativeH264EncoderFromHandle(handle) requestKeyFrame];
     }
 }
 

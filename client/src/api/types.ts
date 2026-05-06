@@ -28,11 +28,17 @@ export interface PrivateDisplayInfo {
 export interface SimulatorMetadata {
   udid: string;
   name: string;
+  platform?: "ios-simulator" | "android-emulator" | string;
   runtimeName?: string;
   runtimeIdentifier?: string;
   deviceTypeName?: string;
   deviceTypeIdentifier?: string;
   isBooted: boolean;
+  android?: {
+    avdName?: string;
+    grpcPort?: number;
+    serial?: string;
+  };
   privateDisplay?: PrivateDisplayInfo;
 }
 
@@ -112,6 +118,7 @@ export interface ChromeProfile {
   screenWidth: number;
   screenHeight: number;
   cornerRadius: number;
+  chromeStyle?: "asset" | "css-android" | string;
   hasScreenMask?: boolean;
   buttons?: ChromeButtonProfile[];
 }

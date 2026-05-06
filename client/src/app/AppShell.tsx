@@ -745,9 +745,12 @@ export function AppShell({
         : "",
     [selectedSimulator?.udid, streamStamp],
   );
+  const chromeUsesAsset = Boolean(
+    viewportChromeProfile && viewportChromeProfile.chromeStyle !== "css-android",
+  );
   const chromeRequired = Boolean(
     (shouldRenderChrome && !chromeProfileReady) ||
-    (viewportChromeProfile && chromeUrl),
+      (chromeUsesAsset && chromeUrl),
   );
   const simulatorRotationQuarterTurns =
     normalizeSimulatorRotationQuarterTurns(selectedSimulator);
@@ -1987,6 +1990,7 @@ export function AppShell({
         chromeProfile={viewportChromeProfile}
         chromeRequired={chromeRequired}
         chromeScreenStyle={viewportScreenStyle}
+        chromeStyle={viewportChromeProfile?.chromeStyle}
         chromeUrl={chromeUrl}
         chromeButtonUrl={chromeButtonUrl}
         debugPanel={

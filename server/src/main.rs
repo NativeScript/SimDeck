@@ -1,3 +1,4 @@
+mod android;
 mod api;
 mod auth;
 mod config;
@@ -2245,7 +2246,16 @@ fn main() -> anyhow::Result<()> {
             up,
             delay_ms,
         } => {
-            if let Some(server_url) = service_url.as_deref().filter(|_| normalized) {
+            let android_device = android::is_android_id(&udid);
+            if android_device && !normalized {
+                anyhow::bail!("Android touch coordinates require --normalized.");
+            }
+            let command_server_url = if android_device {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            if let Some(server_url) = command_server_url.as_deref().filter(|_| normalized) {
                 if down || up {
                     let mut events = Vec::new();
                     if down {
@@ -2300,8 +2310,13 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
+            let command_server_url = if android::is_android_id(&udid) {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
             if let (Some(server_url), Some(x), Some(y), true, None, None, None, None) = (
-                service_url.as_deref(),
+                command_server_url.as_deref(),
                 x,
                 y,
                 normalized,
@@ -2313,7 +2328,7 @@ fn main() -> anyhow::Result<()> {
                 sleep_ms(pre_delay_ms);
                 service_tap(server_url, &udid, x, y, duration_ms)?;
                 sleep_ms(post_delay_ms);
-            } else if let Some(server_url) = service_url.as_deref() {
+            } else if let Some(server_url) = command_server_url.as_deref() {
                 sleep_ms(pre_delay_ms);
                 service_tap_element(
                     server_url,
@@ -2375,18 +2390,44 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
-            if let Some(server_url) = service_url.as_deref().filter(|_| normalized) {
+            let android_device = android::is_android_id(&udid);
+            if android_device && !normalized {
+                anyhow::bail!("Android swipe coordinates require --normalized.");
+            }
+            let command_server_url = if android_device {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            if let Some(server_url) = command_server_url.as_deref().filter(|_| normalized) {
                 sleep_ms(pre_delay_ms);
-                service_swipe(
-                    server_url,
-                    &udid,
-                    start_x,
-                    start_y,
-                    end_x,
-                    end_y,
-                    duration_ms,
-                    steps,
-                )?;
+                if android_device {
+                    service_batch(
+                        server_url,
+                        &udid,
+                        vec![serde_json::json!({
+                            "action": "swipe",
+                            "startX": start_x,
+                            "startY": start_y,
+                            "endX": end_x,
+                            "endY": end_y,
+                            "durationMs": duration_ms,
+                            "steps": steps,
+                        })],
+                        false,
+                    )?;
+                } else {
+                    service_swipe(
+                        server_url,
+                        &udid,
+                        start_x,
+                        start_y,
+                        end_x,
+                        end_y,
+                        duration_ms,
+                        steps,
+                    )?;
+                }
                 sleep_ms(post_delay_ms);
             } else {
                 let (start_x, start_y) =
@@ -2421,7 +2462,36 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
-            if let Some(server_url) = service_url.as_deref().filter(|_| normalized) {
+            let android_device = android::is_android_id(&udid);
+            let command_server_url = if android_device {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            if android_device {
+                let server_url = command_server_url
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("Android command requires SimDeck daemon."))?;
+                sleep_ms(pre_delay_ms);
+                service_batch(
+                    server_url,
+                    &udid,
+                    vec![serde_json::json!({
+                        "action": "gesture",
+                        "preset": preset,
+                        "durationMs": duration_ms,
+                        "delta": delta,
+                        "steps": 4,
+                    })],
+                    false,
+                )?;
+                sleep_ms(post_delay_ms);
+                println_json(
+                    &serde_json::json!({ "ok": true, "udid": udid, "action": "gesture", "preset": preset }),
+                )?;
+                return Ok(());
+            }
+            if let Some(server_url) = command_server_url.as_deref().filter(|_| normalized) {
                 let gesture = gesture_coordinates(
                     &bridge,
                     &udid,
@@ -2484,6 +2554,9 @@ fn main() -> anyhow::Result<()> {
             duration_ms,
             steps,
         } => {
+            if android::is_android_id(&udid) {
+                anyhow::bail!("Android pinch gestures are not supported by the ADB input bridge.");
+            }
             let frames = pinch_frames(
                 &bridge,
                 &udid,
@@ -2509,6 +2582,9 @@ fn main() -> anyhow::Result<()> {
             duration_ms,
             steps,
         } => {
+            if android::is_android_id(&udid) {
+                anyhow::bail!("Android rotate gestures are not supported by the ADB input bridge.");
+            }
             let frames = rotate_gesture_frames(
                 &bridge,
                 &udid,
@@ -2537,7 +2613,12 @@ fn main() -> anyhow::Result<()> {
         } => {
             let key_code = parse_hid_key(&key)?;
             sleep_ms(pre_delay_ms);
-            if let Some(server_url) = service_url.as_deref().filter(|_| duration_ms == 0) {
+            let command_server_url = if android::is_android_id(&udid) {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            if let Some(server_url) = command_server_url.as_deref().filter(|_| duration_ms == 0) {
                 service_key(server_url, &udid, key_code, modifiers)?;
             } else if duration_ms > 0 && modifiers == 0 {
                 let input = bridge.create_input_session(&udid)?;
@@ -2557,7 +2638,12 @@ fn main() -> anyhow::Result<()> {
             delay_ms,
         } => {
             let keys = parse_key_list(&keycodes)?;
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url = if android::is_android_id(&udid) {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_key_sequence(server_url, &udid, &keys, delay_ms)?;
             } else {
                 let input = bridge.create_input_session(&udid)?;
@@ -2580,7 +2666,12 @@ fn main() -> anyhow::Result<()> {
         } => {
             let modifier_mask = parse_modifier_mask(&modifiers)?;
             let key_code = parse_hid_key(&key)?;
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url = if android::is_android_id(&udid) {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_key(server_url, &udid, key_code, modifier_mask)?;
             } else {
                 bridge.send_key(&udid, key_code, modifier_mask)?;
@@ -2596,7 +2687,21 @@ fn main() -> anyhow::Result<()> {
             delay_ms,
         } => {
             let text = read_text_input(text, stdin, file)?;
-            type_text(&bridge, &udid, &text, delay_ms)?;
+            if android::is_android_id(&udid) {
+                let server_url = command_service_url(explicit_server_url.clone())?;
+                service_batch(
+                    &server_url,
+                    &udid,
+                    vec![serde_json::json!({
+                        "action": "type",
+                        "text": text,
+                        "delayMs": delay_ms,
+                    })],
+                    false,
+                )?;
+            } else {
+                type_text(&bridge, &udid, &text, delay_ms)?;
+            }
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "type" }))?;
             Ok(())
         }
@@ -2605,7 +2710,12 @@ fn main() -> anyhow::Result<()> {
             button,
             duration_ms,
         } => {
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url = if android::is_android_id(&udid) {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_button(server_url, &udid, &button, duration_ms)?;
             } else {
                 bridge.press_button(&udid, &button, duration_ms)?;
@@ -2622,7 +2732,12 @@ fn main() -> anyhow::Result<()> {
             stdin,
             continue_on_error,
         } => {
-            let report = if let Some(server_url) = service_url.as_deref() {
+            let command_server_url = if android::is_android_id(&udid) {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            let report = if let Some(server_url) = command_server_url.as_deref() {
                 let step_lines = read_batch_steps(steps, file, stdin)?;
                 service_batch(
                     server_url,
@@ -2637,7 +2752,12 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::DismissKeyboard { udid } => {
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url = if android::is_android_id(&udid) {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "dismiss-keyboard", &Value::Null)?;
             } else {
                 bridge.send_key(&udid, 41, 0)?;
@@ -2651,7 +2771,12 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Home { udid } => {
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url = if android::is_android_id(&udid) {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "home", &Value::Null)?;
             } else {
                 bridge.press_home(&udid)?;
@@ -2660,7 +2785,12 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::AppSwitcher { udid } => {
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url = if android::is_android_id(&udid) {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "app-switcher", &Value::Null)?;
             } else {
                 bridge.open_app_switcher(&udid)?;
@@ -2671,7 +2801,12 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::RotateLeft { udid } => {
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url = if android::is_android_id(&udid) {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "rotate-left", &Value::Null)?;
             } else {
                 bridge.rotate_left(&udid)?;
@@ -2682,7 +2817,12 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::RotateRight { udid } => {
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url = if android::is_android_id(&udid) {
+                Some(command_service_url(explicit_server_url.clone())?)
+            } else {
+                service_url.clone()
+            };
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "rotate-right", &Value::Null)?;
             } else {
                 bridge.rotate_right(&udid)?;
@@ -5179,6 +5319,7 @@ async fn serve(
         inspectors,
         metrics,
         simulator_inventory: Default::default(),
+        android: Default::default(),
     };
 
     let http_router = app_router(

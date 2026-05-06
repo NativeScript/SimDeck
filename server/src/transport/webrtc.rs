@@ -1,18 +1,22 @@
+use crate::android;
 use crate::api::routes::{
     apply_stream_quality_payload, run_control_message, run_toggle_appearance_control, AppState,
     ControlMessage, StreamQualityPayload,
 };
 use crate::error::AppError;
 use crate::metrics::counters::ClientStreamStats;
+use crate::native::ffi;
+use crate::transport::packet::{FramePacket, SharedFrame};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::ffi::{c_void, CStr};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task;
-use tokio::time;
+use tokio::time::{self, Instant};
 use tracing::{info, warn};
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
@@ -53,6 +57,10 @@ const WEBRTC_FAST_ICE_GATHER_TIMEOUT: Duration = Duration::from_millis(250);
 const WEBRTC_FULL_ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(3);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 const WEBRTC_PEER_DISCONNECTED_TIMEOUT: Duration = Duration::from_secs(12);
+const ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY: usize = 128;
+const DEFAULT_ANDROID_WEBRTC_MAX_EDGE: u32 = 1280;
+const DEFAULT_ANDROID_WEBRTC_FPS: u64 = 60;
+const MAX_ANDROID_WEBRTC_FPS: u64 = 120;
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<WebRtcMediaStreamToken>>>> =
     OnceLock::new();
 const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 16;
@@ -103,12 +111,6 @@ pub async fn create_answer(
             "WebRTC payload must include type `offer`.",
         ));
     }
-
-    let session = state.registry.get_or_create_async(&udid).await?;
-    if let Err(error) = session.ensure_started_async().await {
-        state.registry.remove(&udid);
-        return Err(error);
-    }
     if payload.transport.is_some() {
         return Err(AppError::bad_request(
             "WebRTC preview supports media tracks only.",
@@ -117,6 +119,26 @@ pub async fn create_answer(
     if let Some(stream_config) = payload.stream_config.as_ref() {
         apply_stream_quality_payload(&state, stream_config)?;
     }
+
+    let source = if android::is_android_id(&udid) {
+        WebRtcVideoSource::Android(
+            AndroidWebRtcSource::start(
+                state.android.clone(),
+                state.metrics.clone(),
+                udid.clone(),
+                android_webrtc_max_edge(),
+            )
+            .await?,
+        )
+    } else {
+        let session = state.registry.get_or_create_async(&udid).await?;
+        if let Err(error) = session.ensure_started_async().await {
+            state.registry.remove(&udid);
+            return Err(error);
+        }
+        WebRtcVideoSource::Simulator(session)
+    };
+
     info!(
         "WebRTC offer for {udid}: remote_candidates={} remote_candidate_types={} ice_servers={} ice_transport_policy={}",
         count_sdp_candidates(&payload.sdp),
@@ -128,9 +150,9 @@ pub async fn create_answer(
         ice_transport_policy_label()
     );
 
-    let first_frame = wait_for_h264_sync_keyframe(&session, WEBRTC_INITIAL_KEYFRAME_TIMEOUT)
+    let first_frame = wait_for_h264_sync_keyframe(&source, WEBRTC_INITIAL_KEYFRAME_TIMEOUT)
         .await
-        .ok_or_else(|| AppError::native("Timed out waiting for a simulator H.264 keyframe."))?;
+        .ok_or_else(|| AppError::native("Timed out waiting for a device H.264 keyframe."))?;
     let codec = first_frame
         .codec
         .as_deref()
@@ -179,13 +201,22 @@ pub async fn create_answer(
     );
     register_diagnostics(&peer_connection, &udid);
     let (stream_control_tx, stream_control_rx) = mpsc::unbounded_channel();
-    register_control_data_channel(
-        &peer_connection,
-        session.clone(),
-        state.clone(),
-        udid.clone(),
-        stream_control_tx,
-    );
+    match &source {
+        WebRtcVideoSource::Simulator(session) => register_control_data_channel(
+            &peer_connection,
+            session.clone(),
+            state.clone(),
+            udid.clone(),
+            stream_control_tx,
+        ),
+        WebRtcVideoSource::Android(source) => register_android_data_channel(
+            &peer_connection,
+            source.clone(),
+            state.clone(),
+            udid.clone(),
+            stream_control_tx,
+        ),
+    }
 
     let video_track = Arc::new(TrackLocalStaticRTP::new(
         RTCRtpCodecCapability {
@@ -203,7 +234,7 @@ pub async fn create_answer(
         .add_track(video_track.clone() as Arc<dyn TrackLocal + Send + Sync>)
         .await
         .map_err(|error| AppError::internal(format!("add WebRTC video track: {error}")))?;
-    let rtcp_session = session.clone();
+    let rtcp_source = source.clone();
     let rtcp_udid = udid.clone();
     tokio::spawn(async move {
         while let Ok((packets, _attributes)) = rtp_sender.read_rtcp().await {
@@ -212,7 +243,7 @@ pub async fn create_answer(
                 .any(|packet| rtcp_packet_requests_keyframe(packet.as_ref()))
             {
                 info!("WebRTC RTCP requested keyframe for {rtcp_udid}");
-                rtcp_session.request_keyframe();
+                rtcp_source.request_keyframe();
             }
         }
     });
@@ -264,7 +295,7 @@ pub async fn create_answer(
         WebRtcMediaStream {
             state,
             udid,
-            session,
+            source,
             first_frame,
             peer_connection,
             video_track,
@@ -479,6 +510,202 @@ fn attach_control_data_channel(
             }
         })
     }));
+}
+
+fn register_android_data_channel(
+    peer_connection: &Arc<webrtc::peer_connection::RTCPeerConnection>,
+    source: AndroidWebRtcSource,
+    state: AppState,
+    udid: String,
+    stream_control_tx: mpsc::UnboundedSender<WebRtcStreamCommand>,
+) {
+    peer_connection.on_data_channel(Box::new(move |channel: Arc<RTCDataChannel>| {
+        let source = source.clone();
+        let state = state.clone();
+        let udid = udid.clone();
+        let stream_control_tx = stream_control_tx.clone();
+        Box::pin(async move {
+            let label = channel.label();
+            if label != WEBRTC_CONTROL_CHANNEL_LABEL && label != WEBRTC_TELEMETRY_CHANNEL_LABEL {
+                return;
+            }
+            attach_android_data_channel(channel, source, state, udid, stream_control_tx);
+        })
+    }));
+}
+
+fn attach_android_data_channel(
+    channel: Arc<RTCDataChannel>,
+    source: AndroidWebRtcSource,
+    state: AppState,
+    udid: String,
+    stream_control_tx: mpsc::UnboundedSender<WebRtcStreamCommand>,
+) {
+    let (control_tx, control_rx) = mpsc::unbounded_channel::<ControlMessage>();
+    task::spawn(run_android_webrtc_control_queue(
+        state.clone(),
+        udid.clone(),
+        control_rx,
+    ));
+    channel.on_message(Box::new(move |message: DataChannelMessage| {
+        let source = source.clone();
+        let state = state.clone();
+        let udid = udid.clone();
+        let stream_control_tx = stream_control_tx.clone();
+        let control_tx = control_tx.clone();
+        Box::pin(async move {
+            let Ok(text) = std::str::from_utf8(&message.data) else {
+                warn!("Invalid Android WebRTC control message bytes for {udid}");
+                return;
+            };
+            if let Ok(message) = serde_json::from_str::<WebRtcDataChannelMessage>(text) {
+                match message {
+                    WebRtcDataChannelMessage::ClientStats { stats } => {
+                        if !stats.client_id.trim().is_empty() && !stats.kind.trim().is_empty() {
+                            state.metrics.record_client_stream_stats(*stats);
+                        }
+                    }
+                    WebRtcDataChannelMessage::StreamControl {
+                        force_keyframe,
+                        snapshot,
+                    } => {
+                        let command = WebRtcStreamCommand {
+                            force_keyframe: force_keyframe.unwrap_or(false),
+                            snapshot: snapshot.unwrap_or(false),
+                        };
+                        if command.force_keyframe || command.snapshot {
+                            source.request_keyframe();
+                        }
+                        let _ = stream_control_tx.send(command);
+                    }
+                    WebRtcDataChannelMessage::StreamQuality { config } => {
+                        if let Err(error) = apply_stream_quality_payload(&state, &config) {
+                            warn!(
+                                "Android WebRTC stream quality update failed for {udid}: {error}"
+                            );
+                        } else {
+                            source.request_keyframe();
+                        }
+                    }
+                }
+                return;
+            }
+
+            let control_message = match serde_json::from_str::<ControlMessage>(text) {
+                Ok(message) => message,
+                Err(error) => {
+                    warn!("Invalid Android WebRTC control message for {udid}: {error}");
+                    return;
+                }
+            };
+            if control_tx.send(control_message).is_err() {
+                warn!("Android WebRTC control queue closed for {udid}");
+            }
+        })
+    }));
+}
+
+async fn run_android_webrtc_control_queue(
+    state: AppState,
+    udid: String,
+    mut receiver: mpsc::UnboundedReceiver<ControlMessage>,
+) {
+    let mut pending = VecDeque::new();
+    loop {
+        let mut message = match pending.pop_front() {
+            Some(message) => message,
+            None => match receiver.recv().await {
+                Some(message) => message,
+                None => break,
+            },
+        };
+        if webrtc_control_message_is_move(&message) {
+            while let Ok(next_message) = receiver.try_recv() {
+                if webrtc_control_message_is_move(&next_message) {
+                    message = next_message;
+                } else {
+                    pending.push_back(next_message);
+                    break;
+                }
+            }
+        }
+
+        if let Err(error) =
+            run_android_webrtc_control_message(state.clone(), udid.clone(), message).await
+        {
+            warn!("Android WebRTC control message failed for {udid}: {error}");
+        }
+    }
+}
+
+async fn run_android_webrtc_control_message(
+    state: AppState,
+    udid: String,
+    message: ControlMessage,
+) -> Result<(), AppError> {
+    task::spawn_blocking(move || match message {
+        ControlMessage::Touch { x, y, phase } => {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(AppError::bad_request(
+                    "`x` and `y` must be finite normalized numbers.",
+                ));
+            }
+            state
+                .android
+                .send_touch(&udid, x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), &phase)
+        }
+        ControlMessage::EdgeTouch { x, y, phase, .. } => {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(AppError::bad_request(
+                    "`x` and `y` must be finite normalized numbers.",
+                ));
+            }
+            state
+                .android
+                .send_touch(&udid, x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), &phase)
+        }
+        ControlMessage::MultiTouch { x1, y1, phase, .. } => {
+            if !x1.is_finite() || !y1.is_finite() {
+                return Err(AppError::bad_request(
+                    "`x1` and `y1` must be finite normalized numbers.",
+                ));
+            }
+            state
+                .android
+                .send_touch(&udid, x1.clamp(0.0, 1.0), y1.clamp(0.0, 1.0), &phase)
+        }
+        ControlMessage::Key {
+            key_code,
+            modifiers,
+        } => state
+            .android
+            .send_key(&udid, key_code, modifiers.unwrap_or(0)),
+        ControlMessage::Button {
+            button,
+            duration_ms,
+            phase,
+            ..
+        } => match phase.as_deref() {
+            Some("down" | "began") => Ok(()),
+            Some("up" | "ended" | "cancelled") | None => {
+                state
+                    .android
+                    .press_button(&udid, &button, duration_ms.unwrap_or(0))
+            }
+            Some(_) => Err(AppError::bad_request(
+                "`phase` must be `down`, `up`, `began`, `ended`, or `cancelled`.",
+            )),
+        },
+        ControlMessage::DismissKeyboard => state.android.send_key(&udid, 41, 0),
+        ControlMessage::Home => state.android.press_home(&udid),
+        ControlMessage::AppSwitcher => state.android.open_app_switcher(&udid),
+        ControlMessage::RotateLeft | ControlMessage::RotateRight => {
+            state.android.rotate_right(&udid)
+        }
+        ControlMessage::ToggleAppearance => state.android.toggle_appearance(&udid),
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("Failed to join Android control task: {error}")))?
 }
 
 async fn run_webrtc_control_queue(
@@ -842,32 +1069,383 @@ fn ice_transport_policy() -> RTCIceTransportPolicy {
     }
 }
 
-async fn wait_for_h264_sync_keyframe(
-    session: &crate::simulators::session::SimulatorSession,
-    timeout_duration: Duration,
-) -> Option<crate::transport::packet::SharedFrame> {
-    if let Some(frame) = session.latest_keyframe() {
-        if h264_frame_is_decoder_sync(&frame) {
-            return Some(frame);
+#[derive(Clone)]
+struct AndroidWebRtcSource {
+    inner: Arc<AndroidWebRtcSourceInner>,
+}
+
+struct AndroidWebRtcSourceInner {
+    udid: String,
+    encoder_handle: AtomicUsize,
+    callback_user_data: AtomicUsize,
+    shutdown_tx: broadcast::Sender<()>,
+    sender: broadcast::Sender<SharedFrame>,
+    latest_keyframe: RwLock<Option<SharedFrame>>,
+    metrics: Arc<crate::metrics::counters::Metrics>,
+}
+
+unsafe impl Send for AndroidWebRtcSourceInner {}
+unsafe impl Sync for AndroidWebRtcSourceInner {}
+
+impl AndroidWebRtcSource {
+    async fn start(
+        bridge: android::AndroidBridge,
+        metrics: Arc<crate::metrics::counters::Metrics>,
+        udid: String,
+        max_edge: u32,
+    ) -> Result<Self, AppError> {
+        let mut frame_stream = bridge.grpc_frame_stream(&udid, Some(max_edge)).await?;
+        let (sender, _) = broadcast::channel(ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY);
+        let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
+        let inner = Arc::new(AndroidWebRtcSourceInner {
+            udid: udid.clone(),
+            encoder_handle: AtomicUsize::new(0),
+            callback_user_data: AtomicUsize::new(0),
+            shutdown_tx,
+            sender,
+            latest_keyframe: RwLock::new(None),
+            metrics,
+        });
+        let user_data = Weak::into_raw(Arc::downgrade(&inner)) as *mut c_void;
+        let mut error = std::ptr::null_mut();
+        let handle = unsafe {
+            ffi::xcw_native_h264_encoder_create(
+                Some(android_h264_encoder_frame_callback),
+                user_data,
+                &mut error,
+            )
+        };
+        if handle.is_null() {
+            unsafe {
+                let _ = Weak::from_raw(user_data as *const AndroidWebRtcSourceInner);
+            }
+            return Err(unsafe { take_native_error(error) }
+                .unwrap_or_else(|| AppError::native("Unable to create Android H.264 encoder.")));
+        }
+        inner
+            .encoder_handle
+            .store(handle as usize, Ordering::Release);
+        inner
+            .callback_user_data
+            .store(user_data as usize, Ordering::Release);
+
+        let source = Self { inner };
+        let task_inner = Arc::downgrade(&source.inner);
+        tokio::spawn(async move {
+            let min_frame_gap = android_webrtc_frame_interval();
+            let mut last_encoded_at = Instant::now() - min_frame_gap;
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx.recv() => break,
+                    frame = frame_stream.next_frame() => {
+                        let frame = match frame {
+                            Ok(Some(frame)) => frame,
+                            Ok(None) => break,
+                            Err(error) => {
+                                let udid = task_inner
+                                    .upgrade()
+                                    .map(|inner| inner.udid.clone())
+                                    .unwrap_or_else(|| "android".to_owned());
+                                warn!("Android WebRTC raw frame stream failed for {udid}: {error}");
+                                break;
+                            }
+                        };
+                        let Some(inner) = task_inner.upgrade() else {
+                            break;
+                        };
+                        let now = Instant::now();
+                        if now.duration_since(last_encoded_at) < min_frame_gap {
+                            continue;
+                        }
+                        last_encoded_at = now;
+                        let handle = inner.encoder_handle.load(Ordering::Acquire);
+                        let udid = inner.udid.clone();
+                        let encode_result = task::spawn_blocking(move || {
+                            encode_android_rgba_frame(handle, &frame)
+                        })
+                        .await
+                        .map_err(|error| AppError::internal(format!("Failed to join Android encoder task: {error}")))
+                        .and_then(|result| result);
+                        if let Err(error) = encode_result {
+                            warn!("Android VideoToolbox encode failed for {udid}: {error}");
+                        }
+                    }
+                }
+            }
+        });
+        source.request_keyframe();
+        Ok(source)
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<SharedFrame> {
+        self.inner.sender.subscribe()
+    }
+
+    async fn wait_for_keyframe(&self, timeout_duration: Duration) -> Option<SharedFrame> {
+        let deadline = Instant::now() + timeout_duration;
+        let baseline_sequence = self
+            .inner
+            .latest_keyframe
+            .read()
+            .unwrap()
+            .as_ref()
+            .map_or(0, |frame| frame.frame_sequence);
+        let mut receiver = self.inner.sender.subscribe();
+        self.request_keyframe();
+
+        loop {
+            if let Some(frame) = self.inner.latest_keyframe.read().unwrap().clone() {
+                if frame.frame_sequence > baseline_sequence {
+                    return Some(frame);
+                }
+            }
+            let remaining = deadline.checked_duration_since(Instant::now())?;
+            match time::timeout(remaining, receiver.recv()).await {
+                Ok(Ok(frame)) if frame.is_keyframe && frame.frame_sequence > baseline_sequence => {
+                    return Some(frame)
+                }
+                Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
+                    self.request_keyframe();
+                }
+                Ok(Err(_)) | Err(_) => return None,
+            }
         }
     }
 
+    fn request_refresh(&self) {}
+
+    fn request_keyframe(&self) {
+        self.inner
+            .metrics
+            .keyframe_requests
+            .fetch_add(1, Ordering::Relaxed);
+        unsafe {
+            ffi::xcw_native_h264_encoder_request_keyframe(
+                self.inner.encoder_handle.load(Ordering::Acquire) as *mut c_void,
+            );
+        }
+    }
+}
+
+impl Drop for AndroidWebRtcSourceInner {
+    fn drop(&mut self) {
+        let _ = self.shutdown_tx.send(());
+        let encoder_handle = self.encoder_handle.load(Ordering::Acquire);
+        let callback_user_data = self.callback_user_data.load(Ordering::Acquire);
+        unsafe {
+            if encoder_handle != 0 {
+                ffi::xcw_native_h264_encoder_destroy(encoder_handle as *mut c_void);
+            }
+            if callback_user_data != 0 {
+                let _ = Weak::from_raw(callback_user_data as *const AndroidWebRtcSourceInner);
+            }
+        }
+    }
+}
+
+unsafe extern "C" fn android_h264_encoder_frame_callback(
+    frame: *const ffi::xcw_native_frame,
+    user_data: *mut c_void,
+) {
+    if frame.is_null() || user_data.is_null() {
+        return;
+    }
+
+    let weak = unsafe { Weak::from_raw(user_data as *const AndroidWebRtcSourceInner) };
+    if let Some(inner) = weak.upgrade() {
+        unsafe {
+            inner.handle_encoded_frame(&*frame);
+        }
+    }
+    let _ = Weak::into_raw(weak);
+}
+
+impl AndroidWebRtcSourceInner {
+    fn handle_encoded_frame(&self, frame: &ffi::xcw_native_frame) {
+        let description = unsafe { copy_native_shared_bytes(frame.description) };
+        let Some(data) = (unsafe { copy_native_shared_bytes(frame.data) }) else {
+            return;
+        };
+        let packet = Arc::new(FramePacket {
+            frame_sequence: frame.frame_sequence,
+            timestamp_us: frame.timestamp_us,
+            is_keyframe: frame.is_keyframe,
+            width: frame.width,
+            height: frame.height,
+            codec: native_c_string(frame.codec),
+            description,
+            data,
+        });
+        self.metrics.frames_encoded.fetch_add(1, Ordering::Relaxed);
+        if packet.is_keyframe {
+            self.metrics
+                .keyframes_encoded
+                .fetch_add(1, Ordering::Relaxed);
+            *self.latest_keyframe.write().unwrap() = Some(packet.clone());
+        }
+        let _ = self.sender.send(packet);
+    }
+}
+
+fn encode_android_rgba_frame(
+    encoder_handle: usize,
+    frame: &android::AndroidFrame,
+) -> Result<(), AppError> {
+    unsafe {
+        let mut error = std::ptr::null_mut();
+        let ok = ffi::xcw_native_h264_encoder_encode_rgba(
+            encoder_handle as *mut c_void,
+            frame.rgba.as_ptr(),
+            frame.rgba.len(),
+            frame.width,
+            frame.height,
+            frame.timestamp_us,
+            &mut error,
+        );
+        if ok {
+            Ok(())
+        } else {
+            Err(take_native_error(error)
+                .unwrap_or_else(|| AppError::native("Android VideoToolbox encode failed.")))
+        }
+    }
+}
+
+unsafe fn copy_native_shared_bytes(bytes: ffi::xcw_native_shared_bytes) -> Option<Bytes> {
+    if bytes.data.is_null() || bytes.length == 0 {
+        if !bytes.owner.is_null() {
+            unsafe {
+                ffi::xcw_native_release_shared_bytes(bytes);
+            }
+        }
+        return None;
+    }
+
+    let copied =
+        unsafe { Bytes::copy_from_slice(std::slice::from_raw_parts(bytes.data, bytes.length)) };
+    unsafe {
+        ffi::xcw_native_release_shared_bytes(bytes);
+    }
+    Some(copied)
+}
+
+fn native_c_string(ptr: *const i8) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let value = unsafe { CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .trim()
+        .to_owned();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+unsafe fn take_native_error(raw: *mut i8) -> Option<AppError> {
+    if raw.is_null() {
+        return None;
+    }
+    let message = unsafe { CStr::from_ptr(raw) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe {
+        ffi::xcw_native_free_string(raw);
+    }
+    Some(AppError::native(message))
+}
+
+fn android_webrtc_max_edge() -> u32 {
+    std::env::var("SIMDECK_ANDROID_WEBRTC_MAX_EDGE")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_ANDROID_WEBRTC_MAX_EDGE)
+        .clamp(360, 2400)
+}
+
+fn android_webrtc_frame_interval() -> Duration {
+    let fps = std::env::var("SIMDECK_REALTIME_FPS")
+        .or_else(|_| std::env::var("SIMDECK_LOCAL_STREAM_FPS"))
+        .or_else(|_| std::env::var("SIMDECK_ANDROID_WEBRTC_FPS"))
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_ANDROID_WEBRTC_FPS)
+        .clamp(15, MAX_ANDROID_WEBRTC_FPS);
+    Duration::from_micros(1_000_000 / fps)
+}
+
+#[derive(Clone)]
+enum WebRtcVideoSource {
+    Simulator(crate::simulators::session::SimulatorSession),
+    Android(AndroidWebRtcSource),
+}
+
+impl WebRtcVideoSource {
+    fn subscribe(&self) -> WebRtcFrameReceiver {
+        match self {
+            Self::Simulator(session) => WebRtcFrameReceiver::Simulator(session.subscribe()),
+            Self::Android(source) => WebRtcFrameReceiver::Android(source.subscribe()),
+        }
+    }
+
+    async fn wait_for_keyframe(&self, timeout_duration: Duration) -> Option<SharedFrame> {
+        match self {
+            Self::Simulator(session) => session.wait_for_keyframe(timeout_duration).await,
+            Self::Android(source) => source.wait_for_keyframe(timeout_duration).await,
+        }
+    }
+
+    fn request_refresh(&self) {
+        match self {
+            Self::Simulator(session) => session.request_refresh(),
+            Self::Android(source) => source.request_refresh(),
+        }
+    }
+
+    fn request_keyframe(&self) {
+        match self {
+            Self::Simulator(session) => session.request_keyframe(),
+            Self::Android(source) => source.request_keyframe(),
+        }
+    }
+}
+
+enum WebRtcFrameReceiver {
+    Simulator(crate::simulators::session::FrameSubscription),
+    Android(broadcast::Receiver<SharedFrame>),
+}
+
+impl WebRtcFrameReceiver {
+    async fn recv(&mut self) -> Result<SharedFrame, broadcast::error::RecvError> {
+        match self {
+            Self::Simulator(receiver) => receiver.recv().await,
+            Self::Android(receiver) => receiver.recv().await,
+        }
+    }
+}
+
+async fn wait_for_h264_sync_keyframe(
+    source: &WebRtcVideoSource,
+    timeout_duration: Duration,
+) -> Option<SharedFrame> {
     let deadline = time::Instant::now() + timeout_duration;
     loop {
         let remaining = deadline.checked_duration_since(time::Instant::now())?;
-        let frame = session.wait_for_keyframe(remaining).await?;
+        let frame = source.wait_for_keyframe(remaining).await?;
         if h264_frame_is_decoder_sync(&frame) {
             return Some(frame);
         }
-        session.request_keyframe();
+        source.request_keyframe();
     }
 }
 
 struct WebRtcMediaStream {
     state: AppState,
-    session: crate::simulators::session::SimulatorSession,
+    source: WebRtcVideoSource,
     udid: String,
-    first_frame: crate::transport::packet::SharedFrame,
+    first_frame: SharedFrame,
     peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
     video_track: Arc<TrackLocalStaticRTP>,
     cancellation_token: broadcast::Sender<()>,
@@ -879,7 +1457,7 @@ impl WebRtcMediaStream {
     async fn run(self) {
         let Self {
             state,
-            session,
+            source,
             udid,
             first_frame,
             peer_connection,
@@ -888,7 +1466,7 @@ impl WebRtcMediaStream {
             mut cancellation,
             mut stream_control_rx,
         } = self;
-        let mut rx = session.subscribe();
+        let mut rx = source.subscribe();
         let mut send_timing = WebRtcSendTiming::new();
         let mut peer_state_interval = time::interval(Duration::from_millis(250));
         let realtime_stream = realtime_stream_enabled();
@@ -925,10 +1503,10 @@ impl WebRtcMediaStream {
                 if recovery_action_for_write_timeout(realtime_stream)
                     == FrameRecoveryAction::Refresh
                 {
-                    session.request_refresh();
+                    source.request_refresh();
                 } else {
                     waiting_for_keyframe = true;
-                    session.request_keyframe();
+                    source.request_keyframe();
                 }
             }
             Err(error) => {
@@ -967,9 +1545,9 @@ impl WebRtcMediaStream {
                     };
                     if command.force_keyframe || command.snapshot {
                         waiting_for_keyframe = true;
-                        session.request_keyframe();
+                        source.request_keyframe();
                     } else {
-                        session.request_refresh();
+                        source.request_refresh();
                     }
                 }
                 frame = rx.recv() => {
@@ -981,7 +1559,7 @@ impl WebRtcMediaStream {
                                 .frames_dropped_server
                                 .fetch_add(skipped, Ordering::Relaxed);
                             waiting_for_keyframe = true;
-                            session.request_keyframe();
+                            source.request_keyframe();
                             continue;
                         }
                         Err(broadcast::error::RecvError::Closed) => {
@@ -997,7 +1575,7 @@ impl WebRtcMediaStream {
                         waiting_for_keyframe = false;
                     } else if frame.is_keyframe {
                         waiting_for_keyframe = true;
-                        session.request_keyframe();
+                        source.request_keyframe();
                         state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
@@ -1022,9 +1600,9 @@ impl WebRtcMediaStream {
                             let recovery_action = recovery_action_for_write_timeout(realtime_stream);
                             waiting_for_keyframe = recovery_action == FrameRecoveryAction::Keyframe;
                             if recovery_action == FrameRecoveryAction::Refresh {
-                                session.request_refresh();
+                                source.request_refresh();
                             } else {
-                                session.request_keyframe();
+                                source.request_keyframe();
                             }
                         }
                         Err(error) => {

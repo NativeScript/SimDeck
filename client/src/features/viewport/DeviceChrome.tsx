@@ -17,6 +17,7 @@ interface DeviceChromeProps {
   accessibilitySelectedId: string;
   chromeProfile: ChromeProfile | null;
   chromeScreenStyle: CSSProperties | null;
+  chromeStyle?: string;
   chromeUrl: string;
   chromeButtonUrl: (button: string, pressed?: boolean) => string;
   hasFrame: boolean;
@@ -61,6 +62,7 @@ export function DeviceChrome({
   accessibilitySelectedId,
   chromeProfile,
   chromeScreenStyle,
+  chromeStyle,
   chromeUrl,
   chromeButtonUrl,
   hasFrame,
@@ -93,35 +95,42 @@ export function DeviceChrome({
   useChromeProfile,
 }: DeviceChromeProps) {
   if (useChromeProfile) {
+    const useCssAndroidChrome = chromeStyle === "css-android";
     return (
       <div
-        className="device-shell"
+        className={`device-shell ${useCssAndroidChrome ? "android-css-shell" : ""}`}
         onPointerCancel={onPanPointerUp}
         onPointerDown={onStartPanning}
         onPointerMove={onPanPointerMove}
         onPointerUp={onPanPointerUp}
         style={shellStyle ?? undefined}
       >
-        <ChromeButtonOverlay
-          chromeButtonUrl={chromeButtonUrl}
-          chromeProfile={chromeProfile}
-          layer="under"
-          onEvent={onChromeButtonEvent}
-        />
-        <img
-          alt=""
-          aria-hidden="true"
-          className="device-chrome"
-          draggable={false}
-          onLoad={onChromeLoad}
-          src={chromeUrl}
-        />
-        <ChromeButtonOverlay
-          chromeButtonUrl={chromeButtonUrl}
-          chromeProfile={chromeProfile}
-          layer="over"
-          onEvent={onChromeButtonEvent}
-        />
+        {useCssAndroidChrome ? (
+          <div className="android-css-chrome" aria-hidden="true" />
+        ) : (
+          <>
+            <ChromeButtonOverlay
+              chromeButtonUrl={chromeButtonUrl}
+              chromeProfile={chromeProfile}
+              layer="under"
+              onEvent={onChromeButtonEvent}
+            />
+            <img
+              alt=""
+              aria-hidden="true"
+              className="device-chrome"
+              draggable={false}
+              onLoad={onChromeLoad}
+              src={chromeUrl}
+            />
+            <ChromeButtonOverlay
+              chromeButtonUrl={chromeButtonUrl}
+              chromeProfile={chromeProfile}
+              layer="over"
+              onEvent={onChromeButtonEvent}
+            />
+          </>
+        )}
         <ScreenLayer
           accessibilityHoveredId={accessibilityHoveredId}
           accessibilityPickerActive={accessibilityPickerActive}

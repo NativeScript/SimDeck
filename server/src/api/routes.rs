@@ -1,3 +1,4 @@
+use crate::android::{self, AndroidBridge};
 use crate::api::json::json;
 use crate::auth;
 use crate::config::Config;
@@ -55,6 +56,7 @@ pub struct AppState {
     pub inspectors: InspectorHub,
     pub metrics: Arc<Metrics>,
     pub simulator_inventory: SimulatorInventoryCache,
+    pub android: AndroidBridge,
 }
 
 #[derive(Clone, Default)]
@@ -472,6 +474,13 @@ struct AccessibilityPointQuery {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct AndroidFrameQuery {
+    max_edge: Option<u32>,
+    max_fps: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AccessibilityTreeQuery {
     source: Option<String>,
     max_depth: Option<usize>,
@@ -583,6 +592,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/control", get(control_socket))
         .route("/api/simulators/{udid}/input", get(control_socket))
         .route("/api/simulators/{udid}/h264", get(h264_socket))
+        .route(
+            "/api/simulators/{udid}/android/frames",
+            get(android_frame_socket),
+        )
         .route("/api/simulators/{udid}/webrtc/offer", post(webrtc_offer))
         .route(
             "/api/simulators/{udid}/touch-sequence",
@@ -1341,9 +1354,9 @@ async fn inspector_response(
 }
 
 async fn list_simulators(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
-    let simulators = list_simulators_cached(state.clone(), false).await?;
+    let simulators = all_device_values(state.clone(), false).await?;
     Ok(json(json_value!({
-        "simulators": state.registry.enrich_simulators(simulators),
+        "simulators": simulators,
     })))
 }
 
@@ -1351,6 +1364,15 @@ async fn boot_simulator(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        let action_udid = udid.clone();
+        run_android_action(state.clone(), move |android| {
+            android.boot(&action_udid)?;
+            android.wait_until_booted(&action_udid, Duration::from_secs(120))
+        })
+        .await?;
+        return simulator_payload(state, udid).await;
+    }
     forget_lifecycle_session(&state, &udid);
     let action_udid = udid.clone();
     run_bridge_action(state.clone(), move |bridge| {
@@ -1364,6 +1386,11 @@ async fn shutdown_simulator(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        let action_udid = udid.clone();
+        run_android_action(state.clone(), move |android| android.shutdown(&action_udid)).await?;
+        return simulator_payload(state, udid).await;
+    }
     forget_lifecycle_session(&state, &udid);
     let action_udid = udid.clone();
     run_bridge_action(state.clone(), move |bridge| {
@@ -1377,6 +1404,11 @@ async fn erase_simulator(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        let action_udid = udid.clone();
+        run_android_action(state, move |android| android.erase(&action_udid)).await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     forget_lifecycle_session(&state, &udid);
     let action_udid = udid.clone();
     run_bridge_action(state, move |bridge| bridge.erase_simulator(&action_udid)).await?;
@@ -1401,6 +1433,14 @@ async fn install_app(
             "Request body must include `appPath`.",
         ));
     }
+    if android::is_android_id(&udid) {
+        let action_udid = udid.clone();
+        run_android_action(state, move |android| {
+            android.install_app(&action_udid, &payload.app_path)
+        })
+        .await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     let action_udid = udid.clone();
     run_bridge_action(state, move |bridge| {
         bridge.install_app(&action_udid, &payload.app_path)
@@ -1419,6 +1459,14 @@ async fn uninstall_app(
             "Request body must include `bundleId`.",
         ));
     }
+    if android::is_android_id(&udid) {
+        let action_udid = udid.clone();
+        run_android_action(state, move |android| {
+            android.uninstall_app(&action_udid, &payload.bundle_id)
+        })
+        .await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     let action_udid = udid.clone();
     run_bridge_action(state, move |bridge| {
         bridge.uninstall_app(&action_udid, &payload.bundle_id)
@@ -1431,6 +1479,10 @@ async fn get_pasteboard(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        let text = run_android_action(state, move |android| android.pasteboard_text(&udid)).await?;
+        return Ok(json(json_value!({ "text": text })));
+    }
     let text = run_bridge_action(state, move |bridge| bridge.pasteboard_text(&udid)).await?;
     Ok(json(json_value!({ "text": text })))
 }
@@ -1440,6 +1492,13 @@ async fn set_pasteboard(
     Path(udid): Path<String>,
     Json(payload): Json<PasteboardPayload>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        run_android_action(state, move |android| {
+            android.set_pasteboard_text(&udid, &payload.text)
+        })
+        .await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     run_bridge_action(state, move |bridge| {
         bridge.set_pasteboard_text(&udid, &payload.text)
     })
@@ -1451,7 +1510,11 @@ async fn screenshot_png(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<(StatusCode, HeaderMap, Vec<u8>), AppError> {
-    let png = run_bridge_action(state, move |bridge| bridge.screenshot_png(&udid)).await?;
+    let png = if android::is_android_id(&udid) {
+        run_android_action(state, move |android| android.screenshot_png(&udid)).await?
+    } else {
+        run_bridge_action(state, move |bridge| bridge.screenshot_png(&udid)).await?
+    };
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
     headers.insert(
@@ -1465,6 +1528,10 @@ async fn toggle_appearance(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        run_android_action(state, move |android| android.toggle_appearance(&udid)).await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     let action_udid = udid.clone();
     run_bridge_action(state, move |bridge| bridge.toggle_appearance(&action_udid)).await?;
     Ok(json(json_value!({ "ok": true })))
@@ -1474,6 +1541,9 @@ async fn refresh_stream(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        return Ok(json(json_value!({ "ok": true, "stream": "screenshot" })));
+    }
     let session = state.registry.get_or_create_async(&udid).await?;
     if let Err(error) = session.ensure_started_async().await {
         state.registry.remove(&udid);
@@ -1490,6 +1560,14 @@ async fn open_url(
 ) -> Result<Json<Value>, AppError> {
     if payload.url.trim().is_empty() {
         return Err(AppError::bad_request("Request body must include `url`."));
+    }
+    if android::is_android_id(&udid) {
+        let action_udid = udid.clone();
+        run_android_action(state, move |android| {
+            android.open_url(&action_udid, &payload.url)
+        })
+        .await?;
+        return Ok(json(json_value!({ "ok": true })));
     }
     let action_udid = udid.clone();
     run_bridge_action(state, move |bridge| {
@@ -1508,6 +1586,14 @@ async fn launch_bundle(
         return Err(AppError::bad_request(
             "Request body must include `bundleId`.",
         ));
+    }
+    if android::is_android_id(&udid) {
+        let action_udid = udid.clone();
+        run_android_action(state, move |android| {
+            android.launch_package(&action_udid, &payload.bundle_id)
+        })
+        .await?;
+        return Ok(json(json_value!({ "ok": true })));
     }
     let action_udid = udid.clone();
     run_bridge_action(state, move |bridge| {
@@ -1639,6 +1725,13 @@ async fn send_touch(
     let x = payload.x.clamp(0.0, 1.0);
     let y = payload.y.clamp(0.0, 1.0);
     let phase = payload.phase;
+    if android::is_android_id(&udid) {
+        run_android_action(state, move |android| {
+            android.send_touch(&udid, x, y, &phase)
+        })
+        .await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     run_bridge_action(state, move |bridge| {
         let input = bridge.create_input_session(&udid)?;
         input.send_touch(x, y, &phase)
@@ -1669,6 +1762,24 @@ async fn send_touch_sequence(
             ));
         }
     }
+    if android::is_android_id(&udid) {
+        run_android_action(state, move |android| {
+            for event in payload.events {
+                android.send_touch(
+                    &udid,
+                    event.x.clamp(0.0, 1.0),
+                    event.y.clamp(0.0, 1.0),
+                    &event.phase,
+                )?;
+                if let Some(delay_ms) = event.delay_ms_after.filter(|delay_ms| *delay_ms > 0) {
+                    std::thread::sleep(Duration::from_millis(delay_ms));
+                }
+            }
+            Ok(())
+        })
+        .await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     run_bridge_action(state, move |bridge| {
         let input = bridge.create_input_session(&udid)?;
         for event in payload.events {
@@ -1692,6 +1803,10 @@ async fn control_socket(
     Path(udid): Path<String>,
     websocket: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    if android::is_android_id(&udid) {
+        return websocket
+            .on_upgrade(move |socket| handle_android_control_socket(state, udid, socket));
+    }
     websocket.on_upgrade(move |socket| handle_control_socket(state, udid, socket))
 }
 
@@ -1702,6 +1817,294 @@ async fn h264_socket(
     websocket: WebSocketUpgrade,
 ) -> impl IntoResponse {
     websocket.on_upgrade(move |socket| handle_h264_socket(state, udid, query, socket))
+}
+
+async fn android_frame_socket(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Query(query): Query<AndroidFrameQuery>,
+    websocket: WebSocketUpgrade,
+) -> impl IntoResponse {
+    websocket.on_upgrade(move |socket| {
+        handle_android_frame_socket(state, udid, query.max_edge, query.max_fps, socket)
+    })
+}
+
+async fn handle_android_frame_socket(
+    state: AppState,
+    udid: String,
+    max_edge: Option<u32>,
+    max_fps: Option<u32>,
+    socket: WebSocket,
+) {
+    let (mut sender, mut receiver) = socket.split();
+    if !android::is_android_id(&udid) {
+        let _ = sender
+            .send(Message::Text(
+                json_value!({
+                    "type": "error",
+                    "error": "Android frame streaming only supports Android emulator IDs."
+                })
+                .to_string()
+                .into(),
+            ))
+            .await;
+        return;
+    }
+
+    let mut stream = match state.android.grpc_frame_stream(&udid, max_edge).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            let _ = sender
+                .send(Message::Text(
+                    json_value!({ "type": "error", "error": error.to_string() })
+                        .to_string()
+                        .into(),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    let _ = sender
+        .send(Message::Text(
+            json_value!({ "type": "ready", "udid": udid, "platform": "android-emulator" })
+                .to_string()
+                .into(),
+        ))
+        .await;
+
+    let min_frame_gap = max_fps
+        .filter(|fps| *fps > 0)
+        .map(|fps| Duration::from_millis(1000 / u64::from(fps.min(60))))
+        .unwrap_or_else(|| Duration::from_millis(83));
+    let mut last_sent_at = Instant::now() - min_frame_gap;
+
+    loop {
+        tokio::select! {
+            message = receiver.next() => {
+                match message {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => break,
+                }
+            }
+            frame = stream.next_frame() => {
+                let frame = match frame {
+                    Ok(Some(frame)) => frame,
+                    Ok(None) => break,
+                    Err(error) => {
+                        let _ = sender
+                            .send(Message::Text(
+                                json_value!({ "type": "error", "error": error.to_string() })
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await;
+                        break;
+                    }
+                };
+                let now = Instant::now();
+                if now.duration_since(last_sent_at) < min_frame_gap {
+                    continue;
+                }
+                last_sent_at = now;
+                if sender
+                    .send(Message::Binary(encode_android_frame(frame).into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn encode_android_frame(frame: android::AndroidFrame) -> Vec<u8> {
+    const HEADER_LEN: usize = 32;
+    let mut bytes = Vec::with_capacity(HEADER_LEN + frame.rgba.len());
+    bytes.extend_from_slice(b"SDAF");
+    bytes.push(1);
+    bytes.push(1);
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&frame.width.to_le_bytes());
+    bytes.extend_from_slice(&frame.height.to_le_bytes());
+    bytes.extend_from_slice(&frame.seq.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&frame.timestamp_us.to_le_bytes());
+    bytes.extend_from_slice(&frame.rgba);
+    bytes
+}
+
+async fn handle_android_control_socket(state: AppState, udid: String, socket: WebSocket) {
+    let (mut sender, mut receiver) = socket.split();
+    let mut active_touch: Option<AndroidControlTouch> = None;
+    let _ = sender
+        .send(Message::Text(
+            json_value!({ "type": "ready", "udid": udid, "platform": "android-emulator" })
+                .to_string()
+                .into(),
+        ))
+        .await;
+    while let Some(message) = receiver.next().await {
+        let text = match message {
+            Ok(Message::Text(text)) => text,
+            Ok(Message::Binary(bytes)) => match String::from_utf8(bytes.to_vec()) {
+                Ok(text) => text.into(),
+                Err(_) => continue,
+            },
+            Ok(Message::Close(_)) => break,
+            Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => continue,
+            Err(_) => break,
+        };
+        let Ok(control_message) = serde_json::from_str::<ControlMessage>(&text) else {
+            continue;
+        };
+        let state = state.clone();
+        let udid = udid.clone();
+        let _ = run_android_control_message(state, udid, control_message, &mut active_touch).await;
+    }
+}
+
+struct AndroidControlTouch {
+    started_at: Instant,
+    start_x: f64,
+    start_y: f64,
+    latest_x: f64,
+    latest_y: f64,
+}
+
+async fn run_android_control_message(
+    state: AppState,
+    udid: String,
+    message: ControlMessage,
+    active_touch: &mut Option<AndroidControlTouch>,
+) -> Result<(), AppError> {
+    match message {
+        ControlMessage::Touch { x, y, phase } => {
+            handle_android_control_touch(state, udid, x, y, phase, active_touch).await
+        }
+        ControlMessage::EdgeTouch { x, y, phase, .. } => {
+            handle_android_control_touch(state, udid, x, y, phase, active_touch).await
+        }
+        ControlMessage::MultiTouch { x1, y1, phase, .. } => {
+            handle_android_control_touch(state, udid, x1, y1, phase, active_touch).await
+        }
+        other => {
+            run_android_action(state, move |android| match other {
+                ControlMessage::Key {
+                    key_code,
+                    modifiers,
+                } => android.send_key(&udid, key_code, modifiers.unwrap_or(0)),
+                ControlMessage::Button {
+                    button,
+                    duration_ms,
+                    phase,
+                    ..
+                } => match phase.as_deref() {
+                    Some("down" | "began") => Ok(()),
+                    Some("up" | "ended" | "cancelled") | None => {
+                        android.press_button(&udid, &button, duration_ms.unwrap_or(0))
+                    }
+                    Some(_) => Err(AppError::bad_request(
+                        "`phase` must be `down`, `up`, `began`, `ended`, or `cancelled`.",
+                    )),
+                },
+                ControlMessage::DismissKeyboard => android.send_key(&udid, 41, 0),
+                ControlMessage::Home => android.press_home(&udid),
+                ControlMessage::AppSwitcher => android.open_app_switcher(&udid),
+                ControlMessage::RotateLeft | ControlMessage::RotateRight => {
+                    android.rotate_right(&udid)
+                }
+                ControlMessage::ToggleAppearance => android.toggle_appearance(&udid),
+                ControlMessage::Touch { .. }
+                | ControlMessage::EdgeTouch { .. }
+                | ControlMessage::MultiTouch { .. } => Ok(()),
+            })
+            .await
+        }
+    }
+}
+
+async fn handle_android_control_touch(
+    state: AppState,
+    udid: String,
+    x: f64,
+    y: f64,
+    phase: String,
+    active_touch: &mut Option<AndroidControlTouch>,
+) -> Result<(), AppError> {
+    if !x.is_finite() || !y.is_finite() {
+        return Err(AppError::bad_request(
+            "`x` and `y` must be finite normalized numbers.",
+        ));
+    }
+    let x = x.clamp(0.0, 1.0);
+    let y = y.clamp(0.0, 1.0);
+    match phase.as_str() {
+        "began" => {
+            *active_touch = Some(AndroidControlTouch {
+                started_at: Instant::now(),
+                start_x: x,
+                start_y: y,
+                latest_x: x,
+                latest_y: y,
+            });
+            run_android_action(state, move |android| {
+                android.send_touch(&udid, x, y, "began")
+            })
+            .await
+        }
+        "moved" => {
+            if let Some(touch) = active_touch.as_mut() {
+                touch.latest_x = x;
+                touch.latest_y = y;
+            }
+            run_android_action(state, move |android| {
+                android.send_touch(&udid, x, y, "moved")
+            })
+            .await
+        }
+        "ended" => {
+            let touch = active_touch.take().unwrap_or(AndroidControlTouch {
+                started_at: Instant::now(),
+                start_x: x,
+                start_y: y,
+                latest_x: x,
+                latest_y: y,
+            });
+            let end_x = x;
+            let end_y = y;
+            let distance =
+                ((end_x - touch.start_x).powi(2) + (end_y - touch.start_y).powi(2)).sqrt();
+            let duration_ms = touch.started_at.elapsed().as_millis().clamp(80, 1500) as u64;
+            run_android_action(state, move |android| {
+                if distance >= 0.025 {
+                    android
+                        .send_touch(&udid, end_x, end_y, "ended")
+                        .or_else(|_| {
+                            android.send_swipe(
+                                &udid,
+                                touch.start_x,
+                                touch.start_y,
+                                end_x,
+                                end_y,
+                                duration_ms,
+                            )
+                        })
+                } else {
+                    android.send_touch(&udid, end_x, end_y, "ended")
+                }
+            })
+            .await
+        }
+        "cancelled" => {
+            *active_touch = None;
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 async fn webrtc_offer(
@@ -2150,6 +2553,13 @@ async fn send_key(
     Path(udid): Path<String>,
     Json(payload): Json<KeyPayload>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        run_android_action(state, move |android| {
+            android.send_key(&udid, payload.key_code, payload.modifiers.unwrap_or(0))
+        })
+        .await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     run_bridge_action(state, move |bridge| {
         bridge.send_key(&udid, payload.key_code, payload.modifiers.unwrap_or(0))
     })
@@ -2172,6 +2582,21 @@ async fn send_key_sequence(
             "Key sequence cannot contain more than 512 key codes.",
         ));
     }
+    if android::is_android_id(&udid) {
+        run_android_action(state, move |android| {
+            let delay_ms = payload.delay_ms.unwrap_or(0);
+            let key_count = payload.key_codes.len();
+            for (index, key_code) in payload.key_codes.into_iter().enumerate() {
+                android.send_key(&udid, key_code, 0)?;
+                if delay_ms > 0 && index + 1 < key_count {
+                    std::thread::sleep(Duration::from_millis(delay_ms));
+                }
+            }
+            Ok(())
+        })
+        .await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     run_bridge_action(state, move |bridge| {
         let input = bridge.create_input_session(&udid)?;
         let delay_ms = payload.delay_ms.unwrap_or(0);
@@ -2192,6 +2617,10 @@ async fn dismiss_keyboard(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        run_android_action(state, move |android| android.send_key(&udid, 41, 0)).await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     run_bridge_action(state, move |bridge| bridge.send_key(&udid, 41, 0)).await?;
     Ok(json(json_value!({ "ok": true })))
 }
@@ -2203,6 +2632,13 @@ async fn press_button(
 ) -> Result<Json<Value>, AppError> {
     if payload.button.trim().is_empty() {
         return Err(AppError::bad_request("Request body must include `button`."));
+    }
+    if android::is_android_id(&udid) {
+        run_android_action(state, move |android| {
+            android.press_button(&udid, &payload.button, payload.duration_ms.unwrap_or(0))
+        })
+        .await?;
+        return Ok(json(json_value!({ "ok": true })));
     }
     if let Some(phase) = payload.phase.as_deref() {
         let pressed = match phase {
@@ -2237,6 +2673,10 @@ async fn press_home(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        run_android_action(state, move |android| android.press_home(&udid)).await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     run_bridge_action(state, move |bridge| bridge.press_home(&udid)).await?;
     Ok(json(json_value!({ "ok": true })))
 }
@@ -2245,6 +2685,10 @@ async fn open_app_switcher(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        run_android_action(state, move |android| android.open_app_switcher(&udid)).await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     run_bridge_action(state, move |bridge| bridge.open_app_switcher(&udid)).await?;
     Ok(json(json_value!({ "ok": true })))
 }
@@ -2253,6 +2697,10 @@ async fn rotate_right(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        run_android_action(state, move |android| android.rotate_right(&udid)).await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     run_bridge_action(state, move |bridge| bridge.rotate_right(&udid)).await?;
     Ok(json(json_value!({ "ok": true })))
 }
@@ -2261,6 +2709,10 @@ async fn rotate_left(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        run_android_action(state, move |android| android.rotate_right(&udid)).await?;
+        return Ok(json(json_value!({ "ok": true })));
+    }
     run_bridge_action(state, move |bridge| bridge.rotate_left(&udid)).await?;
     Ok(json(json_value!({ "ok": true })))
 }
@@ -2269,6 +2721,11 @@ async fn chrome_profile(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        let profile =
+            run_android_action(state, move |android| android.chrome_profile(&udid)).await?;
+        return Ok(json(profile));
+    }
     let profile = run_bridge_action(state, move |bridge| bridge.chrome_profile(&udid)).await?;
     Ok(json(json_value!(profile)))
 }
@@ -2278,6 +2735,11 @@ async fn chrome_png(
     Path(udid): Path<String>,
     Query(query): Query<ChromePngQuery>,
 ) -> Result<(StatusCode, HeaderMap, Vec<u8>), AppError> {
+    if android::is_android_id(&udid) {
+        return Err(AppError::not_found(
+            "Android emulators do not expose device chrome assets.",
+        ));
+    }
     let include_buttons = query
         .buttons
         .as_deref()
@@ -2349,6 +2811,11 @@ async fn screen_mask_png(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<(StatusCode, HeaderMap, Vec<u8>), AppError> {
+    if android::is_android_id(&udid) {
+        return Err(AppError::not_found(
+            "Android emulators do not expose screen mask assets.",
+        ));
+    }
     let png = run_bridge_action(state, move |bridge| bridge.screen_mask_png(&udid)).await?;
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
@@ -2383,6 +2850,22 @@ async fn accessibility_tree_value(
     max_depth: Option<usize>,
     include_hidden: bool,
 ) -> Result<Value, AppError> {
+    if android::is_android_id(&udid) {
+        let requested_source = source
+            .filter(|source| *source != "auto")
+            .map(|source| source.to_owned());
+        return run_android_action(state, move |android| {
+            let mut tree = android.accessibility_tree(&udid, max_depth)?;
+            if include_hidden {
+                tree["includeHidden"] = Value::Bool(true);
+            }
+            if let Some(source) = requested_source {
+                tree["requestedSource"] = Value::String(source);
+            }
+            Ok(tree)
+        })
+        .await;
+    }
     let requested_source = AccessibilityHierarchySource::parse(source)?;
     let max_depth = max_depth.map(|depth| depth.min(80));
 
@@ -2521,6 +3004,13 @@ async fn accessibility_point(
         ));
     }
 
+    if android::is_android_id(&udid) {
+        let snapshot = run_android_action(state, move |android| {
+            android.accessibility_tree(&udid, None)
+        })
+        .await?;
+        return Ok(json(snapshot));
+    }
     let snapshot = accessibility_snapshot(state, udid, Some((query.x, query.y)), None).await?;
     Ok(json(snapshot))
 }
@@ -2568,6 +3058,17 @@ async fn perform_tap_payload(
         let snapshot = wait_for_snapshot_match(state.clone(), udid.clone(), wait_payload).await?;
         tap_point_from_snapshot(&snapshot, &payload.selector)?
     };
+
+    if android::is_android_id(&udid) {
+        return run_android_action(state, move |android| {
+            android.send_touch(&udid, x, y, "began")?;
+            if duration_ms > 0 {
+                std::thread::sleep(Duration::from_millis(duration_ms));
+            }
+            android.send_touch(&udid, x, y, "ended")
+        })
+        .await;
+    }
 
     run_bridge_action(state, move |bridge| {
         let input = bridge.create_input_session(&udid)?;
@@ -2651,6 +3152,13 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
             key_code,
             modifiers,
         } => {
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| {
+                    android.send_key(&udid, key_code, modifiers.unwrap_or(0))
+                })
+                .await?;
+                return Ok(json_value!({ "action": "key" }));
+            }
             run_bridge_action(state, move |bridge| {
                 bridge.send_key(&udid, key_code, modifiers.unwrap_or(0))
             })
@@ -2668,6 +3176,21 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
                 return Err(AppError::bad_request(
                     "keySequence cannot contain more than 512 key codes.",
                 ));
+            }
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| {
+                    let delay_ms = delay_ms.unwrap_or(0);
+                    let key_count = key_codes.len();
+                    for (index, key_code) in key_codes.into_iter().enumerate() {
+                        android.send_key(&udid, key_code, 0)?;
+                        if delay_ms > 0 && index + 1 < key_count {
+                            std::thread::sleep(Duration::from_millis(delay_ms));
+                        }
+                    }
+                    Ok(())
+                })
+                .await?;
+                return Ok(json_value!({ "action": "keySequence" }));
             }
             run_bridge_action(state, move |bridge| {
                 let input = bridge.create_input_session(&udid)?;
@@ -2696,6 +3219,28 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
                 return Err(AppError::bad_request(
                     "touch requires finite normalized x and y.",
                 ));
+            }
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| {
+                    let x = x.clamp(0.0, 1.0);
+                    let y = y.clamp(0.0, 1.0);
+                    if down.unwrap_or(false) || up.unwrap_or(false) {
+                        if down.unwrap_or(false) {
+                            android.send_touch(&udid, x, y, "began")?;
+                        }
+                        if down.unwrap_or(false) && up.unwrap_or(false) {
+                            std::thread::sleep(Duration::from_millis(delay_ms.unwrap_or(100)));
+                        }
+                        if up.unwrap_or(false) {
+                            android.send_touch(&udid, x, y, "ended")?;
+                        }
+                    } else {
+                        android.send_touch(&udid, x, y, phase.as_deref().unwrap_or("began"))?;
+                    }
+                    Ok(())
+                })
+                .await?;
+                return Ok(json_value!({ "action": "touch" }));
             }
             run_bridge_action(state, move |bridge| {
                 let input = bridge.create_input_session(&udid)?;
@@ -2727,6 +3272,31 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
                 return Err(AppError::bad_request(
                     "touchSequence cannot contain more than 64 events.",
                 ));
+            }
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| {
+                    for event in events {
+                        if !event.x.is_finite() || !event.y.is_finite() {
+                            return Err(AppError::bad_request(
+                                "touchSequence requires finite normalized x and y.",
+                            ));
+                        }
+                        android.send_touch(
+                            &udid,
+                            event.x.clamp(0.0, 1.0),
+                            event.y.clamp(0.0, 1.0),
+                            &event.phase,
+                        )?;
+                        if let Some(delay_ms) =
+                            event.delay_ms_after.filter(|delay_ms| *delay_ms > 0)
+                        {
+                            std::thread::sleep(Duration::from_millis(delay_ms));
+                        }
+                    }
+                    Ok(())
+                })
+                .await?;
+                return Ok(json_value!({ "action": "touchSequence" }));
             }
             run_bridge_action(state, move |bridge| {
                 let input = bridge.create_input_session(&udid)?;
@@ -2767,6 +3337,20 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
                     "swipe requires finite normalized coordinates.",
                 ));
             }
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| {
+                    android.send_swipe(
+                        &udid,
+                        start_x,
+                        start_y,
+                        end_x,
+                        end_y,
+                        duration_ms.unwrap_or(350),
+                    )
+                })
+                .await?;
+                return Ok(json_value!({ "action": "swipe" }));
+            }
             run_bridge_action(state, move |bridge| {
                 let step_count = steps.unwrap_or(12).max(1);
                 let delay =
@@ -2799,6 +3383,20 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
         } => {
             let (start_x, start_y, end_x, end_y, default_duration_ms) =
                 normalized_gesture_coordinates(&preset, delta)?;
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| {
+                    android.send_swipe(
+                        &udid,
+                        start_x,
+                        start_y,
+                        end_x,
+                        end_y,
+                        duration_ms.unwrap_or(default_duration_ms),
+                    )
+                })
+                .await?;
+                return Ok(json_value!({ "action": "gesture", "preset": preset }));
+            }
             run_bridge_action(state, move |bridge| {
                 let step_count = steps.unwrap_or(12).max(1);
                 let delay = Duration::from_millis(
@@ -2821,6 +3419,23 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
             Ok(json_value!({ "action": "gesture", "preset": preset }))
         }
         BatchStep::Type { text, delay_ms } => {
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| {
+                    if delay_ms.is_some() {
+                        for character in text.chars() {
+                            android.type_text(&udid, &character.to_string())?;
+                            if let Some(delay_ms) = delay_ms.filter(|delay_ms| *delay_ms > 0) {
+                                std::thread::sleep(Duration::from_millis(delay_ms));
+                            }
+                        }
+                        Ok(())
+                    } else {
+                        android.type_text(&udid, &text)
+                    }
+                })
+                .await?;
+                return Ok(json_value!({ "action": "type" }));
+            }
             run_bridge_action(state, move |bridge| {
                 let input = bridge.create_input_session(&udid)?;
                 for character in text.chars() {
@@ -2843,6 +3458,13 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
             button,
             duration_ms,
         } => {
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| {
+                    android.press_button(&udid, &button, duration_ms.unwrap_or(0))
+                })
+                .await?;
+                return Ok(json_value!({ "action": "button" }));
+            }
             run_bridge_action(state, move |bridge| {
                 bridge.press_button(&udid, &button, duration_ms.unwrap_or(0))
             })
@@ -2850,34 +3472,69 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
             Ok(json_value!({ "action": "button" }))
         }
         BatchStep::Launch { bundle_id } => {
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| {
+                    android.launch_package(&udid, &bundle_id)
+                })
+                .await?;
+                return Ok(json_value!({ "action": "launch" }));
+            }
             run_bridge_action(state, move |bridge| bridge.launch_bundle(&udid, &bundle_id)).await?;
             Ok(json_value!({ "action": "launch" }))
         }
         BatchStep::OpenUrl { url } => {
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| android.open_url(&udid, &url)).await?;
+                return Ok(json_value!({ "action": "openUrl" }));
+            }
             run_bridge_action(state, move |bridge| bridge.open_url(&udid, &url)).await?;
             Ok(json_value!({ "action": "openUrl" }))
         }
         BatchStep::Home => {
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| android.press_home(&udid)).await?;
+                return Ok(json_value!({ "action": "home" }));
+            }
             run_bridge_action(state, move |bridge| bridge.press_home(&udid)).await?;
             Ok(json_value!({ "action": "home" }))
         }
         BatchStep::DismissKeyboard => {
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| android.send_key(&udid, 41, 0)).await?;
+                return Ok(json_value!({ "action": "dismissKeyboard" }));
+            }
             run_bridge_action(state, move |bridge| bridge.send_key(&udid, 41, 0)).await?;
             Ok(json_value!({ "action": "dismissKeyboard" }))
         }
         BatchStep::AppSwitcher => {
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| android.open_app_switcher(&udid)).await?;
+                return Ok(json_value!({ "action": "appSwitcher" }));
+            }
             run_bridge_action(state, move |bridge| bridge.open_app_switcher(&udid)).await?;
             Ok(json_value!({ "action": "appSwitcher" }))
         }
         BatchStep::RotateLeft => {
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| android.rotate_right(&udid)).await?;
+                return Ok(json_value!({ "action": "rotateLeft" }));
+            }
             run_bridge_action(state, move |bridge| bridge.rotate_left(&udid)).await?;
             Ok(json_value!({ "action": "rotateLeft" }))
         }
         BatchStep::RotateRight => {
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| android.rotate_right(&udid)).await?;
+                return Ok(json_value!({ "action": "rotateRight" }));
+            }
             run_bridge_action(state, move |bridge| bridge.rotate_right(&udid)).await?;
             Ok(json_value!({ "action": "rotateRight" }))
         }
         BatchStep::ToggleAppearance => {
+            if android::is_android_id(&udid) {
+                run_android_action(state, move |android| android.toggle_appearance(&udid)).await?;
+                return Ok(json_value!({ "action": "toggleAppearance" }));
+            }
             run_bridge_action(state, move |bridge| bridge.toggle_appearance(&udid)).await?;
             Ok(json_value!({ "action": "toggleAppearance" }))
         }
@@ -3314,6 +3971,10 @@ async fn simulator_logs(
     Query(query): Query<LogsQuery>,
 ) -> Result<Json<Value>, AppError> {
     let limit = query.limit.unwrap_or(250).clamp(1, 1000);
+    if android::is_android_id(&udid) {
+        let entries = run_android_action(state, move |android| android.logs(&udid, limit)).await?;
+        return Ok(json(json_value!({ "entries": entries })));
+    }
     let filters = LogFilters::new(
         split_filter_values(query.levels.as_deref()),
         split_filter_values(query.processes.as_deref()),
@@ -4648,6 +5309,28 @@ where
         })?
 }
 
+async fn run_android_action<F, T>(state: AppState, action: F) -> Result<T, AppError>
+where
+    F: FnOnce(AndroidBridge) -> Result<T, AppError> + Send + 'static,
+    T: Send + 'static,
+{
+    let android = state.android.clone();
+    task::spawn_blocking(move || action(android))
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("Failed to join Android bridge task: {error}"))
+        })?
+}
+
+async fn all_device_values(state: AppState, force_refresh: bool) -> Result<Vec<Value>, AppError> {
+    let ios = list_simulators_cached(state.clone(), force_refresh).await?;
+    let mut values = state.registry.enrich_simulators(ios);
+    let android_devices =
+        run_android_action(state.clone(), |android| android.list_devices()).await?;
+    values.extend(state.android.enrich_devices(android_devices));
+    Ok(values)
+}
+
 async fn list_simulators_cached(
     state: AppState,
     force_refresh: bool,
@@ -4680,8 +5363,7 @@ async fn accessibility_snapshot(
 }
 
 async fn simulator_payload(state: AppState, udid: String) -> Result<Json<Value>, AppError> {
-    let simulators = list_simulators_cached(state.clone(), true).await?;
-    let enriched = state.registry.enrich_simulators(simulators);
+    let enriched = all_device_values(state.clone(), true).await?;
     let simulator = enriched
         .into_iter()
         .find(|entry| entry.get("udid").and_then(Value::as_str) == Some(udid.as_str()))
