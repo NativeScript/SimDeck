@@ -153,6 +153,9 @@ async function main() {
     },
     { phase: phaseSetup },
   );
+  await measuredStep("fixture app registration", waitForFixtureRegistration, {
+    phase: phaseSetup,
+  });
 
   await measuredStep(
     "setup launch SwiftUI fixture",
@@ -815,16 +818,16 @@ async function ensureFixtureForeground(label, options = {}) {
     );
   } catch (error) {
     launchError = error;
-    logStep(
-      `${label}: launch command reported ${String(error?.message ?? error).split("\n")[0]}`,
-    );
+    logStep(`${label}: launch command reported ${summarizeError(error)}`);
   }
 
   try {
     return await verifyUi(label, {
       expectFixture: true,
-      attempts: options.verifyAttempts ?? 8,
+      attempts: options.verifyAttempts ?? (launchError === null ? 8 : 2),
       delayMs: options.verifyDelayMs ?? 1_000,
+      waitTimeoutMs:
+        options.waitTimeoutMs ?? (launchError === null ? 5_000 : 1_000),
     });
   } catch (verifyError) {
     if (launchError === null) {
@@ -857,6 +860,37 @@ async function ensureFixtureForeground(label, options = {}) {
     attempts: options.fallbackVerifyAttempts ?? 12,
     delayMs: options.fallbackVerifyDelayMs ?? 1_500,
   });
+}
+
+async function waitForFixtureRegistration() {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
+    try {
+      const appContainer = runText(
+        "xcrun",
+        ["simctl", "get_app_container", simulatorUDID, fixtureBundleId],
+        { timeoutMs: 60_000 },
+      ).trim();
+      if (appContainer.length > 0) {
+        logStep(`fixture registered at ${appContainer}`);
+        return appContainer;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(1_000);
+  }
+  throw new Error(
+    `fixture app was not registered after install: ${summarizeError(lastError)}`,
+  );
+}
+
+function summarizeError(error) {
+  return String(error?.message ?? error)
+    .split("\n")
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(" | ");
 }
 
 function cliArgs(args) {
