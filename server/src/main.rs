@@ -99,6 +99,10 @@ enum Command {
         #[command(subcommand)]
         command: StudioCommand,
     },
+    Provider {
+        #[command(subcommand)]
+        command: ProviderCommand,
+    },
     #[command(hide = true)]
     Serve {
         #[arg(long, default_value_t = 4310)]
@@ -465,6 +469,48 @@ enum StudioCommand {
         video_codec: VideoCodecMode,
         #[arg(long, value_enum, conflicts_with = "low_latency")]
         stream_quality: Option<StreamQualityProfileArg>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProviderCommand {
+    Connect {
+        #[arg(long)]
+        studio_url: String,
+        #[arg(long)]
+        host_id: String,
+        #[arg(long)]
+        host_token: String,
+        #[arg(long)]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        work_root: Option<PathBuf>,
+    },
+    Run {
+        #[arg(long)]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        studio_url: Option<String>,
+        #[arg(long)]
+        host_id: Option<String>,
+        #[arg(long)]
+        host_token: Option<String>,
+        #[arg(long)]
+        work_root: Option<PathBuf>,
+        #[arg(long, default_value_t = 1)]
+        max_capacity: u32,
+        #[arg(long, default_value = "iPhone 17 Pro")]
+        simulator_template: String,
+        #[arg(long, default_value_t = 4310)]
+        port: u16,
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Software)]
+        video_codec: VideoCodecMode,
+        #[arg(long, value_enum, default_value_t = StreamQualityProfileArg::Smooth)]
+        stream_quality: StreamQualityProfileArg,
+    },
+    Status {
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
 }
 
@@ -1595,6 +1641,113 @@ fn studio_provider_bridge_script() -> anyhow::Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("Unable to find scripts/studio-provider-bridge.mjs."))
 }
 
+fn studio_host_provider_script() -> anyhow::Result<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(root) = project_root() {
+        candidates.push(root.join("scripts/studio-host-provider.mjs"));
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(package_root) = current_exe.parent().and_then(Path::parent) {
+            candidates.push(package_root.join("scripts/studio-host-provider.mjs"));
+        }
+    }
+    if let Ok(current_dir) = env::current_dir() {
+        candidates.push(current_dir.join("scripts/studio-host-provider.mjs"));
+    }
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| anyhow::anyhow!("Unable to find scripts/studio-host-provider.mjs."))
+}
+
+fn run_provider_command(command: ProviderCommand) -> anyhow::Result<()> {
+    let script = studio_host_provider_script()?;
+    let executable = env::current_exe().context("resolve simdeck executable")?;
+    let mut args = Vec::new();
+    match command {
+        ProviderCommand::Connect {
+            studio_url,
+            host_id,
+            host_token,
+            config,
+            work_root,
+        } => {
+            args.push("connect".to_owned());
+            push_arg(&mut args, "--studio-url", studio_url);
+            push_arg(&mut args, "--host-id", host_id);
+            push_arg(&mut args, "--host-token", host_token);
+            push_optional_path_arg(&mut args, "--config", config);
+            push_optional_path_arg(&mut args, "--work-root", work_root);
+        }
+        ProviderCommand::Run {
+            config,
+            studio_url,
+            host_id,
+            host_token,
+            work_root,
+            max_capacity,
+            simulator_template,
+            port,
+            video_codec,
+            stream_quality,
+        } => {
+            args.push("run".to_owned());
+            push_optional_path_arg(&mut args, "--config", config);
+            push_optional_arg(&mut args, "--studio-url", studio_url);
+            push_optional_arg(&mut args, "--host-id", host_id);
+            push_optional_arg(&mut args, "--host-token", host_token);
+            push_optional_path_arg(&mut args, "--work-root", work_root);
+            push_arg(&mut args, "--max-capacity", max_capacity.to_string());
+            push_arg(&mut args, "--simulator-template", simulator_template);
+            push_arg(&mut args, "--local-url", format!("http://127.0.0.1:{port}"));
+            push_arg(
+                &mut args,
+                "--video-codec",
+                video_codec.as_env_value().to_owned(),
+            );
+            push_arg(
+                &mut args,
+                "--stream-quality",
+                stream_quality.as_profile_id().to_owned(),
+            );
+        }
+        ProviderCommand::Status { config } => {
+            args.push("status".to_owned());
+            push_optional_path_arg(&mut args, "--config", config);
+        }
+    }
+    let status = ProcessCommand::new("node")
+        .arg(script)
+        .args(args)
+        .env("SIMDECK_BINARY", executable)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .context("run Studio provider command")?;
+    if !status.success() {
+        anyhow::bail!("Studio provider command exited with status {status}");
+    }
+    Ok(())
+}
+
+fn push_arg(args: &mut Vec<String>, name: &str, value: String) {
+    args.push(name.to_owned());
+    args.push(value);
+}
+
+fn push_optional_arg(args: &mut Vec<String>, name: &str, value: Option<String>) {
+    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+        push_arg(args, name, value);
+    }
+}
+
+fn push_optional_path_arg(args: &mut Vec<String>, name: &str, value: Option<PathBuf>) {
+    if let Some(value) = value {
+        push_arg(args, name, value.to_string_lossy().into_owned());
+    }
+}
+
 fn format_pairing_code(pairing_code: &str) -> String {
     if pairing_code.len() == 6 {
         format!("{} {}", &pairing_code[..3], &pairing_code[3..])
@@ -1789,6 +1942,7 @@ fn main() -> anyhow::Result<()> {
                 local_stream_fps: None,
             }),
         },
+        Command::Provider { command } => run_provider_command(command),
         Command::Serve {
             port,
             bind,

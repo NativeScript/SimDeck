@@ -54,6 +54,24 @@ Studio expose defaults to software H.264, realtime stream delivery, and the
 active codec/profile, and keeps the outbound bridge alive until Ctrl-C.
 `--video-codec hardware` opts back into the hardware encoder when that is preferable.
 
+### `provider`
+
+Run a self-hosted SimDeck Studio provider on an always-on Mac:
+
+```sh
+simdeck provider connect --studio-url https://simdeck.djdev.me \
+                         --host-id <id> --host-token <token>
+simdeck provider run [--max-capacity 1] [--simulator-template "iPhone 17 Pro"]
+simdeck provider status
+```
+
+`provider connect` stores the Studio host credential in
+`~/.simdeck/studio-provider.json` with user-only permissions. `provider run`
+starts or reuses the local daemon, heartbeats to Studio, polls for allocation
+jobs, clones simulators from the configured template, installs downloaded
+artifacts, launches the configured bundle id, proxies Studio API requests to the
+local daemon, and deletes session clones on release.
+
 ### `daemon start`
 
 Start or reuse the project daemon without opening the browser:
