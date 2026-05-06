@@ -209,9 +209,15 @@ function fixtureSource() {
 
 - (void)openFixtureURL:(NSURL *)url {
   if ([url.host isEqualToString:@"focus-message"]) {
-    self.statusLabel.text = @"Message Focused";
     dispatch_async(dispatch_get_main_queue(), ^{
       [self.messageField becomeFirstResponder];
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+        if (self.messageField.isFirstResponder) {
+          self.statusLabel.text = @"Message Focused";
+        } else {
+          self.statusLabel.text = @"Message Focus Failed";
+        }
+      });
     });
   } else {
     self.statusLabel.text = @"URL Opened";

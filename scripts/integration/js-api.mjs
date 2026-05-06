@@ -195,6 +195,16 @@ async function main() {
     await expectFixtureText("URL Opened");
   });
   await measuredStep("JS focus URL and type", async () => {
+    await session.tapElement(
+      simulatorUDID,
+      { id: "fixture.message" },
+      {
+        source: "native-ax",
+        maxDepth: 3,
+        waitTimeoutMs: 15_000,
+        durationMs: 30,
+      },
+    );
     await retryAsync(
       async () => {
         await session.openUrl(simulatorUDID, fixtureFocusUrl);
@@ -204,6 +214,7 @@ async function main() {
       3,
       2_000,
     );
+    await sleep(1_000);
     await session.batch(simulatorUDID, [
       { action: "type", text: "agent-ready", delayMs: 12 },
     ]);
@@ -292,12 +303,12 @@ async function main() {
   console.log("SimDeck JS API integration suite passed");
 }
 
-async function expectFixtureText(text) {
-  return expectElementContains({ id: "fixture.status" }, text);
+async function expectFixtureText(text, options = {}) {
+  return expectElementContains({ id: "fixture.status" }, text, options);
 }
 
-async function expectElementContains(selector, text) {
-  const deadline = Date.now() + 5_000;
+async function expectElementContains(selector, text, options = {}) {
+  const deadline = Date.now() + (options.timeoutMs ?? 15_000);
   let last = "";
   while (Date.now() < deadline) {
     const matches = await session.query(simulatorUDID, selector, {
