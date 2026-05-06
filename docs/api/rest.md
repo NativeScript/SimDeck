@@ -36,7 +36,9 @@ to mirror the daemon's WebRTC ICE configuration.
 
 ### `GET /api/metrics`
 
-Returns server-side video stats and a rolling buffer of client-side stats. See [Video Pipeline](/guide/video#tuning-with-metrics) for an annotated example.
+Returns server-side video stats, active encoder overload states, and a rolling
+buffer of client-side stats. See [Video Pipeline](/guide/video#tuning-with-metrics)
+for an annotated example.
 
 ### `GET /api/client-stream-stats`
 
@@ -88,10 +90,11 @@ quality.
 
 `videoCodec` accepts `hardware` or `software` from the UI, and the API also
 accepts `auto`. `fps` is clamped to the local stream range. Browser viewers show
-three profiles: `quality`, `balanced`, and `economy`. The API still accepts the
-legacy `fast`, `smooth`, and `ci-software` profiles for CLI/provider
-compatibility. When `profile` is provided, its resolution preset is applied;
-send `maxEdge` without `profile` for a custom resolution cap.
+five profiles: `quality` (4096 px), `balanced` (1280 px), `economy` (1080 px),
+`low` (720 px), and `tiny` (540 px). The API still accepts the legacy `fast`,
+`smooth`, and `ci-software` profiles for CLI/provider compatibility. When
+`profile` is provided, its resolution preset is applied; send `maxEdge` without
+`profile` for a custom resolution cap.
 
 ## Simulator inventory
 

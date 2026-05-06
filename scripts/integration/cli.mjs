@@ -153,31 +153,13 @@ async function main() {
     },
     { phase: phaseSetup },
   );
+  await measuredStep("fixture app registration", waitForFixtureRegistration, {
+    phase: phaseSetup,
+  });
 
   await measuredStep(
     "setup launch SwiftUI fixture",
-    async () => {
-      try {
-        await retrySimdeckJson(
-          cliArgs(["launch", simulatorUDID, fixtureBundleId]),
-          "setup launch SwiftUI fixture",
-          {
-            attempts: 3,
-            delayMs: 5_000,
-            timeoutMs: 180_000,
-          },
-        );
-        await verifyUi("setup launch SwiftUI fixture", {
-          expectFixture: true,
-          phase: phaseSetup,
-          waitTimeoutMs: 3_000,
-        });
-      } catch (error) {
-        logStep(
-          `setup warm launch skipped: ${String(error?.message ?? error).split("\n")[0]}`,
-        );
-      }
-    },
+    () => ensureFixtureForeground("setup launch SwiftUI fixture"),
     { phase: phaseSetup },
   );
 
@@ -441,6 +423,11 @@ async function runCliControls() {
     ],
     {},
     { skip: true, phase: phaseCommandSmoke },
+  );
+  await measuredStep(
+    "CLI foreground fixture before URL",
+    () => ensureFixtureForeground("CLI foreground fixture before URL"),
+    { phase: phaseTest },
   );
   await cliStep(
     "CLI open fixture URL",
@@ -815,6 +802,95 @@ async function cliStep(label, args, commandOptions = {}, verifyOptions = {}) {
     },
     { phase: verifyOptions.phase ?? phaseTest },
   );
+}
+
+async function ensureFixtureForeground(label, options = {}) {
+  let launchError = null;
+  try {
+    await retrySimdeckJson(
+      cliArgs(["launch", simulatorUDID, fixtureBundleId]),
+      label,
+      {
+        attempts: options.launchAttempts ?? 1,
+        delayMs: options.launchDelayMs ?? 5_000,
+        timeoutMs: options.launchTimeoutMs ?? 180_000,
+      },
+    );
+  } catch (error) {
+    launchError = error;
+    logStep(`${label}: launch command reported ${summarizeError(error)}`);
+  }
+
+  try {
+    return await verifyUi(label, {
+      expectFixture: true,
+      attempts: options.verifyAttempts ?? (launchError === null ? 8 : 2),
+      delayMs: options.verifyDelayMs ?? 1_000,
+      waitTimeoutMs:
+        options.waitTimeoutMs ?? (launchError === null ? 5_000 : 1_000),
+    });
+  } catch (verifyError) {
+    if (launchError === null) {
+      throw verifyError;
+    }
+    logStep(`${label}: tapping fixture icon after launch timeout`);
+  }
+
+  await retrySimdeckJson(
+    cliArgs([
+      "tap",
+      simulatorUDID,
+      "--label",
+      "SimDeckFixture",
+      "--wait-timeout-ms",
+      "15000",
+      "--duration-ms",
+      "30",
+    ]),
+    `${label} fixture icon tap`,
+    {
+      attempts: 2,
+      delayMs: 2_000,
+      timeoutMs: 180_000,
+    },
+  );
+
+  return verifyUi(label, {
+    expectFixture: true,
+    attempts: options.fallbackVerifyAttempts ?? 12,
+    delayMs: options.fallbackVerifyDelayMs ?? 1_500,
+  });
+}
+
+async function waitForFixtureRegistration() {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
+    try {
+      const appContainer = runText(
+        "xcrun",
+        ["simctl", "get_app_container", simulatorUDID, fixtureBundleId],
+        { timeoutMs: 60_000 },
+      ).trim();
+      if (appContainer.length > 0) {
+        logStep(`fixture registered at ${appContainer}`);
+        return appContainer;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(1_000);
+  }
+  throw new Error(
+    `fixture app was not registered after install: ${summarizeError(lastError)}`,
+  );
+}
+
+function summarizeError(error) {
+  return String(error?.message ?? error)
+    .split("\n")
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(" | ");
 }
 
 function cliArgs(args) {

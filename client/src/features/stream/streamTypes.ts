@@ -14,8 +14,10 @@ export type StreamQualityPreset =
   | "ci-software"
   | "economy"
   | "fast"
+  | "low"
   | "quality"
-  | "smooth";
+  | "smooth"
+  | "tiny";
 
 export interface StreamConfig {
   encoder: StreamEncoder;

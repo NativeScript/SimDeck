@@ -1669,6 +1669,7 @@ export function AppShell({
         debugPanel={
           debugVisible ? (
             <DebugPanel
+              encoder={selectedSimulator.privateDisplay?.encoder}
               fps={fps}
               inline
               onClose={() => setDebugVisible(false)}
@@ -1826,6 +1827,12 @@ function normalizeStreamQuality(
   }
   if (normalized === "economy" || normalized === "ci-software") {
     return "economy";
+  }
+  if (normalized === "low") {
+    return "low";
+  }
+  if (normalized === "tiny") {
+    return "tiny";
   }
   return fallback;
 }

@@ -32,7 +32,7 @@ It is CLI-only because it is meant for less capable machines where freshness
 matters more than maximum smoothness.
 
 The requested encoder mode is reported to clients in the JSON `videoCodec` field on `GET /api/health`.
-The browser UI exposes stream controls for encoder, FPS, and three quality choices: `quality`, `balanced`, and `economy`. Local browser sessions default to hardware H.264, 120 fps, and `quality`/full resolution with FPS choices of 30, 60, and 120. Remote browser sessions default to software H.264, 30 fps, and `balanced` with FPS choices of 15, 30, and 60.
+The browser UI exposes stream controls for encoder, FPS, and five quality choices: `quality` (4096 px), `balanced` (1280 px), `economy` (1080 px), `low` (720 px), and `tiny` (540 px). Local browser sessions default to hardware H.264, 120 fps, and `quality`/full resolution with FPS choices of 30, 60, and 120. Remote browser sessions default to software H.264, 30 fps, and `balanced` with FPS choices of 15, 30, and 60.
 
 ## Remote WebRTC ICE
 
@@ -82,6 +82,7 @@ A few practical guidelines:
 - **Use `--local-stream-fps` above 60 only for local high-refresh testing.** The local quality stream defaults to 60 fps; higher targets pace both capture refresh and hardware encode submission so the stream does not build delay by pushing unbounded frames.
 - **Switch to `software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
 - **Studio providers default to software H.264 plus `--stream-quality smooth`.** This profile uses a 1170-pixel longest edge, allows up to 60 fps, raises the bitrate budget to reduce compression artifacts, and lets multiple provider sessions share CPU cores without depending on one hardware encoder.
+- **Use `low` or `tiny` when resolution is the bottleneck.** `low` caps the longest edge at 720 pixels and targets 30 fps; `tiny` caps the longest edge at 540 pixels and targets 24 fps.
 - **The remote browser renders the live stream as a native `<video>` element.** The canvas remains for input geometry, but it is not in the live per-frame render path and does not preserve stale frames during reconnects.
 - **Use `--stream-quality ci-software` for denser virtualized CI Macs.** This profile uses software H.264 at a 960-pixel longest edge, targets 24 fps, lowers bitrate pressure, and favors fresh frames over full-resolution sharpness.
 - **Use `simdeck studio expose --video-codec hardware` only when a dedicated hardware encoder is preferable.** The normal Studio default stays on software H.264 so future multi-simulator provider hosts can scale across CPU cores.
@@ -114,6 +115,13 @@ Useful signals:
 | `frames_dropped_server` | If this climbs while a stream is open, the client cannot keep up.                 |
 | `keyframe_requests`     | Goes up every time the server forces a refresh. Frequent spikes mean rough seeks. |
 | `active_streams`        | Number of WebRTC streams currently subscribed.                                    |
+
+`encoders[].encoder.overloadState` reports native encoder pressure for each
+active simulator session. `strained` means encode latency is approaching the
+active frame budget; `overloaded` means smoothed latency is over budget or
+multiple frames in a row exceeded the budget. For hardware H.264 this usually
+means the shared VideoToolbox encoder is saturated; lower resolution/FPS or
+switch to software H.264.
 
 Clients can also push their decoder/renderer stats back to the server:
 

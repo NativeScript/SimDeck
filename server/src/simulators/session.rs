@@ -70,6 +70,10 @@ impl Drop for FrameSubscription {
 }
 
 impl SimulatorSession {
+    pub fn udid(&self) -> &str {
+        &self.inner.udid
+    }
+
     pub fn new(
         bridge: &NativeBridge,
         udid: String,

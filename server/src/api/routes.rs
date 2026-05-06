@@ -185,9 +185,26 @@ const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
         min_bitrate: 1_500_000,
         bits_per_pixel: 3,
     },
+    StreamQualityProfile {
+        id: "low",
+        label: "Low",
+        max_edge: 720,
+        fps: 30,
+        min_bitrate: 900_000,
+        bits_per_pixel: 2,
+    },
+    StreamQualityProfile {
+        id: "tiny",
+        label: "Tiny",
+        max_edge: 540,
+        fps: 24,
+        min_bitrate: 600_000,
+        bits_per_pixel: 2,
+    },
 ];
 
-const VISIBLE_STREAM_QUALITY_PROFILE_IDS: &[&str] = &["quality", "balanced", "economy"];
+const VISIBLE_STREAM_QUALITY_PROFILE_IDS: &[&str] =
+    &["quality", "balanced", "economy", "low", "tiny"];
 
 static STREAM_CONFIG_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
 
@@ -626,7 +643,14 @@ fn normalize_video_codec(codec: &str) -> Option<&'static str> {
 }
 
 async fn metrics(State(state): State<AppState>) -> Json<Value> {
-    json(json_value!(state.metrics.snapshot()))
+    let mut snapshot = json_value!(state.metrics.snapshot());
+    if let Some(object) = snapshot.as_object_mut() {
+        object.insert(
+            "encoders".to_owned(),
+            json_value!(state.registry.encoder_snapshots()),
+        );
+    }
+    json(snapshot)
 }
 
 async fn stream_quality(State(state): State<AppState>) -> Json<Value> {

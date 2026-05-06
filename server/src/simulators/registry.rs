@@ -132,6 +132,20 @@ impl SessionRegistry<SimulatorSession> {
         }
     }
 
+    pub fn encoder_snapshots(&self) -> Vec<serde_json::Value> {
+        self.store
+            .values()
+            .into_iter()
+            .map(|session| {
+                let snapshot = session.snapshot();
+                json!({
+                    "udid": session.udid(),
+                    "encoder": snapshot.get("encoder").cloned().unwrap_or_else(|| json!({})),
+                })
+            })
+            .collect()
+    }
+
     pub fn enrich_simulators(&self, simulators: Vec<Simulator>) -> Vec<serde_json::Value> {
         simulators
             .into_iter()
