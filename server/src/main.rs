@@ -4161,21 +4161,34 @@ fn batch_line_to_json_step(line: &str) -> anyhow::Result<Value> {
     let value = match command {
         "sleep" => serde_json::json!({
             "action": "sleep",
-            "seconds": tokens.get(1).and_then(|value| value.parse::<f64>().ok()).unwrap_or(0.0),
+            "ms": parse_batch_sleep_duration_ms(&args, tokens.get(1).map(String::as_str))?,
         }),
         "tap" => serde_json::json!({
             "action": "tap",
             "x": args.value("x").and_then(|value| value.parse::<f64>().ok()),
             "y": args.value("y").and_then(|value| value.parse::<f64>().ok()),
             "normalized": args.flag("normalized"),
-            "selector": {
-                "id": args.value("id"),
-                "label": args.value("label"),
-                "value": args.value("value"),
-                "elementType": args.value("element-type"),
-            },
+            "selector": batch_selector_json(&args),
             "durationMs": args.value("duration-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(60),
             "waitTimeoutMs": args.value("wait-timeout-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(0),
+            "pollMs": args.value("poll-interval-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(100),
+        }),
+        "wait-for" | "waitFor" => serde_json::json!({
+            "action": "waitFor",
+            "selector": batch_selector_json(&args),
+            "source": args.value("source"),
+            "maxDepth": args.value("max-depth").and_then(|value| value.parse::<usize>().ok()),
+            "includeHidden": args.flag("include-hidden"),
+            "timeoutMs": args.value("timeout-ms").or_else(|| args.value("wait-timeout-ms")).and_then(|value| value.parse::<u64>().ok()).unwrap_or(5_000),
+            "pollMs": args.value("poll-interval-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(100),
+        }),
+        "assert" => serde_json::json!({
+            "action": "assert",
+            "selector": batch_selector_json(&args),
+            "source": args.value("source"),
+            "maxDepth": args.value("max-depth").and_then(|value| value.parse::<usize>().ok()),
+            "includeHidden": args.flag("include-hidden"),
+            "timeoutMs": args.value("timeout-ms").or_else(|| args.value("wait-timeout-ms")).and_then(|value| value.parse::<u64>().ok()).unwrap_or(5_000),
             "pollMs": args.value("poll-interval-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(100),
         }),
         "key" => serde_json::json!({
@@ -4280,14 +4293,16 @@ fn run_batch_step(
     };
     match command {
         "sleep" => {
-            let seconds = tokens
-                .get(1)
-                .ok_or_else(|| crate::error::AppError::bad_request("sleep requires seconds."))?
-                .parse::<f64>()
-                .map_err(|_| {
-                    crate::error::AppError::bad_request("sleep seconds must be numeric.")
-                })?;
-            sleep_ms((seconds * 1000.0).max(0.0) as u64);
+            let args = parse_step_options(&tokens[1..]);
+            let duration_ms = parse_batch_sleep_duration_ms(
+                &args,
+                tokens
+                    .iter()
+                    .skip(1)
+                    .find(|token| !token.starts_with('-'))
+                    .map(String::as_str),
+            )?;
+            sleep_ms(duration_ms);
             Ok("sleep")
         }
         "tap" => {
@@ -4306,12 +4321,7 @@ fn run_batch_step(
                     x,
                     y,
                     normalized,
-                    selector: ElementSelector {
-                        id: args.value("id").map(str::to_owned),
-                        label: args.value("label").map(str::to_owned),
-                        value: args.value("value").map(str::to_owned),
-                        element_type: args.value("element-type").map(str::to_owned),
-                    },
+                    selector: batch_selector_from_args(&args),
                     wait_timeout_ms: args
                         .value("wait-timeout-ms")
                         .and_then(|value| value.parse().ok())
@@ -4328,6 +4338,16 @@ fn run_batch_step(
                 perform_tap(bridge, udid, target.x, target.y, duration_ms)?;
             }
             Ok("tap")
+        }
+        "wait-for" | "waitFor" => {
+            let args = parse_step_options(&tokens[1..]);
+            wait_for_batch_selector(bridge, udid, &args)?;
+            Ok("wait-for")
+        }
+        "assert" => {
+            let args = parse_step_options(&tokens[1..]);
+            wait_for_batch_selector(bridge, udid, &args)?;
+            Ok("assert")
         }
         "swipe" => {
             let args = parse_step_options(&tokens[1..]);
@@ -4590,6 +4610,156 @@ fn required_f64(args: &StepOptions, key: &str) -> Result<f64, crate::error::AppE
         .ok_or_else(|| crate::error::AppError::bad_request(format!("Missing --{key}.")))?
         .parse::<f64>()
         .map_err(|_| crate::error::AppError::bad_request(format!("--{key} must be numeric.")))
+}
+
+fn batch_selector_json(args: &StepOptions) -> Value {
+    serde_json::json!({
+        "id": args.value("id"),
+        "label": args.value("label"),
+        "value": args.value("value"),
+        "elementType": args.value("element-type"),
+    })
+}
+
+fn batch_selector_from_args(args: &StepOptions) -> ElementSelector {
+    ElementSelector {
+        id: args.value("id").map(str::to_owned),
+        label: args.value("label").map(str::to_owned),
+        value: args.value("value").map(str::to_owned),
+        element_type: args.value("element-type").map(str::to_owned),
+    }
+}
+
+fn wait_for_batch_selector(
+    bridge: &NativeBridge,
+    udid: &str,
+    args: &StepOptions,
+) -> Result<(), crate::error::AppError> {
+    let selector = batch_selector_from_args(args);
+    if selector.id.is_none()
+        && selector.label.is_none()
+        && selector.value.is_none()
+        && selector.element_type.is_none()
+    {
+        return Err(crate::error::AppError::bad_request(
+            "wait-for/assert requires a selector flag.",
+        ));
+    }
+
+    let timeout_ms = args
+        .value("timeout-ms")
+        .or_else(|| args.value("wait-timeout-ms"))
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(5_000);
+    let poll_interval_ms = args
+        .value("poll-interval-ms")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(100)
+        .max(10);
+    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+
+    loop {
+        let snapshot = bridge.accessibility_snapshot(udid, None)?;
+        if snapshot_contains_element(&snapshot, &selector) {
+            return Ok(());
+        }
+        if timeout_ms == 0 || std::time::Instant::now() >= deadline {
+            return Err(crate::error::AppError::not_found(
+                "No accessibility element matched the selector.",
+            ));
+        }
+        sleep_ms(poll_interval_ms);
+    }
+}
+
+fn snapshot_contains_element(snapshot: &Value, selector: &ElementSelector) -> bool {
+    snapshot
+        .get("roots")
+        .and_then(Value::as_array)
+        .map(|roots| {
+            roots
+                .iter()
+                .any(|root| node_contains_matching_element(root, selector))
+        })
+        .unwrap_or(false)
+}
+
+fn node_contains_matching_element(node: &Value, selector: &ElementSelector) -> bool {
+    element_matches(node, selector)
+        || node
+            .get("children")
+            .and_then(Value::as_array)
+            .map(|children| {
+                children
+                    .iter()
+                    .any(|child| node_contains_matching_element(child, selector))
+            })
+            .unwrap_or(false)
+}
+
+fn parse_batch_sleep_duration_ms(
+    args: &StepOptions,
+    positional: Option<&str>,
+) -> Result<u64, crate::error::AppError> {
+    if let Some(value) = args
+        .value("ms")
+        .or_else(|| args.value("milliseconds"))
+        .or_else(|| args.value("duration-ms"))
+    {
+        return parse_duration_ms_value(value, "sleep --ms");
+    }
+
+    if let Some(value) = args.value("seconds").or_else(|| args.value("s")) {
+        return parse_duration_seconds_value(value, "sleep --seconds");
+    }
+
+    let Some(value) = positional else {
+        return Err(crate::error::AppError::bad_request(
+            "sleep requires a duration, for example `sleep 500`, `sleep 500ms`, or `sleep 0.5s`.",
+        ));
+    };
+
+    parse_duration_literal_ms(value)
+}
+
+fn parse_duration_literal_ms(value: &str) -> Result<u64, crate::error::AppError> {
+    let value = value.trim();
+    if let Some(ms) = value.strip_suffix("ms") {
+        return parse_duration_ms_value(ms, "sleep duration");
+    }
+    if let Some(seconds) = value.strip_suffix('s') {
+        return parse_duration_seconds_value(seconds, "sleep duration");
+    }
+    parse_duration_ms_value(value, "sleep duration")
+}
+
+fn parse_duration_ms_value(value: &str, context: &str) -> Result<u64, crate::error::AppError> {
+    let duration = value
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| crate::error::AppError::bad_request(format!("{context} must be numeric.")))?;
+    finite_non_negative_duration_ms(duration, 1.0, context)
+}
+
+fn parse_duration_seconds_value(value: &str, context: &str) -> Result<u64, crate::error::AppError> {
+    let duration = value
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| crate::error::AppError::bad_request(format!("{context} must be numeric.")))?;
+    finite_non_negative_duration_ms(duration, 1000.0, context)
+}
+
+fn finite_non_negative_duration_ms(
+    value: f64,
+    multiplier: f64,
+    context: &str,
+) -> Result<u64, crate::error::AppError> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(crate::error::AppError::bad_request(format!(
+            "{context} must be finite and non-negative."
+        )));
+    }
+    Ok((value * multiplier).round() as u64)
 }
 
 fn tokenize_step(line: &str) -> Result<Vec<String>, crate::error::AppError> {
@@ -4974,10 +5144,11 @@ fn default_client_root() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_accessibility_point_for_display, server_health_watchdog_should_restart,
-        service_post_error_is_retryable, studio_daemon_restart_args, Cli, Command, DaemonCommand,
-        StreamQualityProfileArg, StudioExposeOptions, VideoCodecMode,
-        SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD, SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
+        batch_line_to_json_step, normalize_accessibility_point_for_display,
+        server_health_watchdog_should_restart, service_post_error_is_retryable,
+        studio_daemon_restart_args, Cli, Command, DaemonCommand, StreamQualityProfileArg,
+        StudioExposeOptions, VideoCodecMode, SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD,
+        SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
     };
     use clap::Parser;
 
@@ -5052,6 +5223,57 @@ mod tests {
             "touch",
             "Connection reset by peer (os error 54)"
         ));
+    }
+
+    #[test]
+    fn batch_sleep_positional_duration_defaults_to_milliseconds() {
+        let step = batch_line_to_json_step("sleep 500").unwrap();
+
+        assert_eq!(step["action"], "sleep");
+        assert_eq!(step["ms"], 500);
+        assert!(step.get("seconds").is_none());
+    }
+
+    #[test]
+    fn batch_sleep_accepts_explicit_seconds_and_milliseconds() {
+        assert_eq!(batch_line_to_json_step("sleep 0.5s").unwrap()["ms"], 500);
+        assert_eq!(
+            batch_line_to_json_step("sleep --seconds 0.25").unwrap()["ms"],
+            250
+        );
+        assert_eq!(
+            batch_line_to_json_step("sleep --ms 125").unwrap()["ms"],
+            125
+        );
+        assert_eq!(
+            batch_line_to_json_step("sleep --duration-ms 75").unwrap()["ms"],
+            75
+        );
+    }
+
+    #[test]
+    fn batch_wait_for_maps_selector_and_timeout_options() {
+        let step = batch_line_to_json_step(
+            "wait-for --id todo-title-1 --label Done --timeout-ms 750 --poll-interval-ms 25 --source native-ax --max-depth 4",
+        )
+        .unwrap();
+
+        assert_eq!(step["action"], "waitFor");
+        assert_eq!(step["selector"]["id"], "todo-title-1");
+        assert_eq!(step["selector"]["label"], "Done");
+        assert_eq!(step["timeoutMs"], 750);
+        assert_eq!(step["pollMs"], 25);
+        assert_eq!(step["source"], "native-ax");
+        assert_eq!(step["maxDepth"], 4);
+    }
+
+    #[test]
+    fn batch_assert_maps_to_assert_action() {
+        let step = batch_line_to_json_step("assert --value Ready").unwrap();
+
+        assert_eq!(step["action"], "assert");
+        assert_eq!(step["selector"]["value"], "Ready");
+        assert_eq!(step["timeoutMs"], 5000);
     }
 
     #[test]

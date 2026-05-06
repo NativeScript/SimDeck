@@ -227,10 +227,11 @@ Run a known sequence through one command:
 simdeck batch <udid> \
   --step "tap --label Continue --wait-timeout-ms 5000" \
   --step "type 'hello world'" \
+  --step "wait-for --label 'hello world' --timeout-ms 5000" \
   --step "gesture scroll-down"
 ```
 
-Batch input can come from `--step`, `--file`, or `--stdin`. It fails fast by default; pass `--continue-on-error` for best-effort execution.
+Batch input can come from `--step`, `--file`, or `--stdin`. Use `wait-for` or `assert` with selector flags (`--id`, `--label`, `--value`, `--element-type`) to wait for UI state instead of fixed delays. `sleep 500` waits 500 ms; suffix seconds explicitly with `s`, as in `sleep 0.5s`. It fails fast by default; pass `--continue-on-error` for best-effort execution.
 
 ## Evidence
 

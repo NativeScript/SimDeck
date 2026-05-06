@@ -18,16 +18,20 @@ simdeck -r
 simdeck daemon start
 simdeck daemon restart
 simdeck daemon killall
-simdeck ui --open
+simdeck ui
 npm run build:cli && ./build/simdeck ui --open
 simdeck daemon start --video-codec software
 simdeck daemon start --video-codec software --low-latency
 simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
+simdeck batch <udid> --step "tap --label Continue" --step "type 'hello'" --step "wait-for --label hello"
 ```
 
 `simdeck` alone starts a foreground workspace daemon, prints URLs. The optional single argument is a simulator name or UDID to select by default. Use `-d` for detached start, `-k` to kill the background daemon, and `-r` to restart it.
 
 Viewer: usually `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
+
+Open the URL reported by the CLI in the in-app browser using Browser Use if available.
+`simdeck ui --open` would open the default browser - taking focus away from the app - so prefer the in app browser always. `--open` is not meant for agents.
 
 ## Device And App
 
@@ -144,6 +148,8 @@ simdeck tap <UDID> --label "Continue" --wait-timeout-ms 5000
 simdeck swipe <UDID> 200 700 200 200 --pre-delay-ms 100 --post-delay-ms 250
 simdeck button <UDID> lock --duration-ms 1000
 ```
+
+Prefer to use `wait-for` or `assert` in a batch to wait for UI state instead of fixed delays. `sleep 500` in a batch waits 500 ms. Use `sleep 0.5s` or `sleep --seconds 0.5` when you want to write seconds explicitly.
 
 Use `batch` when steps are known; use discrete commands when a later step depends on parsing previous output.
 

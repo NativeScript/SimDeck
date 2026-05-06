@@ -158,7 +158,7 @@ simdeck key-combo <udid> --modifiers cmd --key a
 simdeck type <udid> "hello"
 simdeck type <udid> --file message.txt
 simdeck button <udid> lock --duration-ms 1000
-simdeck batch <udid> --step "tap --label Continue" --step "type 'hello'"
+simdeck batch <udid> --step "tap --label Continue" --step "type 'hello'" --step "wait-for --label hello"
 simdeck dismiss-keyboard <udid>
 simdeck home <udid>
 simdeck app-switcher <udid>
