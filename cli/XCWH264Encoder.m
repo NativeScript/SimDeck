@@ -477,6 +477,11 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 - (nullable CVPixelBufferRef)copySoftwareScaledPixelBuffer:(CVPixelBufferRef)pixelBuffer
                                                targetWidth:(int32_t)targetWidth
                                               targetHeight:(int32_t)targetHeight;
+- (BOOL)shouldUseSoftwareScalerForSourceWidth:(int32_t)sourceWidth
+                                  sourceHeight:(int32_t)sourceHeight
+                                   targetWidth:(int32_t)targetWidth
+                                  targetHeight:(int32_t)targetHeight
+                                   pixelFormat:(OSType)pixelFormat;
 - (nullable CVPixelBufferRef)copyPixelBufferFromScalingPoolWithWidth:(int32_t)targetWidth
                                                               height:(int32_t)targetHeight
                                                          pixelFormat:(OSType)pixelFormat;
@@ -715,7 +720,11 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 }
 
 - (uint64_t)maximumHardwareFrameIntervalUsLocked {
-    return _realtimeStreamMode ? XCWRealtimeMaximumFrameIntervalUs() : XCWLocalStreamMaximumFrameIntervalUs();
+    if (_realtimeStreamMode) {
+        uint64_t minimumFpsIntervalUs = (uint64_t)llround(1000000.0 / (double)XCWMinimumLocalStreamFrameRate);
+        return MAX(XCWRealtimeMaximumFrameIntervalUs(), minimumFpsIntervalUs);
+    }
+    return XCWLocalStreamMaximumFrameIntervalUs();
 }
 
 - (int32_t)expectedFrameRateLocked {
@@ -807,7 +816,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 }
 
 - (void)adaptHardwarePacingForLatencyUs:(uint64_t)latencyUs {
-    if ((_encoderMode != XCWVideoEncoderModeAuto && _encoderMode != XCWVideoEncoderModeH264Hardware) || !_lowLatencyMode || latencyUs == 0) {
+    if ((_encoderMode != XCWVideoEncoderModeAuto && _encoderMode != XCWVideoEncoderModeH264Hardware) || !_realtimeStreamMode || latencyUs == 0) {
         return;
     }
     if (_hardwareFrameIntervalUs == 0) {
@@ -1077,10 +1086,23 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
                                               targetHeight:(int32_t)targetHeight {
     int32_t sourceWidth = (int32_t)CVPixelBufferGetWidth(pixelBuffer);
     int32_t sourceHeight = (int32_t)CVPixelBufferGetHeight(pixelBuffer);
+    OSType sourcePixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
     BOOL shouldCopyStableRealtimeBuffer = _realtimeStreamMode || _lowLatencyMode;
     if (sourceWidth == targetWidth && sourceHeight == targetHeight && !shouldCopyStableRealtimeBuffer) {
         CVPixelBufferRetain(pixelBuffer);
         return pixelBuffer;
+    }
+    if ([self shouldUseSoftwareScalerForSourceWidth:sourceWidth
+                                       sourceHeight:sourceHeight
+                                        targetWidth:targetWidth
+                                       targetHeight:targetHeight
+                                        pixelFormat:sourcePixelFormat]) {
+        CVPixelBufferRef scaledPixelBuffer = [self copySoftwareScaledPixelBuffer:pixelBuffer
+                                                                     targetWidth:targetWidth
+                                                                    targetHeight:targetHeight];
+        if (scaledPixelBuffer != NULL) {
+            return scaledPixelBuffer;
+        }
     }
 
     if (_pixelTransferSession == NULL) {
@@ -1105,7 +1127,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
                              kVTScalingMode_Normal);
     }
 
-    OSType sourcePixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
     CVPixelBufferRef scaledPixelBuffer = [self copyPixelBufferFromScalingPoolWithWidth:targetWidth
                                                                                 height:targetHeight
                                                                            pixelFormat:sourcePixelFormat];
@@ -1128,6 +1149,20 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     }
 
     return scaledPixelBuffer;
+}
+
+- (BOOL)shouldUseSoftwareScalerForSourceWidth:(int32_t)sourceWidth
+                                  sourceHeight:(int32_t)sourceHeight
+                                   targetWidth:(int32_t)targetWidth
+                                  targetHeight:(int32_t)targetHeight
+                                   pixelFormat:(OSType)pixelFormat {
+    if (!_realtimeStreamMode || !XCWPixelFormatSupportsSoftwareScaling(pixelFormat)) {
+        return NO;
+    }
+    if (sourceWidth == targetWidth && sourceHeight == targetHeight) {
+        return NO;
+    }
+    return _encoderMode == XCWVideoEncoderModeAuto || _encoderMode == XCWVideoEncoderModeH264Hardware;
 }
 
 - (nullable CVPixelBufferRef)copySoftwareScaledPixelBuffer:(CVPixelBufferRef)pixelBuffer
