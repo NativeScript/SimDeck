@@ -11,6 +11,23 @@ export function simulatorRuntimeLabel(simulator: SimulatorMetadata): string {
   );
 }
 
+export function shouldRenderNativeChrome(
+  simulator: SimulatorMetadata,
+): boolean {
+  const identifier = simulator.deviceTypeIdentifier ?? "";
+  const name = simulator.name ?? "";
+  const deviceTypeName = simulator.deviceTypeName ?? "";
+  return (
+    identifier.includes(".iPhone-") ||
+    identifier.includes(".iPad-") ||
+    identifier.includes(".Apple-Watch-") ||
+    name.startsWith("iPhone") ||
+    name.startsWith("iPad") ||
+    name.startsWith("Apple Watch") ||
+    deviceTypeName.startsWith("Apple Watch")
+  );
+}
+
 function formatRuntimeLabel(value: string | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) {
