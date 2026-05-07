@@ -9,42 +9,55 @@ SimDeck supports two test layers: a small JS/TS client package for app tests, an
 ```ts
 import { connect } from "simdeck/test";
 
-const sim = await connect();
+const sim = await connect({ udid: "<udid>" });
 
 try {
   const devices = await sim.list();
-  await sim.launch("<udid>", "com.example.App");
-  await sim.tap("<udid>", 0.5, 0.5);
-  await sim.waitFor("<udid>", { label: "Continue" });
-  const png = await sim.screenshot("<udid>");
+  await sim.launch("com.example.App");
+  await sim.tap(0.5, 0.5);
+  await sim.waitFor({ label: "Continue" });
+  const png = await sim.screenshot();
 } finally {
   sim.close();
 }
 ```
 
-`connect()` starts the daemon when needed, reuses it when healthy, and only stops daemons it started itself unless `keepDaemon` is set.
+`connect()` starts the daemon when needed, reuses it when healthy, and only stops daemons it started itself unless `keepDaemon` is set. Pass `udid` to bind the session to one simulator; existing calls that pass `udid` as the first method argument still work, and `sim.device("<other-udid>")` returns a session bound to another simulator.
 
 ## Session API
 
 The current session object exposes:
 
-| Method         | Purpose                                                           |
-| -------------- | ----------------------------------------------------------------- |
-| `list()`       | Fetch simulator inventory from `GET /api/simulators`.             |
-| `launch()`     | Launch an installed bundle ID.                                    |
-| `openUrl()`    | Open a URL or deep link.                                          |
-| `tap()`        | Tap normalized screen coordinates.                                |
-| `key()`        | Send one HID key code.                                            |
-| `button()`     | Press a hardware button.                                          |
-| `tree()`       | Fetch an accessibility hierarchy.                                 |
-| `query()`      | Return compact matches for a selector.                            |
-| `waitFor()`    | Poll until a selector appears.                                    |
-| `assert()`     | Assert a selector is present.                                     |
-| `batch()`      | Run multiple REST actions through `/api/simulators/{udid}/batch`. |
-| `screenshot()` | Return a PNG buffer.                                              |
-| `close()`      | Stop the daemon if this session started it.                       |
+| Method                 | Purpose                                                           |
+| ---------------------- | ----------------------------------------------------------------- |
+| `list()`               | Fetch simulator inventory from `GET /api/simulators`.             |
+| `launch()`             | Launch an installed bundle ID.                                    |
+| `openUrl()`            | Open a URL or deep link.                                          |
+| `tap()`                | Tap normalized screen coordinates.                                |
+| `key()`                | Send one HID key code.                                            |
+| `button()`             | Press a hardware button.                                          |
+| `tree()`               | Fetch an accessibility hierarchy.                                 |
+| `query()`              | Return compact matches for a selector.                            |
+| `waitFor()`            | Poll until a selector appears.                                    |
+| `waitForNot()`         | Poll until a selector disappears.                                 |
+| `assert()`             | Assert a selector is present.                                     |
+| `assertNot()`          | Assert a selector is absent.                                      |
+| `scrollUntilVisible()` | Scroll until a selector appears or the timeout expires.           |
+| `batch()`              | Run multiple REST actions through `/api/simulators/{udid}/batch`. |
+| `screenshot()`         | Return a PNG buffer.                                              |
+| `close()`              | Stop the daemon if this session started it.                       |
 
-Selectors can match `id`, `label`, `value`, or `type`. Query options accept `source`, `maxDepth`, and `includeHidden`.
+Selectors can match `text`, `id`, `label`, `value`, `type`, `index`, `enabled`, `checked`, `focused`, and `selected`. Set `regex: true` to treat string selector fields as regular expressions. Query options accept `source`, `maxDepth`, and `includeHidden`.
+
+## Maestro-Compatible YAML
+
+The CLI includes a compatibility runner for common Maestro YAML flows:
+
+```sh
+simdeck maestro test <udid> flow.yaml --artifacts-dir artifacts/maestro
+```
+
+Supported commands include `launchApp`, `openLink`, `tapOn`, `inputText`, `eraseText`, `pressKey`, `assertVisible`, `assertNotVisible`, `scrollUntilVisible`, `swipe`, `takeScreenshot`, and `waitForAnimationToEnd`. Unsupported Maestro commands fail clearly so the flow can be adjusted or the compatibility layer can be expanded.
 
 ## Repository Integration Suite
 

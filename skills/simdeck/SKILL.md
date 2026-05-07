@@ -84,13 +84,13 @@ For persistent app integration tests, use `simdeck/test` instead of shelling out
 ```ts
 import { connect } from "simdeck/test";
 
-const simdeck = await connect();
+const simdeck = await connect({ udid });
 try {
-  await simdeck.launch(udid, "com.example.App");
-  await simdeck.waitFor(udid, { id: "login.button" }, { maxDepth: 8 });
-  await simdeck.tap(udid, 0.5, 0.5);
-  await simdeck.assert(udid, { label: "Welcome" }, { maxDepth: 8 });
-  const matches = await simdeck.query(udid, { id: "account.name" });
+  await simdeck.launch("com.example.App");
+  await simdeck.waitFor({ id: "login.button" }, { maxDepth: 8 });
+  await simdeck.tap(0.5, 0.5);
+  await simdeck.assert({ label: "Welcome" }, { maxDepth: 8 });
+  const matches = await simdeck.query({ id: "account.name" });
   console.log(matches);
 } finally {
   simdeck.close();
@@ -166,7 +166,7 @@ Batch rules: one source (`--step`, `--file`, or `--stdin`); keep `<UDID>` at bat
 For JS tests, batch can combine action and verification without extra CLI process startup:
 
 ```ts
-await simdeck.batch(udid, [
+await simdeck.batch([
   { action: "tap", selector: { label: "Continue" }, waitTimeoutMs: 5000 },
   {
     action: "waitFor",
@@ -175,6 +175,12 @@ await simdeck.batch(udid, [
   },
   { action: "assert", selector: { id: "fixture.status" } },
 ]);
+```
+
+For app-style flows, SimDeck can run a practical subset of Maestro YAML:
+
+```bash
+simdeck maestro test <UDID> flow.yaml --artifacts-dir artifacts/maestro
 ```
 
 ## Evidence

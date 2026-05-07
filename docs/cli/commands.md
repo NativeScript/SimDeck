@@ -251,6 +251,16 @@ simdeck batch <udid> \
 
 Batch input can come from `--step`, `--file`, or `--stdin`. Use `wait-for` or `assert` with selector flags (`--id`, `--label`, `--value`, `--element-type`) to wait for UI state instead of fixed delays. `sleep 500` waits 500 ms; suffix seconds explicitly with `s`, as in `sleep 0.5s`. It fails fast by default; pass `--continue-on-error` for best-effort execution.
 
+## Maestro YAML
+
+Run common Maestro flows through SimDeck's daemon-backed iOS Simulator API:
+
+```sh
+simdeck maestro test <udid> flow.yaml --artifacts-dir artifacts/maestro
+```
+
+The compatibility runner supports the core local commands: `launchApp`, `openLink`, `tapOn`, `inputText`, `eraseText`, `pressKey`, `assertVisible`, `assertNotVisible`, `scrollUntilVisible`, `swipe`, `takeScreenshot`, and `waitForAnimationToEnd`.
+
 ## Evidence
 
 ```sh

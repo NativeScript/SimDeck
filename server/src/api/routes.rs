@@ -17,6 +17,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::{SinkExt, StreamExt};
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::Map;
 use serde_json::{json as json_value, Value};
@@ -266,11 +267,18 @@ struct ButtonPayload {
 #[derive(Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 struct ElementSelectorPayload {
+    text: Option<String>,
     id: Option<String>,
     label: Option<String>,
     value: Option<String>,
     #[serde(alias = "type")]
     element_type: Option<String>,
+    index: Option<usize>,
+    enabled: Option<bool>,
+    checked: Option<bool>,
+    focused: Option<bool>,
+    selected: Option<bool>,
+    regex: Option<bool>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -294,6 +302,21 @@ struct WaitForPayload {
     include_hidden: Option<bool>,
     timeout_ms: Option<u64>,
     poll_ms: Option<u64>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ScrollUntilVisiblePayload {
+    #[serde(default)]
+    selector: ElementSelectorPayload,
+    source: Option<String>,
+    max_depth: Option<usize>,
+    include_hidden: Option<bool>,
+    timeout_ms: Option<u64>,
+    poll_ms: Option<u64>,
+    direction: Option<String>,
+    duration_ms: Option<u64>,
+    steps: Option<u32>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -333,6 +356,8 @@ enum BatchStep {
     Tap(TapElementPayload),
     WaitFor(WaitForPayload),
     Assert(WaitForPayload),
+    AssertNot(WaitForPayload),
+    ScrollUntilVisible(ScrollUntilVisiblePayload),
     Key {
         key_code: u16,
         modifiers: Option<u32>,
@@ -490,6 +515,18 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/query", post(accessibility_query))
         .route("/api/simulators/{udid}/wait-for", post(wait_for_element))
         .route("/api/simulators/{udid}/assert", post(assert_element))
+        .route(
+            "/api/simulators/{udid}/wait-for-not",
+            post(wait_for_not_element),
+        )
+        .route(
+            "/api/simulators/{udid}/assert-not",
+            post(assert_not_element),
+        )
+        .route(
+            "/api/simulators/{udid}/scroll-until-visible",
+            post(scroll_until_visible),
+        )
         .route("/api/simulators/{udid}/batch", post(run_batch))
         .route("/api/simulators/{udid}/touch", post(send_touch))
         .route("/api/simulators/{udid}/control", get(control_socket))
@@ -1155,6 +1192,30 @@ async fn assert_element(
     wait_for_element_payload(state, udid, payload).await
 }
 
+async fn wait_for_not_element(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<WaitForPayload>,
+) -> Result<Json<Value>, AppError> {
+    wait_for_absent_element_payload(state, udid, payload).await
+}
+
+async fn assert_not_element(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<WaitForPayload>,
+) -> Result<Json<Value>, AppError> {
+    wait_for_absent_element_payload(state, udid, payload).await
+}
+
+async fn scroll_until_visible(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<ScrollUntilVisiblePayload>,
+) -> Result<Json<Value>, AppError> {
+    scroll_until_visible_payload(state, udid, payload).await
+}
+
 async fn run_batch(
     State(state): State<AppState>,
     Path(udid): Path<String>,
@@ -1776,6 +1837,39 @@ async fn wait_for_element_payload(
     })))
 }
 
+async fn wait_for_absent_element_payload(
+    state: AppState,
+    udid: String,
+    payload: WaitForPayload,
+) -> Result<Json<Value>, AppError> {
+    let started = Instant::now();
+    let timeout_ms = payload.timeout_ms.unwrap_or(5_000);
+    let poll_ms = payload.poll_ms.unwrap_or(100).max(10);
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let snapshot = accessibility_tree_value(
+            state.clone(),
+            udid.clone(),
+            payload.source.as_deref(),
+            payload.max_depth,
+            payload.include_hidden.unwrap_or(false),
+        )
+        .await?;
+        if first_matching_element(&snapshot, &payload.selector).is_none() {
+            return Ok(json(json_value!({
+                "ok": true,
+                "elapsedMs": started.elapsed().as_millis() as u64,
+            })));
+        }
+        if timeout_ms == 0 || Instant::now() >= deadline {
+            return Err(AppError::bad_request(
+                "Accessibility element still matched the selector.",
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(poll_ms)).await;
+    }
+}
+
 async fn wait_for_snapshot_match(
     state: AppState,
     udid: String,
@@ -1803,6 +1897,76 @@ async fn wait_for_snapshot_match(
     }
 }
 
+async fn scroll_until_visible_payload(
+    state: AppState,
+    udid: String,
+    payload: ScrollUntilVisiblePayload,
+) -> Result<Json<Value>, AppError> {
+    let started = Instant::now();
+    let timeout_ms = payload.timeout_ms.unwrap_or(10_000);
+    let poll_ms = payload.poll_ms.unwrap_or(100).max(10);
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut scroll_count = 0usize;
+    loop {
+        let snapshot = accessibility_tree_value(
+            state.clone(),
+            udid.clone(),
+            payload.source.as_deref(),
+            payload.max_depth,
+            payload.include_hidden.unwrap_or(false),
+        )
+        .await?;
+        if let Some(found) = first_matching_element(&snapshot, &payload.selector) {
+            return Ok(json(json_value!({
+                "ok": true,
+                "elapsedMs": started.elapsed().as_millis() as u64,
+                "scrollCount": scroll_count,
+                "match": compact_accessibility_node(&found),
+            })));
+        }
+        if timeout_ms == 0 || Instant::now() >= deadline {
+            return Err(AppError::not_found("No accessibility element matched."));
+        }
+        let (start_x, start_y, end_x, end_y) =
+            normalized_scroll_coordinates(payload.direction.as_deref())?;
+        let duration_ms = payload.duration_ms.unwrap_or(350);
+        let steps = payload.steps.unwrap_or(12).max(1);
+        let action_udid = udid.clone();
+        run_bridge_action(state.clone(), move |bridge| {
+            let input = bridge.create_input_session(&action_udid)?;
+            let delay = Duration::from_millis(duration_ms / u64::from(steps));
+            input.send_touch(start_x, start_y, "began")?;
+            for step in 1..steps {
+                let t = f64::from(step) / f64::from(steps);
+                input.send_touch(
+                    start_x + (end_x - start_x) * t,
+                    start_y + (end_y - start_y) * t,
+                    "moved",
+                )?;
+                std::thread::sleep(delay);
+            }
+            input.send_touch(end_x, end_y, "ended")
+        })
+        .await?;
+        scroll_count += 1;
+        tokio::time::sleep(Duration::from_millis(poll_ms)).await;
+    }
+}
+
+fn normalized_scroll_coordinates(
+    direction: Option<&str>,
+) -> Result<(f64, f64, f64, f64), AppError> {
+    match direction.unwrap_or("down").to_ascii_lowercase().as_str() {
+        "down" => Ok((0.5, 0.78, 0.5, 0.22)),
+        "up" => Ok((0.5, 0.22, 0.5, 0.78)),
+        "left" => Ok((0.78, 0.5, 0.22, 0.5)),
+        "right" => Ok((0.22, 0.5, 0.78, 0.5)),
+        other => Err(AppError::bad_request(format!(
+            "Unsupported scroll direction `{other}`."
+        ))),
+    }
+}
+
 async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Result<Value, AppError> {
     match step {
         BatchStep::Sleep { ms, seconds } => {
@@ -1826,6 +1990,18 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
             let found = first_matching_element(&snapshot, &payload.selector)
                 .ok_or_else(|| AppError::not_found("No accessibility element matched."))?;
             Ok(json_value!({ "action": "assert", "match": compact_accessibility_node(&found) }))
+        }
+        BatchStep::AssertNot(payload) => {
+            let Json(_) = wait_for_absent_element_payload(state, udid, payload).await?;
+            Ok(json_value!({ "action": "assertNot" }))
+        }
+        BatchStep::ScrollUntilVisible(payload) => {
+            let Json(result) = scroll_until_visible_payload(state, udid, payload).await?;
+            Ok(json_value!({
+                "action": "scrollUntilVisible",
+                "match": result.get("match").cloned().unwrap_or(Value::Null),
+                "scrollCount": result.get("scrollCount").cloned().unwrap_or(Value::Null),
+            }))
         }
         BatchStep::Key {
             key_code,
@@ -2090,11 +2266,15 @@ fn query_compact_elements(
     let mut matches = Vec::new();
     if let Some(roots) = snapshot.get("roots").and_then(Value::as_array) {
         for root in roots {
-            collect_query_matches(root, selector, limit, &mut matches);
-            if matches.len() >= limit {
+            let target_limit = selector.index.map(|index| index + 1).unwrap_or(limit);
+            collect_query_matches(root, selector, target_limit, &mut matches);
+            if matches.len() >= target_limit {
                 break;
             }
         }
+    }
+    if let Some(index) = selector.index {
+        return matches.into_iter().nth(index).into_iter().collect();
     }
     matches
 }
@@ -2123,6 +2303,16 @@ fn collect_query_matches(
 
 fn first_matching_element(snapshot: &Value, selector: &ElementSelectorPayload) -> Option<Value> {
     let roots = snapshot.get("roots")?.as_array()?;
+    if let Some(index) = selector.index {
+        let mut matches = Vec::new();
+        for root in roots {
+            collect_query_matches(root, selector, index + 1, &mut matches);
+            if matches.len() > index {
+                break;
+            }
+        }
+        return matches.into_iter().nth(index);
+    }
     for root in roots {
         if let Some(found) = first_matching_node(root, selector) {
             return Some(found.clone());
@@ -2155,48 +2345,122 @@ fn element_matches_selector(node: &Value, selector: &ElementSelectorPayload) -> 
     if selector_is_empty(selector) {
         return true;
     }
-    selector
-        .element_type
-        .as_ref()
-        .is_none_or(|expected| string_fields_match(node, expected, &["type", "role", "className"]))
-        && selector.id.as_ref().is_none_or(|expected| {
-            string_fields_match(
-                node,
-                expected,
-                &[
-                    "AXIdentifier",
-                    "AXUniqueId",
-                    "inspectorId",
-                    "id",
-                    "identifier",
-                ],
-            )
-        })
-        && selector.label.as_ref().is_none_or(|expected| {
-            string_fields_match(
-                node,
-                expected,
-                &["AXLabel", "label", "title", "text", "name"],
-            )
-        })
-        && selector
-            .value
-            .as_ref()
-            .is_none_or(|expected| string_fields_match(node, expected, &["AXValue", "value"]))
+    let use_regex = selector.regex.unwrap_or(false);
+    selector.element_type.as_ref().is_none_or(|expected| {
+        string_fields_match(node, expected, use_regex, &["type", "role", "className"])
+    }) && selector.id.as_ref().is_none_or(|expected| {
+        string_fields_match(
+            node,
+            expected,
+            use_regex,
+            &[
+                "AXIdentifier",
+                "AXUniqueId",
+                "inspectorId",
+                "id",
+                "identifier",
+            ],
+        )
+    }) && selector.text.as_ref().is_none_or(|expected| {
+        string_fields_match(
+            node,
+            expected,
+            use_regex,
+            &["AXLabel", "label", "title", "text", "name"],
+        )
+    }) && selector.label.as_ref().is_none_or(|expected| {
+        string_fields_match(
+            node,
+            expected,
+            use_regex,
+            &["AXLabel", "label", "title", "text", "name"],
+        )
+    }) && selector.value.as_ref().is_none_or(|expected| {
+        string_fields_match(node, expected, use_regex, &["AXValue", "value"])
+    }) && selector.enabled.is_none_or(|expected| {
+        bool_fields_match(
+            node,
+            expected,
+            &[
+                "enabled",
+                "AXEnabled",
+                "isEnabled",
+                "isUserInteractionEnabled",
+            ],
+        )
+    }) && selector.checked.is_none_or(|expected| {
+        bool_or_state_fields_match(
+            node,
+            expected,
+            &["checked", "isChecked", "AXChecked"],
+            &["AXValue", "value"],
+            &["1", "true", "yes", "on", "checked", "selected"],
+        )
+    }) && selector.focused.is_none_or(|expected| {
+        bool_fields_match(node, expected, &["focused", "isFocused", "AXFocused"])
+    }) && selector.selected.is_none_or(|expected| {
+        bool_or_state_fields_match(
+            node,
+            expected,
+            &["selected", "isSelected", "AXSelected"],
+            &["AXValue", "value"],
+            &["selected", "1", "true", "yes", "on"],
+        )
+    })
 }
 
 fn selector_is_empty(selector: &ElementSelectorPayload) -> bool {
-    selector.id.is_none()
+    selector.text.is_none()
+        && selector.id.is_none()
         && selector.label.is_none()
         && selector.value.is_none()
         && selector.element_type.is_none()
+        && selector.enabled.is_none()
+        && selector.checked.is_none()
+        && selector.focused.is_none()
+        && selector.selected.is_none()
 }
 
-fn string_fields_match(node: &Value, expected: &str, fields: &[&str]) -> bool {
+fn string_fields_match(node: &Value, expected: &str, use_regex: bool, fields: &[&str]) -> bool {
+    let regex = use_regex.then(|| Regex::new(expected).ok()).flatten();
     fields
         .iter()
         .filter_map(|field| node.get(*field).and_then(Value::as_str))
-        .any(|value| value == expected)
+        .any(|value| {
+            if let Some(regex) = regex.as_ref() {
+                regex.is_match(value)
+            } else {
+                value == expected
+            }
+        })
+}
+
+fn bool_fields_match(node: &Value, expected: bool, fields: &[&str]) -> bool {
+    fields
+        .iter()
+        .find_map(|field| node.get(*field).and_then(Value::as_bool))
+        .is_some_and(|value| value == expected)
+}
+
+fn bool_or_state_fields_match(
+    node: &Value,
+    expected: bool,
+    bool_fields: &[&str],
+    string_fields: &[&str],
+    truthy_values: &[&str],
+) -> bool {
+    if bool_fields_match(node, expected, bool_fields) {
+        return true;
+    }
+    string_fields
+        .iter()
+        .filter_map(|field| node.get(*field).and_then(Value::as_str))
+        .any(|value| {
+            let truthy = truthy_values
+                .iter()
+                .any(|truthy| value.eq_ignore_ascii_case(truthy));
+            truthy == expected
+        })
 }
 
 fn tap_point_from_snapshot(
@@ -2207,6 +2471,7 @@ fn tap_point_from_snapshot(
         .get("roots")
         .and_then(Value::as_array)
         .ok_or_else(|| AppError::not_found("Accessibility snapshot does not contain roots."))?;
+    let mut seen_matches = 0usize;
     for root in roots {
         let root_frame = root
             .get("frame")
@@ -2214,7 +2479,7 @@ fn tap_point_from_snapshot(
             .ok_or_else(|| AppError::not_found("Accessibility root does not expose a frame."))?;
         let root_width = number_field(root_frame, "width")?;
         let root_height = number_field(root_frame, "height")?;
-        if let Some(node) = first_matching_node(root, selector) {
+        if let Some(node) = indexed_matching_node(root, selector, &mut seen_matches) {
             let frame = node
                 .get("frame")
                 .or_else(|| node.get("frameInScreen"))
@@ -2228,6 +2493,30 @@ fn tap_point_from_snapshot(
         }
     }
     Err(AppError::not_found("No accessibility element matched."))
+}
+
+fn indexed_matching_node<'a>(
+    node: &'a Value,
+    selector: &ElementSelectorPayload,
+    seen_matches: &mut usize,
+) -> Option<&'a Value> {
+    if element_matches_selector(node, selector) {
+        if selector.index.unwrap_or(0) == *seen_matches {
+            return Some(node);
+        }
+        *seen_matches += 1;
+    }
+    for child in node
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(found) = indexed_matching_node(child, selector, seen_matches) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn normalize_screen_point_from_snapshot(
@@ -3508,10 +3797,17 @@ mod tests {
 
     fn selector() -> ElementSelectorPayload {
         ElementSelectorPayload {
+            text: None,
             id: Some("continue-button".to_owned()),
             label: Some("Continue".to_owned()),
             value: None,
             element_type: Some("Button".to_owned()),
+            index: None,
+            enabled: None,
+            checked: None,
+            focused: None,
+            selected: None,
+            regex: None,
         }
     }
 
