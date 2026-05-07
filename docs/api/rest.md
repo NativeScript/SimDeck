@@ -199,7 +199,10 @@ Touch, edge-touch, and multi-touch coordinates are normalized from `0.0` to `1.0
 | `GET`  | `/api/simulators/{udid}/accessibility-point?x=120&y=240` | Element at a point              |
 | `POST` | `/api/simulators/{udid}/query`                           | Query tree by selector          |
 | `POST` | `/api/simulators/{udid}/wait-for`                        | Wait until selector appears     |
+| `POST` | `/api/simulators/{udid}/wait-for-not`                    | Wait until selector disappears  |
 | `POST` | `/api/simulators/{udid}/assert`                          | Assert selector exists          |
+| `POST` | `/api/simulators/{udid}/assert-not`                      | Assert selector is absent       |
+| `POST` | `/api/simulators/{udid}/scroll-until-visible`            | Scroll until selector appears   |
 | `POST` | `/api/simulators/{udid}/batch`                           | Run multiple control steps      |
 | `POST` | `/api/simulators/{udid}/inspector/request`               | Call an in-app inspector method |
 
@@ -219,6 +222,39 @@ Point query parameters:
 | `maxDepth` | Optional integer depth limit for native AX output |
 
 Every tree response reports the `source` used and may include a `fallbackReason`.
+
+Selector endpoints accept compact accessibility selectors:
+
+```json
+{
+  "selector": {
+    "text": "Continue",
+    "id": "continue-button",
+    "elementType": "Button",
+    "enabled": true,
+    "regex": false
+  },
+  "source": "auto",
+  "maxDepth": 8,
+  "limit": 20
+}
+```
+
+Selectors can match `text`, `id`, `label`, `value`, `elementType`, `index`, `enabled`, `checked`, `focused`, and `selected`. Set `regex: true` to use regular expression matching for string fields.
+
+`POST /api/simulators/{udid}/query` returns compact matches. `wait-for` and `assert` use the same body shape for positive checks. `wait-for-not` and `assert-not` perform negative checks.
+
+`POST /api/simulators/{udid}/scroll-until-visible` scrolls and polls until a selector appears:
+
+```json
+{
+  "selector": { "text": "Settings" },
+  "direction": "down",
+  "timeoutMs": 10000
+}
+```
+
+`direction` accepts `up`, `down`, `left`, and `right`.
 
 ## DevTools And WebKit
 

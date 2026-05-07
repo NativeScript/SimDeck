@@ -204,7 +204,7 @@ Batch rules: one source (`--step`, `--file`, or `--stdin`); keep `<UDID>` at bat
 For JS tests, batch can combine action and verification without extra CLI process startup:
 
 ```ts
-await simdeck.batch(udid, [
+await simdeck.batch([
   { action: "tap", selector: { label: "Continue" }, waitTimeoutMs: 5000 },
   {
     action: "waitFor",
@@ -213,6 +213,12 @@ await simdeck.batch(udid, [
   },
   { action: "assert", selector: { id: "fixture.status" } },
 ]);
+```
+
+For app-style flows, SimDeck can run a practical subset of Maestro YAML:
+
+```bash
+simdeck maestro test <UDID> flow.yaml --artifacts-dir artifacts/maestro
 ```
 
 ## Evidence

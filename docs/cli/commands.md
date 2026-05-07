@@ -144,6 +144,16 @@ simdeck batch <udid> \
 
 Use `wait-for` or `assert` steps instead of fixed sleeps when possible.
 
+## Maestro YAML
+
+Run common Maestro flows through SimDeck's daemon-backed iOS Simulator API:
+
+```sh
+simdeck maestro test <udid> flow.yaml --artifacts-dir artifacts/maestro
+```
+
+The compatibility runner supports the core local commands: `launchApp`, `openLink`, `tapOn`, `inputText`, `eraseText`, `pressKey`, `assertVisible`, `assertNotVisible`, `scrollUntilVisible`, `swipe`, `takeScreenshot`, and `waitForAnimationToEnd`.
+
 ## Evidence
 
 ```sh

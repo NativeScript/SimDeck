@@ -25,7 +25,7 @@ try {
 }
 ```
 
-`connect()` starts the project daemon if needed, reuses a healthy daemon, and only stops daemons it started itself. Pass `udid` to `connect()` to make it the default for session methods; methods still accept an explicit UDID as their first argument.
+`connect()` starts the project daemon if needed, reuses a healthy daemon, and only stops daemons it started itself. Pass `udid` to `connect()` to make it the default for session methods; methods still accept an explicit UDID as their first argument. Use `sim.device("<other-udid>")` to create a session bound to another simulator.
 
 ## Useful Test Methods
 
@@ -39,10 +39,22 @@ try {
 | `typeText()`, `key()`, `keySequence()`          | Text and keyboard input        |
 | `button()`, `home()`, `appSwitcher()`           | System controls                |
 | `tree()`, `query()`, `waitFor()`, `assert()`    | UI state checks                |
+| `waitForNot()`, `assertNot()`                   | Negative UI state checks       |
+| `scrollUntilVisible()`                          | Scroll until a selector exists |
 | `screenshot()`, `record()`, `logs()`            | Evidence capture               |
 | `batch()`                                       | Multi-step actions             |
 
-Selectors can match `id`, `label`, `value`, or `type`.
+Selectors can match `text`, `id`, `label`, `value`, `type`, `index`, `enabled`, `checked`, `focused`, or `selected`. Set `regex: true` to treat string selector fields as regular expressions.
+
+## Maestro-Compatible YAML
+
+The CLI includes a compatibility runner for common Maestro YAML flows:
+
+```sh
+simdeck maestro test <udid> flow.yaml --artifacts-dir artifacts/maestro
+```
+
+Supported commands include `launchApp`, `openLink`, `tapOn`, `inputText`, `eraseText`, `pressKey`, `assertVisible`, `assertNotVisible`, `scrollUntilVisible`, `swipe`, `takeScreenshot`, and `waitForAnimationToEnd`. Unsupported Maestro commands fail clearly so the flow can be adjusted or the compatibility layer can be expanded.
 
 ## Repository Tests
 

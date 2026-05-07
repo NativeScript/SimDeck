@@ -242,6 +242,12 @@ healthy, and only stops daemons it started itself. Pass `udid` to `connect()`
 to make it the default for session methods; each method still accepts an
 explicit UDID as the first argument when needed.
 
+Run common Maestro YAML flows against the same daemon-backed simulator API:
+
+```sh
+simdeck maestro test <udid> flow.yaml --artifacts-dir artifacts/maestro
+```
+
 ## NativeScript Inspector
 
 NativeScript apps can connect directly to the running server from JS and expose
