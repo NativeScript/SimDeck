@@ -231,6 +231,30 @@ impl SimulatorSession {
         }
     }
 
+    pub fn update_jpeg_config(&self, config: JpegStreamConfig) {
+        if self
+            .inner
+            .active_jpeg_subscribers
+            .load(Ordering::Relaxed)
+            == 0
+        {
+            return;
+        }
+        let mut current_config = self.inner.jpeg_config.lock().unwrap();
+        if current_config.as_ref() == Some(&config) {
+            return;
+        }
+        *current_config = Some(config);
+        unsafe {
+            self.inner.native.set_jpeg_frame_callback(
+                Some(native_jpeg_frame_callback),
+                self.jpeg_callback_user_data as *mut c_void,
+                config.max_edge,
+                (config.quality_percent as f64 / 100.0).clamp(0.2, 0.95),
+            );
+        }
+    }
+
     pub fn latest_keyframe(&self) -> Option<SharedFrame> {
         self.inner.latest_keyframe.read().unwrap().clone()
     }

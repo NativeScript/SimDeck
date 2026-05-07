@@ -56,9 +56,12 @@ and localhost sessions.
 ## MJPEG fallback
 
 The browser UI defaults to `?stream=auto`: it tries WebRTC first and falls back
-to MJPEG if WebRTC fails before the first rendered frame. The stream settings
-menu includes a transport picker for Auto, WebRTC, and MJPEG. You can also force
-a mode while testing:
+to MJPEG if WebRTC fails before the first rendered frame. For remote browser
+sessions, SimDeck also falls back immediately when the browser's WebRTC offer
+contains no local `host` ICE candidates, which covers Safari privacy/network
+settings that suppress direct candidates. The stream settings menu includes a
+transport picker for Auto, WebRTC, and MJPEG. You can also force a mode while
+testing:
 
 ```text
 http://127.0.0.1:4310?stream=webrtc
@@ -69,17 +72,18 @@ MJPEG uses the private display bridge directly, encodes the latest
 `CVPixelBuffer` as JPEG in native code, and serves it as:
 
 ```http
-GET /api/simulators/{udid}/mjpeg?fps=15&quality=0.7&maxEdge=720
+GET /api/simulators/{udid}/mjpeg?fps=30&quality=0.7&autoQuality=1
 ```
 
 The response is `multipart/x-mixed-replace` with `image/jpeg` parts. The server
 keeps at most the latest pending JPEG frame per session, so slow clients drop
 stale frames instead of building latency. Fallback input uses:
 
-The same stream quality presets drive MJPEG too: `quality` uses the native
-longest edge with JPEG quality `0.82`, `balanced` uses 1280 px at `0.76`,
-`economy` uses 1080 px at `0.70`, `low` uses 720 px at `0.66`, and `tiny` uses
-540 px at `0.62`.
+The same stream quality menu drives MJPEG too, but MJPEG does not use H.264
+resolution caps. It encodes the native raw frame size and maps the selection to
+JPEG compression only: `Auto` starts at `0.70` and adjusts compression from
+HTTP stream backpressure, `quality` uses `0.82`, `balanced` uses `0.76`,
+`economy` uses `0.70`, `low` uses `0.66`, and `tiny` uses `0.62`.
 
 ```http
 GET /api/simulators/{udid}/input
@@ -117,7 +121,7 @@ A few practical guidelines:
 - **Use `--local-stream-fps` above 60 only for local high-refresh testing.** The local quality stream defaults to 60 fps; higher targets pace both capture refresh and hardware encode submission so the stream does not build delay by pushing unbounded frames.
 - **Switch to `software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
 - **Studio providers default to software H.264 plus `--stream-quality smooth`.** This profile uses a 1170-pixel longest edge, allows up to 60 fps, raises the bitrate budget to reduce compression artifacts, and lets multiple provider sessions share CPU cores without depending on one hardware encoder.
-- **Use `low` for the default MJPEG stream.** It caps the longest edge at 720 pixels, uses JPEG quality `0.66`, and targets 30 fps. Raise to `economy` or higher when sharpness matters more than CPU and bandwidth.
+- **Use `Auto` for the default MJPEG stream.** It encodes the native frame size at JPEG quality `0.70`, targets 30 fps, lowers JPEG quality when the HTTP stream backs up, and raises it again after sustained low backpressure. MJPEG does not apply the H.264 `maxEdge` caps unless a caller explicitly passes `maxEdge` to the raw MJPEG endpoint.
 - **The remote browser renders WebRTC as a native `<video>` element and MJPEG as a native `<img>` stream.** The canvas remains for input geometry and diagnostics, and fallback mode keeps simulator controls on the WebSocket input channel.
 - **Use `--stream-quality ci-software` for denser virtualized CI Macs.** This profile uses software H.264 at a 960-pixel longest edge, targets 24 fps, lowers bitrate pressure, and favors fresh frames over full-resolution sharpness.
 - **Use `simdeck studio expose --video-codec hardware` only when a dedicated hardware encoder is preferable.** The normal Studio default stays on software H.264 so future multi-simulator provider hosts can scale across CPU cores.

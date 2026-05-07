@@ -25,6 +25,7 @@ const WEBRTC_RECONNECT_MAX_DELAY_MS = 1000;
 const MJPEG_DEFAULT_QUALITY = 0.7;
 const MJPEG_FIRST_FRAME_TIMEOUT_MS = 10000;
 const MJPEG_STALLED_FRAME_TIMEOUT_MS = 5000;
+const CONTROL_BACKLOG_DROP_BYTES = 4096;
 
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
 let activeWebRtcTelemetryChannel: RTCDataChannel | null = null;
@@ -33,10 +34,13 @@ let activeStreamClient: StreamWorkerClient | null = null;
 
 export type StreamBackend = "mjpeg" | "webrtc";
 
-export function sendWebRtcControlMessage(encoded: string): boolean {
+export function sendWebRtcControlMessage(
+  encoded: string,
+  options: { dropIfBacklogged?: boolean } = {},
+): boolean {
   return (
-    sendDataChannelMessage(activeWebRtcControlChannel, encoded) ||
-    sendWebSocketMessage(activeInputSocket, encoded)
+    sendDataChannelMessage(activeWebRtcControlChannel, encoded, options) ||
+    sendWebSocketMessage(activeInputSocket, encoded, options)
   );
 }
 
@@ -60,9 +64,16 @@ export function sendWebRtcStreamControl(options: {
 function sendDataChannelMessage(
   channel: RTCDataChannel | null,
   encoded: string,
+  options: { dropIfBacklogged?: boolean } = {},
 ): boolean {
   if (channel?.readyState !== "open") {
     return false;
+  }
+  if (
+    options.dropIfBacklogged &&
+    channel.bufferedAmount > CONTROL_BACKLOG_DROP_BYTES
+  ) {
+    return true;
   }
   channel.send(encoded);
   return true;
@@ -71,9 +82,16 @@ function sendDataChannelMessage(
 function sendWebSocketMessage(
   socket: WebSocket | null,
   encoded: string,
+  options: { dropIfBacklogged?: boolean } = {},
 ): boolean {
   if (socket?.readyState !== WebSocket.OPEN) {
     return false;
+  }
+  if (
+    options.dropIfBacklogged &&
+    socket.bufferedAmount > CONTROL_BACKLOG_DROP_BYTES
+  ) {
+    return true;
   }
   socket.send(encoded);
   return true;
@@ -188,8 +206,10 @@ function buildMjpegUrl(target: StreamConnectTarget): string {
   const config = target.streamConfig;
   const quality = mjpegQualityPreset(config?.quality);
   url.searchParams.set("fps", String(config?.fps ?? (target.remote ? 15 : 30)));
-  url.searchParams.set("maxEdge", String(config?.maxEdge ?? quality.maxEdge));
   url.searchParams.set("quality", String(quality.jpegQuality));
+  if (config?.quality === "auto") {
+    url.searchParams.set("autoQuality", "true");
+  }
   if (target.clientId) {
     url.searchParams.set("clientId", target.clientId);
   }
@@ -198,23 +218,24 @@ function buildMjpegUrl(target: StreamConnectTarget): string {
 
 function mjpegQualityPreset(quality?: StreamConfig["quality"]): {
   jpegQuality: number;
-  maxEdge: number;
 } {
   switch (quality) {
+    case "auto":
+      return { jpegQuality: 0.7 };
     case "quality":
-      return { jpegQuality: 0.82, maxEdge: 4096 };
+      return { jpegQuality: 0.82 };
     case "balanced":
-      return { jpegQuality: 0.76, maxEdge: 1280 };
+      return { jpegQuality: 0.76 };
     case "smooth":
-      return { jpegQuality: 0.74, maxEdge: 1170 };
+      return { jpegQuality: 0.74 };
     case "economy":
-      return { jpegQuality: 0.7, maxEdge: 1080 };
+      return { jpegQuality: 0.7 };
     case "low":
-      return { jpegQuality: 0.66, maxEdge: 720 };
+      return { jpegQuality: 0.66 };
     case "tiny":
-      return { jpegQuality: 0.62, maxEdge: 540 };
+      return { jpegQuality: 0.62 };
     default:
-      return { jpegQuality: MJPEG_DEFAULT_QUALITY, maxEdge: 720 };
+      return { jpegQuality: MJPEG_DEFAULT_QUALITY };
   }
 }
 
@@ -860,6 +881,11 @@ class WebRtcStreamClient implements StreamClientBackend {
       localDescription.sdp,
     );
     this.postDiagnostics(target, `${options.detailPrefix}-offer`);
+    if (target.remote && !sdpHasCandidateType(localDescription.sdp, "host")) {
+      throw new Error(
+        "WebRTC gathered no host ICE candidates for this remote browser.",
+      );
+    }
 
     const response = await postWebRtcOfferWithAuthRetry(
       target,
@@ -1588,7 +1614,7 @@ function postStreamConfig(config: StreamConfig): Promise<Response> {
   return fetch(apiUrl("/api/stream-quality"), {
     body: JSON.stringify({
       fps: config.fps,
-      profile: config.quality,
+      profile: config.quality === "auto" ? "economy" : config.quality,
       videoCodec: config.encoder,
     }),
     headers: apiHeaders(),
@@ -1756,6 +1782,17 @@ function summarizeSdpCandidates(sdp: string): string {
       .filter((line) => line.startsWith("a=candidate:"))
       .map((line) => line.slice("a=".length)),
   );
+}
+
+function sdpHasCandidateType(sdp: string, candidateType: string): boolean {
+  return sdp
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("a=candidate:"))
+    .some((line) => {
+      const parts = line.slice("a=".length).split(/\s+/);
+      const typIndex = parts.indexOf("typ");
+      return typIndex >= 0 && parts[typIndex + 1] === candidateType;
+    });
 }
 
 function summarizeCandidateLines(lines: string[]): string {

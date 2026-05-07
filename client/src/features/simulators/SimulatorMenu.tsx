@@ -72,6 +72,10 @@ export function SimulatorMenu({
   const fpsOptions = remoteStream
     ? REMOTE_STREAM_FPS_OPTIONS
     : LOCAL_STREAM_FPS_OPTIONS;
+  const qualityOptions =
+    streamTransport === "mjpeg"
+      ? MJPEG_STREAM_QUALITY_OPTIONS
+      : H264_STREAM_QUALITY_OPTIONS;
   const activeFpsOption = fpsOptions.some(
     (option) => option.value === streamConfig.fps,
   )
@@ -168,7 +172,7 @@ export function SimulatorMenu({
                   ))}
                 </div>
                 <div aria-label="Quality" className="menu-segment">
-                  {STREAM_QUALITY_OPTIONS.map((option) => (
+                  {qualityOptions.map((option) => (
                     <button
                       className={`menu-option ${streamConfig.quality === option.value ? "active" : ""}`}
                       key={option.value}
@@ -256,7 +260,7 @@ const REMOTE_STREAM_FPS_OPTIONS: Array<{ label: string; value: StreamFps }> = [
   { label: "60", value: 60 },
 ];
 
-const STREAM_QUALITY_OPTIONS: Array<{
+const H264_STREAM_QUALITY_OPTIONS: Array<{
   label: string;
   value: StreamQualityPreset;
 }> = [
@@ -266,6 +270,28 @@ const STREAM_QUALITY_OPTIONS: Array<{
   { label: "720", value: "low" },
   { label: "540", value: "tiny" },
 ];
+
+const MJPEG_STREAM_QUALITY_OPTIONS: Array<{
+  label: string;
+  value: StreamQualityPreset;
+}> = [
+  { label: "Auto", value: "auto" },
+  { label: "0.82", value: "quality" },
+  { label: "0.76", value: "balanced" },
+  { label: "0.70", value: "economy" },
+  { label: "0.66", value: "low" },
+  { label: "0.62", value: "tiny" },
+];
+
+const MJPEG_QUALITY_LABELS: Partial<Record<StreamQualityPreset, string>> = {
+  auto: "Auto",
+  balanced: "JPEG 0.76",
+  economy: "JPEG 0.70",
+  low: "JPEG 0.66",
+  quality: "JPEG 0.82",
+  smooth: "JPEG 0.74",
+  tiny: "JPEG 0.62",
+};
 
 function MenuIcon() {
   return (
@@ -279,6 +305,11 @@ function formatStreamConfigSummary(
   streamConfig: StreamConfig,
   transport: StreamTransport,
 ): string {
+  if (transport === "mjpeg") {
+    const jpegQuality =
+      MJPEG_QUALITY_LABELS[streamConfig.quality] ?? "JPEG quality";
+    return `${transport.toUpperCase()} / ${jpegQuality} / ${streamConfig.fps} fps`;
+  }
   const resolution =
     typeof streamConfig.maxEdge === "number" && streamConfig.maxEdge > 0
       ? `${streamConfig.maxEdge}px`

@@ -112,7 +112,8 @@ const REMOTE_STREAM_DEFAULTS: StreamConfig = {
   quality: "balanced",
 };
 const MJPEG_DEFAULT_FPS = 30;
-const MJPEG_DEFAULT_QUALITY: StreamQualityPreset = "low";
+const MJPEG_DEFAULT_QUALITY: StreamQualityPreset = "auto";
+const CONTROL_BACKLOG_DROP_BYTES = 4096;
 const STREAM_CONFIG_SYNC_INTERVAL_MS = 1500;
 const STREAM_CONFIG_USER_CHANGE_GRACE_MS = 1000;
 const STREAM_ENCODER_VALUES = new Set<StreamEncoder>([
@@ -423,6 +424,11 @@ export function AppShell({
     socket: WebSocket;
     pending: string[];
   } | null>(null);
+  const pendingTouchMoveRef = useRef<{
+    coords: Point;
+    udid: string;
+  } | null>(null);
+  const touchMoveFrameRef = useRef(0);
   const canvasSize = useElementSize(outerCanvasElement);
   const zoomDockSize = useElementSize(zoomDockElement);
 
@@ -516,7 +522,9 @@ export function AppShell({
         return;
       }
       setStreamConfig((current) =>
-        mergeStreamQualityResponse(current, response),
+        mergeStreamQualityResponse(current, response, {
+          preserveAutoQuality: streamTransport === "mjpeg",
+        }),
       );
     } catch {
       // Keep the existing local/default selection; the stream path will surface
@@ -526,7 +534,7 @@ export function AppShell({
         setStreamConfigReady(true);
       }
     }
-  }, []);
+  }, [streamTransport]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1117,7 +1125,7 @@ export function AppShell({
         setAccessibilitySelectedId("");
         setAccessibilityHoveredId(null);
       }
-      sendControl(selectedSimulator.udid, { type: "touch", ...coords, phase });
+      sendTouchControl(selectedSimulator.udid, phase, coords);
     },
     onTouchPreview: showTouchIndicator,
     pan,
@@ -1290,9 +1298,52 @@ export function AppShell({
   }, []);
 
   function sendControl(udid: string, message: ControlMessage): boolean {
+    if (message.type === "touch") {
+      sendTouchControl(udid, message.phase, { x: message.x, y: message.y });
+      return true;
+    }
+    return sendControlNow(udid, message);
+  }
+
+  function sendTouchControl(udid: string, phase: TouchPhase, coords: Point) {
+    if (phase === "moved") {
+      pendingTouchMoveRef.current = { coords, udid };
+      if (!touchMoveFrameRef.current) {
+        touchMoveFrameRef.current = window.requestAnimationFrame(() => {
+          touchMoveFrameRef.current = 0;
+          flushPendingTouchMove();
+        });
+      }
+      return;
+    }
+
+    flushPendingTouchMove();
+    sendControlNow(udid, { type: "touch", ...coords, phase });
+  }
+
+  function flushPendingTouchMove() {
+    const pending = pendingTouchMoveRef.current;
+    pendingTouchMoveRef.current = null;
+    if (touchMoveFrameRef.current) {
+      window.cancelAnimationFrame(touchMoveFrameRef.current);
+      touchMoveFrameRef.current = 0;
+    }
+    if (!pending) {
+      return;
+    }
+    sendControlNow(pending.udid, {
+      type: "touch",
+      ...pending.coords,
+      phase: "moved",
+    });
+  }
+
+  function sendControlNow(udid: string, message: ControlMessage): boolean {
     setLocalError("");
     const encoded = JSON.stringify(message);
-    if (sendWebRtcControlMessage(encoded)) {
+    const dropIfBacklogged =
+      message.type === "touch" && message.phase === "moved";
+    if (sendWebRtcControlMessage(encoded, { dropIfBacklogged })) {
       return true;
     }
     if (remoteStream) {
@@ -1300,14 +1351,36 @@ export function AppShell({
     }
     const state = ensureControlSocket(udid);
     if (state.socket.readyState === WebSocket.OPEN) {
+      if (
+        dropIfBacklogged &&
+        state.socket.bufferedAmount > CONTROL_BACKLOG_DROP_BYTES
+      ) {
+        return true;
+      }
       state.socket.send(encoded);
     } else {
+      if (dropIfBacklogged) {
+        const lastIndex = state.pending.length - 1;
+        if (lastIndex >= 0 && state.pending[lastIndex].includes('"moved"')) {
+          state.pending[lastIndex] = encoded;
+          return true;
+        }
+      }
       state.pending.push(encoded);
     }
     return true;
   }
 
-  useEffect(() => closeControlSocket, [closeControlSocket]);
+  useEffect(() => {
+    return () => {
+      if (touchMoveFrameRef.current) {
+        window.cancelAnimationFrame(touchMoveFrameRef.current);
+        touchMoveFrameRef.current = 0;
+      }
+      pendingTouchMoveRef.current = null;
+      closeControlSocket();
+    };
+  }, [closeControlSocket]);
 
   function beginZoomAnimation() {
     setZoomAnimating(true);
@@ -1867,6 +1940,7 @@ function friendlyStreamError(
 function mergeStreamQualityResponse(
   current: StreamConfig,
   response: StreamQualityResponse,
+  options: { preserveAutoQuality?: boolean } = {},
 ): StreamConfig {
   const quality = response.quality ?? {};
   const next: StreamConfig = {
@@ -1877,7 +1951,10 @@ function mergeStreamQualityResponse(
     ),
     fps: normalizeStreamFps(quality.fps, current.fps),
     maxEdge: normalizeMaxEdge(quality.maxEdge, current.maxEdge),
-    quality: normalizeStreamQuality(quality.profile, current.quality),
+    quality:
+      options.preserveAutoQuality && current.quality === "auto"
+        ? "auto"
+        : normalizeStreamQuality(quality.profile, current.quality),
   };
   return streamConfigsEqual(current, next) ? current : next;
 }
@@ -1897,6 +1974,9 @@ function normalizeStreamQuality(
   fallback: StreamQualityPreset,
 ): StreamQualityPreset {
   const normalized = value?.trim().toLowerCase();
+  if (normalized === "auto") {
+    return "auto";
+  }
   if (normalized === "quality") {
     return "quality";
   }

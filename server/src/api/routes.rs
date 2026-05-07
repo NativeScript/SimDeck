@@ -41,13 +41,14 @@ const MJPEG_BOUNDARY: &str = "simdeck-frame";
 const MJPEG_DEFAULT_FPS: u32 = 15;
 const MJPEG_MIN_FPS: u32 = 1;
 const MJPEG_MAX_FPS: u32 = 60;
-const MJPEG_DEFAULT_MAX_EDGE: u32 = 720;
+const MJPEG_DEFAULT_MAX_EDGE: u32 = 0;
 const MJPEG_MIN_MAX_EDGE: u32 = 160;
 const MJPEG_MAX_MAX_EDGE: u32 = 4096;
 const MJPEG_DEFAULT_QUALITY_PERCENT: u32 = 70;
 const MJPEG_MIN_QUALITY_PERCENT: u32 = 20;
 const MJPEG_MAX_QUALITY_PERCENT: u32 = 95;
 const MJPEG_FRAME_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
+const MJPEG_AUTO_QUALITY_STEPS: &[u32] = &[62, 66, 70, 76, 82];
 
 #[derive(Clone)]
 pub struct AppState {
@@ -108,6 +109,7 @@ struct TouchPayload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MjpegStreamQuery {
+    auto_quality: Option<bool>,
     fps: Option<u32>,
     max_edge: Option<u32>,
     quality: Option<f64>,
@@ -115,6 +117,7 @@ struct MjpegStreamQuery {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct MjpegStreamOptions {
+    auto_quality: bool,
     fps: u32,
     max_edge: u32,
     quality_percent: u32,
@@ -1332,6 +1335,9 @@ async fn mjpeg_stream(
     let stream_session = session.clone();
     tokio::spawn(async move {
         let frame_interval = Duration::from_micros(1_000_000 / options.fps as u64);
+        let mut active_quality_percent =
+            nearest_mjpeg_auto_quality_step(options.quality_percent);
+        let mut consecutive_low_backpressure_frames = 0u32;
         loop {
             stream_session.request_refresh();
             let frame = match timeout(MJPEG_FRAME_WAIT_TIMEOUT, subscription.recv()).await {
@@ -1340,8 +1346,25 @@ async fn mjpeg_stream(
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
                 Err(_) => continue,
             };
+            let send_started_at = Instant::now();
             if tx.send(Ok(mjpeg_frame_part(&frame))).await.is_err() {
                 break;
+            }
+            if options.auto_quality {
+                let next_quality = next_mjpeg_auto_quality_percent(
+                    active_quality_percent,
+                    send_started_at.elapsed(),
+                    frame_interval,
+                    options.fps,
+                    &mut consecutive_low_backpressure_frames,
+                );
+                if next_quality != active_quality_percent {
+                    active_quality_percent = next_quality;
+                    stream_session.update_jpeg_config(JpegStreamConfig {
+                        max_edge: options.max_edge,
+                        quality_percent: active_quality_percent,
+                    });
+                }
             }
             tokio::time::sleep(frame_interval).await;
         }
@@ -1376,14 +1399,15 @@ async fn webrtc_offer(
 
 fn normalize_mjpeg_stream_options(query: MjpegStreamQuery) -> MjpegStreamOptions {
     MjpegStreamOptions {
+        auto_quality: query.auto_quality.unwrap_or(false),
         fps: query
             .fps
             .unwrap_or(MJPEG_DEFAULT_FPS)
             .clamp(MJPEG_MIN_FPS, MJPEG_MAX_FPS),
         max_edge: query
             .max_edge
-            .unwrap_or(MJPEG_DEFAULT_MAX_EDGE)
-            .clamp(MJPEG_MIN_MAX_EDGE, MJPEG_MAX_MAX_EDGE),
+            .map(|max_edge| max_edge.clamp(MJPEG_MIN_MAX_EDGE, MJPEG_MAX_MAX_EDGE))
+            .unwrap_or(MJPEG_DEFAULT_MAX_EDGE),
         quality_percent: query
             .quality
             .and_then(|quality| {
@@ -1394,6 +1418,53 @@ fn normalize_mjpeg_stream_options(query: MjpegStreamQuery) -> MjpegStreamOptions
             .unwrap_or(MJPEG_DEFAULT_QUALITY_PERCENT)
             .clamp(MJPEG_MIN_QUALITY_PERCENT, MJPEG_MAX_QUALITY_PERCENT),
     }
+}
+
+fn nearest_mjpeg_auto_quality_step(quality_percent: u32) -> u32 {
+    *MJPEG_AUTO_QUALITY_STEPS
+        .iter()
+        .min_by_key(|step| step.abs_diff(quality_percent))
+        .unwrap_or(&MJPEG_DEFAULT_QUALITY_PERCENT)
+}
+
+fn next_mjpeg_auto_quality_percent(
+    current: u32,
+    send_elapsed: Duration,
+    frame_interval: Duration,
+    fps: u32,
+    consecutive_low_backpressure_frames: &mut u32,
+) -> u32 {
+    let current_index = MJPEG_AUTO_QUALITY_STEPS
+        .iter()
+        .position(|step| *step == current)
+        .unwrap_or_else(|| {
+            MJPEG_AUTO_QUALITY_STEPS
+                .iter()
+                .position(|step| *step == nearest_mjpeg_auto_quality_step(current))
+                .unwrap_or(2)
+        });
+    let degrade_threshold = frame_interval.saturating_mul(2).max(Duration::from_millis(80));
+    if send_elapsed > degrade_threshold {
+        *consecutive_low_backpressure_frames = 0;
+        return MJPEG_AUTO_QUALITY_STEPS[current_index.saturating_sub(1)];
+    }
+
+    let improve_threshold = frame_interval.max(Duration::from_millis(16));
+    if send_elapsed <= improve_threshold {
+        *consecutive_low_backpressure_frames =
+            consecutive_low_backpressure_frames.saturating_add(1);
+    } else {
+        *consecutive_low_backpressure_frames = 0;
+    }
+
+    let improve_after_frames = fps.saturating_mul(5).max(60);
+    if *consecutive_low_backpressure_frames >= improve_after_frames {
+        *consecutive_low_backpressure_frames = 0;
+        return MJPEG_AUTO_QUALITY_STEPS
+            [usize::min(current_index + 1, MJPEG_AUTO_QUALITY_STEPS.len() - 1)];
+    }
+
+    current
 }
 
 fn mjpeg_frame_part(frame: &crate::transport::packet::JpegFramePacket) -> Bytes {
@@ -3889,11 +3960,13 @@ mod tests {
     fn mjpeg_stream_options_apply_safe_defaults_and_bounds() {
         assert_eq!(
             normalize_mjpeg_stream_options(MjpegStreamQuery {
+                auto_quality: None,
                 fps: None,
                 max_edge: None,
                 quality: None,
             }),
             MjpegStreamOptions {
+                auto_quality: false,
                 fps: MJPEG_DEFAULT_FPS,
                 max_edge: MJPEG_DEFAULT_MAX_EDGE,
                 quality_percent: MJPEG_DEFAULT_QUALITY_PERCENT,
@@ -3901,11 +3974,13 @@ mod tests {
         );
         assert_eq!(
             normalize_mjpeg_stream_options(MjpegStreamQuery {
+                auto_quality: Some(true),
                 fps: Some(0),
                 max_edge: Some(1),
                 quality: Some(0.01),
             }),
             MjpegStreamOptions {
+                auto_quality: true,
                 fps: MJPEG_MIN_FPS,
                 max_edge: MJPEG_MIN_MAX_EDGE,
                 quality_percent: MJPEG_MIN_QUALITY_PERCENT,
@@ -3913,11 +3988,13 @@ mod tests {
         );
         assert_eq!(
             normalize_mjpeg_stream_options(MjpegStreamQuery {
+                auto_quality: None,
                 fps: Some(999),
                 max_edge: Some(9999),
                 quality: Some(1.5),
             }),
             MjpegStreamOptions {
+                auto_quality: false,
                 fps: MJPEG_MAX_FPS,
                 max_edge: MJPEG_MAX_MAX_EDGE,
                 quality_percent: MJPEG_MAX_QUALITY_PERCENT,
