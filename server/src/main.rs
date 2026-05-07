@@ -2833,11 +2833,16 @@ fn main() -> anyhow::Result<()> {
                 artifacts_dir,
                 continue_on_error,
             } => {
-                let service_url = command_service_url(explicit_server_url.clone())?;
+                let service_url = command_service_url(explicit_server_url.as_deref())?;
                 let report =
                     run_maestro_flow(&service_url, &udid, &flow, artifacts_dir, continue_on_error)?;
+                let ok = report.get("ok").and_then(Value::as_bool).unwrap_or(false);
                 println_json(&report)?;
-                Ok(())
+                if ok {
+                    Ok(())
+                } else {
+                    anyhow::bail!("Maestro-compatible flow failed.")
+                }
             }
         },
         Command::Serve {
@@ -6056,7 +6061,10 @@ fn maestro_bundle_id(value: &YamlValue) -> anyhow::Result<String> {
 }
 
 fn maestro_tap_body(value: &YamlValue) -> anyhow::Result<Value> {
-    if let Some(point) = yaml_string_or_field(value, "point") {
+    if let Some(point) = yaml_field(value, "point")
+        .and_then(YamlValue::as_str)
+        .map(str::to_owned)
+    {
         let (x, y) = parse_maestro_point(&point)?;
         return Ok(serde_json::json!({ "x": x, "y": y, "normalized": true }));
     }
@@ -7918,6 +7926,13 @@ index: 1
     #[test]
     fn maestro_percent_points_become_normalized_coordinates() {
         assert_eq!(parse_maestro_point("50%,75%").unwrap(), (0.5, 0.75));
+    }
+
+    #[test]
+    fn maestro_tap_on_string_maps_to_text_selector() {
+        let yaml: YamlValue = serde_yaml::from_str("Continue").unwrap();
+        let body = super::maestro_tap_body(&yaml).unwrap();
+        assert_eq!(body["selector"]["text"], "Continue");
     }
 
     #[test]
