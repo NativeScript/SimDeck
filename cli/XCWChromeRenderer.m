@@ -106,7 +106,11 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         }
     }
     CGContextTranslateCTM(context, -chromeX, -chromeY);
-    [self clearScreenAreaForProfile:profile context:context];
+    if (![self clearScreenAreaForChromeInfo:chromeInfo profile:profile context:context error:error]) {
+        CGContextRestoreGState(context);
+        CGContextRelease(context);
+        return nil;
+    }
     if (![self drawSensorBarForChromeInfo:chromeInfo profile:profile context:context error:error]) {
         CGContextRestoreGState(context);
         CGContextRelease(context);
@@ -237,8 +241,11 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     CGFloat screenScale = MAX([self numberValue:plist[@"mainScreenScale"]], 1.0);
     CGFloat profileScreenWidth = [self numberValue:plist[@"mainScreenWidth"]];
     CGFloat profileScreenHeight = [self numberValue:plist[@"mainScreenHeight"]];
-    CGFloat pointScreenWidth = watchProfile ? profileScreenWidth : profileScreenWidth / screenScale;
-    CGFloat pointScreenHeight = watchProfile ? profileScreenHeight : profileScreenHeight / screenScale;
+    CGSize profileScreenSize = [self screenSizeForChromeInfo:chromeInfo
+                                                   chromeSize:compositeSize
+                                                  screenScale:screenScale];
+    CGFloat pointScreenWidth = profileScreenSize.width;
+    CGFloat pointScreenHeight = profileScreenSize.height;
 
     CGFloat screenWidth;
     CGFloat screenHeight;
@@ -262,15 +269,10 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         screenHeight = MAX(compositeSize.height - standHeight - bezelTop - bezelBottom, 1.0);
     }
 
-    CGFloat innerRadius = MAX(rawCornerRadius - MAX(bezelLeft, bezelTop), 0.0);
+    CGFloat innerRadius = MAX(rawCornerRadius - MAX(screenX, screenY), 0.0);
     CGFloat radiusScale = pointScreenWidth > 0.0 ? screenWidth / pointScreenWidth : 1.0;
-    CGFloat chromeCornerRadius = watchProfile ? rawCornerRadius : innerRadius * radiusScale;
+    CGFloat chromeCornerRadius = innerRadius * radiusScale;
     CGFloat cornerRadius = chromeCornerRadius;
-    CGFloat maskCornerRadius = [self framebufferMaskCornerRadiusForChromeInfo:chromeInfo
-                                                             pointScreenWidth:pointScreenWidth];
-    if (!phoneProfile && maskCornerRadius > 0.0) {
-        cornerRadius = maskCornerRadius * radiusScale;
-    }
 
     CGRect fullFrame = [self fullFrameForChromeInfo:chromeInfo chromeSize:compositeSize];
     CGFloat chromeX = -CGRectGetMinX(fullFrame);
@@ -388,13 +390,11 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         NSDictionary *bord = [paths[@"simpleOutsideBorder"] isKindOfClass:[NSDictionary class]] ? paths[@"simpleOutsideBorder"] : @{};
         NSDictionary *bordI = [bord[@"insets"] isKindOfClass:[NSDictionary class]] ? bord[@"insets"] : @{};
         CGFloat screenScale = MAX([self numberValue:plist[@"mainScreenScale"]], 1.0);
-        BOOL watchProfile = [self isWatchProfile:plist];
-        CGFloat screenWidth = [self numberValue:plist[@"mainScreenWidth"]];
-        CGFloat screenHeight = [self numberValue:plist[@"mainScreenHeight"]];
-        if (!watchProfile) {
-            screenWidth /= screenScale;
-            screenHeight /= screenScale;
-        }
+        CGSize screenSize = [self screenSizeForChromeInfo:chromeInfo
+                                               chromeSize:CGSizeZero
+                                              screenScale:screenScale];
+        CGFloat screenWidth = screenSize.width;
+        CGFloat screenHeight = screenSize.height;
         CGFloat bezelLeft = [self numberValue:sizing[@"leftWidth"]] + [self numberValue:bordI[@"left"]];
         CGFloat bezelRight = [self numberValue:sizing[@"rightWidth"]] + [self numberValue:bordI[@"right"]];
         CGFloat bezelTop = [self numberValue:sizing[@"topHeight"]] + [self numberValue:bordI[@"top"]];
@@ -496,7 +496,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         if (NSWidth(nsRect) <= 0.0 || NSHeight(nsRect) <= 0.0) {
             continue;
         }
-        if ([self drawPDFAtPath:assetPath inRect:NSRectToCGRect(nsRect) context:context error:error]) {
+        if ([self drawRasterizedPDFAtPath:assetPath inRect:NSRectToCGRect(nsRect) context:context error:error]) {
             drewAny = YES;
         } else {
             return NO;
@@ -549,26 +549,26 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     CGFloat y = chromeYMax;
 
     if (leftPath.length > 0 && leftWidth > 0.0) {
-        if (![self drawPDFAtPath:leftPath
-                          inRect:CGRectMake(x, y, leftWidth, standHeight)
-                         context:context
-                           error:error]) {
+        if (![self drawRasterizedPDFAtPath:leftPath
+                                     inRect:CGRectMake(x, y, leftWidth, standHeight)
+                                    context:context
+                                      error:error]) {
             return NO;
         }
     }
     if (centerPath.length > 0) {
-        if (![self drawPDFAtPath:centerPath
-                          inRect:CGRectMake(x + leftWidth, y, centerWidth, standHeight)
-                         context:context
-                           error:error]) {
+        if (![self drawRasterizedPDFAtPath:centerPath
+                                     inRect:CGRectMake(x + leftWidth, y, centerWidth, standHeight)
+                                    context:context
+                                      error:error]) {
             return NO;
         }
     }
     if (rightPath.length > 0 && rightWidth > 0.0) {
-        if (![self drawPDFAtPath:rightPath
-                          inRect:CGRectMake(x + leftWidth + centerWidth, y, rightWidth, standHeight)
-                         context:context
-                           error:error]) {
+        if (![self drawRasterizedPDFAtPath:rightPath
+                                     inRect:CGRectMake(x + leftWidth + centerWidth, y, rightWidth, standHeight)
+                                    context:context
+                                      error:error]) {
             return NO;
         }
     }
@@ -654,17 +654,13 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     CGFloat x = offsetX;
     CGFloat y = offsetY;
     if ([anchor isEqualToString:@"left"]) {
-        CGFloat visibleWidth = MAX(assetSize.width - MAX(offsetX, 0.0), 0.0) / 2.0;
-        x = -visibleWidth;
+        x = offsetX - (assetSize.width / 2.0);
     } else if ([anchor isEqualToString:@"right"]) {
-        CGFloat visibleWidth = MAX(assetSize.width + MIN(offsetX, 0.0), 0.0) / 2.0;
-        x = size.width - assetSize.width + visibleWidth;
+        x = size.width + offsetX - (assetSize.width / 2.0);
     } else if ([anchor isEqualToString:@"top"]) {
-        CGFloat visibleHeight = MAX(assetSize.height - MAX(offsetY, 0.0), 0.0) / 2.0;
-        y = -visibleHeight;
+        y = offsetY;
     } else if ([anchor isEqualToString:@"bottom"]) {
-        CGFloat visibleHeight = MAX(assetSize.height + MIN(offsetY, 0.0), 0.0) / 2.0;
-        y = size.height - assetSize.height + visibleHeight;
+        y = size.height + offsetY;
     }
 
     if ([anchor isEqualToString:@"left"] || [anchor isEqualToString:@"right"]) {
@@ -688,21 +684,162 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     return CGRectMake(x, y, assetSize.width, assetSize.height);
 }
 
-+ (void)clearScreenAreaForProfile:(NSDictionary *)profile
-                           context:(CGContextRef)context {
++ (CGSize)screenSizeForChromeInfo:(NSDictionary *)chromeInfo
+                        chromeSize:(CGSize)chromeSize
+                       screenScale:(CGFloat)screenScale {
+    NSDictionary *plist = chromeInfo[@"plist"];
+    CGFloat rawWidth = [self numberValue:plist[@"mainScreenWidth"]];
+    CGFloat rawHeight = [self numberValue:plist[@"mainScreenHeight"]];
+    CGFloat scale = MAX(screenScale, 1.0);
+    if (![self isWatchProfile:plist]) {
+        return CGSizeMake(rawWidth / scale, rawHeight / scale);
+    }
+
+    if (chromeSize.width > 0.0 &&
+        chromeSize.height > 0.0 &&
+        rawWidth <= chromeSize.width &&
+        rawHeight <= chromeSize.height) {
+        return CGSizeMake(rawWidth, rawHeight);
+    }
+    return CGSizeMake(rawWidth / scale, rawHeight / scale);
+}
+
++ (BOOL)drawRasterizedPDFAtPath:(NSString *)path
+                         inRect:(CGRect)rect
+                        context:(CGContextRef)context
+                          error:(NSError * _Nullable __autoreleasing *)error {
+    CGImageRef image = [self newImageForPDFAtPath:path error:error];
+    if (image == NULL) {
+        return NO;
+    }
+
+    CGFloat imageWidth = MAX((CGFloat)CGImageGetWidth(image), 1.0);
+    CGFloat imageHeight = MAX((CGFloat)CGImageGetHeight(image), 1.0);
+    CGContextSaveGState(context);
+    CGContextClipToRect(context, rect);
+    CGContextTranslateCTM(context, rect.origin.x, rect.origin.y + rect.size.height);
+    CGContextScaleCTM(context, rect.size.width / imageWidth, -rect.size.height / imageHeight);
+    CGContextDrawImage(context, CGRectMake(0, 0, imageWidth, imageHeight), image);
+    CGContextRestoreGState(context);
+    CGImageRelease(image);
+    return YES;
+}
+
++ (nullable CGImageRef)newImageForPDFAtPath:(NSString *)path
+                                      error:(NSError * _Nullable __autoreleasing *)error CF_RETURNS_RETAINED {
+    if (path.length == 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                         code:14
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"DeviceKit chrome asset path was empty.",
+            }];
+        }
+        return NULL;
+    }
+
+    CGPDFDocumentRef document = CGPDFDocumentCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:path]);
+    if (document == NULL) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                         code:7
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Unable to open DeviceKit chrome PDF %@.", path.lastPathComponent],
+            }];
+        }
+        return NULL;
+    }
+    CGPDFPageRef page = CGPDFDocumentGetPage(document, 1);
+    if (page == NULL) {
+        CGPDFDocumentRelease(document);
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                         code:8
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: [NSString stringWithFormat:@"DeviceKit chrome PDF %@ did not contain a renderable page.", path.lastPathComponent],
+            }];
+        }
+        return NULL;
+    }
+
+    CGRect mediaBox = CGPDFPageGetBoxRect(page, kCGPDFCropBox);
+    if (CGRectIsEmpty(mediaBox)) {
+        mediaBox = CGPDFPageGetBoxRect(page, kCGPDFMediaBox);
+    }
+    NSInteger width = MAX((NSInteger)ceil(mediaBox.size.width), 1);
+    NSInteger height = MAX((NSInteger)ceil(mediaBox.size.height), 1);
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(NULL,
+                                                 width,
+                                                 height,
+                                                 8,
+                                                 0,
+                                                 colorSpace,
+                                                 kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(colorSpace);
+    if (context == NULL) {
+        CGPDFDocumentRelease(document);
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                         code:9
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"Unable to create a CoreGraphics bitmap context for DeviceKit chrome asset rendering.",
+            }];
+        }
+        return NULL;
+    }
+
+    CGContextClearRect(context, CGRectMake(0, 0, width, height));
+    CGContextTranslateCTM(context, -mediaBox.origin.x, -mediaBox.origin.y);
+    CGContextDrawPDFPage(context, page);
+    CGImageRef image = CGBitmapContextCreateImage(context);
+    CGContextRelease(context);
+    CGPDFDocumentRelease(document);
+    if (image == NULL && error != NULL) {
+        *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                     code:10
+                                 userInfo:@{
+            NSLocalizedDescriptionKey: @"Unable to create a CGImage from the DeviceKit chrome asset.",
+        }];
+    }
+    return image;
+}
+
++ (BOOL)clearScreenAreaForChromeInfo:(NSDictionary *)chromeInfo
+                              profile:(NSDictionary *)profile
+                              context:(CGContextRef)context
+                                error:(NSError * _Nullable __autoreleasing *)error {
     CGFloat x = [self numberValue:profile[@"screenX"]];
     CGFloat y = [self numberValue:profile[@"screenY"]];
     CGFloat width = [self numberValue:profile[@"screenWidth"]];
     CGFloat height = [self numberValue:profile[@"screenHeight"]];
-    CGFloat radius = [self numberValue:profile[@"chromeCornerRadius"]];
-    if (radius <= 0.0) {
-        radius = [self numberValue:profile[@"cornerRadius"]];
-    }
     if (width <= 0.0 || height <= 0.0) {
-        return;
+        return YES;
     }
 
     CGRect rect = CGRectMake(x, y, width, height);
+    BOOL hasScreenMask = [profile[@"hasScreenMask"] respondsToSelector:@selector(boolValue)] && [profile[@"hasScreenMask"] boolValue];
+    if (hasScreenMask) {
+        NSString *maskPath = [self screenMaskPathForChromeInfo:chromeInfo];
+        if (maskPath.length > 0) {
+            CGImageRef maskImage = [self newImageForPDFAtPath:maskPath error:error];
+            if (maskImage == NULL) {
+                return NO;
+            }
+            CGContextSaveGState(context);
+            CGContextClipToMask(context, rect, maskImage);
+            CGContextSetBlendMode(context, kCGBlendModeClear);
+            CGContextFillRect(context, rect);
+            CGContextRestoreGState(context);
+            CGImageRelease(maskImage);
+            return YES;
+        }
+    }
+
+    CGFloat radius = [self numberValue:profile[@"cornerRadius"]];
+    if (radius <= 0.0) {
+        radius = [self numberValue:profile[@"chromeCornerRadius"]];
+    }
     CGFloat clampedRadius = MIN(MAX(radius, 0.0), MIN(width, height) / 2.0);
 
     CGContextSaveGState(context);
@@ -726,6 +863,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         CGPathRelease(path);
     }
     CGContextRestoreGState(context);
+    return YES;
 }
 
 + (BOOL)drawSensorBarForChromeInfo:(NSDictionary *)chromeInfo

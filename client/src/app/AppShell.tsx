@@ -43,7 +43,10 @@ import { AccessibilityInspector } from "../features/accessibility/AccessibilityI
 import { isEditableTarget } from "../features/input/keycodes";
 import { useKeyboardInput } from "../features/input/useKeyboardInput";
 import { usePointerInput } from "../features/input/usePointerInput";
-import { simulatorRuntimeLabel } from "../features/simulators/simulatorDisplay";
+import {
+  shouldRenderNativeChrome,
+  simulatorRuntimeLabel,
+} from "../features/simulators/simulatorDisplay";
 import { useSimulatorList } from "../features/simulators/useSimulatorList";
 import { sendWebRtcControlMessage } from "../features/stream/streamWorkerClient";
 import type {
@@ -160,17 +163,6 @@ function shouldUseRemoteStreamDefault(apiRoot: string): boolean {
   }
   return (
     new URLSearchParams(window.location.search).get("remoteStream") === "1"
-  );
-}
-
-function shouldRenderNativeChrome(simulator: SimulatorMetadata): boolean {
-  const identifier = simulator.deviceTypeIdentifier ?? "";
-  const name = simulator.name ?? "";
-  return (
-    identifier.includes(".iPhone-") ||
-    identifier.includes(".iPad-") ||
-    name.startsWith("iPhone") ||
-    name.startsWith("iPad")
   );
 }
 
@@ -1092,7 +1084,9 @@ export function AppShell({
           top: `${(chromeScreenRect.y / viewportChromeProfile.totalHeight) * 100}%`,
           width: `${(chromeScreenRect.width / viewportChromeProfile.totalWidth) * 100}%`,
           height: `${(chromeScreenRect.height / viewportChromeProfile.totalHeight) * 100}%`,
-          borderRadius: chromeScreenBorderRadius ?? "0",
+          borderRadius: viewportChromeProfile.hasScreenMask
+            ? "0"
+            : (chromeScreenBorderRadius ?? "0"),
           ...(viewportChromeProfile.hasScreenMask && selectedSimulator
             ? {
                 maskImage: `url("${buildScreenMaskUrl(
