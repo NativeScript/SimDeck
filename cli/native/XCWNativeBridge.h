@@ -30,6 +30,16 @@ typedef struct xcw_native_frame {
 
 typedef void (*xcw_native_frame_callback)(const xcw_native_frame * _Nonnull frame, void * _Nullable user_data);
 
+typedef struct xcw_native_jpeg_frame {
+    uint64_t frame_sequence;
+    uint64_t timestamp_us;
+    uint32_t width;
+    uint32_t height;
+    xcw_native_shared_bytes data;
+} xcw_native_jpeg_frame;
+
+typedef void (*xcw_native_jpeg_frame_callback)(const xcw_native_jpeg_frame * _Nonnull frame, void * _Nullable user_data);
+
 void xcw_native_initialize_app(void);
 void xcw_native_run_main_loop_slice(double duration_seconds);
 
@@ -83,6 +93,11 @@ bool xcw_native_session_open_app_switcher(void * _Nonnull handle, char * _Nullab
 bool xcw_native_session_rotate_right(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_rotate_left(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 void xcw_native_session_set_frame_callback(void * _Nonnull handle, xcw_native_frame_callback _Nullable callback, void * _Nullable user_data);
+void xcw_native_session_set_jpeg_frame_callback(void * _Nonnull handle,
+                                               xcw_native_jpeg_frame_callback _Nullable callback,
+                                               void * _Nullable user_data,
+                                               uint32_t max_edge,
+                                               double quality);
 
 void xcw_native_free_string(char * _Nullable value);
 void xcw_native_free_bytes(xcw_native_owned_bytes bytes);

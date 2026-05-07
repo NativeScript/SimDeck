@@ -10,6 +10,11 @@ typedef void (^XCWPrivateSimulatorEncodedFrameHandler)(NSData *sampleData,
                                                        NSData * _Nullable decoderConfig,
                                                        CGSize dimensions);
 
+typedef void (^XCWPrivateSimulatorJPEGFrameHandler)(NSData *jpegData,
+                                                    NSUInteger frameSequence,
+                                                    uint64_t timestampUs,
+                                                    CGSize dimensions);
+
 @interface XCWPrivateSimulatorSession : NSObject
 
 - (instancetype)init NS_UNAVAILABLE;
@@ -34,6 +39,10 @@ typedef void (^XCWPrivateSimulatorEncodedFrameHandler)(NSData *sampleData,
 - (NSDictionary *)videoEncoderStats;
 - (id)addEncodedFrameListener:(XCWPrivateSimulatorEncodedFrameHandler)handler;
 - (void)removeEncodedFrameListener:(id)token;
+- (id)addJPEGFrameListenerWithMaxEdge:(NSUInteger)maxEdge
+                               quality:(double)quality
+                               handler:(XCWPrivateSimulatorJPEGFrameHandler)handler;
+- (void)removeJPEGFrameListener:(id)token;
 
 - (BOOL)sendTouchWithNormalizedX:(double)normalizedX
                      normalizedY:(double)normalizedY

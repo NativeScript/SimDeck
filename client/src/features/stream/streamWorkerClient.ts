@@ -6,6 +6,7 @@ import type {
   StreamConnectTarget,
   StreamConfig,
   StreamStats,
+  StreamTransport,
   WorkerToMainMessage,
 } from "./streamTypes";
 
@@ -21,15 +22,22 @@ const WEBRTC_REMOTE_DISCONNECTED_GRACE_MS = 10000;
 const WEBRTC_REMOTE_ICE_RESTART_GRACE_MS = 1500;
 const WEBRTC_RECONNECT_BASE_DELAY_MS = 250;
 const WEBRTC_RECONNECT_MAX_DELAY_MS = 1000;
+const MJPEG_DEFAULT_QUALITY = 0.7;
+const MJPEG_FIRST_FRAME_TIMEOUT_MS = 10000;
+const MJPEG_STALLED_FRAME_TIMEOUT_MS = 5000;
 
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
 let activeWebRtcTelemetryChannel: RTCDataChannel | null = null;
+let activeInputSocket: WebSocket | null = null;
 let activeStreamClient: StreamWorkerClient | null = null;
 
-export type StreamBackend = "webrtc";
+export type StreamBackend = "mjpeg" | "webrtc";
 
 export function sendWebRtcControlMessage(encoded: string): boolean {
-  return sendDataChannelMessage(activeWebRtcControlChannel, encoded);
+  return (
+    sendDataChannelMessage(activeWebRtcControlChannel, encoded) ||
+    sendWebSocketMessage(activeInputSocket, encoded)
+  );
 }
 
 export function sendWebRtcClientStats(stats: unknown): boolean {
@@ -57,6 +65,17 @@ function sendDataChannelMessage(
     return false;
   }
   channel.send(encoded);
+  return true;
+}
+
+function sendWebSocketMessage(
+  socket: WebSocket | null,
+  encoded: string,
+): boolean {
+  if (socket?.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  socket.send(encoded);
   return true;
 }
 
@@ -149,14 +168,60 @@ export function buildStreamTarget(
     clientId?: string;
     remote?: boolean;
     streamConfig?: StreamConfig;
+    transport?: StreamTransport;
   } = {},
 ): StreamConnectTarget {
   return {
     clientId: options.clientId,
     remote: options.remote,
     streamConfig: options.streamConfig,
+    transport: options.transport,
     udid,
   };
+}
+
+function buildMjpegUrl(target: StreamConnectTarget): string {
+  const url = new URL(
+    apiUrl(`/api/simulators/${encodeURIComponent(target.udid)}/mjpeg`),
+    window.location.href,
+  );
+  const config = target.streamConfig;
+  const quality = mjpegQualityPreset(config?.quality);
+  url.searchParams.set("fps", String(config?.fps ?? (target.remote ? 15 : 30)));
+  url.searchParams.set("maxEdge", String(config?.maxEdge ?? quality.maxEdge));
+  url.searchParams.set("quality", String(quality.jpegQuality));
+  if (target.clientId) {
+    url.searchParams.set("clientId", target.clientId);
+  }
+  return url.toString();
+}
+
+function mjpegQualityPreset(quality?: StreamConfig["quality"]): {
+  jpegQuality: number;
+  maxEdge: number;
+} {
+  switch (quality) {
+    case "quality":
+      return { jpegQuality: 0.82, maxEdge: 4096 };
+    case "balanced":
+      return { jpegQuality: 0.76, maxEdge: 1280 };
+    case "smooth":
+      return { jpegQuality: 0.74, maxEdge: 1170 };
+    case "economy":
+      return { jpegQuality: 0.7, maxEdge: 1080 };
+    case "low":
+      return { jpegQuality: 0.66, maxEdge: 720 };
+    case "tiny":
+      return { jpegQuality: 0.62, maxEdge: 540 };
+    default:
+      return { jpegQuality: MJPEG_DEFAULT_QUALITY, maxEdge: 720 };
+  }
+}
+
+function webSocketApiUrl(path: string): string {
+  const url = new URL(apiUrl(path), window.location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
 }
 
 export function canUseWebRtc(): boolean {
@@ -181,6 +246,286 @@ export interface VisualArtifactSample {
   maxPixelDiff: number;
   maxTileMeanDiff: number;
   meanDiff: number;
+}
+
+class MjpegStreamClient implements StreamClientBackend {
+  private animationFrame = 0;
+  private canvas: HTMLCanvasElement | null = null;
+  private connectGeneration = 0;
+  private frameWatchdogTimeout = 0;
+  private image: HTMLImageElement | null = null;
+  private inputSocket: WebSocket | null = null;
+  private lastDrawAt = 0;
+  private lastFrameAt = 0;
+  private reportedVideoHeight = 0;
+  private reportedVideoWidth = 0;
+  private shouldReconnect = false;
+  private stats: StreamStats = createEmptyStreamStats();
+  private streamConfig?: StreamConfig;
+  private streamTarget: StreamConnectTarget | null = null;
+
+  constructor(
+    private readonly onMessage: (message: WorkerToMainMessage) => void,
+  ) {}
+
+  attachCanvas(canvasElement: HTMLCanvasElement) {
+    this.canvas = canvasElement;
+  }
+
+  async connect(target: StreamConnectTarget) {
+    this.disconnect();
+    if (!this.canvas) {
+      return;
+    }
+    const generation = ++this.connectGeneration;
+    this.shouldReconnect = true;
+    this.streamTarget = target;
+    this.streamConfig = target.streamConfig;
+    this.stats = createEmptyStreamStats();
+    this.stats.codec = "mjpeg";
+    this.onMessage({ type: "stats", stats: { ...this.stats } });
+    this.onMessage({
+      type: "status",
+      status: { detail: "Opening MJPEG stream", state: "connecting" },
+    });
+
+    try {
+      await postStreamConfigWithAuthRetry(target.streamConfig, {
+        remote: target.remote,
+      });
+    } catch (error) {
+      if (!target.remote) {
+        throw error;
+      }
+    }
+    if (generation !== this.connectGeneration) {
+      return;
+    }
+
+    const image = document.createElement("img");
+    image.alt = "";
+    image.className = "stream-video";
+    image.decoding = "async";
+    image.draggable = false;
+    image.referrerPolicy = "no-referrer";
+    image.src = buildMjpegUrl(target);
+    this.canvas.parentElement?.insertBefore(image, this.canvas.nextSibling);
+    this.image = image;
+
+    image.addEventListener("load", () => {
+      if (generation !== this.connectGeneration || image.naturalWidth <= 0) {
+        return;
+      }
+      this.lastFrameAt = performance.now();
+      this.syncCanvasSize(image.naturalWidth, image.naturalHeight);
+      this.reportVideoConfig(image.naturalWidth, image.naturalHeight);
+      this.onMessage({
+        type: "status",
+        status: { detail: "MJPEG stream connected", state: "streaming" },
+      });
+      this.scheduleDraw();
+    });
+    image.addEventListener("error", () => {
+      if (generation === this.connectGeneration) {
+        this.handleError("MJPEG stream failed.");
+      }
+    });
+
+    this.connectInputSocket(target, generation);
+    this.scheduleFrameWatchdog(generation);
+  }
+
+  disconnect() {
+    this.shouldReconnect = false;
+    this.connectGeneration += 1;
+    this.clearFrameWatchdog();
+    window.cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = 0;
+    if (this.image) {
+      this.image.removeAttribute("src");
+      this.image.remove();
+    }
+    this.image = null;
+    this.inputSocket?.close();
+    if (activeInputSocket === this.inputSocket) {
+      activeInputSocket = null;
+    }
+    this.inputSocket = null;
+    this.streamTarget = null;
+    this.reportedVideoHeight = 0;
+    this.reportedVideoWidth = 0;
+  }
+
+  destroy() {
+    this.disconnect();
+  }
+
+  clear() {
+    const canvas = this.canvas;
+    if (!canvas) {
+      return;
+    }
+    canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  sendControl(payload: unknown): boolean {
+    if (
+      payload &&
+      typeof payload === "object" &&
+      "type" in payload &&
+      payload.type === "streamControl"
+    ) {
+      return false;
+    }
+    return sendWebSocketMessage(this.inputSocket, JSON.stringify(payload));
+  }
+
+  async applyStreamConfig(config?: StreamConfig) {
+    this.streamConfig = config;
+    if (config) {
+      await postStreamConfigWithAuthRetry(config, {
+        remote: this.streamTarget?.remote,
+      });
+    }
+    const target = this.streamTarget;
+    if (target && this.shouldReconnect) {
+      this.connect({ ...target, streamConfig: config });
+    }
+  }
+
+  private connectInputSocket(target: StreamConnectTarget, generation: number) {
+    const socket = new WebSocket(
+      webSocketApiUrl(
+        `/api/simulators/${encodeURIComponent(target.udid)}/input`,
+      ),
+    );
+    this.inputSocket = socket;
+    activeInputSocket = socket;
+    socket.addEventListener("open", () => {
+      if (generation === this.connectGeneration) {
+        activeInputSocket = socket;
+      }
+    });
+    socket.addEventListener("close", () => {
+      if (activeInputSocket === socket) {
+        activeInputSocket = null;
+      }
+    });
+    socket.addEventListener("error", () => {
+      if (generation === this.connectGeneration) {
+        console.warn("MJPEG input WebSocket failed.");
+      }
+    });
+  }
+
+  private scheduleDraw() {
+    window.cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = window.requestAnimationFrame(this.drawFrame);
+  }
+
+  private drawFrame = () => {
+    this.animationFrame = 0;
+    const image = this.image;
+    const canvas = this.canvas;
+    if (
+      !image ||
+      !canvas ||
+      image.naturalWidth <= 0 ||
+      image.naturalHeight <= 0
+    ) {
+      return;
+    }
+    const now = performance.now();
+    const fps =
+      this.streamConfig?.fps && this.streamConfig.fps > 0
+        ? this.streamConfig.fps
+        : 15;
+    const minFrameGap = 1000 / Math.min(60, Math.max(1, fps));
+    if (now - this.lastDrawAt >= minFrameGap) {
+      this.syncCanvasSize(image.naturalWidth, image.naturalHeight);
+      canvas
+        .getContext("2d")
+        ?.drawImage(image, 0, 0, canvas.width, canvas.height);
+      this.stats.codec = "mjpeg";
+      this.stats.decodedFrames += 1;
+      this.stats.renderedFrames += 1;
+      this.stats.frameSequence = this.stats.renderedFrames;
+      if (this.lastFrameAt > 0) {
+        this.stats.latestFrameGapMs = now - this.lastFrameAt;
+      }
+      this.lastFrameAt = now;
+      this.lastDrawAt = now;
+      this.onMessage({ type: "stats", stats: { ...this.stats } });
+    }
+    this.scheduleDraw();
+  };
+
+  private syncCanvasSize(width: number, height: number) {
+    const canvas = this.canvas;
+    if (!canvas) {
+      return;
+    }
+    if (canvas.width !== width) {
+      canvas.width = width;
+    }
+    if (canvas.height !== height) {
+      canvas.height = height;
+    }
+  }
+
+  private reportVideoConfig(width: number, height: number) {
+    if (
+      this.reportedVideoWidth === width &&
+      this.reportedVideoHeight === height
+    ) {
+      return;
+    }
+    this.reportedVideoWidth = width;
+    this.reportedVideoHeight = height;
+    this.stats.width = width;
+    this.stats.height = height;
+    this.onMessage({ type: "video-config", size: { height, width } });
+  }
+
+  private scheduleFrameWatchdog(generation: number) {
+    this.clearFrameWatchdog();
+    this.frameWatchdogTimeout = window.setTimeout(
+      () => {
+        this.frameWatchdogTimeout = 0;
+        if (generation !== this.connectGeneration || !this.shouldReconnect) {
+          return;
+        }
+        const now = performance.now();
+        if (this.lastFrameAt <= 0) {
+          this.handleError("MJPEG stream did not render a frame.");
+          return;
+        }
+        if (now - this.lastFrameAt > MJPEG_STALLED_FRAME_TIMEOUT_MS) {
+          this.handleError("MJPEG stream stalled.");
+          return;
+        }
+        this.scheduleFrameWatchdog(generation);
+      },
+      this.lastFrameAt > 0
+        ? MJPEG_STALLED_FRAME_TIMEOUT_MS
+        : MJPEG_FIRST_FRAME_TIMEOUT_MS,
+    );
+  }
+
+  private clearFrameWatchdog() {
+    if (!this.frameWatchdogTimeout) {
+      return;
+    }
+    window.clearTimeout(this.frameWatchdogTimeout);
+    this.frameWatchdogTimeout = 0;
+  }
+
+  private handleError(message: string) {
+    this.onMessage({
+      type: "status",
+      status: { error: message, state: "error" },
+    });
+  }
 }
 
 class WebRtcStreamClient implements StreamClientBackend {
@@ -1473,7 +1818,11 @@ export class StreamWorkerClient {
   private readonly onMessage: (message: WorkerToMainMessage) => void;
   private backend: StreamClientBackend | null = null;
   private attachedCanvas = false;
+  private backendKind: StreamBackend | null = null;
+  private canvasElement: HTMLCanvasElement | null = null;
   private disposed = false;
+  private fallbackAttempted = false;
+  private target: StreamConnectTarget | null = null;
   private readonly destroyOnPageExit = () => {
     this.destroy();
   };
@@ -1491,13 +1840,18 @@ export class StreamWorkerClient {
       return;
     }
 
-    this.backend = new WebRtcStreamClient(this.onMessage);
-    this.backend.attachCanvas(canvasElement);
+    this.canvasElement = canvasElement;
     this.attachedCanvas = true;
   }
 
   connect(target: StreamConnectTarget) {
     try {
+      this.target = target;
+      this.fallbackAttempted = false;
+      const preferredBackend = preferredStreamBackend(target);
+      const backendKind =
+        preferredBackend === "mjpeg" || !canUseWebRtc() ? "mjpeg" : "webrtc";
+      this.setBackend(backendKind);
       const result = this.backend?.connect(target);
       if (result && typeof result.catch === "function") {
         result.catch((error: unknown) => {
@@ -1523,6 +1877,7 @@ export class StreamWorkerClient {
 
   disconnect() {
     this.backend?.disconnect();
+    this.target = null;
   }
 
   clear() {
@@ -1565,4 +1920,50 @@ export class StreamWorkerClient {
       activeStreamClient = null;
     }
   }
+
+  private setBackend(kind: StreamBackend) {
+    if (this.backend && this.backendKind === kind) {
+      return;
+    }
+    this.backend?.destroy();
+    this.backend =
+      kind === "mjpeg"
+        ? new MjpegStreamClient(this.handleBackendMessage)
+        : new WebRtcStreamClient(this.handleBackendMessage);
+    this.backendKind = kind;
+    if (this.canvasElement) {
+      this.backend.attachCanvas(this.canvasElement);
+    }
+  }
+
+  private readonly handleBackendMessage = (message: WorkerToMainMessage) => {
+    if (
+      message.type === "status" &&
+      message.status.state === "error" &&
+      this.backendKind === "webrtc" &&
+      preferredStreamBackend(this.target) === "auto" &&
+      !this.fallbackAttempted &&
+      this.target
+    ) {
+      this.fallbackAttempted = true;
+      const target = this.target;
+      this.setBackend("mjpeg");
+      this.onMessage({
+        type: "status",
+        status: { detail: "Falling back to MJPEG", state: "connecting" },
+      });
+      this.backend?.connect(target);
+      return;
+    }
+    this.onMessage(message);
+  };
+}
+
+function preferredStreamBackend(
+  target?: StreamConnectTarget | null,
+): "auto" | StreamBackend {
+  const value =
+    target?.transport ??
+    new URLSearchParams(window.location.search).get("stream");
+  return value === "mjpeg" || value === "webrtc" ? value : "auto";
 }

@@ -1,7 +1,10 @@
 #import "XCWPrivateSimulatorSession.h"
 
 #import <CoreGraphics/CoreGraphics.h>
+#import <CoreImage/CoreImage.h>
 #import <CoreVideo/CoreVideo.h>
+#import <ImageIO/ImageIO.h>
+#import <QuartzCore/QuartzCore.h>
 
 #import "DFPrivateSimulatorDisplayBridge.h"
 #import "XCWH264Encoder.h"
@@ -15,15 +18,129 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
 
 @end
 
+@interface XCWPrivateSimulatorJPEGFrameListener : NSObject
+
+@property (nonatomic, copy) XCWPrivateSimulatorJPEGFrameHandler handler;
+@property (nonatomic) NSUInteger maxEdge;
+@property (nonatomic) double quality;
+
+@end
+
+@implementation XCWPrivateSimulatorJPEGFrameListener
+
+@end
+
+static uint64_t XCWCurrentTimestampUs(void) {
+    return (uint64_t)llround(CACurrentMediaTime() * 1000000.0);
+}
+
+static CIContext *XCWSharedCIContext(void) {
+    static CIContext *context = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        context = [CIContext contextWithOptions:@{
+            kCIContextUseSoftwareRenderer: @NO,
+        }];
+    });
+    return context;
+}
+
+static CGImageRef XCWCreateScaledImageIfNeeded(CGImageRef image, NSUInteger maxEdge) CF_RETURNS_RETAINED {
+    if (image == NULL || maxEdge == 0) {
+        return image == NULL ? NULL : CGImageRetain(image);
+    }
+
+    size_t sourceWidth = CGImageGetWidth(image);
+    size_t sourceHeight = CGImageGetHeight(image);
+    size_t sourceMaxEdge = MAX(sourceWidth, sourceHeight);
+    if (sourceMaxEdge <= maxEdge) {
+        return CGImageRetain(image);
+    }
+
+    CGFloat scale = (CGFloat)maxEdge / (CGFloat)sourceMaxEdge;
+    size_t targetWidth = MAX((size_t)1, (size_t)llround((CGFloat)sourceWidth * scale));
+    size_t targetHeight = MAX((size_t)1, (size_t)llround((CGFloat)sourceHeight * scale));
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(NULL,
+                                                 targetWidth,
+                                                 targetHeight,
+                                                 8,
+                                                 0,
+                                                 colorSpace,
+                                                 kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+    CGColorSpaceRelease(colorSpace);
+    if (context == NULL) {
+        return CGImageRetain(image);
+    }
+
+    CGContextSetInterpolationQuality(context, kCGInterpolationMedium);
+    CGContextDrawImage(context, CGRectMake(0, 0, (CGFloat)targetWidth, (CGFloat)targetHeight), image);
+    CGImageRef scaledImage = CGBitmapContextCreateImage(context);
+    CGContextRelease(context);
+    return scaledImage ?: CGImageRetain(image);
+}
+
+static NSData *XCWJPEGDataFromPixelBuffer(CVPixelBufferRef pixelBuffer, NSUInteger maxEdge, double quality, CGSize *dimensions) {
+    if (pixelBuffer == NULL) {
+        return nil;
+    }
+
+    size_t width = CVPixelBufferGetWidth(pixelBuffer);
+    size_t height = CVPixelBufferGetHeight(pixelBuffer);
+    if (width == 0 || height == 0) {
+        return nil;
+    }
+
+    CIImage *ciImage = [CIImage imageWithCVPixelBuffer:pixelBuffer];
+    CGImageRef sourceImage = [XCWSharedCIContext() createCGImage:ciImage
+                                                        fromRect:CGRectMake(0, 0, (CGFloat)width, (CGFloat)height)];
+    if (sourceImage == NULL) {
+        return nil;
+    }
+
+    CGImageRef outputImage = XCWCreateScaledImageIfNeeded(sourceImage, maxEdge);
+    CGImageRelease(sourceImage);
+    if (outputImage == NULL) {
+        return nil;
+    }
+
+    NSMutableData *data = [NSMutableData data];
+    CGImageDestinationRef destination = CGImageDestinationCreateWithData((__bridge CFMutableDataRef)data,
+                                                                        CFSTR("public.jpeg"),
+                                                                        1,
+                                                                        NULL);
+    if (destination == NULL) {
+        CGImageRelease(outputImage);
+        return nil;
+    }
+
+    NSDictionary *properties = @{
+        (__bridge NSString *)kCGImageDestinationLossyCompressionQuality: @(MIN(MAX(quality, 0.2), 0.95)),
+    };
+    CGImageDestinationAddImage(destination, outputImage, (__bridge CFDictionaryRef)properties);
+    BOOL finalized = CGImageDestinationFinalize(destination);
+    CFRelease(destination);
+    if (dimensions != NULL) {
+        *dimensions = CGSizeMake((CGFloat)CGImageGetWidth(outputImage), (CGFloat)CGImageGetHeight(outputImage));
+    }
+    CGImageRelease(outputImage);
+    return finalized && data.length > 0 ? data : nil;
+}
+
 @implementation XCWPrivateSimulatorSession {
     DFPrivateSimulatorDisplayBridge *_displayBridge;
     dispatch_queue_t _stateQueue;
+    dispatch_queue_t _jpegQueue;
     dispatch_semaphore_t _readinessSemaphore;
     XCWH264Encoder *_videoEncoder;
     NSString *_displayStatusValue;
     CGSize _displaySizeValue;
     NSMutableDictionary<NSUUID *, XCWPrivateSimulatorEncodedFrameHandler> *_encodedFrameListeners;
+    NSMutableDictionary<NSUUID *, XCWPrivateSimulatorJPEGFrameListener *> *_jpegFrameListeners;
     NSUInteger _encodedFrameSequenceValue;
+    NSUInteger _jpegFrameSequenceValue;
+    CVPixelBufferRef _pendingJPEGPixelBuffer;
+    BOOL _jpegEncodeInFlight;
     NSData *_latestKeyFrameData;
     uint64_t _latestKeyFrameTimestampUs;
     NSString *_latestKeyFrameCodec;
@@ -62,8 +179,10 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
     dispatch_queue_attr_t queueAttributes =
         dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
     _stateQueue = dispatch_queue_create("com.simdeck.private-session.state", queueAttributes);
+    _jpegQueue = dispatch_queue_create("com.simdeck.private-session.jpeg", queueAttributes);
     _readinessSemaphore = dispatch_semaphore_create(0);
     _encodedFrameListeners = [NSMutableDictionary dictionary];
+    _jpegFrameListeners = [NSMutableDictionary dictionary];
     _displayStatusValue = bridge.displayStatus ?: @"Initializing private simulator display";
     _displayReadyValue = bridge.isDisplayReady;
     __weak typeof(self) weakSelf = self;
@@ -112,6 +231,10 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
 
 - (void)dealloc {
     [_videoEncoder invalidate];
+    if (_pendingJPEGPixelBuffer != nil) {
+        CVPixelBufferRelease(_pendingJPEGPixelBuffer);
+        _pendingJPEGPixelBuffer = nil;
+    }
 }
 
 - (BOOL)waitUntilReadyWithTimeout:(NSTimeInterval)timeout {
@@ -159,6 +282,7 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
         [self signalReadinessIfNeededLocked];
     });
     [_videoEncoder encodePixelBuffer:pixelBuffer];
+    [self enqueueJPEGPixelBufferIfNeeded:pixelBuffer];
     CVPixelBufferRelease(pixelBuffer);
 }
 
@@ -202,6 +326,35 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
 
     dispatch_sync(_stateQueue, ^{
         [self->_encodedFrameListeners removeObjectForKey:(NSUUID *)token];
+    });
+}
+
+- (id)addJPEGFrameListenerWithMaxEdge:(NSUInteger)maxEdge
+                               quality:(double)quality
+                               handler:(XCWPrivateSimulatorJPEGFrameHandler)handler {
+    if (handler == nil) {
+        return [NSUUID UUID];
+    }
+
+    NSUUID *token = [NSUUID UUID];
+    XCWPrivateSimulatorJPEGFrameListener *listener = [XCWPrivateSimulatorJPEGFrameListener new];
+    listener.handler = handler;
+    listener.maxEdge = maxEdge;
+    listener.quality = quality;
+    dispatch_sync(_stateQueue, ^{
+        self->_jpegFrameListeners[token] = listener;
+    });
+    [self refreshCurrentFrame];
+    return token;
+}
+
+- (void)removeJPEGFrameListener:(id)token {
+    if (![token isKindOfClass:[NSUUID class]]) {
+        return;
+    }
+
+    dispatch_sync(_stateQueue, ^{
+        [self->_jpegFrameListeners removeObjectForKey:(NSUUID *)token];
     });
 }
 
@@ -334,6 +487,7 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
         [self signalReadinessIfNeededLocked];
     });
     [_videoEncoder encodePixelBuffer:pixelBuffer];
+    [self enqueueJPEGPixelBufferIfNeeded:pixelBuffer];
 }
 
 - (void)privateSimulatorDisplayBridge:(DFPrivateSimulatorDisplayBridge *)bridge
@@ -363,8 +517,87 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
             [self signalReadinessIfNeededLocked];
         });
         [_videoEncoder encodePixelBuffer:pixelBuffer];
+        [self enqueueJPEGPixelBufferIfNeeded:pixelBuffer];
         CVPixelBufferRelease(pixelBuffer);
     }
+}
+
+- (void)enqueueJPEGPixelBufferIfNeeded:(CVPixelBufferRef)pixelBuffer {
+    if (pixelBuffer == NULL) {
+        return;
+    }
+
+    __block BOOL hasListeners = NO;
+    dispatch_sync(_stateQueue, ^{
+        hasListeners = self->_jpegFrameListeners.count > 0;
+        if (!hasListeners) {
+            if (self->_pendingJPEGPixelBuffer != nil) {
+                CVPixelBufferRelease(self->_pendingJPEGPixelBuffer);
+                self->_pendingJPEGPixelBuffer = nil;
+            }
+            self->_jpegEncodeInFlight = NO;
+        }
+    });
+    if (!hasListeners) {
+        return;
+    }
+
+    CVPixelBufferRetain(pixelBuffer);
+    __block BOOL shouldStartEncode = NO;
+    dispatch_sync(_stateQueue, ^{
+        if (self->_jpegEncodeInFlight) {
+            if (self->_pendingJPEGPixelBuffer != nil) {
+                CVPixelBufferRelease(self->_pendingJPEGPixelBuffer);
+            }
+            self->_pendingJPEGPixelBuffer = pixelBuffer;
+        } else {
+            self->_jpegEncodeInFlight = YES;
+            shouldStartEncode = YES;
+        }
+    });
+
+    if (shouldStartEncode) {
+        [self encodeJPEGPixelBuffer:pixelBuffer];
+    }
+}
+
+- (void)encodeJPEGPixelBuffer:(CVPixelBufferRef)pixelBuffer {
+    dispatch_async(_jpegQueue, ^{
+        __block NSDictionary<NSUUID *, XCWPrivateSimulatorJPEGFrameListener *> *listeners = nil;
+        __block NSUInteger frameSequence = 0;
+        dispatch_sync(self->_stateQueue, ^{
+            listeners = [self->_jpegFrameListeners copy];
+            self->_jpegFrameSequenceValue += 1;
+            frameSequence = self->_jpegFrameSequenceValue;
+        });
+
+        uint64_t timestampUs = XCWCurrentTimestampUs();
+        [listeners enumerateKeysAndObjectsUsingBlock:^(__unused NSUUID *token,
+                                                       XCWPrivateSimulatorJPEGFrameListener *listener,
+                                                       __unused BOOL *stop) {
+            CGSize dimensions = CGSizeZero;
+            NSData *jpegData = XCWJPEGDataFromPixelBuffer(pixelBuffer,
+                                                          listener.maxEdge,
+                                                          listener.quality,
+                                                          &dimensions);
+            if (jpegData.length > 0) {
+                listener.handler(jpegData, frameSequence, timestampUs, dimensions);
+            }
+        }];
+        CVPixelBufferRelease(pixelBuffer);
+
+        __block CVPixelBufferRef nextPixelBuffer = nil;
+        dispatch_sync(self->_stateQueue, ^{
+            nextPixelBuffer = self->_pendingJPEGPixelBuffer;
+            self->_pendingJPEGPixelBuffer = nil;
+            if (nextPixelBuffer == nil) {
+                self->_jpegEncodeInFlight = NO;
+            }
+        });
+        if (nextPixelBuffer != nil) {
+            [self encodeJPEGPixelBuffer:nextPixelBuffer];
+        }
+    });
 }
 
 - (void)signalReadinessIfNeededLocked {

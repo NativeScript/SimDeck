@@ -36,6 +36,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)rotateLeft:(NSError * _Nullable * _Nullable)error;
 - (void)setFrameCallback:(xcw_native_frame_callback _Nullable)callback
                  userData:(void * _Nullable)userData;
+- (void)setJPEGFrameCallback:(xcw_native_jpeg_frame_callback _Nullable)callback
+                    userData:(void * _Nullable)userData
+                     maxEdge:(uint32_t)maxEdge
+                     quality:(double)quality;
 - (void)disconnect;
 
 @end

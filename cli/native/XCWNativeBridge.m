@@ -803,6 +803,19 @@ void xcw_native_session_set_frame_callback(void *handle, xcw_native_frame_callba
     }
 }
 
+void xcw_native_session_set_jpeg_frame_callback(void *handle,
+                                                xcw_native_jpeg_frame_callback callback,
+                                                void *user_data,
+                                                uint32_t max_edge,
+                                                double quality) {
+    @autoreleasepool {
+        [XCWNativeSessionFromHandle(handle) setJPEGFrameCallback:callback
+                                                        userData:user_data
+                                                         maxEdge:max_edge
+                                                         quality:quality];
+    }
+}
+
 void xcw_native_free_string(char *value) {
     if (value != NULL) {
         free(value);

@@ -30,6 +30,19 @@ pub struct xcw_native_frame {
 pub type xcw_native_frame_callback =
     unsafe extern "C" fn(frame: *const xcw_native_frame, user_data: *mut c_void);
 
+#[repr(C)]
+pub struct xcw_native_jpeg_frame {
+    pub frame_sequence: u64,
+    pub timestamp_us: u64,
+    pub width: u32,
+    pub height: u32,
+    pub data: xcw_native_shared_bytes,
+}
+
+#[allow(non_camel_case_types)]
+pub type xcw_native_jpeg_frame_callback =
+    unsafe extern "C" fn(frame: *const xcw_native_jpeg_frame, user_data: *mut c_void);
+
 unsafe extern "C" {
     pub fn xcw_native_initialize_app();
     pub fn xcw_native_run_main_loop_slice(duration_seconds: f64);
@@ -189,6 +202,13 @@ unsafe extern "C" {
         handle: *mut c_void,
         callback: Option<xcw_native_frame_callback>,
         user_data: *mut c_void,
+    );
+    pub fn xcw_native_session_set_jpeg_frame_callback(
+        handle: *mut c_void,
+        callback: Option<xcw_native_jpeg_frame_callback>,
+        user_data: *mut c_void,
+        max_edge: u32,
+        quality: f64,
     );
     pub fn xcw_native_session_send_touch(
         handle: *mut c_void,

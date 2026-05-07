@@ -7,7 +7,6 @@ import type { Size } from "../viewport/types";
 import { createEmptyStreamStats } from "./stats";
 import {
   buildStreamTarget,
-  canUseWebRtc,
   sendWebRtcClientStats,
   StreamWorkerClient,
   type StreamBackend,
@@ -18,6 +17,7 @@ import type {
   StreamConfig,
   StreamStats,
   StreamStatus,
+  StreamTransport,
   WorkerToMainMessage,
 } from "./streamTypes";
 
@@ -34,6 +34,7 @@ interface UseLiveStreamOptions {
   simulator: SimulatorMetadata | null;
   streamConfig?: StreamConfig;
   streamConfigApplyKey?: number;
+  streamTransport?: StreamTransport;
 }
 
 interface UseLiveStreamResult {
@@ -95,6 +96,7 @@ export function useLiveStream({
   simulator,
   streamConfig,
   streamConfigApplyKey = 0,
+  streamTransport = "auto",
 }: UseLiveStreamOptions): UseLiveStreamResult {
   const clientTelemetryIdRef = useRef("");
   const workerClientRef = useRef<StreamWorkerClient | null>(null);
@@ -272,25 +274,25 @@ export function useLiveStream({
       return;
     }
 
-    if (!canUseWebRtc()) {
-      setStatus({
-        error: "This browser does not support WebRTC video.",
-        state: "error",
-      });
-      return;
-    }
-
     workerClient.connect(
       buildStreamTarget(simulator.udid, {
         clientId: clientTelemetryIdRef.current,
         remote,
         streamConfig,
+        transport: streamTransport,
       }),
     );
     return () => {
       workerClient.disconnect();
     };
-  }, [canvasElement, simulator?.isBooted, simulator?.udid, paused, remote]);
+  }, [
+    canvasElement,
+    simulator?.isBooted,
+    simulator?.udid,
+    paused,
+    remote,
+    streamTransport,
+  ]);
 
   useEffect(() => {
     if (
@@ -386,7 +388,7 @@ export function useLiveStream({
     runtimeInfo,
     stats,
     status,
-    streamBackend: "webrtc",
-    streamCanvasKey: `webrtc-${streamCanvasRevision}`,
+    streamBackend: stats.codec === "mjpeg" ? "mjpeg" : "webrtc",
+    streamCanvasKey: `stream-${streamCanvasRevision}`,
   };
 }

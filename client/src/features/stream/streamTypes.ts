@@ -4,11 +4,13 @@ export interface StreamConnectTarget {
   clientId?: string;
   remote?: boolean;
   streamConfig?: StreamConfig;
+  transport?: StreamTransport;
   udid: string;
 }
 
 export type StreamEncoder = "auto" | "hardware" | "software";
 export type StreamFps = number;
+export type StreamTransport = "auto" | "mjpeg" | "webrtc";
 export type StreamQualityPreset =
   | "balanced"
   | "ci-software"

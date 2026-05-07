@@ -7,7 +7,7 @@ use crate::logs::LogRegistry;
 use crate::metrics::counters::{ClientStreamStats, Metrics};
 use crate::native::bridge::{LogFilters, NativeBridge};
 use crate::simulators::registry::SessionRegistry;
-use crate::simulators::session::SimulatorSession;
+use crate::simulators::session::{JpegStreamConfig, SimulatorSession};
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Path, Query, State};
@@ -16,11 +16,13 @@ use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use bytes::{Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Map;
 use serde_json::{json as json_value, Value};
 use std::collections::VecDeque;
+use std::convert::Infallible;
 use std::env;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
@@ -31,9 +33,21 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task;
 use tokio::time::timeout;
+use tokio_stream::wrappers::ReceiverStream;
 use tower_http::trace::TraceLayer;
 
 const SIMULATOR_INVENTORY_CACHE_TTL: Duration = Duration::from_secs(5);
+const MJPEG_BOUNDARY: &str = "simdeck-frame";
+const MJPEG_DEFAULT_FPS: u32 = 15;
+const MJPEG_MIN_FPS: u32 = 1;
+const MJPEG_MAX_FPS: u32 = 60;
+const MJPEG_DEFAULT_MAX_EDGE: u32 = 720;
+const MJPEG_MIN_MAX_EDGE: u32 = 160;
+const MJPEG_MAX_MAX_EDGE: u32 = 4096;
+const MJPEG_DEFAULT_QUALITY_PERCENT: u32 = 70;
+const MJPEG_MIN_QUALITY_PERCENT: u32 = 20;
+const MJPEG_MAX_QUALITY_PERCENT: u32 = 95;
+const MJPEG_FRAME_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -89,6 +103,21 @@ struct TouchPayload {
     x: f64,
     y: f64,
     phase: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MjpegStreamQuery {
+    fps: Option<u32>,
+    max_edge: Option<u32>,
+    quality: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MjpegStreamOptions {
+    fps: u32,
+    max_edge: u32,
+    quality_percent: u32,
 }
 
 #[derive(Deserialize)]
@@ -493,6 +522,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/batch", post(run_batch))
         .route("/api/simulators/{udid}/touch", post(send_touch))
         .route("/api/simulators/{udid}/control", get(control_socket))
+        .route("/api/simulators/{udid}/input", get(control_socket))
+        .route("/api/simulators/{udid}/mjpeg", get(mjpeg_stream))
         .route("/api/simulators/{udid}/webrtc/offer", post(webrtc_offer))
         .route(
             "/api/simulators/{udid}/touch-sequence",
@@ -1282,6 +1313,57 @@ async fn control_socket(
     websocket.on_upgrade(move |socket| handle_control_socket(state, udid, socket))
 }
 
+async fn mjpeg_stream(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Query(query): Query<MjpegStreamQuery>,
+) -> Result<Response, AppError> {
+    let options = normalize_mjpeg_stream_options(query);
+    let session = state.registry.get_or_create_async(&udid).await?;
+    if let Err(error) = session.ensure_started_async().await {
+        state.registry.remove(&udid);
+        return Err(error);
+    }
+    let mut subscription = session.subscribe_jpeg(JpegStreamConfig {
+        max_edge: options.max_edge,
+        quality_percent: options.quality_percent,
+    });
+    let (tx, rx) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+    let stream_session = session.clone();
+    tokio::spawn(async move {
+        let frame_interval = Duration::from_micros(1_000_000 / options.fps as u64);
+        loop {
+            stream_session.request_refresh();
+            let frame = match timeout(MJPEG_FRAME_WAIT_TIMEOUT, subscription.recv()).await {
+                Ok(Ok(frame)) => frame,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+                Err(_) => continue,
+            };
+            if tx.send(Ok(mjpeg_frame_part(&frame))).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(frame_interval).await;
+        }
+    });
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        format!("multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}")
+            .parse()
+            .unwrap(),
+    );
+    headers.insert(header::CACHE_CONTROL, "no-store, no-cache".parse().unwrap());
+    headers.insert(header::PRAGMA, "no-cache".parse().unwrap());
+    Ok((
+        StatusCode::OK,
+        headers,
+        Body::from_stream(ReceiverStream::new(rx)),
+    )
+        .into_response())
+}
+
 async fn webrtc_offer(
     State(state): State<AppState>,
     Path(udid): Path<String>,
@@ -1290,6 +1372,44 @@ async fn webrtc_offer(
     crate::transport::webrtc::create_answer(state, udid, payload)
         .await
         .map(Json)
+}
+
+fn normalize_mjpeg_stream_options(query: MjpegStreamQuery) -> MjpegStreamOptions {
+    MjpegStreamOptions {
+        fps: query
+            .fps
+            .unwrap_or(MJPEG_DEFAULT_FPS)
+            .clamp(MJPEG_MIN_FPS, MJPEG_MAX_FPS),
+        max_edge: query
+            .max_edge
+            .unwrap_or(MJPEG_DEFAULT_MAX_EDGE)
+            .clamp(MJPEG_MIN_MAX_EDGE, MJPEG_MAX_MAX_EDGE),
+        quality_percent: query
+            .quality
+            .and_then(|quality| {
+                quality
+                    .is_finite()
+                    .then_some((quality * 100.0).round() as u32)
+            })
+            .unwrap_or(MJPEG_DEFAULT_QUALITY_PERCENT)
+            .clamp(MJPEG_MIN_QUALITY_PERCENT, MJPEG_MAX_QUALITY_PERCENT),
+    }
+}
+
+fn mjpeg_frame_part(frame: &crate::transport::packet::JpegFramePacket) -> Bytes {
+    let header = format!(
+        "\r\n--{MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\nX-SimDeck-Frame-Sequence: {}\r\nX-SimDeck-Timestamp-Us: {}\r\nX-SimDeck-Width: {}\r\nX-SimDeck-Height: {}\r\n\r\n",
+        frame.data.len(),
+        frame.frame_sequence,
+        frame.timestamp_us,
+        frame.width,
+        frame.height
+    );
+    let mut part = BytesMut::with_capacity(header.len() + frame.data.len() + 2);
+    part.extend_from_slice(header.as_bytes());
+    part.extend_from_slice(&frame.data);
+    part.extend_from_slice(b"\r\n");
+    part.freeze()
 }
 
 async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket) {
@@ -3496,14 +3616,19 @@ mod tests {
     use super::{
         attach_tree_metadata, available_sources_for_snapshot, best_inspector_session,
         compact_accessibility_snapshot, element_matches_selector, first_matching_element,
-        inspector_available_sources, normalize_inspector_node,
+        inspector_available_sources, normalize_inspector_node, normalize_mjpeg_stream_options,
         normalize_screen_point_from_snapshot, normalized_gesture_coordinates,
         parse_lsof_tcp_listener, resolved_stream_quality_limits, split_filter_values,
         stream_quality_profile, suppress_native_ax_translation_error, tap_point_from_snapshot,
         trim_tree_depth, AccessibilityHierarchySource, ElementSelectorPayload, InspectorSession,
-        InspectorSessionTransport, StreamQualityLimits, StreamQualityPayload, SOURCE_NATIVE_AX,
-        SOURCE_NATIVE_SCRIPT, SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
+        InspectorSessionTransport, MjpegStreamOptions, MjpegStreamQuery, StreamQualityLimits,
+        StreamQualityPayload, MJPEG_DEFAULT_FPS, MJPEG_DEFAULT_MAX_EDGE,
+        MJPEG_DEFAULT_QUALITY_PERCENT, MJPEG_MAX_FPS, MJPEG_MAX_MAX_EDGE,
+        MJPEG_MAX_QUALITY_PERCENT, MJPEG_MIN_FPS, MJPEG_MIN_MAX_EDGE, MJPEG_MIN_QUALITY_PERCENT,
+        SOURCE_NATIVE_AX, SOURCE_NATIVE_SCRIPT, SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
     };
+    use crate::transport::packet::JpegFramePacket;
+    use bytes::Bytes;
     use serde_json::{json, Value};
 
     fn selector() -> ElementSelectorPayload {
@@ -3758,5 +3883,63 @@ mod tests {
             split_filter_values(Some(" Error, SpringBoard ,, DEBUG ")),
             vec!["error", "springboard", "debug"]
         );
+    }
+
+    #[test]
+    fn mjpeg_stream_options_apply_safe_defaults_and_bounds() {
+        assert_eq!(
+            normalize_mjpeg_stream_options(MjpegStreamQuery {
+                fps: None,
+                max_edge: None,
+                quality: None,
+            }),
+            MjpegStreamOptions {
+                fps: MJPEG_DEFAULT_FPS,
+                max_edge: MJPEG_DEFAULT_MAX_EDGE,
+                quality_percent: MJPEG_DEFAULT_QUALITY_PERCENT,
+            }
+        );
+        assert_eq!(
+            normalize_mjpeg_stream_options(MjpegStreamQuery {
+                fps: Some(0),
+                max_edge: Some(1),
+                quality: Some(0.01),
+            }),
+            MjpegStreamOptions {
+                fps: MJPEG_MIN_FPS,
+                max_edge: MJPEG_MIN_MAX_EDGE,
+                quality_percent: MJPEG_MIN_QUALITY_PERCENT,
+            }
+        );
+        assert_eq!(
+            normalize_mjpeg_stream_options(MjpegStreamQuery {
+                fps: Some(999),
+                max_edge: Some(9999),
+                quality: Some(1.5),
+            }),
+            MjpegStreamOptions {
+                fps: MJPEG_MAX_FPS,
+                max_edge: MJPEG_MAX_MAX_EDGE,
+                quality_percent: MJPEG_MAX_QUALITY_PERCENT,
+            }
+        );
+    }
+
+    #[test]
+    fn mjpeg_frame_part_includes_multipart_headers_and_payload() {
+        let frame = JpegFramePacket {
+            frame_sequence: 7,
+            timestamp_us: 123,
+            width: 320,
+            height: 240,
+            data: Bytes::from_static(b"\xff\xd8jpeg\xff\xd9"),
+        };
+        let part = super::mjpeg_frame_part(&frame);
+        let text = String::from_utf8_lossy(&part);
+        assert!(text.starts_with("\r\n--simdeck-frame\r\n"));
+        assert!(text.contains("Content-Type: image/jpeg\r\n"));
+        assert!(text.contains("Content-Length: 8\r\n"));
+        assert!(text.contains("X-SimDeck-Frame-Sequence: 7\r\n"));
+        assert!(part.ends_with(b"\r\n"));
     }
 }

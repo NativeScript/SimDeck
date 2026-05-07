@@ -25,8 +25,11 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
 
 @implementation XCWNativeSession {
     id _listenerToken;
+    id _jpegListenerToken;
     xcw_native_frame_callback _frameCallback;
+    xcw_native_jpeg_frame_callback _jpegFrameCallback;
     void *_frameCallbackUserData;
+    void *_jpegFrameCallbackUserData;
 }
 
 - (nullable instancetype)initWithUDID:(NSString *)udid
@@ -194,10 +197,53 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
     }];
 }
 
+- (void)setJPEGFrameCallback:(xcw_native_jpeg_frame_callback)callback
+                    userData:(void *)userData
+                     maxEdge:(uint32_t)maxEdge
+                     quality:(double)quality {
+    _jpegFrameCallback = callback;
+    _jpegFrameCallbackUserData = userData;
+
+    if (_jpegListenerToken != nil) {
+        [self.session removeJPEGFrameListener:_jpegListenerToken];
+        _jpegListenerToken = nil;
+    }
+
+    if (callback == NULL) {
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    _jpegListenerToken = [self.session addJPEGFrameListenerWithMaxEdge:(NSUInteger)maxEdge
+                                                               quality:quality
+                                                               handler:^(NSData *jpegData,
+                                                                         NSUInteger frameSequence,
+                                                                         uint64_t timestampUs,
+                                                                         CGSize dimensions) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf == nil || strongSelf->_jpegFrameCallback == NULL) {
+            return;
+        }
+
+        xcw_native_jpeg_frame frame = {
+            .frame_sequence = (uint64_t)frameSequence,
+            .timestamp_us = timestampUs,
+            .width = (uint32_t)llround(dimensions.width),
+            .height = (uint32_t)llround(dimensions.height),
+            .data = XCWSharedBytesFromData(jpegData),
+        };
+        strongSelf->_jpegFrameCallback(&frame, strongSelf->_jpegFrameCallbackUserData);
+    }];
+}
+
 - (void)disconnect {
     if (_listenerToken != nil) {
         [self.session removeEncodedFrameListener:_listenerToken];
         _listenerToken = nil;
+    }
+    if (_jpegListenerToken != nil) {
+        [self.session removeJPEGFrameListener:_jpegListenerToken];
+        _jpegListenerToken = nil;
     }
     [self.session disconnect];
 }

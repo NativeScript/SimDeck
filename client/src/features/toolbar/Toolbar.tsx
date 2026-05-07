@@ -6,6 +6,7 @@ import type {
   StreamEncoder,
   StreamFps,
   StreamQualityPreset,
+  StreamTransport,
 } from "../stream/streamTypes";
 import { SimulatorMenu } from "../simulators/SimulatorMenu";
 
@@ -29,6 +30,7 @@ interface ToolbarProps {
   onStreamEncoderChange: (encoder: StreamEncoder) => void;
   onStreamFpsChange: (fps: StreamFps) => void;
   onStreamQualityChange: (quality: StreamQualityPreset) => void;
+  onStreamTransportChange: (transport: StreamTransport) => void;
   onToggleAppearance: () => void;
   onToggleDebug: () => void;
   onToggleHierarchy: () => void;
@@ -42,6 +44,7 @@ interface ToolbarProps {
   showBootButton: boolean;
   showStopButton: boolean;
   streamConfig: StreamConfig;
+  streamTransport: StreamTransport;
   touchOverlayVisible: boolean;
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
@@ -71,6 +74,7 @@ export function Toolbar({
   onStreamEncoderChange,
   onStreamFpsChange,
   onStreamQualityChange,
+  onStreamTransportChange,
   onToggleAppearance,
   onToggleDebug,
   onToggleHierarchy,
@@ -84,6 +88,7 @@ export function Toolbar({
   showBootButton,
   showStopButton,
   streamConfig,
+  streamTransport,
   touchOverlayVisible,
 }: ToolbarProps) {
   const [errorCopied, setErrorCopied] = useState(false);
@@ -133,6 +138,7 @@ export function Toolbar({
           onStreamEncoderChange={onStreamEncoderChange}
           onStreamFpsChange={onStreamFpsChange}
           onStreamQualityChange={onStreamQualityChange}
+          onStreamTransportChange={onStreamTransportChange}
           onToggleAppearance={onToggleAppearance}
           onToggleDebug={onToggleDebug}
           onToggleMenu={onToggleMenu}
@@ -142,6 +148,7 @@ export function Toolbar({
           selectedSimulator={selectedSimulator}
           setSelectedUDID={setSelectedUDID}
           streamConfig={streamConfig}
+          streamTransport={streamTransport}
           touchOverlayVisible={touchOverlayVisible}
         />
         {selectedSimulator ? (

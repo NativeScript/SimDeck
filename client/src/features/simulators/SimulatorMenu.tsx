@@ -6,6 +6,7 @@ import type {
   StreamEncoder,
   StreamFps,
   StreamQualityPreset,
+  StreamTransport,
 } from "../stream/streamTypes";
 import { SimulatorRow } from "./SimulatorRow";
 
@@ -25,6 +26,7 @@ interface SimulatorMenuProps {
   onStreamEncoderChange: (encoder: StreamEncoder) => void;
   onStreamFpsChange: (fps: StreamFps) => void;
   onStreamQualityChange: (quality: StreamQualityPreset) => void;
+  onStreamTransportChange: (transport: StreamTransport) => void;
   onToggleAppearance: () => void;
   onToggleDebug: () => void;
   onToggleMenu: () => void;
@@ -34,6 +36,7 @@ interface SimulatorMenuProps {
   selectedSimulator: SimulatorMetadata | null;
   setSelectedUDID: (udid: string) => void;
   streamConfig: StreamConfig;
+  streamTransport: StreamTransport;
   touchOverlayVisible: boolean;
 }
 
@@ -53,6 +56,7 @@ export function SimulatorMenu({
   onStreamEncoderChange,
   onStreamFpsChange,
   onStreamQualityChange,
+  onStreamTransportChange,
   onToggleAppearance,
   onToggleDebug,
   onToggleMenu,
@@ -62,6 +66,7 @@ export function SimulatorMenu({
   selectedSimulator,
   setSelectedUDID,
   streamConfig,
+  streamTransport,
   touchOverlayVisible,
 }: SimulatorMenuProps) {
   const fpsOptions = remoteStream
@@ -123,8 +128,20 @@ export function SimulatorMenu({
                 <div className="menu-section-heading">
                   <span className="menu-section-title">Stream</span>
                   <span className="menu-section-meta">
-                    {formatStreamConfigSummary(streamConfig)}
+                    {formatStreamConfigSummary(streamConfig, streamTransport)}
                   </span>
+                </div>
+                <div aria-label="Transport" className="menu-segment">
+                  {STREAM_TRANSPORTS.map((option) => (
+                    <button
+                      className={`menu-option ${streamTransport === option.value ? "active" : ""}`}
+                      key={option.value}
+                      onClick={() => onStreamTransportChange(option.value)}
+                      type="button"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
                 </div>
                 <div aria-label="Encoder" className="menu-segment">
                   {STREAM_ENCODERS.map((option) => (
@@ -221,6 +238,12 @@ const STREAM_ENCODERS: Array<{ label: string; value: StreamEncoder }> = [
   { label: "Software", value: "software" },
 ];
 
+const STREAM_TRANSPORTS: Array<{ label: string; value: StreamTransport }> = [
+  { label: "Auto", value: "auto" },
+  { label: "WebRTC", value: "webrtc" },
+  { label: "MJPEG", value: "mjpeg" },
+];
+
 const LOCAL_STREAM_FPS_OPTIONS: Array<{ label: string; value: StreamFps }> = [
   { label: "30", value: 30 },
   { label: "60", value: 60 },
@@ -252,10 +275,13 @@ function MenuIcon() {
   );
 }
 
-function formatStreamConfigSummary(streamConfig: StreamConfig): string {
+function formatStreamConfigSummary(
+  streamConfig: StreamConfig,
+  transport: StreamTransport,
+): string {
   const resolution =
     typeof streamConfig.maxEdge === "number" && streamConfig.maxEdge > 0
       ? `${streamConfig.maxEdge}px`
       : "Full res";
-  return `${resolution} / ${streamConfig.fps} fps`;
+  return `${transport.toUpperCase()} / ${resolution} / ${streamConfig.fps} fps`;
 }

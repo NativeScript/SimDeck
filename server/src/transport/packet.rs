@@ -14,3 +14,14 @@ pub struct FramePacket {
 }
 
 pub type SharedFrame = Arc<FramePacket>;
+
+#[derive(Debug)]
+pub struct JpegFramePacket {
+    pub frame_sequence: u64,
+    pub timestamp_us: u64,
+    pub width: u32,
+    pub height: u32,
+    pub data: Bytes,
+}
+
+pub type SharedJpegFrame = Arc<JpegFramePacket>;

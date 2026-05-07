@@ -670,6 +670,22 @@ impl NativeSession {
         ffi::xcw_native_session_set_frame_callback(self.handle, callback, user_data);
     }
 
+    pub unsafe fn set_jpeg_frame_callback(
+        &self,
+        callback: Option<ffi::xcw_native_jpeg_frame_callback>,
+        user_data: *mut c_void,
+        max_edge: u32,
+        quality: f64,
+    ) {
+        ffi::xcw_native_session_set_jpeg_frame_callback(
+            self.handle,
+            callback,
+            user_data,
+            max_edge,
+            quality,
+        );
+    }
+
     pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
         let phase = CString::new(phase).map_err(|e| AppError::bad_request(e.to_string()))?;
         unsafe {
