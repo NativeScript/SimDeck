@@ -232,12 +232,7 @@ impl SimulatorSession {
     }
 
     pub fn update_jpeg_config(&self, config: JpegStreamConfig) {
-        if self
-            .inner
-            .active_jpeg_subscribers
-            .load(Ordering::Relaxed)
-            == 0
-        {
+        if self.inner.active_jpeg_subscribers.load(Ordering::Relaxed) == 0 {
             return;
         }
         let mut current_config = self.inner.jpeg_config.lock().unwrap();

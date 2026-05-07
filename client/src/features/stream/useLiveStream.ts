@@ -89,6 +89,16 @@ function buildClientTelemetryUrl(): string {
   ).toString();
 }
 
+function currentClientBundle(): string {
+  return (
+    Array.from(document.scripts)
+      .map((script) => script.src)
+      .find((src) => /\/assets\/index-[^/]+\.js(?:$|\?)/.test(src))
+      ?.split("/")
+      .pop() ?? ""
+  );
+}
+
 export function useLiveStream({
   canvasElement,
   paused = false,
@@ -350,6 +360,7 @@ export function useLiveStream({
         udid: simulator.udid,
         url: window.location.href,
         userAgent: window.navigator.userAgent,
+        clientBundle: currentClientBundle(),
         visualBadPixelRatio: latestVisualArtifact?.badPixelRatio,
         visualMaxPixelDiff: latestVisualArtifact?.maxPixelDiff,
         visualMaxTileDiff: latestVisualArtifact?.maxTileMeanDiff,
@@ -388,7 +399,12 @@ export function useLiveStream({
     runtimeInfo,
     stats,
     status,
-    streamBackend: stats.codec === "mjpeg" ? "mjpeg" : "webrtc",
+    streamBackend:
+      stats.codec === "mjpeg"
+        ? "mjpeg"
+        : stats.codec === "h264-ws"
+          ? "h264-ws"
+          : "webrtc",
     streamCanvasKey: `stream-${streamCanvasRevision}`,
   };
 }

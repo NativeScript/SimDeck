@@ -113,6 +113,9 @@ const REMOTE_STREAM_DEFAULTS: StreamConfig = {
 };
 const MJPEG_DEFAULT_FPS = 30;
 const MJPEG_DEFAULT_QUALITY: StreamQualityPreset = "auto";
+const H264_WS_DEFAULT_FPS = 60;
+const H264_WS_LOCAL_DEFAULT_QUALITY: StreamQualityPreset = "full";
+const H264_WS_REMOTE_DEFAULT_QUALITY: StreamQualityPreset = "auto";
 const CONTROL_BACKLOG_DROP_BYTES = 4096;
 const STREAM_CONFIG_SYNC_INTERVAL_MS = 1500;
 const STREAM_CONFIG_USER_CHANGE_GRACE_MS = 1000;
@@ -123,6 +126,7 @@ const STREAM_ENCODER_VALUES = new Set<StreamEncoder>([
 ]);
 const STREAM_TRANSPORT_VALUES = new Set<StreamTransport>([
   "auto",
+  "h264",
   "mjpeg",
   "webrtc",
 ]);
@@ -174,6 +178,9 @@ function shouldUseRemoteStreamDefault(apiRoot: string): boolean {
 
 function readStreamTransportQueryParam(): StreamTransport {
   const value = new URLSearchParams(window.location.search).get("stream");
+  if (value === "h264-ws") {
+    return "h264";
+  }
   return value && STREAM_TRANSPORT_VALUES.has(value as StreamTransport)
     ? (value as StreamTransport)
     : "auto";
@@ -184,6 +191,16 @@ function defaultStreamConfigForTransport(
   transport: StreamTransport,
 ): StreamConfig {
   const base = remote ? REMOTE_STREAM_DEFAULTS : LOCAL_STREAM_DEFAULTS;
+  if (transport === "h264") {
+    return {
+      ...base,
+      fps: H264_WS_DEFAULT_FPS,
+      maxEdge: undefined,
+      quality: remote
+        ? H264_WS_REMOTE_DEFAULT_QUALITY
+        : H264_WS_LOCAL_DEFAULT_QUALITY,
+    };
+  }
   if (transport !== "mjpeg") {
     return base;
   }
@@ -521,9 +538,13 @@ export function AppShell({
       ) {
         return;
       }
+      if (streamTransport === "h264" && !streamConfigUserTouchedRef.current) {
+        return;
+      }
       setStreamConfig((current) =>
         mergeStreamQualityResponse(current, response, {
-          preserveAutoQuality: streamTransport === "mjpeg",
+          preserveAutoQuality:
+            streamTransport === "mjpeg" || streamTransport === "h264",
         }),
       );
     } catch {
@@ -598,22 +619,39 @@ export function AppShell({
     setStreamConfig((current) => ({ ...current, maxEdge: undefined, quality }));
   }, []);
 
-  const updateStreamTransport = useCallback((transport: StreamTransport) => {
-    setStreamTransport(transport);
-    writeStreamTransportQueryParam(transport);
-    if (transport !== "mjpeg" || streamConfigUserTouchedRef.current) {
-      return;
-    }
-    streamConfigUserChangeAtRef.current = Date.now();
-    setStreamConfigReady(true);
-    setStreamConfigApplyKey((current) => current + 1);
-    setStreamConfig((current) => ({
-      ...current,
-      fps: MJPEG_DEFAULT_FPS,
-      maxEdge: undefined,
-      quality: MJPEG_DEFAULT_QUALITY,
-    }));
-  }, []);
+  const updateStreamTransport = useCallback(
+    (transport: StreamTransport) => {
+      setStreamTransport(transport);
+      writeStreamTransportQueryParam(transport);
+      if (
+        (transport !== "mjpeg" && transport !== "h264") ||
+        streamConfigUserTouchedRef.current
+      ) {
+        return;
+      }
+      streamConfigUserChangeAtRef.current = Date.now();
+      setStreamConfigReady(true);
+      setStreamConfigApplyKey((current) => current + 1);
+      setStreamConfig((current) =>
+        transport === "h264"
+          ? {
+              ...current,
+              fps: H264_WS_DEFAULT_FPS,
+              maxEdge: undefined,
+              quality: remoteStream
+                ? H264_WS_REMOTE_DEFAULT_QUALITY
+                : H264_WS_LOCAL_DEFAULT_QUALITY,
+            }
+          : {
+              ...current,
+              fps: MJPEG_DEFAULT_FPS,
+              maxEdge: undefined,
+              quality: MJPEG_DEFAULT_QUALITY,
+            },
+      );
+    },
+    [remoteStream],
+  );
 
   useEffect(() => {
     if (
@@ -1977,14 +2015,16 @@ function normalizeStreamQuality(
   if (normalized === "auto") {
     return "auto";
   }
+  if (normalized === "full") {
+    return "full";
+  }
   if (normalized === "quality") {
     return "quality";
   }
-  if (
-    normalized === "balanced" ||
-    normalized === "smooth" ||
-    normalized === "fast"
-  ) {
+  if (normalized === "smooth") {
+    return "smooth";
+  }
+  if (normalized === "balanced" || normalized === "fast") {
     return "balanced";
   }
   if (normalized === "economy" || normalized === "ci-software") {

@@ -245,6 +245,7 @@ const STREAM_ENCODERS: Array<{ label: string; value: StreamEncoder }> = [
 const STREAM_TRANSPORTS: Array<{ label: string; value: StreamTransport }> = [
   { label: "Auto", value: "auto" },
   { label: "WebRTC", value: "webrtc" },
+  { label: "H264 WS", value: "h264" },
   { label: "MJPEG", value: "mjpeg" },
 ];
 
@@ -264,7 +265,10 @@ const H264_STREAM_QUALITY_OPTIONS: Array<{
   label: string;
   value: StreamQualityPreset;
 }> = [
-  { label: "Full", value: "quality" },
+  { label: "Auto", value: "auto" },
+  { label: "Full", value: "full" },
+  { label: "Max", value: "quality" },
+  { label: "Smooth", value: "smooth" },
   { label: "1280", value: "balanced" },
   { label: "1080", value: "economy" },
   { label: "720", value: "low" },
@@ -310,9 +314,11 @@ function formatStreamConfigSummary(
       MJPEG_QUALITY_LABELS[streamConfig.quality] ?? "JPEG quality";
     return `${transport.toUpperCase()} / ${jpegQuality} / ${streamConfig.fps} fps`;
   }
+  const transportLabel =
+    transport === "h264" ? "H264 WS" : transport.toUpperCase();
   const resolution =
     typeof streamConfig.maxEdge === "number" && streamConfig.maxEdge > 0
       ? `${streamConfig.maxEdge}px`
       : "Full res";
-  return `${transport.toUpperCase()} / ${resolution} / ${streamConfig.fps} fps`;
+  return `${transportLabel} / ${resolution} / ${streamConfig.fps} fps`;
 }

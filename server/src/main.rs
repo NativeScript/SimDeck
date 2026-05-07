@@ -592,6 +592,7 @@ enum VideoCodecMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum StreamQualityProfileArg {
     Quality,
+    Full,
     Balanced,
     Fast,
     Smooth,
@@ -605,6 +606,7 @@ impl StreamQualityProfileArg {
     fn as_profile_id(self) -> &'static str {
         match self {
             Self::Quality => "quality",
+            Self::Full => "full",
             Self::Balanced => "balanced",
             Self::Fast => "fast",
             Self::Smooth => "smooth",
@@ -718,6 +720,13 @@ fn stream_quality_env_for_profile(profile: &str) -> anyhow::Result<StreamQuality
             fps: 60,
             min_bitrate: 60_000_000,
             bits_per_pixel: 10,
+        }),
+        "full" => Ok(StreamQualityEnvironment {
+            profile: "full",
+            max_edge: 4096,
+            fps: 60,
+            min_bitrate: 12_000_000,
+            bits_per_pixel: 4,
         }),
         "balanced" => Ok(StreamQualityEnvironment {
             profile: "balanced",

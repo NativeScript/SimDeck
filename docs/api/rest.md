@@ -90,9 +90,10 @@ quality.
 
 `videoCodec` accepts `hardware` or `software` from the UI, and the API also
 accepts `auto`. `fps` is clamped to the local stream range. Browser viewers show
-five profiles: `quality` (4096 px), `balanced` (1280 px), `economy` (1080 px),
-`low` (720 px), and `tiny` (540 px). The API still accepts the legacy `fast`,
-`smooth`, and `ci-software` profiles for CLI/provider compatibility. When
+six profiles: `full` (4096 px at 60 fps), `quality` (4096 px high bitrate),
+`balanced` (1280 px), `economy` (1080 px), `low` (720 px), and `tiny` (540 px).
+The API still accepts the legacy `fast`, `smooth`, and `ci-software` profiles
+for CLI/provider compatibility. When
 `profile` is provided, its resolution preset is applied; send `maxEdge` without
 `profile` for a custom resolution cap.
 
@@ -187,6 +188,33 @@ messages, clients can tune the stream attached to that peer:
 
 Supported profiles are `thumb`/`thumbnail`, `focus`/`full`, and `paused`.
 Clients may also send `fps`, `forceKeyframe`, or `snapshot` fields.
+
+### `GET /api/simulators/{udid}/h264`
+
+Direct H.264 video over WebSocket for browsers that support WebCodecs but
+cannot establish WebRTC media. The server sends binary messages with this
+layout:
+
+| Offset | Size | Field                                               |
+| ------ | ---- | --------------------------------------------------- |
+| 0      | 4    | Magic bytes `SDH1`                                  |
+| 4      | 1    | Version, currently `1`                              |
+| 5      | 1    | Flags: bit 0 keyframe, bit 1 decoder config present |
+| 6      | 2    | Header length, big-endian                           |
+| 8      | 8    | Frame sequence, big-endian                          |
+| 16     | 8    | Timestamp in microseconds, big-endian               |
+| 24     | 4    | Encoded width, big-endian                           |
+| 28     | 4    | Encoded height, big-endian                          |
+| 32     | 4    | Decoder config byte length, big-endian              |
+| 36     | 4    | H.264 sample byte length, big-endian                |
+
+The optional decoder config bytes follow the header, then the encoded H.264
+sample bytes. Clients can send text `streamControl` messages on this socket,
+for example `{ "type": "streamControl", "forceKeyframe": true }`. Touch and
+keyboard input should use the separate `/api/simulators/{udid}/input`
+WebSocket. The video socket is latest-frame oriented: clients should drop stale
+decoded frames locally and request a keyframe if the decoder loses sync, rather
+than ACKing every rendered frame.
 
 ### `POST /api/simulators/{udid}/open-url`
 

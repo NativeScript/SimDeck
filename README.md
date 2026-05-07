@@ -35,7 +35,7 @@ view inside the editor.
 
 ## Features
 
-- Local simulator video stream over browser-native WebRTC H.264 with direct HTTP MJPEG fallback
+- Local simulator video stream over browser-native WebRTC H.264, H.264 WebSocket, or direct HTTP MJPEG fallback
 - Full simulator control & inspection using private accessibility APIs - available using `simdeck` CLI
 - Real-time screen `describe` command using accessibility view tree - available in token-efficient format for agents
 - CoreSimulator chrome asset rendering for device bezels
@@ -70,7 +70,8 @@ SimDeck Studio providers run the daemon on loopback and use
 with Studio. Studio hosts the browser UI and proxies SimDeck REST requests over
 that bridge while WebRTC media negotiates directly between the browser and
 runner through ICE. If WebRTC fails before rendering a frame, the browser can
-fall back to the daemon's direct MJPEG stream and WebSocket input channel.
+fall back to H.264 over WebSocket, then to the daemon's direct MJPEG stream and
+WebSocket input channel.
 
 Expose a local simulator through SimDeck Studio with one command:
 

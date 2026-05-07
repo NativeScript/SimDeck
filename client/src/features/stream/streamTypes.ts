@@ -10,13 +10,14 @@ export interface StreamConnectTarget {
 
 export type StreamEncoder = "auto" | "hardware" | "software";
 export type StreamFps = number;
-export type StreamTransport = "auto" | "mjpeg" | "webrtc";
+export type StreamTransport = "auto" | "h264" | "mjpeg" | "webrtc";
 export type StreamQualityPreset =
   | "auto"
   | "balanced"
   | "ci-software"
   | "economy"
   | "fast"
+  | "full"
   | "low"
   | "quality"
   | "smooth"
@@ -50,6 +51,10 @@ export interface StreamStats extends Size {
   decoderDroppedFrames: number;
   droppedFrames: number;
   frameSequence: number;
+  h264ParseFailures: number;
+  h264SocketBytes: number;
+  h264SocketMessages: number;
+  h264SocketMessageType: string;
   iceRestartReason: string;
   iceRestarts: number;
   latestFrameGapMs: number;

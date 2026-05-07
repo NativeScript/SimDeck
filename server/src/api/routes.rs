@@ -8,6 +8,7 @@ use crate::metrics::counters::{ClientStreamStats, Metrics};
 use crate::native::bridge::{LogFilters, NativeBridge};
 use crate::simulators::registry::SessionRegistry;
 use crate::simulators::session::{JpegStreamConfig, SimulatorSession};
+use crate::transport::packet::FramePacket;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Path, Query, State};
@@ -48,7 +49,16 @@ const MJPEG_DEFAULT_QUALITY_PERCENT: u32 = 70;
 const MJPEG_MIN_QUALITY_PERCENT: u32 = 20;
 const MJPEG_MAX_QUALITY_PERCENT: u32 = 95;
 const MJPEG_FRAME_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
-const MJPEG_AUTO_QUALITY_STEPS: &[u32] = &[62, 66, 70, 76, 82];
+const MJPEG_AUTO_QUALITY_STEPS: &[u32] = &[20, 30, 40, 50, 62, 66, 70, 76, 82];
+const MJPEG_AUTO_TARGET_BYTES_PER_SECOND: usize = 2_000_000;
+const MJPEG_MIN_AUTO_TARGET_KBPS: u32 = 512;
+const MJPEG_MAX_AUTO_TARGET_KBPS: u32 = 100_000;
+const H264_WS_MAGIC: &[u8; 4] = b"SDH1";
+const H264_WS_HEADER_LEN: usize = 40;
+const H264_WS_FLAG_KEYFRAME: u8 = 1 << 0;
+const H264_WS_FLAG_CONFIG: u8 = 1 << 1;
+const H264_WS_SEND_TIMEOUT: Duration = Duration::from_secs(2);
+const H264_WS_KEYFRAME_WAIT_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -110,6 +120,7 @@ struct TouchPayload {
 #[serde(rename_all = "camelCase")]
 struct MjpegStreamQuery {
     auto_quality: Option<bool>,
+    auto_target_kbps: Option<u32>,
     fps: Option<u32>,
     max_edge: Option<u32>,
     quality: Option<f64>,
@@ -118,6 +129,7 @@ struct MjpegStreamQuery {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct MjpegStreamOptions {
     auto_quality: bool,
+    auto_target_bytes_per_second: usize,
     fps: u32,
     max_edge: u32,
     quality_percent: u32,
@@ -186,6 +198,14 @@ const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
         bits_per_pixel: 10,
     },
     StreamQualityProfile {
+        id: "full",
+        label: "Full",
+        max_edge: 4096,
+        fps: 60,
+        min_bitrate: 12_000_000,
+        bits_per_pixel: 4,
+    },
+    StreamQualityProfile {
         id: "balanced",
         label: "Balanced",
         max_edge: 1280,
@@ -236,7 +256,7 @@ const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
 ];
 
 const VISIBLE_STREAM_QUALITY_PROFILE_IDS: &[&str] =
-    &["quality", "balanced", "economy", "low", "tiny"];
+    &["full", "quality", "balanced", "economy", "low", "tiny"];
 
 static STREAM_CONFIG_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
 
@@ -526,6 +546,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/touch", post(send_touch))
         .route("/api/simulators/{udid}/control", get(control_socket))
         .route("/api/simulators/{udid}/input", get(control_socket))
+        .route("/api/simulators/{udid}/h264", get(h264_socket))
         .route("/api/simulators/{udid}/mjpeg", get(mjpeg_stream))
         .route("/api/simulators/{udid}/webrtc/offer", post(webrtc_offer))
         .route(
@@ -1316,6 +1337,14 @@ async fn control_socket(
     websocket.on_upgrade(move |socket| handle_control_socket(state, udid, socket))
 }
 
+async fn h264_socket(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    websocket: WebSocketUpgrade,
+) -> impl IntoResponse {
+    websocket.on_upgrade(move |socket| handle_h264_socket(state, udid, socket))
+}
+
 async fn mjpeg_stream(
     State(state): State<AppState>,
     Path(udid): Path<String>,
@@ -1335,8 +1364,7 @@ async fn mjpeg_stream(
     let stream_session = session.clone();
     tokio::spawn(async move {
         let frame_interval = Duration::from_micros(1_000_000 / options.fps as u64);
-        let mut active_quality_percent =
-            nearest_mjpeg_auto_quality_step(options.quality_percent);
+        let mut active_quality_percent = nearest_mjpeg_auto_quality_step(options.quality_percent);
         let mut consecutive_low_backpressure_frames = 0u32;
         loop {
             stream_session.request_refresh();
@@ -1353,9 +1381,11 @@ async fn mjpeg_stream(
             if options.auto_quality {
                 let next_quality = next_mjpeg_auto_quality_percent(
                     active_quality_percent,
+                    frame.data.len(),
                     send_started_at.elapsed(),
                     frame_interval,
                     options.fps,
+                    options.auto_target_bytes_per_second,
                     &mut consecutive_low_backpressure_frames,
                 );
                 if next_quality != active_quality_percent {
@@ -1366,7 +1396,16 @@ async fn mjpeg_stream(
                     });
                 }
             }
-            tokio::time::sleep(frame_interval).await;
+            let paced_interval = if options.auto_quality {
+                mjpeg_auto_frame_interval(
+                    frame_interval,
+                    frame.data.len(),
+                    options.auto_target_bytes_per_second,
+                )
+            } else {
+                frame_interval
+            };
+            tokio::time::sleep(paced_interval).await;
         }
     });
 
@@ -1400,6 +1439,12 @@ async fn webrtc_offer(
 fn normalize_mjpeg_stream_options(query: MjpegStreamQuery) -> MjpegStreamOptions {
     MjpegStreamOptions {
         auto_quality: query.auto_quality.unwrap_or(false),
+        auto_target_bytes_per_second: query
+            .auto_target_kbps
+            .unwrap_or((MJPEG_AUTO_TARGET_BYTES_PER_SECOND as u32).saturating_mul(8) / 1000)
+            .clamp(MJPEG_MIN_AUTO_TARGET_KBPS, MJPEG_MAX_AUTO_TARGET_KBPS)
+            .saturating_mul(1000) as usize
+            / 8,
         fps: query
             .fps
             .unwrap_or(MJPEG_DEFAULT_FPS)
@@ -1429,9 +1474,11 @@ fn nearest_mjpeg_auto_quality_step(quality_percent: u32) -> u32 {
 
 fn next_mjpeg_auto_quality_percent(
     current: u32,
+    frame_bytes: usize,
     send_elapsed: Duration,
     frame_interval: Duration,
     fps: u32,
+    target_bytes_per_second: usize,
     consecutive_low_backpressure_frames: &mut u32,
 ) -> u32 {
     let current_index = MJPEG_AUTO_QUALITY_STEPS
@@ -1443,14 +1490,20 @@ fn next_mjpeg_auto_quality_percent(
                 .position(|step| *step == nearest_mjpeg_auto_quality_step(current))
                 .unwrap_or(2)
         });
-    let degrade_threshold = frame_interval.saturating_mul(2).max(Duration::from_millis(80));
-    if send_elapsed > degrade_threshold {
+    let target_frame_bytes = usize::max(
+        target_bytes_per_second / usize::max(fps as usize, 1),
+        24 * 1024,
+    );
+    let degrade_threshold = frame_interval
+        .saturating_mul(2)
+        .max(Duration::from_millis(80));
+    if send_elapsed > degrade_threshold || frame_bytes > target_frame_bytes {
         *consecutive_low_backpressure_frames = 0;
         return MJPEG_AUTO_QUALITY_STEPS[current_index.saturating_sub(1)];
     }
 
     let improve_threshold = frame_interval.max(Duration::from_millis(16));
-    if send_elapsed <= improve_threshold {
+    if send_elapsed <= improve_threshold && frame_bytes < target_frame_bytes.saturating_mul(2) / 3 {
         *consecutive_low_backpressure_frames =
             consecutive_low_backpressure_frames.saturating_add(1);
     } else {
@@ -1467,6 +1520,19 @@ fn next_mjpeg_auto_quality_percent(
     current
 }
 
+fn mjpeg_auto_frame_interval(
+    requested_interval: Duration,
+    frame_bytes: usize,
+    target_bytes_per_second: usize,
+) -> Duration {
+    if target_bytes_per_second == 0 {
+        return requested_interval;
+    }
+    let budgeted_interval =
+        Duration::from_secs_f64(frame_bytes as f64 / target_bytes_per_second as f64);
+    requested_interval.max(budgeted_interval)
+}
+
 fn mjpeg_frame_part(frame: &crate::transport::packet::JpegFramePacket) -> Bytes {
     let header = format!(
         "\r\n--{MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\nX-SimDeck-Frame-Sequence: {}\r\nX-SimDeck-Timestamp-Us: {}\r\nX-SimDeck-Width: {}\r\nX-SimDeck-Height: {}\r\n\r\n",
@@ -1481,6 +1547,178 @@ fn mjpeg_frame_part(frame: &crate::transport::packet::JpegFramePacket) -> Bytes 
     part.extend_from_slice(&frame.data);
     part.extend_from_slice(b"\r\n");
     part.freeze()
+}
+
+async fn handle_h264_socket(state: AppState, udid: String, socket: WebSocket) {
+    let session = match state.registry.get_or_create_async(&udid).await {
+        Ok(session) => session,
+        Err(error) => {
+            tracing::debug!("Failed to create H264 WebSocket session for {udid}: {error}");
+            return;
+        }
+    };
+    if let Err(error) = session.ensure_started_async().await {
+        tracing::debug!("Failed to start H264 WebSocket session for {udid}: {error}");
+        return;
+    }
+
+    let mut subscription = session.subscribe();
+    let (mut sender, mut receiver) = socket.split();
+    let mut decoder_synced = false;
+    let mut last_sent_sequence: Option<u64> = None;
+
+    if let Some(keyframe) = session
+        .wait_for_keyframe(H264_WS_KEYFRAME_WAIT_TIMEOUT)
+        .await
+    {
+        if h264_ws_frame_is_supported(&keyframe) {
+            let message_bytes = h264_ws_frame_message(&keyframe);
+            let message = Message::Binary(message_bytes);
+            if timeout(H264_WS_SEND_TIMEOUT, sender.send(message))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .is_none()
+            {
+                return;
+            }
+            last_sent_sequence = Some(keyframe.frame_sequence);
+            decoder_synced = true;
+        }
+    } else {
+        session.request_keyframe();
+    }
+
+    loop {
+        tokio::select! {
+            received = receiver.next() => {
+                let Some(received) = received else { break };
+                let message = match received {
+                    Ok(message) => message,
+                    Err(error) => {
+                        tracing::debug!("H264 WebSocket closed for {udid}: {error}");
+                        break;
+                    }
+                };
+                if !handle_h264_socket_control_message(&session, &message) {
+                    break;
+                }
+            }
+            frame = subscription.recv() => {
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        decoder_synced = false;
+                        session.request_keyframe();
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+                if !h264_ws_frame_is_supported(&frame) {
+                    continue;
+                }
+                if last_sent_sequence
+                    .map(|sequence| frame.frame_sequence <= sequence)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                if !decoder_synced && !frame.is_keyframe {
+                    session.request_keyframe();
+                    continue;
+                }
+                let is_keyframe = frame.is_keyframe;
+                let message_bytes = h264_ws_frame_message(&frame);
+                let message = Message::Binary(message_bytes);
+                if timeout(H264_WS_SEND_TIMEOUT, sender.send(message))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .is_none()
+                {
+                    break;
+                }
+                last_sent_sequence = Some(frame.frame_sequence);
+                if is_keyframe {
+                    decoder_synced = true;
+                }
+            }
+        }
+    }
+}
+
+fn handle_h264_socket_control_message(
+    session: &SimulatorSession,
+    message: &Message,
+) -> bool {
+    let text = match message {
+        Message::Text(text) => text.as_str(),
+        Message::Binary(bytes) => match std::str::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(_) => return true,
+        },
+        Message::Close(_) => return false,
+        Message::Ping(_) | Message::Pong(_) => return true,
+    };
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return true;
+    };
+    match value.get("type").and_then(Value::as_str) {
+        Some("streamControl") => {}
+        _ => return true,
+    }
+    if value
+        .get("forceKeyframe")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        session.request_keyframe();
+    }
+    if value
+        .get("snapshot")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        session.request_refresh();
+    }
+    true
+}
+
+fn h264_ws_frame_is_supported(frame: &FramePacket) -> bool {
+    frame
+        .codec
+        .as_deref()
+        .map(|codec| {
+            let codec = codec.to_ascii_lowercase();
+            codec == "h264" || codec.starts_with("avc1")
+        })
+        .unwrap_or(true)
+}
+
+fn h264_ws_frame_message(frame: &FramePacket) -> Bytes {
+    let config = frame.description.as_deref().unwrap_or(&[]);
+    let flags = if frame.is_keyframe {
+        H264_WS_FLAG_KEYFRAME
+    } else {
+        0
+    } | if config.is_empty() {
+        0
+    } else {
+        H264_WS_FLAG_CONFIG
+    };
+    let mut message = BytesMut::with_capacity(H264_WS_HEADER_LEN + config.len() + frame.data.len());
+    message.extend_from_slice(H264_WS_MAGIC);
+    message.extend_from_slice(&[1, flags]);
+    message.extend_from_slice(&(H264_WS_HEADER_LEN as u16).to_be_bytes());
+    message.extend_from_slice(&frame.frame_sequence.to_be_bytes());
+    message.extend_from_slice(&frame.timestamp_us.to_be_bytes());
+    message.extend_from_slice(&frame.width.to_be_bytes());
+    message.extend_from_slice(&frame.height.to_be_bytes());
+    message.extend_from_slice(&(config.len() as u32).to_be_bytes());
+    message.extend_from_slice(&(frame.data.len() as u32).to_be_bytes());
+    message.extend_from_slice(config);
+    message.extend_from_slice(&frame.data);
+    message.freeze()
 }
 
 async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket) {
@@ -3693,12 +3931,12 @@ mod tests {
         stream_quality_profile, suppress_native_ax_translation_error, tap_point_from_snapshot,
         trim_tree_depth, AccessibilityHierarchySource, ElementSelectorPayload, InspectorSession,
         InspectorSessionTransport, MjpegStreamOptions, MjpegStreamQuery, StreamQualityLimits,
-        StreamQualityPayload, MJPEG_DEFAULT_FPS, MJPEG_DEFAULT_MAX_EDGE,
-        MJPEG_DEFAULT_QUALITY_PERCENT, MJPEG_MAX_FPS, MJPEG_MAX_MAX_EDGE,
+        StreamQualityPayload, MJPEG_AUTO_TARGET_BYTES_PER_SECOND, MJPEG_DEFAULT_FPS,
+        MJPEG_DEFAULT_MAX_EDGE, MJPEG_DEFAULT_QUALITY_PERCENT, MJPEG_MAX_FPS, MJPEG_MAX_MAX_EDGE,
         MJPEG_MAX_QUALITY_PERCENT, MJPEG_MIN_FPS, MJPEG_MIN_MAX_EDGE, MJPEG_MIN_QUALITY_PERCENT,
         SOURCE_NATIVE_AX, SOURCE_NATIVE_SCRIPT, SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
     };
-    use crate::transport::packet::JpegFramePacket;
+    use crate::transport::packet::{FramePacket, JpegFramePacket};
     use bytes::Bytes;
     use serde_json::{json, Value};
 
@@ -3961,12 +4199,14 @@ mod tests {
         assert_eq!(
             normalize_mjpeg_stream_options(MjpegStreamQuery {
                 auto_quality: None,
+                auto_target_kbps: None,
                 fps: None,
                 max_edge: None,
                 quality: None,
             }),
             MjpegStreamOptions {
                 auto_quality: false,
+                auto_target_bytes_per_second: MJPEG_AUTO_TARGET_BYTES_PER_SECOND,
                 fps: MJPEG_DEFAULT_FPS,
                 max_edge: MJPEG_DEFAULT_MAX_EDGE,
                 quality_percent: MJPEG_DEFAULT_QUALITY_PERCENT,
@@ -3975,12 +4215,14 @@ mod tests {
         assert_eq!(
             normalize_mjpeg_stream_options(MjpegStreamQuery {
                 auto_quality: Some(true),
+                auto_target_kbps: Some(4000),
                 fps: Some(0),
                 max_edge: Some(1),
                 quality: Some(0.01),
             }),
             MjpegStreamOptions {
                 auto_quality: true,
+                auto_target_bytes_per_second: 500_000,
                 fps: MJPEG_MIN_FPS,
                 max_edge: MJPEG_MIN_MAX_EDGE,
                 quality_percent: MJPEG_MIN_QUALITY_PERCENT,
@@ -3989,12 +4231,14 @@ mod tests {
         assert_eq!(
             normalize_mjpeg_stream_options(MjpegStreamQuery {
                 auto_quality: None,
+                auto_target_kbps: None,
                 fps: Some(999),
                 max_edge: Some(9999),
                 quality: Some(1.5),
             }),
             MjpegStreamOptions {
                 auto_quality: false,
+                auto_target_bytes_per_second: MJPEG_AUTO_TARGET_BYTES_PER_SECOND,
                 fps: MJPEG_MAX_FPS,
                 max_edge: MJPEG_MAX_MAX_EDGE,
                 quality_percent: MJPEG_MAX_QUALITY_PERCENT,
@@ -4019,4 +4263,37 @@ mod tests {
         assert!(text.contains("X-SimDeck-Frame-Sequence: 7\r\n"));
         assert!(part.ends_with(b"\r\n"));
     }
+
+    #[test]
+    fn h264_ws_frame_message_uses_fixed_binary_header() {
+        let frame = FramePacket {
+            frame_sequence: 9,
+            timestamp_us: 456,
+            is_keyframe: true,
+            width: 390,
+            height: 844,
+            codec: Some("h264".to_owned()),
+            description: Some(Bytes::from_static(b"avcc")),
+            data: Bytes::from_static(b"h264-sample"),
+        };
+
+        let message = super::h264_ws_frame_message(&frame);
+
+        assert_eq!(&message[0..4], b"SDH1");
+        assert_eq!(message[4], 1);
+        assert_eq!(
+            message[5],
+            super::H264_WS_FLAG_KEYFRAME | super::H264_WS_FLAG_CONFIG
+        );
+        assert_eq!(u16::from_be_bytes([message[6], message[7]]), 40);
+        assert_eq!(u64::from_be_bytes(message[8..16].try_into().unwrap()), 9);
+        assert_eq!(u64::from_be_bytes(message[16..24].try_into().unwrap()), 456);
+        assert_eq!(u32::from_be_bytes(message[24..28].try_into().unwrap()), 390);
+        assert_eq!(u32::from_be_bytes(message[28..32].try_into().unwrap()), 844);
+        assert_eq!(u32::from_be_bytes(message[32..36].try_into().unwrap()), 4);
+        assert_eq!(u32::from_be_bytes(message[36..40].try_into().unwrap()), 11);
+        assert_eq!(&message[40..44], b"avcc");
+        assert_eq!(&message[44..], b"h264-sample");
+    }
+
 }

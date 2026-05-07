@@ -119,4 +119,4 @@ If you contribute, keep the following invariants in mind:
 - Browser-only presentation logic stays in `client/`.
 - NativeScript app runtime inspection logic stays in `packages/nativescript-inspector/`.
 - Add a server endpoint before adding client-only assumptions.
-- The supported live video path is the WebRTC H.264 offer endpoint. Do not bring back legacy `/stream.h264` handling.
+- The supported live video paths are the WebRTC H.264 offer endpoint plus the `/api/simulators/{udid}/h264` WebSocket fallback. Do not bring back legacy `/stream.h264` handling.
