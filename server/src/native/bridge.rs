@@ -783,7 +783,7 @@ fn accessibility_snapshot_is_transient_empty(snapshot: &serde_json::Value) -> bo
     let Some(roots) = snapshot.get("roots").and_then(serde_json::Value::as_array) else {
         return true;
     };
-    roots.is_empty() || roots.iter().all(|root| node_is_zero_sized_leaf(root))
+    roots.is_empty() || roots.iter().all(node_is_zero_sized_leaf)
 }
 
 fn node_is_zero_sized_leaf(node: &serde_json::Value) -> bool {
