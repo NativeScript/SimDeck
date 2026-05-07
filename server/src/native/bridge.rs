@@ -9,6 +9,8 @@ use std::time::Duration;
 
 const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
 const RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV: &str = "SIMDECK_RESTART_ON_CORE_SIMULATOR_MISMATCH";
+const ACCESSIBILITY_SNAPSHOT_MAX_ATTEMPTS: usize = 10;
+const ACCESSIBILITY_SNAPSHOT_RETRY_DELAY_MS: u64 = 100;
 
 static RECOVERABLE_RESTART_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
@@ -289,17 +291,25 @@ impl NativeBridge {
     ) -> Result<serde_json::Value, AppError> {
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
         let max_depth = max_depth.unwrap_or(80).min(80);
-        let json = match native_accessibility_snapshot_json(&udid, point, max_depth) {
-            Ok(json) => json,
-            Err(error) if is_core_simulator_service_mismatch(&error.to_string()) => {
-                std::thread::sleep(Duration::from_millis(250));
-                native_accessibility_snapshot_json(&udid, point, max_depth)?
+        for attempt in 1..=ACCESSIBILITY_SNAPSHOT_MAX_ATTEMPTS {
+            let json = match native_accessibility_snapshot_json(&udid, point, max_depth) {
+                Ok(json) => json,
+                Err(error) if is_core_simulator_service_mismatch(&error.to_string()) => {
+                    std::thread::sleep(Duration::from_millis(250));
+                    native_accessibility_snapshot_json(&udid, point, max_depth)?
+                }
+                Err(error) => return Err(error),
+            };
+            let snapshot: serde_json::Value =
+                serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))?;
+            if !accessibility_snapshot_is_transient_empty(&snapshot)
+                || attempt == ACCESSIBILITY_SNAPSHOT_MAX_ATTEMPTS
+            {
+                return Ok(snapshot);
             }
-            Err(error) => return Err(error),
-        };
-        let snapshot: serde_json::Value =
-            serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))?;
-        Ok(snapshot)
+            std::thread::sleep(Duration::from_millis(ACCESSIBILITY_SNAPSHOT_RETRY_DELAY_MS));
+        }
+        unreachable!("accessibility snapshot retry loop always returns")
     }
 
     pub fn send_touch(&self, udid: &str, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
@@ -769,6 +779,40 @@ fn is_core_simulator_service_mismatch(message: &str) -> bool {
             && message.contains("does not match expected service version")
 }
 
+fn accessibility_snapshot_is_transient_empty(snapshot: &serde_json::Value) -> bool {
+    let Some(roots) = snapshot.get("roots").and_then(serde_json::Value::as_array) else {
+        return true;
+    };
+    roots.is_empty() || roots.iter().all(|root| node_is_zero_sized_leaf(root))
+}
+
+fn node_is_zero_sized_leaf(node: &serde_json::Value) -> bool {
+    let has_children = node
+        .get("children")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|children| !children.is_empty());
+    !has_children && node_frame_is_empty(node)
+}
+
+fn node_frame_is_empty(node: &serde_json::Value) -> bool {
+    let Some(frame) = node
+        .get("frame")
+        .or_else(|| node.get("frameInScreen"))
+        .or_else(|| node.get("bounds"))
+    else {
+        return true;
+    };
+    let width = frame
+        .get("width")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let height = frame
+        .get("height")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    width <= 0.0 || height <= 0.0
+}
+
 unsafe fn string_from_raw(raw: *mut i8, error: *mut i8) -> Result<String, AppError> {
     if raw.is_null() {
         return Err(take_error(error).unwrap_or_else(|| AppError::native("Unknown native error.")));
@@ -814,7 +858,8 @@ fn schedule_recoverable_restart_if_needed(message: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_core_simulator_service_mismatch, log_entry_matches, LogEntry, LogFilters, Simulator,
+        accessibility_snapshot_is_transient_empty, is_core_simulator_service_mismatch,
+        log_entry_matches, LogEntry, LogFilters, Simulator,
     };
     use serde_json::json;
 
@@ -902,5 +947,45 @@ mod tests {
         assert!(!is_core_simulator_service_mismatch(
             "Unable to initialize the private simulator display bridge."
         ));
+    }
+
+    #[test]
+    fn accessibility_snapshot_retry_detects_empty_native_ax_tree() {
+        assert!(accessibility_snapshot_is_transient_empty(&json!({
+            "source": "native-ax",
+            "roots": []
+        })));
+        assert!(accessibility_snapshot_is_transient_empty(&json!({
+            "source": "native-ax",
+            "roots": [{
+                "role": "Application",
+                "frame": { "x": 0, "y": 0, "width": 0, "height": 0 },
+                "children": []
+            }]
+        })));
+    }
+
+    #[test]
+    fn accessibility_snapshot_retry_keeps_usable_native_ax_tree() {
+        assert!(!accessibility_snapshot_is_transient_empty(&json!({
+            "source": "native-ax",
+            "roots": [{
+                "role": "Application",
+                "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+                "children": []
+            }]
+        })));
+        assert!(!accessibility_snapshot_is_transient_empty(&json!({
+            "source": "native-ax",
+            "roots": [{
+                "role": "Application",
+                "frame": { "x": 0, "y": 0, "width": 0, "height": 0 },
+                "children": [{
+                    "role": "Button",
+                    "label": "Continue",
+                    "frame": { "x": 10, "y": 20, "width": 100, "height": 44 }
+                }]
+            }]
+        })));
     }
 }
