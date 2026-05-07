@@ -72,6 +72,7 @@ The client never depends on private APIs and never assumes anything not exposed 
 
 - **`packages/nativescript-inspector/`** ships `@nativescript/simdeck-inspector`, a TypeScript runtime that connects from a NativeScript app to the server's WebSocket inspector hub. See [NativeScript Runtime](/inspector/nativescript).
 - **`packages/react-native-inspector/`** ships `react-native-simdeck`, a React Native runtime that connects from an app to the server's WebSocket inspector hub and publishes React Fiber hierarchy data. See [React Native Runtime](/inspector/react-native).
+- **`packages/flutter-inspector/`** ships `simdeck_flutter_inspector`, a Flutter runtime plugin that connects from an app to the server's WebSocket inspector hub and publishes widget, render, and semantics hierarchy data. See [Flutter Runtime](/inspector/flutter).
 - **`packages/inspector-agent/`** ships `SimDeckInspectorAgent`, a Swift Package you can link from a debug iOS app to expose its UIKit hierarchy. See [Swift In-App Agent](/inspector/swift).
 - **`packages/vscode-extension/`** is the VS Code extension that opens the browser client inside a webview panel and auto-starts the server.
 - **`packages/simdeck-test/`** ships `simdeck/test`, a small JS/TS wrapper around daemon startup and the REST control API. See [Testing](/guide/testing).
@@ -118,5 +119,6 @@ If you contribute, keep the following invariants in mind:
 - Rust server logic stays under `server/`.
 - Browser-only presentation logic stays in `client/`.
 - NativeScript app runtime inspection logic stays in `packages/nativescript-inspector/`.
+- Flutter app runtime inspection logic stays in `packages/flutter-inspector/`.
 - Add a server endpoint before adding client-only assumptions.
 - The supported live video paths are the WebRTC H.264 offer endpoint plus the `/api/simulators/{udid}/h264` WebSocket fallback. Do not bring back legacy `/stream.h264` handling.

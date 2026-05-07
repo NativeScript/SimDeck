@@ -9,6 +9,8 @@ packages/inspector-agent/.build/
 packages/inspector-agent/.swiftpm/
 packages/nativescript-inspector/dist/
 packages/react-native-inspector/dist/
+packages/flutter-inspector/.dart_tool/
+packages/flutter-inspector/pubspec.lock
 docs/.vitepress/dist/
 docs/.vitepress/cache/
 cloud/

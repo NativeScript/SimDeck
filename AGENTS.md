@@ -51,6 +51,10 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
   React Native in-app inspector runtime that connects to the Rust server over
   WebSocket, publishes React Fiber component hierarchies with Metro source
   locations, and performs best-effort debug JS/native prop edits.
+- `packages/flutter-inspector/lib/simdeck_flutter_inspector.dart`
+  Flutter in-app inspector runtime that connects to the Rust server over
+  WebSocket, publishes widget/render/semantics hierarchies with debug creation
+  locations, and performs best-effort semantics, focus, text, and scroll actions.
 
 ## Working Rules
 
@@ -59,6 +63,7 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
 - Keep browser-only presentation logic in `client/`.
 - Keep NativeScript app runtime inspection logic in `packages/nativescript-inspector/`.
 - Keep React Native app runtime inspection logic in `packages/react-native-inspector/`.
+- Keep Flutter app runtime inspection logic in `packages/flutter-inspector/`.
 - Prefer adding a native API endpoint before adding client-only assumptions.
 - Do not add a Node or Swift dependency to solve work that already fits in Foundation/AppKit.
 - When touching private API usage, keep the adaptation small and explicit and document any simulator/runtime assumptions here.

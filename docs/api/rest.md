@@ -442,6 +442,7 @@ Returns the current accessibility tree. The server merges framework inspectors, 
 | `auto` _(default)_ / unset   | Use the most accurate source available, falling back to AX.                                            |
 | `nativescript` / `ns`        | Force the NativeScript logical tree if a NativeScript inspector is connected for the foreground app.   |
 | `react-native` / `rn`        | Force the React Native component tree if a React Native inspector is connected for the foreground app. |
+| `flutter` / `fl`             | Force the Flutter widget tree if a Flutter inspector is connected for the foreground app.              |
 | `swiftui` / `swift-ui`       | Force the published SwiftUI logical tree if the Swift agent root publisher is installed in the app.    |
 | `uikit` / `in-app-inspector` | Force the raw UIKit hierarchy from the in-app inspector agent (NativeScript or Swift).                 |
 | `native-ax` / `ax`           | Always use the native accessibility snapshot.                                                          |
@@ -456,8 +457,8 @@ The response always includes:
 ```json
 {
   "roots": [...],
-  "source": "nativescript|react-native|swiftui|in-app-inspector|native-ax",
-  "availableSources": ["nativescript", "react-native", "swiftui", "in-app-inspector", "native-ax"],
+  "source": "nativescript|react-native|flutter|swiftui|in-app-inspector|native-ax",
+  "availableSources": ["nativescript", "react-native", "flutter", "swiftui", "in-app-inspector", "native-ax"],
   "fallbackReason": "...",
   "inspector": { ... }
 }

@@ -39,7 +39,7 @@ view inside the editor.
 - Full simulator control & inspection using private accessibility APIs - available using `simdeck` CLI
 - Real-time screen `describe` command using accessibility view tree - available in token-efficient format for agents
 - CoreSimulator chrome asset rendering for device bezels
-- NativeScript, React Native, UIKit and SwiftUI runtime inspector plugins to view app's view hierarchy live
+- NativeScript, React Native, Flutter, UIKit and SwiftUI runtime inspector plugins to view app's view hierarchy live
 - `simdeck/test` for fast JS/TS app tests that can query accessibility state and drive simulator controls.
 - SimDeck Studio for sharing Simulator streams & automatic PR deployments to on-demand simulators
 
@@ -182,9 +182,10 @@ booting is unavailable.
 `stream` writes an Annex B H.264 elementary stream to stdout for diagnostics or
 external tools such as `ffplay`.
 
-`describe` uses the project daemon to prefer React Native, NativeScript, or
-UIKit in-app inspectors, then falls back to the built-in private CoreSimulator
-accessibility bridge. Use `--format agent` or `--format compact-json` for
+`describe` uses the project daemon to prefer React Native, NativeScript,
+Flutter, or UIKit in-app inspectors, then falls back to the built-in private
+CoreSimulator accessibility bridge. Use `--format agent` or
+`--format compact-json` for
 lower-token hierarchy dumps. Coordinate commands accept screen coordinates from
 the accessibility tree by default; pass `--normalized` to send `0.0..1.0`
 coordinates directly.
@@ -240,6 +241,27 @@ Import it before `expo-router/entry` or `AppRegistry.registerComponent(...)`
 so the package can capture React Fiber commits. The auto entrypoint no-ops
 outside development, reads `EXPO_PUBLIC_SIMDECK_PORT` when present, and
 otherwise scans common SimDeck daemon ports.
+
+## Flutter Inspector
+
+Flutter apps can expose their widget tree, render frames, semantics metadata,
+and debug widget creation locations with the Flutter inspector package:
+
+```dart
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:simdeck_flutter_inspector/simdeck_flutter_inspector.dart';
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  if (kDebugMode) {
+    startSimDeckFlutterInspector(port: 4310);
+  }
+
+  runApp(const App());
+}
+```
 
 ## VS Code
 

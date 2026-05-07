@@ -198,13 +198,15 @@ simdeck describe <udid>
 simdeck describe <udid> --format agent --max-depth 4
 simdeck describe <udid> --format compact-json
 simdeck describe <udid> --source nativescript
+simdeck describe <udid> --source react-native
+simdeck describe <udid> --source flutter
 simdeck describe <udid> --source uikit
 simdeck describe <udid> --source native-ax
 simdeck describe <udid> --point 120,240
 simdeck describe <udid> --direct
 ```
 
-By default, `describe` uses the project daemon so it can prefer connected NativeScript or UIKit in-app inspectors, then fall back to the private CoreSimulator accessibility bridge. `--direct` skips the daemon and uses the native accessibility bridge directly.
+By default, `describe` uses the project daemon so it can prefer connected NativeScript, React Native, Flutter, or UIKit in-app inspectors, then fall back to the private CoreSimulator accessibility bridge. `--direct` skips the daemon and uses the native accessibility bridge directly.
 
 Use `--format agent` for compact hierarchy text intended for agent planning, and `--format compact-json` when a script needs parseable lower-token output.
 

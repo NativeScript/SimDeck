@@ -164,6 +164,7 @@ export interface AccessibilityNode {
   enabled?: boolean | null;
   frame?: AccessibilityFrame | null;
   frameInScreen?: AccessibilityFrame | null;
+  flutter?: Record<string, unknown> | null;
   help?: string | null;
   imageName?: string | null;
   inspectorId?: string | null;
@@ -178,11 +179,13 @@ export interface AccessibilityNode {
   role?: string | null;
   role_description?: string | null;
   scroll?: Record<string, unknown> | null;
+  semantics?: Record<string, unknown> | null;
   source?:
     | "native-ax"
     | "in-app-inspector"
     | "nativescript"
     | "react-native"
+    | "flutter"
     | "swiftui"
     | string
     | null;
@@ -207,6 +210,7 @@ export type AccessibilitySource =
   | "in-app-inspector"
   | "nativescript"
   | "react-native"
+  | "flutter"
   | "swiftui";
 export type AccessibilitySourcePreference = AccessibilitySource | "auto";
 

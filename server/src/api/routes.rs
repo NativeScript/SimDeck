@@ -527,6 +527,7 @@ const CONNECTED_INSPECTOR_HIERARCHY_TIMEOUT: Duration = Duration::from_secs(8);
 const SOURCE_NATIVE_AX: &str = "native-ax";
 const SOURCE_NATIVE_SCRIPT: &str = "nativescript";
 const SOURCE_REACT_NATIVE: &str = "react-native";
+const SOURCE_FLUTTER: &str = "flutter";
 const SOURCE_SWIFTUI: &str = "swiftui";
 const SOURCE_UIKIT: &str = "in-app-inspector";
 
@@ -2372,6 +2373,7 @@ async fn accessibility_tree_value(
                 AccessibilityHierarchySource::Auto => InAppHierarchySource::Automatic,
                 AccessibilityHierarchySource::NativeScript => InAppHierarchySource::Automatic,
                 AccessibilityHierarchySource::ReactNative => InAppHierarchySource::Automatic,
+                AccessibilityHierarchySource::Flutter => InAppHierarchySource::Automatic,
                 AccessibilityHierarchySource::SwiftUI => InAppHierarchySource::Automatic,
                 AccessibilityHierarchySource::UIKit => InAppHierarchySource::UIKit,
                 AccessibilityHierarchySource::NativeAX => unreachable!(),
@@ -2399,6 +2401,10 @@ async fn accessibility_tree_value(
                         && snapshot_source != Some(SOURCE_REACT_NATIVE)
                     {
                         Some("React Native hierarchy is not published by the app.".to_owned())
+                    } else if requested_source == AccessibilityHierarchySource::Flutter
+                        && snapshot_source != Some(SOURCE_FLUTTER)
+                    {
+                        Some("Flutter hierarchy is not published by the app.".to_owned())
                     } else if requested_source == AccessibilityHierarchySource::SwiftUI
                         && snapshot_source != Some(SOURCE_SWIFTUI)
                     {
@@ -3289,6 +3295,7 @@ enum AccessibilityHierarchySource {
     Auto,
     NativeScript,
     ReactNative,
+    Flutter,
     SwiftUI,
     UIKit,
     NativeAX,
@@ -3300,6 +3307,7 @@ impl AccessibilityHierarchySource {
             "" | "auto" => Ok(Self::Auto),
             "nativescript" | "ns" => Ok(Self::NativeScript),
             "react-native" | "reactnative" | "rn" => Ok(Self::ReactNative),
+            "flutter" | "fl" => Ok(Self::Flutter),
             "swiftui" | "swift-ui" => Ok(Self::SwiftUI),
             "uikit" | "in-app-inspector" => Ok(Self::UIKit),
             "ax" | "native-ax" | "native-accessibility" => Ok(Self::NativeAX),
@@ -3664,25 +3672,32 @@ fn inspector_session_score(session: &InspectorSession) -> u8 {
     if session
         .available_sources
         .iter()
-        .any(|source| source == SOURCE_NATIVE_SCRIPT)
+        .any(|source| source == SOURCE_FLUTTER)
     {
         return 1;
     }
     if session
         .available_sources
         .iter()
-        .any(|source| source == SOURCE_SWIFTUI)
+        .any(|source| source == SOURCE_NATIVE_SCRIPT)
     {
         return 2;
     }
     if session
         .available_sources
         .iter()
-        .any(|source| source == SOURCE_UIKIT)
+        .any(|source| source == SOURCE_SWIFTUI)
     {
         return 3;
     }
-    4
+    if session
+        .available_sources
+        .iter()
+        .any(|source| source == SOURCE_UIKIT)
+    {
+        return 4;
+    }
+    5
 }
 
 async fn frontmost_process_identifier(state: &AppState, udid: &str) -> Result<Option<i64>, String> {
@@ -3787,6 +3802,14 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
     if react_native_available {
         sources.push(SOURCE_REACT_NATIVE.to_owned());
     }
+    let flutter_available = info
+        .get("flutter")
+        .and_then(|value| value.get("available"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if flutter_available {
+        sources.push(SOURCE_FLUTTER.to_owned());
+    }
     let app_hierarchy = info.get("appHierarchy");
     let app_hierarchy_available = app_hierarchy
         .and_then(|value| value.get("available"))
@@ -3800,6 +3823,7 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         match app_hierarchy_source {
             SOURCE_NATIVE_SCRIPT => sources.push(SOURCE_NATIVE_SCRIPT.to_owned()),
             SOURCE_REACT_NATIVE => push_unique_source(&mut sources, SOURCE_REACT_NATIVE),
+            SOURCE_FLUTTER => push_unique_source(&mut sources, SOURCE_FLUTTER),
             SOURCE_SWIFTUI => push_unique_source(&mut sources, SOURCE_SWIFTUI),
             _ => {}
         }
@@ -3808,7 +3832,7 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         .get("uikit")
         .and_then(|value| value.get("available"))
         .and_then(Value::as_bool)
-        .unwrap_or(!react_native_available);
+        .unwrap_or(!(react_native_available || flutter_available));
     if uikit_available {
         sources.push(SOURCE_UIKIT.to_owned());
     }
@@ -3840,6 +3864,13 @@ fn available_sources_for_session(session: &InspectorSession) -> Vec<String> {
     if session
         .available_sources
         .iter()
+        .any(|source| source == SOURCE_FLUTTER)
+    {
+        push_unique_source(&mut sources, SOURCE_FLUTTER);
+    }
+    if session
+        .available_sources
+        .iter()
         .any(|source| source == SOURCE_SWIFTUI)
     {
         push_unique_source(&mut sources, SOURCE_SWIFTUI);
@@ -3867,7 +3898,7 @@ fn available_sources_for_snapshot(base_sources: &[String], snapshot: &Value) -> 
     let Some(source) = snapshot.get("source").and_then(Value::as_str) else {
         return sources;
     };
-    if source == SOURCE_REACT_NATIVE {
+    if source == SOURCE_REACT_NATIVE || source == SOURCE_FLUTTER {
         sources.retain(|candidate| candidate != SOURCE_UIKIT);
     }
     if framework_source(source) && !sources.iter().any(|value| value == source) {
@@ -3904,7 +3935,10 @@ async fn merge_connected_sources_for_pid(
             }
         }
     }
-    if sources.iter().any(|source| source == SOURCE_REACT_NATIVE) {
+    if sources
+        .iter()
+        .any(|source| source == SOURCE_REACT_NATIVE || source == SOURCE_FLUTTER)
+    {
         sources.retain(|source| source != SOURCE_UIKIT);
     }
 }
@@ -3919,7 +3953,10 @@ fn root_process_identifier(snapshot: &Value) -> Option<i64> {
 }
 
 fn framework_source(source: &str) -> bool {
-    source == SOURCE_NATIVE_SCRIPT || source == SOURCE_REACT_NATIVE || source == SOURCE_SWIFTUI
+    source == SOURCE_NATIVE_SCRIPT
+        || source == SOURCE_REACT_NATIVE
+        || source == SOURCE_FLUTTER
+        || source == SOURCE_SWIFTUI
 }
 
 fn attach_available_sources(snapshot: Value, available_sources: &[String]) -> Value {
@@ -4554,8 +4591,8 @@ mod tests {
         parse_lsof_tcp_listener, resolved_stream_quality_limits, split_filter_values,
         stream_quality_profile, suppress_native_ax_translation_error, tap_point_from_snapshot,
         trim_tree_depth, AccessibilityHierarchySource, ElementSelectorPayload, InspectorSession,
-        InspectorSessionTransport, StreamQualityLimits, StreamQualityPayload, SOURCE_NATIVE_AX,
-        SOURCE_NATIVE_SCRIPT, SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
+        InspectorSessionTransport, StreamQualityLimits, StreamQualityPayload, SOURCE_FLUTTER,
+        SOURCE_NATIVE_AX, SOURCE_NATIVE_SCRIPT, SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
     };
     use crate::inspector::PublishedInspector;
     use crate::transport::packet::FramePacket;
@@ -4678,6 +4715,7 @@ mod tests {
     fn inspector_source_detection_prefers_framework_specific_sources() {
         let sources = inspector_available_sources(&json!({
             "reactNative": { "available": true },
+            "flutter": { "available": true },
             "appHierarchy": { "available": true, "source": "nativescript" },
             "uikit": { "available": true }
         }));
@@ -4686,6 +4724,7 @@ mod tests {
             sources,
             vec![
                 SOURCE_REACT_NATIVE.to_owned(),
+                SOURCE_FLUTTER.to_owned(),
                 SOURCE_NATIVE_SCRIPT.to_owned(),
                 SOURCE_UIKIT.to_owned()
             ]
@@ -4769,6 +4808,19 @@ mod tests {
     }
 
     #[test]
+    fn available_sources_for_flutter_snapshot_removes_uikit_fallback() {
+        let sources = available_sources_for_snapshot(
+            &[SOURCE_UIKIT.to_owned(), SOURCE_NATIVE_AX.to_owned()],
+            &json!({ "source": SOURCE_FLUTTER }),
+        );
+
+        assert_eq!(
+            sources,
+            vec![SOURCE_FLUTTER.to_owned(), SOURCE_NATIVE_AX.to_owned()]
+        );
+    }
+
+    #[test]
     fn native_ax_expected_translation_failures_are_suppressed() {
         assert_eq!(
             suppress_native_ax_translation_error(
@@ -4843,6 +4895,10 @@ mod tests {
         assert!(matches!(
             AccessibilityHierarchySource::parse(Some("rn")).unwrap(),
             AccessibilityHierarchySource::ReactNative
+        ));
+        assert!(matches!(
+            AccessibilityHierarchySource::parse(Some("flutter")).unwrap(),
+            AccessibilityHierarchySource::Flutter
         ));
         assert!(matches!(
             AccessibilityHierarchySource::parse(Some("swift-ui")).unwrap(),

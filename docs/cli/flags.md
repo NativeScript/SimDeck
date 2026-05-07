@@ -47,14 +47,14 @@ The public commands generate an access token automatically. Use `simdeck daemon 
 
 ## `describe`
 
-| Flag               | Default                        | Description                                                               |
-| ------------------ | ------------------------------ | ------------------------------------------------------------------------- |
-| `--format`         | `json`                         | Output format: `json`, `compact-json`, or `agent`.                        |
-| `--source`         | `auto`                         | Hierarchy source: `auto`, `nativescript`, `uikit`, or `native-ax`.        |
-| `--max-depth`      | unlimited native / `80` daemon | Trim descendants after the requested depth.                               |
-| `--include-hidden` | `false`                        | Include hidden in-app inspector views when supported.                     |
-| `--direct`         | `false`                        | Skip the daemon and use the private native accessibility bridge directly. |
-| `--point <x>,<y>`  | unset                          | Return the native element at a screen point.                              |
+| Flag               | Default                        | Description                                                                                   |
+| ------------------ | ------------------------------ | --------------------------------------------------------------------------------------------- |
+| `--format`         | `json`                         | Output format: `json`, `compact-json`, or `agent`.                                            |
+| `--source`         | `auto`                         | Hierarchy source: `auto`, `nativescript`, `react-native`, `flutter`, `uikit`, or `native-ax`. |
+| `--max-depth`      | unlimited native / `80` daemon | Trim descendants after the requested depth.                                                   |
+| `--include-hidden` | `false`                        | Include hidden in-app inspector views when supported.                                         |
+| `--direct`         | `false`                        | Skip the daemon and use the private native accessibility bridge directly.                     |
+| `--point <x>,<y>`  | unset                          | Return the native element at a screen point.                                                  |
 
 ## Input Flags
 

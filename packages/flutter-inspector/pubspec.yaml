@@ -1,0 +1,22 @@
+name: simdeck_flutter_inspector
+description: Debug-only Flutter runtime inspector for SimDeck.
+version: 0.1.0
+homepage: https://github.com/NativeScript/SimDeck
+repository: https://github.com/NativeScript/SimDeck
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+flutter:
+  plugin:
+    platforms:
+      ios:
+        pluginClass: SimDeckFlutterInspectorPlugin
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_lints: ^5.0.0

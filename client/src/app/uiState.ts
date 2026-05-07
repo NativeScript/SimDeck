@@ -34,6 +34,7 @@ export const TOUCH_OVERLAY_VISIBLE_STORAGE_KEY = "xcw-touch-overlay-visible";
 const ACCESSIBILITY_SOURCE_ORDER: AccessibilitySource[] = [
   "nativescript",
   "react-native",
+  "flutter",
   "swiftui",
   "in-app-inspector",
   "native-ax",
@@ -158,6 +159,7 @@ export function isAccessibilitySource(
   return (
     value === "nativescript" ||
     value === "react-native" ||
+    value === "flutter" ||
     value === "swiftui" ||
     value === "in-app-inspector" ||
     value === "native-ax"

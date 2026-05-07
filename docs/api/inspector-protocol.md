@@ -122,7 +122,7 @@ Params:
 { "includeHidden": false, "maxDepth": 20, "source": "uikit" }
 ```
 
-By default the agent returns the published framework hierarchy (e.g. NativeScript) when one exists. Pass `"source": "uikit"` to force the raw UIKit tree.
+By default the agent returns the published framework hierarchy (for example NativeScript, React Native, Flutter, or SwiftUI) when one exists. Pass `"source": "uikit"` to force the raw UIKit tree when the runtime supports UIKit inspection.
 
 Published framework nodes may include `sourceLocation`:
 
