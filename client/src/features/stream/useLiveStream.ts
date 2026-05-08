@@ -7,8 +7,7 @@ import type { Size } from "../viewport/types";
 import { createEmptyStreamStats } from "./stats";
 import {
   buildStreamTarget,
-  canUseWebRtc,
-  sendWebRtcClientStats,
+  sendStreamClientStats,
   StreamWorkerClient,
   type StreamBackend,
   type VisualArtifactSample,
@@ -18,6 +17,7 @@ import type {
   StreamConfig,
   StreamStats,
   StreamStatus,
+  StreamTransport,
   WorkerToMainMessage,
 } from "./streamTypes";
 
@@ -25,7 +25,7 @@ const FPS_SAMPLE_INTERVAL_MS = 1000;
 const CLIENT_TELEMETRY_INTERVAL_MS = 1000;
 const REMOTE_CLIENT_TELEMETRY_INTERVAL_MS = 5000;
 const CLIENT_TELEMETRY_ID_STORAGE_KEY = "simdeck.streamClientId";
-const VISUAL_ARTIFACT_TELEMETRY_INTERVAL_MS = 1000;
+const VISUAL_ARTIFACT_TELEMETRY_INTERVAL_MS = 30000;
 
 interface UseLiveStreamOptions {
   canvasElement: HTMLCanvasElement | null;
@@ -34,6 +34,7 @@ interface UseLiveStreamOptions {
   simulator: SimulatorMetadata | null;
   streamConfig?: StreamConfig;
   streamConfigApplyKey?: number;
+  streamTransport?: StreamTransport;
 }
 
 interface UseLiveStreamResult {
@@ -88,6 +89,16 @@ function buildClientTelemetryUrl(): string {
   ).toString();
 }
 
+function currentClientBundle(): string {
+  return (
+    Array.from(document.scripts)
+      .map((script) => script.src)
+      .find((src) => /\/assets\/index-[^/]+\.js(?:$|\?)/.test(src))
+      ?.split("/")
+      .pop() ?? ""
+  );
+}
+
 export function useLiveStream({
   canvasElement,
   paused = false,
@@ -95,6 +106,7 @@ export function useLiveStream({
   simulator,
   streamConfig,
   streamConfigApplyKey = 0,
+  streamTransport = "auto",
 }: UseLiveStreamOptions): UseLiveStreamResult {
   const clientTelemetryIdRef = useRef("");
   const workerClientRef = useRef<StreamWorkerClient | null>(null);
@@ -103,6 +115,9 @@ export function useLiveStream({
   const latestRenderedFramesRef = useRef(0);
   const latestStatsRef = useRef<StreamStats>(createEmptyStreamStats());
   const latestStatusRef = useRef<StreamStatus>({ state: "idle" });
+  const retainedFrameRef = useRef(false);
+  const previousSimulatorUdidRef = useRef<string | undefined>(simulator?.udid);
+  const connectedStreamTargetKeyRef = useRef("");
   const latestVisualArtifactRef = useRef<VisualArtifactSample | null>(null);
   const latestVisualArtifactSampleCountRef = useRef(0);
   const lastVisualArtifactSampleAtRef = useRef(0);
@@ -144,13 +159,20 @@ export function useLiveStream({
   }, []);
 
   useEffect(() => {
-    if (paused || !canvasElement || workerClientRef.current) {
+    if (!canvasElement) {
       return;
     }
 
-    const workerClient = new StreamWorkerClient(
-      (message: WorkerToMainMessage) => {
+    let workerClient = workerClientRef.current;
+    if (!workerClient) {
+      workerClient = new StreamWorkerClient((message: WorkerToMainMessage) => {
         if (message.type === "stats") {
+          if (
+            message.stats.decodedFrames > 0 ||
+            message.stats.renderedFrames > 0
+          ) {
+            retainedFrameRef.current = true;
+          }
           setStats(message.stats);
           return;
         }
@@ -170,12 +192,12 @@ export function useLiveStream({
         }
 
         setDeviceNaturalSize(message.size);
-      },
-    );
+      });
+      workerClientRef.current = workerClient;
+    }
 
     try {
       workerClient.attachCanvas(canvasElement);
-      workerClientRef.current = workerClient;
     } catch (attachError) {
       const message =
         attachError instanceof Error
@@ -184,25 +206,18 @@ export function useLiveStream({
       setError(message);
       setStatus({ error: message, state: "error" });
       workerClient.destroy();
+      workerClientRef.current = null;
       return;
     }
+  }, [canvasElement]);
 
-    const destroyOnPageHide = () => {
-      workerClient.destroy();
-      if (workerClientRef.current === workerClient) {
-        workerClientRef.current = null;
-      }
-    };
-    window.addEventListener("pagehide", destroyOnPageHide);
-    window.addEventListener("beforeunload", destroyOnPageHide);
-
+  useEffect(() => {
     return () => {
-      window.removeEventListener("pagehide", destroyOnPageHide);
-      window.removeEventListener("beforeunload", destroyOnPageHide);
-      workerClient.destroy();
+      workerClientRef.current?.destroy();
       workerClientRef.current = null;
+      connectedStreamTargetKeyRef.current = "";
     };
-  }, [canvasElement, paused]);
+  }, []);
 
   useEffect(() => {
     latestDecodedFramesRef.current = stats.decodedFrames;
@@ -219,7 +234,16 @@ export function useLiveStream({
   }, [fps]);
 
   useEffect(() => {
-    setStreamCanvasRevision((current) => current + 1);
+    const previousUdid = previousSimulatorUdidRef.current;
+    const nextUdid = simulator?.udid;
+    if (previousUdid === nextUdid) {
+      return;
+    }
+    previousSimulatorUdidRef.current = nextUdid;
+    retainedFrameRef.current = false;
+    if (previousUdid && nextUdid) {
+      setStreamCanvasRevision((current) => current + 1);
+    }
   }, [simulator?.udid]);
 
   useEffect(() => {
@@ -256,41 +280,55 @@ export function useLiveStream({
 
   useEffect(() => {
     const workerClient = workerClientRef.current;
-    if (!workerClient) {
+    if (!workerClient || !canvasElement) {
       return;
     }
 
+    if (paused || !simulator?.isBooted) {
+      setDeviceNaturalSize(null);
+      setStats(createEmptyStreamStats());
+      setStatus({ state: "idle" });
+      setError("");
+      setFps(0);
+      retainedFrameRef.current = false;
+      if (connectedStreamTargetKeyRef.current) {
+        workerClient.disconnect();
+      }
+      connectedStreamTargetKeyRef.current = "";
+      workerClient.clear();
+      return;
+    }
+
+    const targetKey = [
+      simulator.udid,
+      remote ? "remote" : "local",
+      streamTransport,
+    ].join("|");
+    if (connectedStreamTargetKeyRef.current === targetKey) {
+      return;
+    }
     setDeviceNaturalSize(null);
     setStats(createEmptyStreamStats());
     setStatus({ state: "idle" });
     setError("");
     setFps(0);
-
-    if (paused || !simulator?.isBooted) {
-      workerClient.disconnect();
-      workerClient.clear();
-      return;
-    }
-
-    if (!canUseWebRtc()) {
-      setStatus({
-        error: "This browser does not support WebRTC video.",
-        state: "error",
-      });
-      return;
-    }
-
+    connectedStreamTargetKeyRef.current = targetKey;
     workerClient.connect(
       buildStreamTarget(simulator.udid, {
         clientId: clientTelemetryIdRef.current,
         remote,
         streamConfig,
+        transport: streamTransport,
       }),
     );
-    return () => {
-      workerClient.disconnect();
-    };
-  }, [canvasElement, simulator?.isBooted, simulator?.udid, paused, remote]);
+  }, [
+    canvasElement,
+    simulator?.isBooted,
+    simulator?.udid,
+    paused,
+    remote,
+    streamTransport,
+  ]);
 
   useEffect(() => {
     if (
@@ -348,6 +386,7 @@ export function useLiveStream({
         udid: simulator.udid,
         url: window.location.href,
         userAgent: window.navigator.userAgent,
+        clientBundle: currentClientBundle(),
         visualBadPixelRatio: latestVisualArtifact?.badPixelRatio,
         visualMaxPixelDiff: latestVisualArtifact?.maxPixelDiff,
         visualMaxTileDiff: latestVisualArtifact?.maxTileMeanDiff,
@@ -355,7 +394,13 @@ export function useLiveStream({
         visualSampleCount: latestVisualArtifactSampleCountRef.current,
         visibilityState: document.visibilityState,
       };
-      if (sendWebRtcClientStats(payload) || remote) {
+      if (
+        sendStreamClientStats(payload) ||
+        remote ||
+        streamTransport === "h264" ||
+        streamTransport === "webrtc" ||
+        streamTransport === "auto"
+      ) {
         return;
       }
       void fetch(buildClientTelemetryUrl(), {
@@ -376,17 +421,20 @@ export function useLiveStream({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [remote, simulator?.udid]);
+  }, [remote, simulator?.udid, streamTransport]);
 
   return {
     deviceNaturalSize,
     error,
     fps,
-    hasFrame: status.state === "streaming" || stats.decodedFrames > 0,
+    hasFrame:
+      status.state === "streaming" ||
+      stats.decodedFrames > 0 ||
+      retainedFrameRef.current,
     runtimeInfo,
     stats,
     status,
-    streamBackend: "webrtc",
-    streamCanvasKey: `webrtc-${streamCanvasRevision}`,
+    streamBackend: stats.codec === "h264-ws" ? "h264-ws" : "webrtc",
+    streamCanvasKey: `stream-${streamCanvasRevision}`,
   };
 }

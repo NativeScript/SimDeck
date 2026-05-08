@@ -54,6 +54,7 @@ import type {
   StreamEncoder,
   StreamFps,
   StreamQualityPreset,
+  StreamTransport,
 } from "../features/stream/streamTypes";
 import { useLiveStream } from "../features/stream/useLiveStream";
 import { DebugPanel } from "../features/toolbar/DebugPanel";
@@ -105,20 +106,28 @@ const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
 const LOCAL_STREAM_DEFAULTS: StreamConfig = {
   encoder: "auto",
-  fps: 120,
-  quality: "quality",
+  fps: 60,
+  quality: "full",
 };
 const REMOTE_STREAM_DEFAULTS: StreamConfig = {
   encoder: "software",
   fps: 30,
   quality: "balanced",
 };
-const STREAM_CONFIG_SYNC_INTERVAL_MS = 1500;
+const H264_WS_DEFAULT_FPS = 60;
+const H264_WS_LOCAL_DEFAULT_QUALITY: StreamQualityPreset = "full";
+const H264_WS_REMOTE_DEFAULT_QUALITY: StreamQualityPreset = "auto";
+const CONTROL_BACKLOG_DROP_BYTES = 4096;
 const STREAM_CONFIG_USER_CHANGE_GRACE_MS = 1000;
 const STREAM_ENCODER_VALUES = new Set<StreamEncoder>([
   "auto",
   "hardware",
   "software",
+]);
+const STREAM_TRANSPORT_VALUES = new Set<StreamTransport>([
+  "auto",
+  "h264",
+  "webrtc",
 ]);
 clearLegacyVolatileUiState();
 
@@ -163,6 +172,48 @@ function shouldUseRemoteStreamDefault(apiRoot: string): boolean {
   }
   return (
     new URLSearchParams(window.location.search).get("remoteStream") === "1"
+  );
+}
+
+function readStreamTransportQueryParam(): StreamTransport {
+  const value = new URLSearchParams(window.location.search).get("stream");
+  if (value === "h264-ws") {
+    return "h264";
+  }
+  return value && STREAM_TRANSPORT_VALUES.has(value as StreamTransport)
+    ? (value as StreamTransport)
+    : "auto";
+}
+
+function defaultStreamConfigForTransport(
+  remote: boolean,
+  transport: StreamTransport,
+): StreamConfig {
+  const base = remote ? REMOTE_STREAM_DEFAULTS : LOCAL_STREAM_DEFAULTS;
+  if (transport === "h264") {
+    return {
+      ...base,
+      fps: H264_WS_DEFAULT_FPS,
+      maxEdge: undefined,
+      quality: remote
+        ? H264_WS_REMOTE_DEFAULT_QUALITY
+        : H264_WS_LOCAL_DEFAULT_QUALITY,
+    };
+  }
+  return base;
+}
+
+function writeStreamTransportQueryParam(transport: StreamTransport) {
+  const url = new URL(window.location.href);
+  if (transport === "auto") {
+    url.searchParams.delete("stream");
+  } else {
+    url.searchParams.set("stream", transport);
+  }
+  window.history.replaceState(
+    null,
+    "",
+    `${url.pathname}${url.search}${url.hash}`,
   );
 }
 
@@ -246,6 +297,9 @@ export function AppShell({
   remoteStream = shouldUseRemoteStreamDefault(apiRoot),
 }: AppShellProps = {}) {
   configureSimDeckClient({ apiRoot });
+  const initialStreamTransportRef = useRef<StreamTransport>(
+    readStreamTransportQueryParam(),
+  );
   const [initialUiState] = useState(readPersistedUiState);
   const [initialSelectedUDID] = useState(
     () =>
@@ -328,7 +382,13 @@ export function AppShell({
     readStoredFlag(TOUCH_OVERLAY_VISIBLE_STORAGE_KEY, true),
   );
   const [streamConfig, setStreamConfig] = useState<StreamConfig>(() =>
-    remoteStream ? REMOTE_STREAM_DEFAULTS : LOCAL_STREAM_DEFAULTS,
+    defaultStreamConfigForTransport(
+      remoteStream,
+      initialStreamTransportRef.current,
+    ),
+  );
+  const [streamTransport, setStreamTransport] = useState<StreamTransport>(
+    initialStreamTransportRef.current,
   );
   const [streamConfigApplyKey, setStreamConfigApplyKey] = useState(0);
   const [streamConfigReady, setStreamConfigReady] = useState(false);
@@ -351,11 +411,17 @@ export function AppShell({
   const accessibilityLoadingRef = useRef(false);
   const streamConfigRequestIdRef = useRef(0);
   const streamConfigUserChangeAtRef = useRef(0);
+  const streamConfigUserTouchedRef = useRef(false);
   const controlSocketRef = useRef<{
     udid: string;
     socket: WebSocket;
     pending: string[];
   } | null>(null);
+  const pendingTouchMoveRef = useRef<{
+    coords: Point;
+    udid: string;
+  } | null>(null);
+  const touchMoveFrameRef = useRef(0);
   const canvasSize = useElementSize(outerCanvasElement);
   const zoomDockSize = useElementSize(zoomDockElement);
 
@@ -448,8 +514,13 @@ export function AppShell({
       ) {
         return;
       }
+      if (streamTransport === "h264" && !streamConfigUserTouchedRef.current) {
+        return;
+      }
       setStreamConfig((current) =>
-        mergeStreamQualityResponse(current, response),
+        mergeStreamQualityResponse(current, response, {
+          preserveAutoQuality: streamTransport === "h264",
+        }),
       );
     } catch {
       // Keep the existing local/default selection; the stream path will surface
@@ -459,7 +530,7 @@ export function AppShell({
         setStreamConfigReady(true);
       }
     }
-  }, []);
+  }, [streamTransport]);
 
   useEffect(() => {
     let cancelled = false;
@@ -472,10 +543,8 @@ export function AppShell({
     };
 
     run();
-    const intervalId = window.setInterval(run, STREAM_CONFIG_SYNC_INTERVAL_MS);
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
     };
   }, [remoteStream, syncStreamConfig]);
 
@@ -496,9 +565,11 @@ export function AppShell({
     simulator: selectedSimulator,
     streamConfig,
     streamConfigApplyKey,
+    streamTransport,
   });
 
   const updateStreamEncoder = useCallback((encoder: StreamEncoder) => {
+    streamConfigUserTouchedRef.current = true;
     streamConfigUserChangeAtRef.current = Date.now();
     setStreamConfigReady(true);
     setStreamConfigApplyKey((current) => current + 1);
@@ -506,6 +577,7 @@ export function AppShell({
   }, []);
 
   const updateStreamFps = useCallback((fps: StreamFps) => {
+    streamConfigUserTouchedRef.current = true;
     streamConfigUserChangeAtRef.current = Date.now();
     setStreamConfigReady(true);
     setStreamConfigApplyKey((current) => current + 1);
@@ -513,11 +585,34 @@ export function AppShell({
   }, []);
 
   const updateStreamQuality = useCallback((quality: StreamQualityPreset) => {
+    streamConfigUserTouchedRef.current = true;
     streamConfigUserChangeAtRef.current = Date.now();
     setStreamConfigReady(true);
     setStreamConfigApplyKey((current) => current + 1);
     setStreamConfig((current) => ({ ...current, maxEdge: undefined, quality }));
   }, []);
+
+  const updateStreamTransport = useCallback(
+    (transport: StreamTransport) => {
+      setStreamTransport(transport);
+      writeStreamTransportQueryParam(transport);
+      if (transport !== "h264" || streamConfigUserTouchedRef.current) {
+        return;
+      }
+      streamConfigUserChangeAtRef.current = Date.now();
+      setStreamConfigReady(true);
+      setStreamConfigApplyKey((current) => current + 1);
+      setStreamConfig((current) => ({
+        ...current,
+        fps: H264_WS_DEFAULT_FPS,
+        maxEdge: undefined,
+        quality: remoteStream
+          ? H264_WS_REMOTE_DEFAULT_QUALITY
+          : H264_WS_LOCAL_DEFAULT_QUALITY,
+      }));
+    },
+    [remoteStream],
+  );
 
   useEffect(() => {
     if (
@@ -1029,7 +1124,7 @@ export function AppShell({
         setAccessibilitySelectedId("");
         setAccessibilityHoveredId(null);
       }
-      sendControl(selectedSimulator.udid, { type: "touch", ...coords, phase });
+      sendTouchControl(selectedSimulator.udid, phase, coords);
     },
     onTouchPreview: showTouchIndicator,
     pan,
@@ -1204,9 +1299,52 @@ export function AppShell({
   }, []);
 
   function sendControl(udid: string, message: ControlMessage): boolean {
+    if (message.type === "touch") {
+      sendTouchControl(udid, message.phase, { x: message.x, y: message.y });
+      return true;
+    }
+    return sendControlNow(udid, message);
+  }
+
+  function sendTouchControl(udid: string, phase: TouchPhase, coords: Point) {
+    if (phase === "moved") {
+      pendingTouchMoveRef.current = { coords, udid };
+      if (!touchMoveFrameRef.current) {
+        touchMoveFrameRef.current = window.requestAnimationFrame(() => {
+          touchMoveFrameRef.current = 0;
+          flushPendingTouchMove();
+        });
+      }
+      return;
+    }
+
+    flushPendingTouchMove();
+    sendControlNow(udid, { type: "touch", ...coords, phase });
+  }
+
+  function flushPendingTouchMove() {
+    const pending = pendingTouchMoveRef.current;
+    pendingTouchMoveRef.current = null;
+    if (touchMoveFrameRef.current) {
+      window.cancelAnimationFrame(touchMoveFrameRef.current);
+      touchMoveFrameRef.current = 0;
+    }
+    if (!pending) {
+      return;
+    }
+    sendControlNow(pending.udid, {
+      type: "touch",
+      ...pending.coords,
+      phase: "moved",
+    });
+  }
+
+  function sendControlNow(udid: string, message: ControlMessage): boolean {
     setLocalError("");
     const encoded = JSON.stringify(message);
-    if (sendWebRtcControlMessage(encoded)) {
+    const dropIfBacklogged =
+      message.type === "touch" && message.phase === "moved";
+    if (sendWebRtcControlMessage(encoded, { dropIfBacklogged })) {
       return true;
     }
     if (remoteStream) {
@@ -1214,14 +1352,36 @@ export function AppShell({
     }
     const state = ensureControlSocket(udid);
     if (state.socket.readyState === WebSocket.OPEN) {
+      if (
+        dropIfBacklogged &&
+        state.socket.bufferedAmount > CONTROL_BACKLOG_DROP_BYTES
+      ) {
+        return true;
+      }
       state.socket.send(encoded);
     } else {
+      if (dropIfBacklogged) {
+        const lastIndex = state.pending.length - 1;
+        if (lastIndex >= 0 && state.pending[lastIndex].includes('"moved"')) {
+          state.pending[lastIndex] = encoded;
+          return true;
+        }
+      }
       state.pending.push(encoded);
     }
     return true;
   }
 
-  useEffect(() => closeControlSocket, [closeControlSocket]);
+  useEffect(() => {
+    return () => {
+      if (touchMoveFrameRef.current) {
+        window.cancelAnimationFrame(touchMoveFrameRef.current);
+        touchMoveFrameRef.current = 0;
+      }
+      pendingTouchMoveRef.current = null;
+      closeControlSocket();
+    };
+  }, [closeControlSocket]);
 
   function beginZoomAnimation() {
     setZoomAnimating(true);
@@ -1574,6 +1734,7 @@ export function AppShell({
         onStreamEncoderChange={updateStreamEncoder}
         onStreamFpsChange={updateStreamFps}
         onStreamQualityChange={updateStreamQuality}
+        onStreamTransportChange={updateStreamTransport}
         onShutdown={() => {
           if (!selectedSimulator) {
             return;
@@ -1622,6 +1783,7 @@ export function AppShell({
           !selectedSimulatorTransitionKind,
         )}
         streamConfig={streamConfig}
+        streamTransport={streamTransport}
         showStopButton={Boolean(
           selectedSimulator?.isBooted && !selectedSimulatorTransitionKind,
         )}
@@ -1779,6 +1941,7 @@ function friendlyStreamError(
 function mergeStreamQualityResponse(
   current: StreamConfig,
   response: StreamQualityResponse,
+  options: { preserveAutoQuality?: boolean } = {},
 ): StreamConfig {
   const quality = response.quality ?? {};
   const next: StreamConfig = {
@@ -1789,7 +1952,10 @@ function mergeStreamQualityResponse(
     ),
     fps: normalizeStreamFps(quality.fps, current.fps),
     maxEdge: normalizeMaxEdge(quality.maxEdge, current.maxEdge),
-    quality: normalizeStreamQuality(quality.profile, current.quality),
+    quality:
+      options.preserveAutoQuality && current.quality === "auto"
+        ? "auto"
+        : normalizeStreamQuality(quality.profile, current.quality),
   };
   return streamConfigsEqual(current, next) ? current : next;
 }
@@ -1809,14 +1975,19 @@ function normalizeStreamQuality(
   fallback: StreamQualityPreset,
 ): StreamQualityPreset {
   const normalized = value?.trim().toLowerCase();
+  if (normalized === "auto") {
+    return "auto";
+  }
+  if (normalized === "full") {
+    return "full";
+  }
   if (normalized === "quality") {
     return "quality";
   }
-  if (
-    normalized === "balanced" ||
-    normalized === "smooth" ||
-    normalized === "fast"
-  ) {
+  if (normalized === "smooth") {
+    return "smooth";
+  }
+  if (normalized === "balanced" || normalized === "fast") {
     return "balanced";
   }
   if (normalized === "economy" || normalized === "ci-software") {

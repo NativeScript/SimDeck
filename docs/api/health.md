@@ -117,7 +117,7 @@ from hardware to software encoding.
 
 ### Client stream stats
 
-`client_streams` is a rolling buffer of the most recent reports a client posted to `POST /api/client-stream-stats`. The server keeps the last 48 entries per `(clientId, kind)` pair.
+`client_streams` is a rolling buffer of the most recent reports from browser stream transports. WebRTC clients normally send reports over the telemetry data channel, H.264 WebSocket clients send them on the stream socket, and simple clients can still post to `POST /api/client-stream-stats`. The server keeps the last 48 entries per `(clientId, kind)` pair.
 
 The browser client uses these to render its in-app diagnostics overlay and to size its decoder workers. Every field is optional except `clientId` and `kind`; see [`ClientStreamStats`](https://github.com/NativeScript/SimDeck/blob/main/server/src/metrics/counters.rs) for the full schema.
 
