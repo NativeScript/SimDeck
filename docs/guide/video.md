@@ -32,7 +32,7 @@ It is CLI-only because it is meant for less capable machines where freshness
 matters more than maximum smoothness.
 
 The requested encoder mode is reported to clients in the JSON `videoCodec` field on `GET /api/health`.
-The browser UI exposes stream controls for encoder, FPS, and quality. H264 modes include `full` (4096 px at 60 fps), `quality` (4096 px high bitrate), `balanced` (1280 px), `economy` (1080 px), `low` (720 px), and `tiny` (540 px). Local H264 WebSocket sessions default to full resolution at 60 fps. Remote browser sessions default to software H.264, 30 fps, and adaptive quality.
+The browser UI exposes stream controls for encoder, FPS, transport, and resolution. H264 resolution choices are `full` (4096 px at 60 fps), `balanced` (1280 px at 60 fps), `economy` (1080 px at 30 fps), `low` (720 px at 30 fps), and `tiny` (540 px at 30 fps). Local H264 WebSocket sessions default to full resolution at 60 fps. Remote browser sessions default to software H.264, 30 fps, and adaptive quality.
 
 ## Remote WebRTC ICE
 
@@ -74,7 +74,7 @@ H264 WS uses the same native H.264 encoder as WebRTC, but sends each encoded
 sample on a binary WebSocket at:
 
 ```http
-GET /api/simulators/{udid}/h264
+GET /api/simulators/{udid}/h264?profile=full&fps=60&videoCodec=auto
 ```
 
 Each message starts with a compact SimDeck header, followed by optional AVC
@@ -82,10 +82,12 @@ decoder config and the encoded sample bytes. The browser decodes with
 WebCodecs, keeps only the latest decoded frame, and paints on
 `requestAnimationFrame` so stale frames do not build latency. Input stays on
 the separate `/api/simulators/{udid}/input` WebSocket so large video frames do
-not block touch and keyboard messages. H264 WS defaults to the `full` profile
-on loopback and `auto` quality for remote sessions. H264 `Auto` starts at
-`full` on loopback; remote `Auto` starts lower but can climb through `smooth`,
-`balanced`, and `full` after sustained low decode/render pressure.
+not block touch and keyboard messages. Stream-quality updates and client stats
+use the WebRTC data channel or the H264 WS video socket instead of repeatedly
+posting REST requests. H264 WS defaults to the `full` profile on loopback and
+`auto` quality for remote sessions. H264 `Auto` starts at `full` on loopback;
+remote `Auto` starts lower but can climb through the internal `smooth` step
+(1170 px), `balanced`, and `full` after sustained low decode/render pressure.
 
 MJPEG uses the private display bridge directly, encodes the latest
 `CVPixelBuffer` as JPEG in native code, and serves it as:
@@ -143,7 +145,7 @@ A few practical guidelines:
 - **Start on the default for local preview.** Browser realtime mode uses VideoToolbox H.264 with full resolution at 60 fps. Pass `--video-codec software` only when the shared hardware encoder is unavailable or performs worse on that host.
 - **Use `--local-stream-fps` above 60 only for local high-refresh testing.** The local quality stream defaults to 60 fps; higher targets pace both capture refresh and hardware encode submission so the stream does not build delay by pushing unbounded frames.
 - **Switch to `software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
-- **Studio providers default to software H.264 plus `--stream-quality smooth`.** This profile uses a 1170-pixel longest edge, allows up to 60 fps, raises the bitrate budget to reduce compression artifacts, and lets multiple provider sessions share CPU cores without depending on one hardware encoder.
+- **Studio providers default to software H.264 plus `--stream-quality smooth`.** `smooth` is an internal/provider profile, not a browser picker item. It uses a 1170-pixel longest edge, allows up to 60 fps, raises the bitrate budget to reduce compression artifacts, and lets multiple provider sessions share CPU cores without depending on one hardware encoder.
 - **Use `Auto` for the default MJPEG stream.** It encodes the native frame size at JPEG quality `0.70`, targets 30 fps, lowers JPEG quality when encoded frames are too large or the HTTP stream backs up, and raises it again after sustained low pressure. MJPEG does not apply the H.264 `maxEdge` caps unless a caller explicitly passes `maxEdge` to the raw MJPEG endpoint.
 - **The remote browser renders WebRTC as a native `<video>` element and MJPEG as a native `<img>` stream.** The canvas remains for input geometry and diagnostics, and fallback mode keeps simulator controls on the WebSocket input channel.
 - **Use `--stream-quality ci-software` for denser virtualized CI Macs.** This profile uses software H.264 at a 960-pixel longest edge, targets 24 fps, lowers bitrate pressure, and favors fresh frames over full-resolution sharpness.
@@ -185,7 +187,9 @@ multiple frames in a row exceeded the budget. For hardware H.264 this usually
 means the shared VideoToolbox encoder is saturated; lower resolution/FPS or
 switch to software H.264.
 
-Clients can also push their decoder/renderer stats back to the server:
+Clients can also push their decoder/renderer stats back to the server. Browser
+clients normally send these over the WebRTC telemetry data channel or the H264
+WS stream socket; REST remains available for simple clients:
 
 ```http
 POST /api/client-stream-stats

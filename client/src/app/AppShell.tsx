@@ -103,8 +103,8 @@ const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
 const LOCAL_STREAM_DEFAULTS: StreamConfig = {
   encoder: "auto",
-  fps: 120,
-  quality: "quality",
+  fps: 60,
+  quality: "full",
 };
 const REMOTE_STREAM_DEFAULTS: StreamConfig = {
   encoder: "software",
@@ -117,7 +117,6 @@ const H264_WS_DEFAULT_FPS = 60;
 const H264_WS_LOCAL_DEFAULT_QUALITY: StreamQualityPreset = "full";
 const H264_WS_REMOTE_DEFAULT_QUALITY: StreamQualityPreset = "auto";
 const CONTROL_BACKLOG_DROP_BYTES = 4096;
-const STREAM_CONFIG_SYNC_INTERVAL_MS = 1500;
 const STREAM_CONFIG_USER_CHANGE_GRACE_MS = 1000;
 const STREAM_ENCODER_VALUES = new Set<StreamEncoder>([
   "auto",
@@ -568,10 +567,8 @@ export function AppShell({
     };
 
     run();
-    const intervalId = window.setInterval(run, STREAM_CONFIG_SYNC_INTERVAL_MS);
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
     };
   }, [remoteStream, syncStreamConfig]);
 

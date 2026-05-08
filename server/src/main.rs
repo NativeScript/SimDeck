@@ -701,7 +701,7 @@ struct StreamQualityEnvironment {
     bits_per_pixel: u32,
 }
 
-const DEFAULT_LOCAL_STREAM_QUALITY_PROFILE: &str = "quality";
+const DEFAULT_LOCAL_STREAM_QUALITY_PROFILE: &str = "full";
 
 fn local_stream_quality_profile(
     low_latency: bool,
@@ -752,23 +752,23 @@ fn stream_quality_env_for_profile(profile: &str) -> anyhow::Result<StreamQuality
         "economy" => Ok(StreamQualityEnvironment {
             profile: "economy",
             max_edge: 1080,
-            fps: 24,
-            min_bitrate: 1_500_000,
-            bits_per_pixel: 3,
+            fps: 30,
+            min_bitrate: 3_500_000,
+            bits_per_pixel: 6,
         }),
         "low" => Ok(StreamQualityEnvironment {
             profile: "low",
             max_edge: 720,
             fps: 30,
-            min_bitrate: 900_000,
-            bits_per_pixel: 2,
+            min_bitrate: 2_000_000,
+            bits_per_pixel: 5,
         }),
         "tiny" => Ok(StreamQualityEnvironment {
             profile: "tiny",
             max_edge: 540,
-            fps: 24,
-            min_bitrate: 600_000,
-            bits_per_pixel: 2,
+            fps: 30,
+            min_bitrate: 1_200_000,
+            bits_per_pixel: 4,
         }),
         "ci-software" => Ok(StreamQualityEnvironment {
             profile: "ci-software",

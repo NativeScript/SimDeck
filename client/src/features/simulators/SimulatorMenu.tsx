@@ -76,6 +76,16 @@ export function SimulatorMenu({
     streamTransport === "mjpeg"
       ? MJPEG_STREAM_QUALITY_OPTIONS
       : H264_STREAM_QUALITY_OPTIONS;
+  const activeQualityOption = qualityOptions.some(
+    (option) => option.value === streamConfig.quality,
+  )
+    ? []
+    : [
+        {
+          label: streamQualityOptionLabel(streamConfig.quality, streamTransport),
+          value: streamConfig.quality,
+        },
+      ];
   const activeFpsOption = fpsOptions.some(
     (option) => option.value === streamConfig.fps,
   )
@@ -135,18 +145,24 @@ export function SimulatorMenu({
                     {formatStreamConfigSummary(streamConfig, streamTransport)}
                   </span>
                 </div>
-                <div aria-label="Transport" className="menu-segment">
-                  {STREAM_TRANSPORTS.map((option) => (
-                    <button
-                      className={`menu-option ${streamTransport === option.value ? "active" : ""}`}
-                      key={option.value}
-                      onClick={() => onStreamTransportChange(option.value)}
-                      type="button"
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
+                <label className="menu-field">
+                  <span className="menu-field-label">Transport</span>
+                  <select
+                    className="menu-select"
+                    onChange={(event) =>
+                      onStreamTransportChange(
+                        event.currentTarget.value as StreamTransport,
+                      )
+                    }
+                    value={streamTransport}
+                  >
+                    {STREAM_TRANSPORTS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <div aria-label="Encoder" className="menu-segment">
                   {STREAM_ENCODERS.map((option) => (
                     <button
@@ -171,18 +187,28 @@ export function SimulatorMenu({
                     </button>
                   ))}
                 </div>
-                <div aria-label="Quality" className="menu-segment">
-                  {qualityOptions.map((option) => (
-                    <button
-                      className={`menu-option ${streamConfig.quality === option.value ? "active" : ""}`}
-                      key={option.value}
-                      onClick={() => onStreamQualityChange(option.value)}
-                      type="button"
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
+                <label className="menu-field">
+                  <span className="menu-field-label">
+                    {streamTransport === "mjpeg"
+                      ? "JPEG quality"
+                      : "Resolution"}
+                  </span>
+                  <select
+                    className="menu-select"
+                    onChange={(event) =>
+                      onStreamQualityChange(
+                        event.currentTarget.value as StreamQualityPreset,
+                      )
+                    }
+                    value={streamConfig.quality}
+                  >
+                    {[...activeQualityOption, ...qualityOptions].map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
               <div className="menu-divider" />
               <div className="menu-actions">
@@ -267,8 +293,6 @@ const H264_STREAM_QUALITY_OPTIONS: Array<{
 }> = [
   { label: "Auto", value: "auto" },
   { label: "Full", value: "full" },
-  { label: "Max", value: "quality" },
-  { label: "Smooth", value: "smooth" },
   { label: "1280", value: "balanced" },
   { label: "1080", value: "economy" },
   { label: "720", value: "low" },
@@ -297,6 +321,27 @@ const MJPEG_QUALITY_LABELS: Partial<Record<StreamQualityPreset, string>> = {
   tiny: "JPEG 0.62",
 };
 
+const H264_QUALITY_LABELS: Partial<Record<StreamQualityPreset, string>> = {
+  auto: "Auto",
+  balanced: "1280px",
+  economy: "1080px",
+  full: "Full res",
+  low: "720px",
+  quality: "Full+",
+  smooth: "1170px",
+  tiny: "540px",
+};
+
+function streamQualityOptionLabel(
+  quality: StreamQualityPreset,
+  transport: StreamTransport,
+): string {
+  if (transport === "mjpeg") {
+    return MJPEG_QUALITY_LABELS[quality] ?? "JPEG quality";
+  }
+  return H264_QUALITY_LABELS[quality] ?? quality;
+}
+
 function MenuIcon() {
   return (
     <svg fill="currentColor" height="16" viewBox="0 0 16 16" width="16">
@@ -317,8 +362,9 @@ function formatStreamConfigSummary(
   const transportLabel =
     transport === "h264" ? "H264 WS" : transport.toUpperCase();
   const resolution =
-    typeof streamConfig.maxEdge === "number" && streamConfig.maxEdge > 0
+    H264_QUALITY_LABELS[streamConfig.quality] ??
+    (typeof streamConfig.maxEdge === "number" && streamConfig.maxEdge > 0
       ? `${streamConfig.maxEdge}px`
-      : "Full res";
+      : "Full res");
   return `${transportLabel} / ${resolution} / ${streamConfig.fps} fps`;
 }

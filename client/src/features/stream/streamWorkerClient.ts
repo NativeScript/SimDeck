@@ -36,7 +36,6 @@ const H264_WS_HEADER_BYTES = 40;
 const H264_WS_MAGIC = 0x53444831;
 const H264_WS_FLAG_KEYFRAME = 1 << 0;
 const H264_WS_FLAG_CONFIG = 1 << 1;
-const H264_WS_MAX_DECODE_QUEUE = 3;
 const H264_WS_LOCAL_AUTO_PROFILES: StreamQualityPreset[] = [
   "low",
   "economy",
@@ -61,6 +60,7 @@ const CONTROL_BACKLOG_DROP_BYTES = 4096;
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
 let activeWebRtcTelemetryChannel: RTCDataChannel | null = null;
 let activeInputSocket: WebSocket | null = null;
+let activeH264StreamSocket: WebSocket | null = null;
 let activeStreamClient: StreamWorkerClient | null = null;
 
 export type StreamBackend = "h264-ws" | "mjpeg" | "webrtc";
@@ -75,10 +75,11 @@ export function sendWebRtcControlMessage(
   );
 }
 
-export function sendWebRtcClientStats(stats: unknown): boolean {
-  return sendDataChannelMessage(
-    activeWebRtcTelemetryChannel,
-    JSON.stringify({ stats, type: "clientStats" }),
+export function sendStreamClientStats(stats: unknown): boolean {
+  const encoded = JSON.stringify({ stats, type: "clientStats" });
+  return (
+    sendDataChannelMessage(activeWebRtcTelemetryChannel, encoded) ||
+    sendWebSocketMessage(activeH264StreamSocket, encoded)
   );
 }
 
@@ -89,6 +90,17 @@ export function sendWebRtcStreamControl(options: {
   return sendDataChannelMessage(
     activeWebRtcControlChannel,
     JSON.stringify({ ...options, type: "streamControl" }),
+  );
+}
+
+function sendStreamQualityConfig(config: StreamConfig): boolean {
+  const encoded = JSON.stringify({
+    config: streamQualityPayload(config),
+    type: "streamQuality",
+  });
+  return (
+    sendDataChannelMessage(activeWebRtcControlChannel, encoded) ||
+    sendWebSocketMessage(activeH264StreamSocket, encoded)
   );
 }
 
@@ -456,19 +468,6 @@ class MjpegStreamClient implements StreamClientBackend {
       status: { detail: "Opening MJPEG stream", state: "connecting" },
     });
 
-    try {
-      await postStreamConfigWithAuthRetry(target.streamConfig, {
-        remote: target.remote,
-      });
-    } catch (error) {
-      if (!target.remote) {
-        throw error;
-      }
-    }
-    if (generation !== this.connectGeneration) {
-      return;
-    }
-
     const image = document.createElement("img");
     image.alt = "";
     image.className = "stream-video";
@@ -549,11 +548,6 @@ class MjpegStreamClient implements StreamClientBackend {
 
   async applyStreamConfig(config?: StreamConfig) {
     this.streamConfig = config;
-    if (config) {
-      await postStreamConfigWithAuthRetry(config, {
-        remote: this.streamTarget?.remote,
-      });
-    }
     const target = this.streamTarget;
     if (target && this.shouldReconnect) {
       this.connect({ ...target, streamConfig: config });
@@ -771,22 +765,9 @@ class H264WebSocketStreamClient implements StreamClientBackend {
       status: { detail: "Opening H264 WebSocket stream", state: "connecting" },
     });
 
-    try {
-      await postStreamConfigWithAuthRetry(effectiveConfig, {
-        remote: target.remote,
-      });
-    } catch (error) {
-      if (!target.remote) {
-        throw error;
-      }
-    }
-    if (generation !== this.connectGeneration) {
-      return;
-    }
-
     const socket = new WebSocket(
       webSocketApiUrl(
-        `/api/simulators/${encodeURIComponent(target.udid)}/h264`,
+        `/api/simulators/${encodeURIComponent(target.udid)}/h264${streamQualityQuery(effectiveConfig)}`,
       ),
     );
     socket.binaryType = "arraybuffer";
@@ -794,6 +775,7 @@ class H264WebSocketStreamClient implements StreamClientBackend {
     socket.addEventListener("open", () => {
       if (socket === this.streamSocket) {
         socket.binaryType = "arraybuffer";
+        activeH264StreamSocket = socket;
         this.startAdaptiveQuality(generation);
       }
     });
@@ -813,6 +795,9 @@ class H264WebSocketStreamClient implements StreamClientBackend {
       this.handleSocketMessage(event.data);
     });
     socket.addEventListener("close", () => {
+      if (activeH264StreamSocket === socket) {
+        activeH264StreamSocket = null;
+      }
       if (socket === this.streamSocket && this.shouldReconnect) {
         this.handleError("H264 WebSocket stream closed.");
       }
@@ -839,6 +824,9 @@ class H264WebSocketStreamClient implements StreamClientBackend {
     this.pendingFrameSequences.clear();
     this.h264DecodeTimestampUs = 0;
     this.streamSocket?.close();
+    if (activeH264StreamSocket === this.streamSocket) {
+      activeH264StreamSocket = null;
+    }
     this.streamSocket = null;
     this.inputSocket?.close();
     if (activeInputSocket === this.inputSocket) {
@@ -887,14 +875,21 @@ class H264WebSocketStreamClient implements StreamClientBackend {
     this.autoProfileStableSamples = 0;
     const effectiveConfig = h264WebSocketStreamConfig(config, this.autoProfile);
     this.streamConfig = config;
-    if (effectiveConfig) {
-      await postStreamConfigWithAuthRetry(effectiveConfig, {
-        remote: this.streamTarget?.remote,
-      });
+    this.clearAdaptiveQuality();
+    if (config?.quality === "auto") {
+      this.startAdaptiveQuality(this.connectGeneration);
     }
-    const target = this.streamTarget;
-    if (target && this.shouldReconnect) {
-      this.connect({ ...target, streamConfig: config });
+    if (effectiveConfig) {
+      if (!sendStreamQualityConfig(effectiveConfig)) {
+        await postStreamConfigWithAuthRetry(effectiveConfig, {
+          remote: this.streamTarget?.remote,
+        });
+      }
+      this.sendControl({
+        forceKeyframe: true,
+        snapshot: true,
+        type: "streamControl",
+      });
     }
   }
 
@@ -952,25 +947,6 @@ class H264WebSocketStreamClient implements StreamClientBackend {
       return;
     }
     this.stats.decodeQueueSize = decoder.decodeQueueSize;
-    if (
-      decoder.decodeQueueSize > H264_WS_MAX_DECODE_QUEUE &&
-      !frame.isKeyFrame
-    ) {
-      this.stats.droppedFrames += 1;
-      this.stats.decoderDroppedFrames += 1;
-      this.closePendingFrame();
-      this.closeDecoder();
-      this.pendingFrameSequences.clear();
-      this.waitingForKeyFrame = true;
-      this.stats.waitingForKeyFrame = true;
-      this.onMessage({ type: "stats", stats: { ...this.stats } });
-      this.sendControl({
-        forceKeyframe: true,
-        frameSequence: frame.sequence,
-        type: "streamControl",
-      });
-      return;
-    }
 
     const { EncodedVideoChunk } = webCodecsConstructors();
     if (!EncodedVideoChunk) {
@@ -1406,11 +1382,13 @@ class H264WebSocketStreamClient implements StreamClientBackend {
     if (!effectiveConfig) {
       return;
     }
-    await postStreamConfigWithAuthRetry(effectiveConfig, {
-      remote: this.streamTarget?.remote,
-    }).catch(() => {
-      // Stream-quality adaptation is opportunistic; the stream socket handles reachability.
-    });
+    if (!sendStreamQualityConfig(effectiveConfig)) {
+      await postStreamConfigWithAuthRetry(effectiveConfig, {
+        remote: this.streamTarget?.remote,
+      }).catch(() => {
+        // Stream-quality adaptation is opportunistic; the stream socket handles reachability.
+      });
+    }
     this.sendControl({ forceKeyframe: true, type: "streamControl" });
   }
 
@@ -1616,18 +1594,6 @@ class WebRtcStreamClient implements StreamClientBackend {
     });
 
     try {
-      try {
-        await postStreamConfigWithAuthRetry(target.streamConfig, {
-          remote: target.remote,
-        });
-      } catch (error) {
-        if (!target.remote) {
-          throw error;
-        }
-      }
-      if (generation !== this.connectGeneration) {
-        return;
-      }
       const health = await fetchHealth().catch(() => null);
       if (generation !== this.connectGeneration) {
         return;
@@ -1805,13 +1771,10 @@ class WebRtcStreamClient implements StreamClientBackend {
       return;
     }
     const generation = ++this.streamConfigGeneration;
-    await postStreamConfigWithAuthRetry(config, { remote: this.remoteMode });
-    if (generation !== this.streamConfigGeneration) {
-      return;
+    if (!sendStreamQualityConfig(config)) {
+      await postStreamConfigWithAuthRetry(config, { remote: this.remoteMode });
     }
-    const target = this.streamTarget;
-    if (target && this.shouldReconnect) {
-      await this.connect({ ...target, streamConfig: config });
+    if (generation !== this.streamConfigGeneration) {
       return;
     }
     this.sendControl({ forceKeyframe: true, type: "streamControl" });
@@ -2283,20 +2246,9 @@ class WebRtcStreamClient implements StreamClientBackend {
       url: window.location.href,
       userAgent: window.navigator.userAgent,
     };
-    if (sendWebRtcClientStats(payload) || this.remoteMode) {
+    if (sendStreamClientStats(payload) || this.remoteMode) {
       return;
     }
-    void fetch(
-      new URL(apiUrl("/api/client-stream-stats"), window.location.href),
-      {
-        body: JSON.stringify(payload),
-        cache: "no-store",
-        headers: apiHeaders(),
-        method: "POST",
-      },
-    ).catch(() => {
-      // Diagnostics only.
-    });
   }
 
   private drawVideoFrame = () => {
@@ -2573,14 +2525,34 @@ async function postStreamConfigWithAuthRetry(
 
 function postStreamConfig(config: StreamConfig): Promise<Response> {
   return fetch(apiUrl("/api/stream-quality"), {
-    body: JSON.stringify({
-      fps: config.fps,
-      profile: config.quality === "auto" ? "economy" : config.quality,
-      videoCodec: config.encoder,
-    }),
+    body: JSON.stringify(streamQualityPayload(config)),
     headers: apiHeaders(),
     method: "POST",
   });
+}
+
+function streamQualityPayload(config: StreamConfig): {
+  fps: number;
+  profile: StreamQualityPreset;
+  videoCodec: string;
+} {
+  return {
+    fps: config.fps,
+    profile: config.quality === "auto" ? "economy" : config.quality,
+    videoCodec: config.encoder,
+  };
+}
+
+function streamQualityQuery(config: StreamConfig | undefined): string {
+  if (!config) {
+    return "";
+  }
+  const params = new URLSearchParams();
+  const payload = streamQualityPayload(config);
+  params.set("fps", String(payload.fps));
+  params.set("profile", payload.profile);
+  params.set("videoCodec", payload.videoCodec);
+  return `?${params.toString()}`;
 }
 
 function postWebRtcOffer(
@@ -2593,6 +2565,9 @@ function postWebRtcOffer(
       body: JSON.stringify({
         clientId: target.clientId,
         sdp: localDescription.sdp,
+        streamConfig: target.streamConfig
+          ? streamQualityPayload(target.streamConfig)
+          : undefined,
         type: localDescription.type,
       }),
       headers: apiHeaders(),

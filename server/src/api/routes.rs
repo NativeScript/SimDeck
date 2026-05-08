@@ -140,16 +140,34 @@ struct TouchSequencePayload {
     events: Vec<TouchSequenceEvent>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct StreamQualityPayload {
-    profile: Option<String>,
+pub(crate) struct StreamQualityPayload {
+    pub(crate) profile: Option<String>,
     #[serde(rename = "videoCodec")]
-    video_codec: Option<String>,
-    max_edge: Option<u32>,
-    fps: Option<u32>,
-    min_bitrate: Option<u32>,
-    bits_per_pixel: Option<u32>,
+    pub(crate) video_codec: Option<String>,
+    pub(crate) max_edge: Option<u32>,
+    pub(crate) fps: Option<u32>,
+    pub(crate) min_bitrate: Option<u32>,
+    pub(crate) bits_per_pixel: Option<u32>,
+}
+
+impl StreamQualityPayload {
+    fn has_any_value(&self) -> bool {
+        self.profile
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+            || self
+                .video_codec
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+            || self.max_edge.is_some()
+            || self.fps.is_some()
+            || self.min_bitrate.is_some()
+            || self.bits_per_pixel.is_some()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -233,30 +251,29 @@ const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
         id: "economy",
         label: "Economy",
         max_edge: 1080,
-        fps: 24,
-        min_bitrate: 1_500_000,
-        bits_per_pixel: 3,
+        fps: 30,
+        min_bitrate: 3_500_000,
+        bits_per_pixel: 6,
     },
     StreamQualityProfile {
         id: "low",
         label: "Low",
         max_edge: 720,
         fps: 30,
-        min_bitrate: 900_000,
-        bits_per_pixel: 2,
+        min_bitrate: 2_000_000,
+        bits_per_pixel: 5,
     },
     StreamQualityProfile {
         id: "tiny",
         label: "Tiny",
         max_edge: 540,
-        fps: 24,
-        min_bitrate: 600_000,
-        bits_per_pixel: 2,
+        fps: 30,
+        min_bitrate: 1_200_000,
+        bits_per_pixel: 4,
     },
 ];
 
-const VISIBLE_STREAM_QUALITY_PROFILE_IDS: &[&str] =
-    &["full", "quality", "balanced", "economy", "low", "tiny"];
+const VISIBLE_STREAM_QUALITY_PROFILE_IDS: &[&str] = &["full", "balanced", "economy", "low", "tiny"];
 
 static STREAM_CONFIG_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
 
@@ -716,6 +733,16 @@ async fn set_stream_quality(
     State(state): State<AppState>,
     Json(payload): Json<StreamQualityPayload>,
 ) -> Result<Json<Value>, AppError> {
+    apply_stream_quality_payload(&state, &payload).map(json)
+}
+
+pub(crate) fn apply_stream_quality_payload(
+    state: &AppState,
+    payload: &StreamQualityPayload,
+) -> Result<Value, AppError> {
+    if !payload.has_any_value() {
+        return Ok(stream_quality_response(&state.config));
+    }
     let video_codec = payload
         .video_codec
         .as_deref()
@@ -749,7 +776,7 @@ async fn set_stream_quality(
         && current.profile == next_profile
         && current.video_codec == next_video_codec
     {
-        return Ok(json(json_value!(stream_quality_response(&state.config))));
+        return Ok(stream_quality_response(&state.config));
     }
 
     env::set_var("SIMDECK_REALTIME_MAX_EDGE", limits.max_edge.to_string());
@@ -773,7 +800,7 @@ async fn set_stream_quality(
     }
 
     state.registry.reconfigure_video_encoders();
-    Ok(json(json_value!(stream_quality_response(&state.config))))
+    Ok(stream_quality_response(&state.config))
 }
 
 fn stream_quality_response(config: &Config) -> Value {
@@ -1340,9 +1367,10 @@ async fn control_socket(
 async fn h264_socket(
     State(state): State<AppState>,
     Path(udid): Path<String>,
+    Query(query): Query<StreamQualityPayload>,
     websocket: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    websocket.on_upgrade(move |socket| handle_h264_socket(state, udid, socket))
+    websocket.on_upgrade(move |socket| handle_h264_socket(state, udid, query, socket))
 }
 
 async fn mjpeg_stream(
@@ -1549,7 +1577,17 @@ fn mjpeg_frame_part(frame: &crate::transport::packet::JpegFramePacket) -> Bytes 
     part.freeze()
 }
 
-async fn handle_h264_socket(state: AppState, udid: String, socket: WebSocket) {
+async fn handle_h264_socket(
+    state: AppState,
+    udid: String,
+    initial_quality: StreamQualityPayload,
+    socket: WebSocket,
+) {
+    if initial_quality.has_any_value() {
+        if let Err(error) = apply_stream_quality_payload(&state, &initial_quality) {
+            tracing::debug!("Failed to apply H264 WebSocket stream quality for {udid}: {error}");
+        }
+    }
     let session = match state.registry.get_or_create_async(&udid).await {
         Ok(session) => session,
         Err(error) => {
@@ -1600,7 +1638,7 @@ async fn handle_h264_socket(state: AppState, udid: String, socket: WebSocket) {
                         break;
                     }
                 };
-                if !handle_h264_socket_control_message(&session, &message) {
+                if !handle_h264_socket_message(&state, &session, &message) {
                     break;
                 }
             }
@@ -1647,7 +1685,8 @@ async fn handle_h264_socket(state: AppState, udid: String, socket: WebSocket) {
     }
 }
 
-fn handle_h264_socket_control_message(
+fn handle_h264_socket_message(
+    state: &AppState,
     session: &SimulatorSession,
     message: &Message,
 ) -> bool {
@@ -1660,28 +1699,51 @@ fn handle_h264_socket_control_message(
         Message::Close(_) => return false,
         Message::Ping(_) | Message::Pong(_) => return true,
     };
-    let Ok(value) = serde_json::from_str::<Value>(text) else {
+    let Ok(message) = serde_json::from_str::<H264SocketMessage>(text) else {
         return true;
     };
-    match value.get("type").and_then(Value::as_str) {
-        Some("streamControl") => {}
-        _ => return true,
-    }
-    if value
-        .get("forceKeyframe")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        session.request_keyframe();
-    }
-    if value
-        .get("snapshot")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        session.request_refresh();
+    match message {
+        H264SocketMessage::ClientStats { stats } => {
+            if !stats.client_id.trim().is_empty() && !stats.kind.trim().is_empty() {
+                state.metrics.record_client_stream_stats(*stats);
+            }
+        }
+        H264SocketMessage::StreamControl {
+            force_keyframe,
+            snapshot,
+        } => {
+            if force_keyframe.unwrap_or(false) {
+                session.request_keyframe();
+            }
+            if snapshot.unwrap_or(false) {
+                session.request_refresh();
+            }
+        }
+        H264SocketMessage::StreamQuality { config } => {
+            if let Err(error) = apply_stream_quality_payload(state, &config) {
+                tracing::debug!("Failed to apply H264 WebSocket stream quality: {error}");
+            } else {
+                session.request_keyframe();
+            }
+        }
     }
     true
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum H264SocketMessage {
+    ClientStats {
+        stats: Box<ClientStreamStats>,
+    },
+    StreamControl {
+        #[serde(rename = "forceKeyframe")]
+        force_keyframe: Option<bool>,
+        snapshot: Option<bool>,
+    },
+    StreamQuality {
+        config: StreamQualityPayload,
+    },
 }
 
 fn h264_ws_frame_is_supported(frame: &FramePacket) -> bool {
@@ -4295,5 +4357,4 @@ mod tests {
         assert_eq!(&message[40..44], b"avcc");
         assert_eq!(&message[44..], b"h264-sample");
     }
-
 }

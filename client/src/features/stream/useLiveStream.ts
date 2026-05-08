@@ -7,7 +7,7 @@ import type { Size } from "../viewport/types";
 import { createEmptyStreamStats } from "./stats";
 import {
   buildStreamTarget,
-  sendWebRtcClientStats,
+  sendStreamClientStats,
   StreamWorkerClient,
   type StreamBackend,
   type VisualArtifactSample,
@@ -25,7 +25,7 @@ const FPS_SAMPLE_INTERVAL_MS = 1000;
 const CLIENT_TELEMETRY_INTERVAL_MS = 1000;
 const REMOTE_CLIENT_TELEMETRY_INTERVAL_MS = 5000;
 const CLIENT_TELEMETRY_ID_STORAGE_KEY = "simdeck.streamClientId";
-const VISUAL_ARTIFACT_TELEMETRY_INTERVAL_MS = 1000;
+const VISUAL_ARTIFACT_TELEMETRY_INTERVAL_MS = 30000;
 
 interface UseLiveStreamOptions {
   canvasElement: HTMLCanvasElement | null;
@@ -368,7 +368,13 @@ export function useLiveStream({
         visualSampleCount: latestVisualArtifactSampleCountRef.current,
         visibilityState: document.visibilityState,
       };
-      if (sendWebRtcClientStats(payload) || remote) {
+      if (
+        sendStreamClientStats(payload) ||
+        remote ||
+        streamTransport === "h264" ||
+        streamTransport === "webrtc" ||
+        streamTransport === "auto"
+      ) {
         return;
       }
       void fetch(buildClientTelemetryUrl(), {
@@ -389,7 +395,7 @@ export function useLiveStream({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [remote, simulator?.udid]);
+  }, [remote, simulator?.udid, streamTransport]);
 
   return {
     deviceNaturalSize,

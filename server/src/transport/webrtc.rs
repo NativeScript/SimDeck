@@ -1,4 +1,7 @@
-use crate::api::routes::{run_control_message, AppState, ControlMessage};
+use crate::api::routes::{
+    apply_stream_quality_payload, run_control_message, AppState, ControlMessage,
+    StreamQualityPayload,
+};
 use crate::error::AppError;
 use crate::metrics::counters::ClientStreamStats;
 use bytes::Bytes;
@@ -63,6 +66,8 @@ struct WebRtcMediaStreamToken {
 pub struct WebRtcOfferPayload {
     pub client_id: Option<String>,
     pub sdp: String,
+    #[serde(rename = "streamConfig")]
+    pub stream_config: Option<StreamQualityPayload>,
     #[serde(rename = "type")]
     pub kind: String,
     pub transport: Option<String>,
@@ -106,6 +111,9 @@ pub async fn create_answer(
         return Err(AppError::bad_request(
             "WebRTC preview supports media tracks only.",
         ));
+    }
+    if let Some(stream_config) = payload.stream_config.as_ref() {
+        apply_stream_quality_payload(&state, stream_config)?;
     }
     info!(
         "WebRTC offer for {udid}: remote_candidates={} remote_candidate_types={} ice_servers={} ice_transport_policy={}",
@@ -422,6 +430,13 @@ fn attach_control_data_channel(
                         }
                         let _ = stream_control_tx.send(command);
                     }
+                    WebRtcDataChannelMessage::StreamQuality { config } => {
+                        if let Err(error) = apply_stream_quality_payload(&state, &config) {
+                            warn!("WebRTC stream quality update failed for {udid}: {error}");
+                        } else {
+                            session.request_keyframe();
+                        }
+                    }
                 }
                 return;
             }
@@ -499,6 +514,9 @@ enum WebRtcDataChannelMessage {
         #[serde(rename = "forceKeyframe")]
         force_keyframe: Option<bool>,
         snapshot: Option<bool>,
+    },
+    StreamQuality {
+        config: StreamQualityPayload,
     },
 }
 
