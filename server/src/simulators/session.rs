@@ -226,6 +226,7 @@ impl SimulatorSession {
     }
 
     pub fn reconfigure_video_encoder(&self) {
+        *self.inner.latest_keyframe.write().unwrap() = None;
         self.inner.last_keyframe_ms.store(0, Ordering::Relaxed);
         self.inner.last_refresh_ms.store(0, Ordering::Relaxed);
         self.inner.native.reconfigure_video_encoder();

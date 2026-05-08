@@ -6,6 +6,7 @@ import type {
   StreamEncoder,
   StreamFps,
   StreamQualityPreset,
+  StreamTransport,
 } from "../stream/streamTypes";
 import { SimulatorRow } from "./SimulatorRow";
 
@@ -25,6 +26,7 @@ interface SimulatorMenuProps {
   onStreamEncoderChange: (encoder: StreamEncoder) => void;
   onStreamFpsChange: (fps: StreamFps) => void;
   onStreamQualityChange: (quality: StreamQualityPreset) => void;
+  onStreamTransportChange: (transport: StreamTransport) => void;
   onToggleAppearance: () => void;
   onToggleDebug: () => void;
   onToggleMenu: () => void;
@@ -34,6 +36,7 @@ interface SimulatorMenuProps {
   selectedSimulator: SimulatorMetadata | null;
   setSelectedUDID: (udid: string) => void;
   streamConfig: StreamConfig;
+  streamTransport: StreamTransport;
   touchOverlayVisible: boolean;
 }
 
@@ -53,6 +56,7 @@ export function SimulatorMenu({
   onStreamEncoderChange,
   onStreamFpsChange,
   onStreamQualityChange,
+  onStreamTransportChange,
   onToggleAppearance,
   onToggleDebug,
   onToggleMenu,
@@ -62,11 +66,23 @@ export function SimulatorMenu({
   selectedSimulator,
   setSelectedUDID,
   streamConfig,
+  streamTransport,
   touchOverlayVisible,
 }: SimulatorMenuProps) {
   const fpsOptions = remoteStream
     ? REMOTE_STREAM_FPS_OPTIONS
     : LOCAL_STREAM_FPS_OPTIONS;
+  const qualityOptions = H264_STREAM_QUALITY_OPTIONS;
+  const activeQualityOption = qualityOptions.some(
+    (option) => option.value === streamConfig.quality,
+  )
+    ? []
+    : [
+        {
+          label: streamQualityOptionLabel(streamConfig.quality),
+          value: streamConfig.quality,
+        },
+      ];
   const activeFpsOption = fpsOptions.some(
     (option) => option.value === streamConfig.fps,
   )
@@ -123,9 +139,27 @@ export function SimulatorMenu({
                 <div className="menu-section-heading">
                   <span className="menu-section-title">Stream</span>
                   <span className="menu-section-meta">
-                    {formatStreamConfigSummary(streamConfig)}
+                    {formatStreamConfigSummary(streamConfig, streamTransport)}
                   </span>
                 </div>
+                <label className="menu-field">
+                  <span className="menu-field-label">Transport</span>
+                  <select
+                    className="menu-select"
+                    onChange={(event) =>
+                      onStreamTransportChange(
+                        event.currentTarget.value as StreamTransport,
+                      )
+                    }
+                    value={streamTransport}
+                  >
+                    {STREAM_TRANSPORTS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <div aria-label="Encoder" className="menu-segment">
                   {STREAM_ENCODERS.map((option) => (
                     <button
@@ -150,18 +184,26 @@ export function SimulatorMenu({
                     </button>
                   ))}
                 </div>
-                <div aria-label="Quality" className="menu-segment">
-                  {STREAM_QUALITY_OPTIONS.map((option) => (
-                    <button
-                      className={`menu-option ${streamConfig.quality === option.value ? "active" : ""}`}
-                      key={option.value}
-                      onClick={() => onStreamQualityChange(option.value)}
-                      type="button"
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
+                <label className="menu-field">
+                  <span className="menu-field-label">Resolution</span>
+                  <select
+                    className="menu-select"
+                    onChange={(event) =>
+                      onStreamQualityChange(
+                        event.currentTarget.value as StreamQualityPreset,
+                      )
+                    }
+                    value={streamConfig.quality}
+                  >
+                    {[...activeQualityOption, ...qualityOptions].map(
+                      (option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                </label>
               </div>
               <div className="menu-divider" />
               <div className="menu-actions">
@@ -221,6 +263,12 @@ const STREAM_ENCODERS: Array<{ label: string; value: StreamEncoder }> = [
   { label: "Software", value: "software" },
 ];
 
+const STREAM_TRANSPORTS: Array<{ label: string; value: StreamTransport }> = [
+  { label: "Auto", value: "auto" },
+  { label: "WebRTC", value: "webrtc" },
+  { label: "H264 WS", value: "h264" },
+];
+
 const LOCAL_STREAM_FPS_OPTIONS: Array<{ label: string; value: StreamFps }> = [
   { label: "30", value: 30 },
   { label: "60", value: 60 },
@@ -233,16 +281,32 @@ const REMOTE_STREAM_FPS_OPTIONS: Array<{ label: string; value: StreamFps }> = [
   { label: "60", value: 60 },
 ];
 
-const STREAM_QUALITY_OPTIONS: Array<{
+const H264_STREAM_QUALITY_OPTIONS: Array<{
   label: string;
   value: StreamQualityPreset;
 }> = [
-  { label: "Full", value: "quality" },
+  { label: "Auto", value: "auto" },
+  { label: "Full", value: "full" },
   { label: "1280", value: "balanced" },
   { label: "1080", value: "economy" },
   { label: "720", value: "low" },
   { label: "540", value: "tiny" },
 ];
+
+const H264_QUALITY_LABELS: Partial<Record<StreamQualityPreset, string>> = {
+  auto: "Auto",
+  balanced: "1280px",
+  economy: "1080px",
+  full: "Full res",
+  low: "720px",
+  quality: "Full+",
+  smooth: "1170px",
+  tiny: "540px",
+};
+
+function streamQualityOptionLabel(quality: StreamQualityPreset): string {
+  return H264_QUALITY_LABELS[quality] ?? quality;
+}
 
 function MenuIcon() {
   return (
@@ -252,10 +316,16 @@ function MenuIcon() {
   );
 }
 
-function formatStreamConfigSummary(streamConfig: StreamConfig): string {
+function formatStreamConfigSummary(
+  streamConfig: StreamConfig,
+  transport: StreamTransport,
+): string {
+  const transportLabel =
+    transport === "h264" ? "H264 WS" : transport.toUpperCase();
   const resolution =
-    typeof streamConfig.maxEdge === "number" && streamConfig.maxEdge > 0
+    H264_QUALITY_LABELS[streamConfig.quality] ??
+    (typeof streamConfig.maxEdge === "number" && streamConfig.maxEdge > 0
       ? `${streamConfig.maxEdge}px`
-      : "Full res";
-  return `${resolution} / ${streamConfig.fps} fps`;
+      : "Full res");
+  return `${transportLabel} / ${resolution} / ${streamConfig.fps} fps`;
 }
