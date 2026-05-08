@@ -30,6 +30,13 @@ interface SimulatorViewportProps {
   isLoading: boolean;
   isStreamError: boolean;
   isPanning: boolean;
+  onChromeButtonEvent: (
+    button: string,
+    phase: "down" | "up",
+    usagePage?: number,
+    usage?: number,
+  ) => void;
+  chromeButtonUrl: (button: string, pressed?: boolean) => string;
   onChromeLoad: () => void;
   onPanPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
   onPanPointerUp: () => void;
@@ -83,6 +90,8 @@ export function SimulatorViewport({
   isLoading,
   isStreamError,
   isPanning,
+  onChromeButtonEvent,
+  chromeButtonUrl,
   onChromeLoad,
   onPanPointerMove,
   onPanPointerUp,
@@ -164,12 +173,15 @@ export function SimulatorViewport({
                   accessibilityPickerActive={accessibilityPickerActive}
                   accessibilityRoots={accessibilityRoots}
                   accessibilitySelectedId={accessibilitySelectedId}
+                  chromeProfile={chromeProfile}
                   chromeScreenStyle={chromeScreenStyle}
                   chromeUrl={chromeUrl}
+                  chromeButtonUrl={chromeButtonUrl}
                   hasFrame={hasFrame}
                   isBooted={selectedSimulator.isBooted}
                   isLoadingStream={showScreenLoading}
                   isStreamError={isStreamError}
+                  onChromeButtonEvent={onChromeButtonEvent}
                   onChromeLoad={onChromeLoad}
                   onPanPointerCancel={onPanPointerUp}
                   onPanPointerMove={onPanPointerMove}

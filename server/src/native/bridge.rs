@@ -117,6 +117,47 @@ pub struct ChromeProfile {
     pub corner_radius: f64,
     #[serde(rename = "hasScreenMask", default)]
     pub has_screen_mask: bool,
+    #[serde(default)]
+    pub buttons: Vec<ChromeButtonProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChromeButtonProfile {
+    pub name: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(rename = "type", default)]
+    pub button_type: Option<String>,
+    #[serde(rename = "imageName", default)]
+    pub image_name: Option<String>,
+    #[serde(rename = "imageDownName", default)]
+    pub image_down_name: Option<String>,
+    #[serde(rename = "imageDownDrawMode", default)]
+    pub image_down_draw_mode: Option<String>,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    #[serde(default)]
+    pub anchor: Option<String>,
+    #[serde(default)]
+    pub align: Option<String>,
+    #[serde(rename = "onTop", default)]
+    pub on_top: bool,
+    #[serde(rename = "usagePage", default)]
+    pub usage_page: Option<u32>,
+    #[serde(default)]
+    pub usage: Option<u32>,
+    #[serde(rename = "normalOffset", default)]
+    pub normal_offset: Option<ChromeButtonOffset>,
+    #[serde(rename = "rolloverOffset", default)]
+    pub rollover_offset: Option<ChromeButtonOffset>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChromeButtonOffset {
+    pub x: f64,
+    pub y: f64,
 }
 
 #[derive(Default, Clone)]
@@ -201,11 +242,44 @@ impl NativeBridge {
         serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))
     }
 
-    pub fn chrome_png(&self, udid: &str) -> Result<Vec<u8>, AppError> {
+    pub fn chrome_png_with_buttons(
+        &self,
+        udid: &str,
+        include_buttons: bool,
+    ) -> Result<Vec<u8>, AppError> {
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
         unsafe {
             let mut error = ptr::null_mut();
-            let bytes = ffi::xcw_native_render_chrome_png(udid.as_ptr(), &mut error);
+            let bytes =
+                ffi::xcw_native_render_chrome_png(udid.as_ptr(), include_buttons, &mut error);
+            if bytes.data.is_null() {
+                return Err(
+                    take_error(error).unwrap_or_else(|| AppError::native("Unknown native error."))
+                );
+            }
+            let data = std::slice::from_raw_parts(bytes.data, bytes.length).to_vec();
+            ffi::xcw_native_free_bytes(bytes);
+            Ok(data)
+        }
+    }
+
+    pub fn chrome_button_png(
+        &self,
+        udid: &str,
+        button_name: &str,
+        pressed: bool,
+    ) -> Result<Vec<u8>, AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let button_name =
+            CString::new(button_name).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            let bytes = ffi::xcw_native_render_chrome_button_png(
+                udid.as_ptr(),
+                button_name.as_ptr(),
+                pressed,
+                &mut error,
+            );
             if bytes.data.is_null() {
                 return Err(
                     take_error(error).unwrap_or_else(|| AppError::native("Unknown native error."))
@@ -364,6 +438,34 @@ impl NativeBridge {
                     udid.as_ptr(),
                     button.as_ptr(),
                     duration_ms,
+                    &mut error,
+                ),
+                error,
+            )
+        }
+    }
+
+    pub fn send_button(
+        &self,
+        udid: &str,
+        button: &str,
+        pressed: bool,
+        usage_page: Option<u32>,
+        usage: Option<u32>,
+    ) -> Result<(), AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let button = CString::new(button).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let has_usage = usage_page.is_some() && usage.is_some();
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_send_button(
+                    udid.as_ptr(),
+                    button.as_ptr(),
+                    pressed,
+                    has_usage,
+                    usage_page.unwrap_or(0),
+                    usage.unwrap_or(0),
                     &mut error,
                 ),
                 error,
@@ -691,6 +793,50 @@ impl NativeSession {
         }
     }
 
+    pub fn send_edge_touch(&self, x: f64, y: f64, phase: &str, edge: u32) -> Result<(), AppError> {
+        let phase = CString::new(phase).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_send_edge_touch(
+                    self.handle,
+                    x,
+                    y,
+                    phase.as_ptr(),
+                    edge,
+                    &mut error,
+                ),
+                error,
+            )
+        }
+    }
+
+    pub fn send_multitouch(
+        &self,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        phase: &str,
+    ) -> Result<(), AppError> {
+        let phase = CString::new(phase).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_send_multitouch(
+                    self.handle,
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    phase.as_ptr(),
+                    &mut error,
+                ),
+                error,
+            )
+        }
+    }
+
     pub fn send_key(&self, key_code: u16, modifiers: u32) -> Result<(), AppError> {
         unsafe {
             let mut error = ptr::null_mut();
@@ -706,6 +852,48 @@ impl NativeSession {
             let mut error = ptr::null_mut();
             bool_result(
                 ffi::xcw_native_session_press_home(self.handle, &mut error),
+                error,
+            )
+        }
+    }
+
+    pub fn press_button(&self, button: &str, duration_ms: u32) -> Result<(), AppError> {
+        let button = CString::new(button).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_press_button(
+                    self.handle,
+                    button.as_ptr(),
+                    duration_ms,
+                    &mut error,
+                ),
+                error,
+            )
+        }
+    }
+
+    pub fn send_button(
+        &self,
+        button: &str,
+        pressed: bool,
+        usage_page: Option<u32>,
+        usage: Option<u32>,
+    ) -> Result<(), AppError> {
+        let button = CString::new(button).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let has_usage = usage_page.is_some() && usage.is_some();
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_send_button(
+                    self.handle,
+                    button.as_ptr(),
+                    pressed,
+                    has_usage,
+                    usage_page.unwrap_or(0),
+                    usage.unwrap_or(0),
+                    &mut error,
+                ),
                 error,
             )
         }

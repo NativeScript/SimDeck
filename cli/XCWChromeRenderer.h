@@ -6,6 +6,13 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (nullable NSData *)PNGDataForDeviceName:(NSString *)deviceName
                                     error:(NSError * _Nullable * _Nullable)error;
++ (nullable NSData *)PNGDataForDeviceName:(NSString *)deviceName
+                            includeButtons:(BOOL)includeButtons
+                                      error:(NSError * _Nullable * _Nullable)error;
++ (nullable NSData *)buttonPNGDataForDeviceName:(NSString *)deviceName
+                                     buttonName:(NSString *)buttonName
+                                        pressed:(BOOL)pressed
+                                          error:(NSError * _Nullable * _Nullable)error;
 + (nullable NSData *)screenMaskPNGDataForDeviceName:(NSString *)deviceName
                                               error:(NSError * _Nullable * _Nullable)error;
 + (nullable NSDictionary<NSString *, id> *)profileForDeviceName:(NSString *)deviceName

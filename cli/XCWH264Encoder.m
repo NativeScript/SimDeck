@@ -1103,8 +1103,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     int32_t sourceWidth = (int32_t)CVPixelBufferGetWidth(pixelBuffer);
     int32_t sourceHeight = (int32_t)CVPixelBufferGetHeight(pixelBuffer);
     OSType sourcePixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
-    BOOL shouldCopyStableRealtimeBuffer = _realtimeStreamMode || _lowLatencyMode;
-    if (sourceWidth == targetWidth && sourceHeight == targetHeight && !shouldCopyStableRealtimeBuffer) {
+    if (sourceWidth == targetWidth && sourceHeight == targetHeight) {
         CVPixelBufferRetain(pixelBuffer);
         return pixelBuffer;
     }

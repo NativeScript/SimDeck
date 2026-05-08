@@ -70,6 +70,7 @@ Private simulator behavior is implemented locally in:
 - Accessibility bridge: `cli/XCWAccessibilityBridge.*`
 
 The current repo uses the private boot path, private display bridge, and private accessibility translation bridge directly. The browser streams frames from that bridge, injects touch and keyboard events through the same native session layer, inspects accessibility through `AccessibilityPlatformTranslation`, and renders device chrome from `cli/XCWChromeRenderer.*`.
+Physical chrome button support uses DeviceKit `chrome.json` input geometry for browser hit targets. Volume, action, and mute buttons dispatch through `IndigoHIDMessageForHIDArbitrary` with consumer/telephony HID usage pairs from the device chrome metadata; home, lock, and app-switcher remain on the existing SimulatorKit button paths.
 
 ## Build and Run
 

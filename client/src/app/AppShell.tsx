@@ -22,6 +22,7 @@ import {
   openAppSwitcher,
   openSimulatorUrl,
   pressHome,
+  pressSimulatorButton,
   rotateLeft,
   rotateRight,
   simulatorControlSocketUrl,
@@ -142,10 +143,28 @@ interface StreamQualityResponse {
   videoCodec?: string;
 }
 
-function buildChromeUrl(udid: string, stamp: number): string {
+function buildChromeUrl(
+  udid: string,
+  stamp: number,
+  includeButtons = true,
+): string {
   return buildAuthenticatedAssetUrl(
     `/api/simulators/${udid}/chrome.png`,
     stamp,
+    includeButtons ? undefined : { buttons: "false" },
+  );
+}
+
+function buildChromeButtonUrl(
+  udid: string,
+  button: string,
+  pressed: boolean,
+  stamp: number,
+): string {
+  return buildAuthenticatedAssetUrl(
+    `/api/simulators/${udid}/chrome-button/${encodeURIComponent(button)}.png`,
+    stamp,
+    pressed ? { pressed: "true" } : undefined,
   );
 }
 
@@ -156,9 +175,16 @@ function buildScreenMaskUrl(udid: string, stamp: number): string {
   );
 }
 
-function buildAuthenticatedAssetUrl(path: string, stamp: number): string {
+function buildAuthenticatedAssetUrl(
+  path: string,
+  stamp: number,
+  params?: Record<string, string>,
+): string {
   const url = new URL(apiUrl(path), window.location.href);
   url.searchParams.set("stamp", String(stamp));
+  for (const [key, value] of Object.entries(params ?? {})) {
+    url.searchParams.set(key, value);
+  }
   const token = accessTokenFromLocation();
   if (token) {
     url.searchParams.set("simdeckToken", token);
@@ -688,9 +714,28 @@ export function AppShell({
   const autoViewportOffsetY =
     viewMode === "manual" ? 0 : -zoomDockReservedHeight / 2;
   const screenAspect = screenAspectRatio(effectiveDeviceNaturalSize);
+  const chromeHasInteractiveButtons = Boolean(
+    viewportChromeProfile?.buttons?.length,
+  );
   const chromeUrl = selectedSimulator
-    ? buildChromeUrl(selectedSimulator.udid, streamStamp)
+    ? buildChromeUrl(
+        selectedSimulator.udid,
+        streamStamp,
+        !chromeHasInteractiveButtons,
+      )
     : "";
+  const chromeButtonUrl = useCallback(
+    (button: string, pressed = false) =>
+      selectedSimulator
+        ? buildChromeButtonUrl(
+            selectedSimulator.udid,
+            button,
+            pressed,
+            streamStamp,
+          )
+        : "",
+    [selectedSimulator?.udid, streamStamp],
+  );
   const chromeRequired = Boolean(
     (shouldRenderChrome && !chromeProfileReady) ||
     (viewportChromeProfile && chromeUrl),
@@ -1126,7 +1171,40 @@ export function AppShell({
       }
       sendTouchControl(selectedSimulator.udid, phase, coords);
     },
+    onEdgeTouch: (phase, coords, edge) => {
+      if (!selectedSimulator) {
+        return;
+      }
+      if (phase === "began" && accessibilitySelectedId) {
+        setAccessibilitySelectedId("");
+        setAccessibilityHoveredId(null);
+      }
+      sendControl(selectedSimulator.udid, {
+        type: "edgeTouch",
+        ...coords,
+        phase,
+        edge,
+      });
+    },
+    onMultiTouch: (phase: TouchPhase, first: Point, second: Point) => {
+      if (!selectedSimulator) {
+        return;
+      }
+      if (phase === "began" && accessibilitySelectedId) {
+        setAccessibilitySelectedId("");
+        setAccessibilityHoveredId(null);
+      }
+      sendControl(selectedSimulator.udid, {
+        type: "multiTouch",
+        x1: first.x,
+        y1: first.y,
+        x2: second.x,
+        y2: second.y,
+        phase,
+      });
+    },
     onTouchPreview: showTouchIndicator,
+    onMultiTouchPreview: showTouchIndicators,
     pan,
     rotationQuarterTurns,
     setPan,
@@ -1487,11 +1565,22 @@ export function AppShell({
   }
 
   function showTouchIndicator(phase: TouchPhase, coords: Point) {
+    showTouchIndicators(phase, [coords]);
+  }
+
+  function showTouchIndicators(phase: TouchPhase, coords: Point[]) {
     if (!touchOverlayVisible) {
       return;
     }
 
-    setTouchIndicators([{ id: 1, phase, x: coords.x, y: coords.y }]);
+    setTouchIndicators(
+      coords.map((coord, index) => ({
+        id: index + 1,
+        phase,
+        x: coord.x,
+        y: coord.y,
+      })),
+    );
     if (touchIndicatorTimeoutRef.current) {
       clearTimeout(touchIndicatorTimeoutRef.current);
       touchIndicatorTimeoutRef.current = 0;
@@ -1586,6 +1675,41 @@ export function AppShell({
     void runAction(() =>
       launchSimulatorBundle(selectedSimulator.udid, { bundleId: trimmed }),
     );
+  }
+
+  function sendHardwareButtonEvent(
+    button: string,
+    phase: "down" | "up",
+    usagePage?: number,
+    usage?: number,
+  ) {
+    if (!selectedSimulator) {
+      return;
+    }
+    if (phase === "down") {
+      setAccessibilitySelectedId("");
+      setAccessibilityHoveredId(null);
+    }
+    if (
+      !sendControl(selectedSimulator.udid, {
+        type: "button",
+        button,
+        phase,
+        usagePage,
+        usage,
+      })
+    ) {
+      void runAction(
+        () =>
+          pressSimulatorButton(selectedSimulator.udid, {
+            button,
+            phase,
+            usagePage,
+            usage,
+          }),
+        false,
+      );
+    }
   }
 
   async function submitPairing(event: FormEvent<HTMLFormElement>) {
@@ -1822,6 +1946,7 @@ export function AppShell({
         chromeRequired={chromeRequired}
         chromeScreenStyle={viewportScreenStyle}
         chromeUrl={chromeUrl}
+        chromeButtonUrl={chromeButtonUrl}
         debugPanel={
           debugVisible ? (
             <DebugPanel
@@ -1845,6 +1970,7 @@ export function AppShell({
         isStreamError={viewportHasStreamError}
         isPanning={pointerInput.isPanning}
         onChromeLoad={() => setChromeLoaded(true)}
+        onChromeButtonEvent={sendHardwareButtonEvent}
         onPanPointerMove={pointerInput.handlePanPointerMove}
         onPanPointerUp={pointerInput.handlePanPointerUp}
         onPickerHover={setAccessibilityHoveredId}

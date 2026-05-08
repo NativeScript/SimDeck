@@ -40,6 +40,12 @@ typedef void (^XCWPrivateSimulatorEncodedFrameHandler)(NSData *sampleData,
                            phase:(NSString *)phase
                            error:(NSError * _Nullable * _Nullable)error;
 
+- (BOOL)sendEdgeTouchWithNormalizedX:(double)normalizedX
+                          normalizedY:(double)normalizedY
+                                phase:(NSString *)phase
+                                 edge:(NSInteger)edge
+                                error:(NSError * _Nullable * _Nullable)error;
+
 - (BOOL)sendMultiTouchWithNormalizedX1:(double)normalizedX1
                            normalizedY1:(double)normalizedY1
                            normalizedX2:(double)normalizedX2
@@ -52,6 +58,14 @@ typedef void (^XCWPrivateSimulatorEncodedFrameHandler)(NSData *sampleData,
               error:(NSError * _Nullable * _Nullable)error;
 
 - (BOOL)pressHomeButton:(NSError * _Nullable * _Nullable)error;
+- (BOOL)pressHardwareButtonNamed:(NSString *)buttonName
+                       durationMs:(NSUInteger)durationMs
+                            error:(NSError * _Nullable * _Nullable)error;
+- (BOOL)sendHardwareButtonNamed:(NSString *)buttonName
+                         pressed:(BOOL)pressed
+                       usagePage:(nullable NSNumber *)usagePage
+                           usage:(nullable NSNumber *)usage
+                           error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)openAppSwitcher:(NSError * _Nullable * _Nullable)error;
 - (BOOL)rotateRight:(NSError * _Nullable * _Nullable)error;
 - (BOOL)rotateLeft:(NSError * _Nullable * _Nullable)error;
