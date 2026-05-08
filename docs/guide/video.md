@@ -1,6 +1,6 @@
 # Video Pipeline
 
-SimDeck streams the iOS Simulator over WebRTC using browser-native H.264 video playout. This page walks through the encoder choices, the keyframe handshake, and the metrics you can use to tune them.
+SimDeck streams the iOS Simulator over WebRTC using browser-native H.264 video playout, with H.264 over WebSocket as the fallback for Safari and networks where peer media negotiation fails. This page walks through the encoder choices, fallback transport, keyframe handshake, and metrics you can use to tune them.
 
 ## Codec selection
 
@@ -32,7 +32,7 @@ It is CLI-only because it is meant for less capable machines where freshness
 matters more than maximum smoothness.
 
 The requested encoder mode is reported to clients in the JSON `videoCodec` field on `GET /api/health`.
-The browser UI exposes stream controls for encoder, FPS, and five quality choices: `quality` (4096 px), `balanced` (1280 px), `economy` (1080 px), `low` (720 px), and `tiny` (540 px). Local browser sessions default to hardware H.264, 120 fps, and `quality`/full resolution with FPS choices of 30, 60, and 120. Remote browser sessions default to software H.264, 30 fps, and `balanced` with FPS choices of 15, 30, and 60.
+The browser UI exposes stream controls for encoder, FPS, transport, and resolution. H264 resolution choices are `full` (4096 px at 60 fps), `balanced` (1280 px at 60 fps), `economy` (1080 px at 30 fps), `low` (720 px at 30 fps), and `tiny` (540 px at 30 fps). Local H264 WebSocket sessions default to full resolution at 60 fps. Remote browser sessions default to software H.264, 30 fps, and adaptive quality.
 
 ## Remote WebRTC ICE
 
@@ -52,6 +52,47 @@ The browser reads these settings from `GET /api/health` before creating its
 peer connection, so the local and remote peers use the same ICE configuration.
 Use `SIMDECK_WEBRTC_ICE_TRANSPORT_POLICY=all` or leave it unset for local LAN
 and localhost sessions.
+
+## H264 WebSocket fallback
+
+The browser UI defaults to `?stream=auto`: it tries WebRTC first and falls back
+to H264 over WebSocket if a decoded frame still does not render.
+For remote browser sessions, SimDeck also falls back immediately when the
+browser's WebRTC offer contains no local `host` ICE candidates, which covers
+Safari privacy/network settings that suppress direct candidates. The stream
+settings menu includes a transport picker for Auto, WebRTC, and H264 WS. You
+can also force a mode while testing:
+
+```text
+http://127.0.0.1:4310?stream=webrtc
+http://127.0.0.1:4310?stream=h264
+```
+
+H264 WS uses the same native H.264 encoder as WebRTC, but sends each encoded
+sample on a binary WebSocket at:
+
+```http
+GET /api/simulators/{udid}/h264?profile=full&fps=60&videoCodec=auto
+```
+
+Each message starts with a compact SimDeck header, followed by optional AVC
+decoder config and the encoded sample bytes. The browser decodes with
+WebCodecs, keeps only the latest decoded frame, and paints on
+`requestAnimationFrame` so stale frames do not build latency. Input stays on
+the separate `/api/simulators/{udid}/input` WebSocket so large video frames do
+not block touch and keyboard messages. Stream-quality updates and client stats
+use the WebRTC data channel or the H264 WS video socket instead of repeatedly
+posting REST requests. H264 WS defaults to the `full` profile on loopback and
+`auto` quality for remote sessions. H264 `Auto` starts at `full` on loopback;
+remote `Auto` starts lower but can climb through the internal `smooth` step
+(1170 px), `balanced`, and `full` after sustained low decode/render pressure.
+
+```http
+GET /api/simulators/{udid}/input
+```
+
+That WebSocket accepts the same normalized control JSON used by the WebRTC data
+channel and coalesces high-frequency touch `moved` events.
 
 ## Keyframe handshake
 
@@ -78,12 +119,11 @@ The WebRTC path favors freshness: stale frames are dropped and the sender reques
 
 A few practical guidelines:
 
-- **Start on the default for local preview.** Browser realtime mode uses VideoToolbox H.264 with the `quality` profile: full resolution, 120 fps, and a high bitrate floor. Pass `--video-codec software` only when the shared hardware encoder is unavailable or performs worse on that host.
+- **Start on the default for local preview.** Browser realtime mode uses VideoToolbox H.264 with full resolution at 60 fps. Pass `--video-codec software` only when the shared hardware encoder is unavailable or performs worse on that host.
 - **Use `--local-stream-fps` above 60 only for local high-refresh testing.** The local quality stream defaults to 60 fps; higher targets pace both capture refresh and hardware encode submission so the stream does not build delay by pushing unbounded frames.
 - **Switch to `software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
-- **Studio providers default to software H.264 plus `--stream-quality smooth`.** This profile uses a 1170-pixel longest edge, allows up to 60 fps, raises the bitrate budget to reduce compression artifacts, and lets multiple provider sessions share CPU cores without depending on one hardware encoder.
-- **Use `low` or `tiny` when resolution is the bottleneck.** `low` caps the longest edge at 720 pixels and targets 30 fps; `tiny` caps the longest edge at 540 pixels and targets 24 fps.
-- **The remote browser renders the live stream as a native `<video>` element.** The canvas remains for input geometry, but it is not in the live per-frame render path and does not preserve stale frames during reconnects.
+- **Studio providers default to software H.264 plus `--stream-quality smooth`.** `smooth` is an internal/provider profile, not a browser picker item. It uses a 1170-pixel longest edge, allows up to 60 fps, raises the bitrate budget to reduce compression artifacts, and lets multiple provider sessions share CPU cores without depending on one hardware encoder.
+- **The remote browser renders WebRTC as a native `<video>` element and H264 WS through WebCodecs.** The canvas remains for input geometry and WebCodecs presentation, and fallback mode keeps simulator controls on the WebSocket input channel.
 - **Use `--stream-quality ci-software` for denser virtualized CI Macs.** This profile uses software H.264 at a 960-pixel longest edge, targets 24 fps, lowers bitrate pressure, and favors fresh frames over full-resolution sharpness.
 - **Use `simdeck studio expose --video-codec hardware` only when a dedicated hardware encoder is preferable.** The normal Studio default stays on software H.264 so future multi-simulator provider hosts can scale across CPU cores.
 - **Use `software --low-latency` only when you need the older extra-conservative software profile.** It caps at 15 fps, uses a single pending frame, reduces the longest edge to 1170 pixels, and backs off before software encode latency turns into seconds of stream delay.
@@ -123,7 +163,9 @@ multiple frames in a row exceeded the budget. For hardware H.264 this usually
 means the shared VideoToolbox encoder is saturated; lower resolution/FPS or
 switch to software H.264.
 
-Clients can also push their decoder/renderer stats back to the server:
+Clients can also push their decoder/renderer stats back to the server. Browser
+clients normally send these over the WebRTC telemetry data channel or the H264
+WS stream socket; REST remains available for simple clients:
 
 ```http
 POST /api/client-stream-stats

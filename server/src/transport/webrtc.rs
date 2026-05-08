@@ -1,4 +1,7 @@
-use crate::api::routes::{run_control_message, AppState, ControlMessage};
+use crate::api::routes::{
+    apply_stream_quality_payload, run_control_message, AppState, ControlMessage,
+    StreamQualityPayload,
+};
 use crate::error::AppError;
 use crate::metrics::counters::ClientStreamStats;
 use bytes::Bytes;
@@ -46,6 +49,8 @@ const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
 const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(90);
 const WEBRTC_INITIAL_KEYFRAME_TIMEOUT: Duration = Duration::from_secs(5);
+const WEBRTC_FAST_ICE_GATHER_TIMEOUT: Duration = Duration::from_millis(250);
+const WEBRTC_FULL_ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(3);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 const WEBRTC_PEER_DISCONNECTED_TIMEOUT: Duration = Duration::from_secs(12);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<WebRtcMediaStreamToken>>>> =
@@ -63,6 +68,8 @@ struct WebRtcMediaStreamToken {
 pub struct WebRtcOfferPayload {
     pub client_id: Option<String>,
     pub sdp: String,
+    #[serde(rename = "streamConfig")]
+    pub stream_config: Option<StreamQualityPayload>,
     #[serde(rename = "type")]
     pub kind: String,
     pub transport: Option<String>,
@@ -106,6 +113,9 @@ pub async fn create_answer(
         return Err(AppError::bad_request(
             "WebRTC preview supports media tracks only.",
         ));
+    }
+    if let Some(stream_config) = payload.stream_config.as_ref() {
+        apply_stream_quality_payload(&state, stream_config)?;
     }
     info!(
         "WebRTC offer for {udid}: remote_candidates={} remote_candidate_types={} ice_servers={} ice_transport_policy={}",
@@ -207,6 +217,8 @@ pub async fn create_answer(
         }
     });
 
+    let fast_gather =
+        has_sdp_candidate_type(&payload.sdp, "host") && ice_transport_policy_label() == "all";
     let offer = RTCSessionDescription::offer(payload.sdp)
         .map_err(|error| AppError::bad_request(format!("invalid WebRTC offer: {error}")))?;
     peer_connection
@@ -223,11 +235,23 @@ pub async fn create_answer(
         .set_local_description(answer)
         .await
         .map_err(|error| AppError::internal(format!("set WebRTC answer: {error}")))?;
-    let _ = gather_complete.recv().await;
-    let local_description = peer_connection
+    let gather_timeout = if fast_gather {
+        WEBRTC_FAST_ICE_GATHER_TIMEOUT
+    } else {
+        WEBRTC_FULL_ICE_GATHER_TIMEOUT
+    };
+    let gather_result = time::timeout(gather_timeout, gather_complete.recv()).await;
+    let mut local_description = peer_connection
         .local_description()
         .await
         .ok_or_else(|| AppError::internal("WebRTC local description was not set."))?;
+    if gather_result.is_err() && count_sdp_candidates(&local_description.sdp) == 0 {
+        let _ = time::timeout(WEBRTC_FULL_ICE_GATHER_TIMEOUT, gather_complete.recv()).await;
+        local_description = peer_connection
+            .local_description()
+            .await
+            .ok_or_else(|| AppError::internal("WebRTC local description was not set."))?;
+    }
     info!(
         "WebRTC answer for {udid}: local_candidates={} local_candidate_types={}",
         count_sdp_candidates(&local_description.sdp),
@@ -314,6 +338,17 @@ fn count_sdp_candidates(sdp: &str) -> usize {
     sdp.lines()
         .filter(|line| line.starts_with("a=candidate:"))
         .count()
+}
+
+fn has_sdp_candidate_type(sdp: &str, candidate_type: &str) -> bool {
+    sdp.lines()
+        .filter(|line| line.starts_with("a=candidate:"))
+        .any(|line| {
+            line.split_whitespace()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair[0] == "typ" && pair[1] == candidate_type)
+        })
 }
 
 fn summarize_sdp_candidate_types(sdp: &str) -> String {
@@ -422,6 +457,13 @@ fn attach_control_data_channel(
                         }
                         let _ = stream_control_tx.send(command);
                     }
+                    WebRtcDataChannelMessage::StreamQuality { config } => {
+                        if let Err(error) = apply_stream_quality_payload(&state, &config) {
+                            warn!("WebRTC stream quality update failed for {udid}: {error}");
+                        } else {
+                            session.request_keyframe();
+                        }
+                    }
                 }
                 return;
             }
@@ -499,6 +541,9 @@ enum WebRtcDataChannelMessage {
         #[serde(rename = "forceKeyframe")]
         force_keyframe: Option<bool>,
         snapshot: Option<bool>,
+    },
+    StreamQuality {
+        config: StreamQualityPayload,
     },
 }
 
@@ -800,6 +845,12 @@ async fn wait_for_h264_sync_keyframe(
     session: &crate::simulators::session::SimulatorSession,
     timeout_duration: Duration,
 ) -> Option<crate::transport::packet::SharedFrame> {
+    if let Some(frame) = session.latest_keyframe() {
+        if h264_frame_is_decoder_sync(&frame) {
+            return Some(frame);
+        }
+    }
+
     let deadline = time::Instant::now() + timeout_duration;
     loop {
         let remaining = deadline.checked_duration_since(time::Instant::now())?;

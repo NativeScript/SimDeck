@@ -3,8 +3,8 @@ import { startTransition, useEffect, useRef, useState } from "react";
 import { listSimulators } from "../../api/simulators";
 import type { SimulatorMetadata } from "../../api/types";
 
-const LOCAL_REFRESH_MS = 5000;
-const REMOTE_REFRESH_MS = 10000;
+const LOCAL_REFRESH_MS = 30000;
+const REMOTE_REFRESH_MS = 60000;
 const REMOTE_ERROR_REFRESH_MS = 15000;
 const REMOTE_REQUEST_TIMEOUT_MS = 12000;
 
@@ -89,13 +89,27 @@ export function useSimulatorList({
       void loadSimulators(cancelled).finally(scheduleNext);
     };
 
+    const refreshWhenVisible = () => {
+      if (!cancelled && document.visibilityState === "visible") {
+        if (timeoutId) {
+          window.clearTimeout(timeoutId);
+          timeoutId = 0;
+        }
+        run();
+      }
+    };
+
     run();
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible);
 
     return () => {
       cancelled = true;
       if (timeoutId) {
         window.clearTimeout(timeoutId);
       }
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
     };
   }, [remote]);
 
