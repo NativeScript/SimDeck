@@ -1,6 +1,10 @@
-import type { CSSProperties, Ref } from "react";
+import { useRef, useState, type CSSProperties, type Ref } from "react";
 
-import type { AccessibilityNode } from "../../api/types";
+import type {
+  AccessibilityNode,
+  ChromeButtonProfile,
+  ChromeProfile,
+} from "../../api/types";
 import { AccessibilityOverlay } from "../accessibility/AccessibilityOverlay";
 import { findAccessibilityItemAtPoint } from "../accessibility/accessibilityTree";
 import { normalizedPointerCoordinatesForOrientation } from "../input/gestureMath";
@@ -11,12 +15,20 @@ interface DeviceChromeProps {
   accessibilityPickerActive: boolean;
   accessibilityRoots: AccessibilityNode[];
   accessibilitySelectedId: string;
+  chromeProfile: ChromeProfile | null;
   chromeScreenStyle: CSSProperties | null;
   chromeUrl: string;
+  chromeButtonUrl: (button: string, pressed?: boolean) => string;
   hasFrame: boolean;
   isBooted: boolean;
   isLoadingStream: boolean;
   isStreamError: boolean;
+  onChromeButtonEvent: (
+    button: string,
+    phase: "down" | "up",
+    usagePage?: number,
+    usage?: number,
+  ) => void;
   onChromeLoad: () => void;
   onPanPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
   onPanPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
@@ -46,12 +58,15 @@ export function DeviceChrome({
   accessibilityPickerActive,
   accessibilityRoots,
   accessibilitySelectedId,
+  chromeProfile,
   chromeScreenStyle,
   chromeUrl,
+  chromeButtonUrl,
   hasFrame,
   isBooted,
   isLoadingStream,
   isStreamError,
+  onChromeButtonEvent,
   onChromeLoad,
   onPanPointerCancel,
   onPanPointerMove,
@@ -85,6 +100,12 @@ export function DeviceChrome({
         onPointerUp={onPanPointerUp}
         style={shellStyle ?? undefined}
       >
+        <ChromeButtonOverlay
+          chromeButtonUrl={chromeButtonUrl}
+          chromeProfile={chromeProfile}
+          layer="under"
+          onEvent={onChromeButtonEvent}
+        />
         <img
           alt=""
           aria-hidden="true"
@@ -92,6 +113,12 @@ export function DeviceChrome({
           draggable={false}
           onLoad={onChromeLoad}
           src={chromeUrl}
+        />
+        <ChromeButtonOverlay
+          chromeButtonUrl={chromeButtonUrl}
+          chromeProfile={chromeProfile}
+          layer="over"
+          onEvent={onChromeButtonEvent}
         />
         <ScreenLayer
           accessibilityHoveredId={accessibilityHoveredId}
@@ -162,6 +189,216 @@ export function DeviceChrome({
       />
     </div>
   );
+}
+
+const CHROME_BUTTON_WIRE_NAMES: Record<string, string> = {
+  action: "action",
+  home: "home",
+  lock: "power",
+  mute: "mute",
+  power: "power",
+  "side-button": "power",
+  "volume-down": "volume-down",
+  "volume-up": "volume-up",
+};
+
+function ChromeButtonOverlay({
+  chromeButtonUrl,
+  chromeProfile,
+  layer,
+  onEvent,
+}: {
+  chromeButtonUrl: (button: string, pressed?: boolean) => string;
+  chromeProfile: ChromeProfile | null;
+  layer: "under" | "over";
+  onEvent: (
+    button: string,
+    phase: "down" | "up",
+    usagePage?: number,
+    usage?: number,
+  ) => void;
+}) {
+  const buttons = chromeProfile?.buttons ?? [];
+  if (!chromeProfile || buttons.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      className={`device-chrome-buttons device-chrome-buttons-${layer}`}
+      aria-hidden={false}
+    >
+      {buttons.map((button) => {
+        const onTop = Boolean(button.onTop);
+        if ((layer === "over") !== onTop) {
+          return null;
+        }
+        const wireName = wireButtonName(button);
+        if (!wireName) {
+          return null;
+        }
+        return (
+          <ChromeButtonHitTarget
+            button={button}
+            chromeButtonUrl={chromeButtonUrl}
+            key={`${button.name}-${button.x}-${button.y}`}
+            onEvent={onEvent}
+            totalHeight={chromeProfile.totalHeight}
+            totalWidth={chromeProfile.totalWidth}
+            wireName={wireName}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function ChromeButtonHitTarget({
+  button,
+  chromeButtonUrl,
+  onEvent,
+  totalHeight,
+  totalWidth,
+  wireName,
+}: {
+  button: ChromeButtonProfile;
+  chromeButtonUrl: (button: string, pressed?: boolean) => string;
+  onEvent: (
+    button: string,
+    phase: "down" | "up",
+    usagePage?: number,
+    usage?: number,
+  ) => void;
+  totalHeight: number;
+  totalWidth: number;
+  wireName: string;
+}) {
+  const pressedRef = useRef(false);
+  const [pressed, setPressed] = useState(false);
+  const label = button.label || humanizeChromeButtonName(button.name);
+  const rolloverDelta = button.rolloverOffset
+    ? {
+        x: button.rolloverOffset.x - (button.normalOffset?.x ?? 0),
+        y: button.rolloverOffset.y - (button.normalOffset?.y ?? 0),
+      }
+    : { x: 0, y: 0 };
+  const imageUrl = chromeButtonUrl(button.name, false);
+  const pressedImageUrl = button.imageDownName
+    ? chromeButtonUrl(button.name, true)
+    : "";
+  const downCompositeUnder =
+    pressed &&
+    pressedImageUrl &&
+    button.imageDownDrawMode?.toLowerCase() === "compositeunder";
+  const style = {
+    height: `${(button.height / totalHeight) * 100}%`,
+    left: `${(button.x / totalWidth) * 100}%`,
+    top: `${(button.y / totalHeight) * 100}%`,
+    width: `${(button.width / totalWidth) * 100}%`,
+    "--button-rest-x": `${(rolloverDelta.x / Math.max(button.width, 1)) * 100}%`,
+    "--button-rest-y": `${(rolloverDelta.y / Math.max(button.height, 1)) * 100}%`,
+    "--button-hover-x": `${((rolloverDelta.x * 2) / Math.max(button.width, 1)) * 100}%`,
+    "--button-hover-y": `${((rolloverDelta.y * 2) / Math.max(button.height, 1)) * 100}%`,
+  } as CSSProperties &
+    Record<
+      | "--button-rest-x"
+      | "--button-rest-y"
+      | "--button-hover-x"
+      | "--button-hover-y",
+      string
+    >;
+
+  function sendPhase(phase: "down" | "up") {
+    onEvent(wireName, phase, button.usagePage, button.usage);
+  }
+
+  function endPress() {
+    if (!pressedRef.current) {
+      return;
+    }
+    pressedRef.current = false;
+    setPressed(false);
+    sendPhase("up");
+  }
+
+  return (
+    <button
+      aria-label={label}
+      className={`device-chrome-button device-chrome-button-${button.anchor ?? "edge"} ${
+        button.onTop ? "device-chrome-button-on-top" : ""
+      } ${pressed ? "is-pressed" : ""}`}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onPointerCancel={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        endPress();
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        pressedRef.current = true;
+        setPressed(true);
+        sendPhase("down");
+      }}
+      onPointerUp={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        endPress();
+      }}
+      onLostPointerCapture={endPress}
+      style={style}
+      title={label}
+      type="button"
+    >
+      {downCompositeUnder ? (
+        <img
+          alt=""
+          aria-hidden="true"
+          className="device-chrome-button-image-under"
+          draggable={false}
+          src={pressedImageUrl}
+        />
+      ) : null}
+      <img
+        alt=""
+        aria-hidden="true"
+        className="device-chrome-button-image"
+        draggable={false}
+        src={
+          pressed && pressedImageUrl && !downCompositeUnder
+            ? pressedImageUrl
+            : imageUrl
+        }
+      />
+      {!pressed && pressedImageUrl ? (
+        <img
+          alt=""
+          aria-hidden="true"
+          className="device-chrome-button-preload"
+          draggable={false}
+          src={pressedImageUrl}
+        />
+      ) : null}
+    </button>
+  );
+}
+
+function wireButtonName(button: ChromeButtonProfile): string | null {
+  return CHROME_BUTTON_WIRE_NAMES[button.name.toLowerCase()] ?? null;
+}
+
+function humanizeChromeButtonName(name: string) {
+  return name
+    .split(/[-_]/)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }
 
 interface ScreenLayerProps {

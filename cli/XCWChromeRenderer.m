@@ -4,6 +4,16 @@
 #import <ImageIO/ImageIO.h>
 
 static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer";
+
+@interface XCWChromeRenderer ()
++ (NSArray<NSDictionary<NSString *, id> *> *)buttonProfilesForChromeInfo:(NSDictionary *)chromeInfo
+                                                               chromeSize:(CGSize)chromeSize
+                                                             chromeOffset:(CGPoint)chromeOffset;
++ (nullable NSDictionary *)inputNamed:(NSString *)buttonName
+                         chromeInfo:(NSDictionary *)chromeInfo
+                              error:(NSError * _Nullable __autoreleasing *)error;
+@end
+
 @implementation XCWChromeRenderer
 
 + (nullable NSDictionary<NSString *, id> *)profileForDeviceName:(NSString *)deviceName
@@ -17,6 +27,12 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
 
 + (nullable NSData *)PNGDataForDeviceName:(NSString *)deviceName
                                     error:(NSError * _Nullable __autoreleasing *)error {
+    return [self PNGDataForDeviceName:deviceName includeButtons:YES error:error];
+}
+
++ (nullable NSData *)PNGDataForDeviceName:(NSString *)deviceName
+                            includeButtons:(BOOL)includeButtons
+                                      error:(NSError * _Nullable __autoreleasing *)error {
     NSDictionary *chromeInfo = [self chromeInfoForDeviceName:deviceName error:error];
     if (chromeInfo == nil) {
         return nil;
@@ -36,7 +52,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
                                    [self numberValue:profile[@"totalHeight"]]);
     CGFloat chromeX = [self numberValue:profile[@"chromeX"]];
     CGFloat chromeY = [self numberValue:profile[@"chromeY"]];
-    BOOL drawNonTopInputsBeforeBody = YES;
+    BOOL drawNonTopInputsBeforeBody = includeButtons;
 
     CGFloat scale = 3.0;
     NSInteger pixelWidth = MAX((NSInteger)ceil(renderSize.width * scale), 1);
@@ -94,7 +110,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         CGContextRelease(context);
         return nil;
     }
-    if (!drawNonTopInputsBeforeBody) {
+    if (includeButtons && !drawNonTopInputsBeforeBody) {
         if (![self drawInputImagesForChromeInfo:chromeInfo
                                          inSize:chromeSize
                                         context:context
@@ -117,14 +133,16 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         return nil;
     }
     CGContextTranslateCTM(context, chromeX, chromeY);
-    if (![self drawInputImagesForChromeInfo:chromeInfo
-                                     inSize:chromeSize
-                                   context:context
-                                  onlyOnTop:YES
-                                      error:error]) {
-        CGContextRestoreGState(context);
-        CGContextRelease(context);
-        return nil;
+    if (includeButtons) {
+        if (![self drawInputImagesForChromeInfo:chromeInfo
+                                         inSize:chromeSize
+                                       context:context
+                                      onlyOnTop:YES
+                                          error:error]) {
+            CGContextRestoreGState(context);
+            CGContextRelease(context);
+            return nil;
+        }
     }
     CGContextRestoreGState(context);
 
@@ -175,6 +193,37 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         return nil;
     }
     return data;
+}
+
++ (nullable NSData *)buttonPNGDataForDeviceName:(NSString *)deviceName
+                                     buttonName:(NSString *)buttonName
+                                        pressed:(BOOL)pressed
+                                          error:(NSError * _Nullable __autoreleasing *)error {
+    NSDictionary *chromeInfo = [self chromeInfoForDeviceName:deviceName error:error];
+    if (chromeInfo == nil) {
+        return nil;
+    }
+    NSDictionary *input = [self inputNamed:buttonName chromeInfo:chromeInfo error:error];
+    if (input == nil) {
+        return nil;
+    }
+
+    NSString *assetName = pressed && [input[@"imageDown"] isKindOfClass:[NSString class]]
+        ? input[@"imageDown"]
+        : input[@"image"];
+    if (assetName.length == 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                         code:14
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: [NSString stringWithFormat:@"The chrome button `%@` did not specify a renderable image.", buttonName ?: @""],
+            }];
+        }
+        return nil;
+    }
+
+    NSString *assetPath = [self resolvedChromeAssetPathForName:assetName chromePath:chromeInfo[@"chromePath"]];
+    return [self PNGDataForPDFAtPath:assetPath scale:3.0 error:error];
 }
 
 + (nullable NSData *)screenMaskPNGDataForDeviceName:(NSString *)deviceName
@@ -278,6 +327,9 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     CGFloat chromeX = -CGRectGetMinX(fullFrame);
     CGFloat chromeY = -CGRectGetMinY(fullFrame);
     BOOL hasScreenMask = !phoneProfile && [self screenMaskPathForChromeInfo:chromeInfo].length > 0;
+    NSArray<NSDictionary<NSString *, id> *> *buttons = [self buttonProfilesForChromeInfo:chromeInfo
+                                                                              chromeSize:compositeSize
+                                                                            chromeOffset:CGPointMake(chromeX, chromeY)];
 
     return @{
         @"totalWidth": @(CGRectGetWidth(fullFrame)),
@@ -293,6 +345,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         @"cornerRadius": @(cornerRadius),
         @"chromeCornerRadius": @(chromeCornerRadius),
         @"hasScreenMask": @(hasScreenMask),
+        @"buttons": buttons,
     };
 }
 
@@ -636,7 +689,14 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         if (assetSize.width <= 0.0 || assetSize.height <= 0.0) {
             continue;
         }
-        bounds = CGRectUnion(bounds, [self inputFrameForInput:input assetSize:assetSize inSize:chromeSize]);
+        bounds = CGRectUnion(bounds, [self inputFrameForInput:input
+                                                    assetSize:assetSize
+                                                       inSize:chromeSize
+                                                   offsetName:@"normal"]);
+        bounds = CGRectUnion(bounds, [self inputFrameForInput:input
+                                                    assetSize:assetSize
+                                                       inSize:chromeSize
+                                                   offsetName:@"rollover"]);
     }
     return CGRectIntegral(bounds);
 }
@@ -644,14 +704,24 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
 + (CGRect)inputFrameForInput:(NSDictionary *)input
                    assetSize:(CGSize)assetSize
                       inSize:(CGSize)size {
+    return [self inputFrameForInput:input assetSize:assetSize inSize:size offsetName:@"normal"];
+}
+
++ (CGRect)inputFrameForInput:(NSDictionary *)input
+                   assetSize:(CGSize)assetSize
+                      inSize:(CGSize)size
+                  offsetName:(NSString *)offsetName {
     NSDictionary *offsets = [input[@"offsets"] isKindOfClass:[NSDictionary class]] ? input[@"offsets"] : @{};
-    NSDictionary *normalOffset = [offsets[@"normal"] isKindOfClass:[NSDictionary class]] ? offsets[@"normal"] : @{};
-    CGFloat offsetX = [self numberValue:normalOffset[@"x"]];
-    CGFloat offsetY = [self numberValue:normalOffset[@"y"]];
+    NSDictionary *requestedOffset = [offsets[offsetName] isKindOfClass:[NSDictionary class]] ? offsets[offsetName] : nil;
+    NSDictionary *normalOffset = [offsets[@"normal"] isKindOfClass:[NSDictionary class]] ? offsets[@"normal"] : nil;
+    NSDictionary *rolloverOffset = [offsets[@"rollover"] isKindOfClass:[NSDictionary class]] ? offsets[@"rollover"] : nil;
+    NSDictionary *offset = requestedOffset ?: rolloverOffset ?: normalOffset ?: @{};
+    CGFloat offsetX = [self numberValue:offset[@"x"]];
+    CGFloat offsetY = [self numberValue:offset[@"y"]];
     NSString *anchor = [input[@"anchor"] isKindOfClass:[NSString class]] ? input[@"anchor"] : @"";
     NSString *align = [input[@"align"] isKindOfClass:[NSString class]] ? input[@"align"] : @"";
 
-    CGFloat x = offsetX;
+    CGFloat x = offsetX - (assetSize.width / 2.0);
     CGFloat y = offsetY;
     if ([anchor isEqualToString:@"left"]) {
         x = offsetX - (assetSize.width / 2.0);
@@ -670,10 +740,17 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
             y = size.height - assetSize.height + offsetY;
         }
     } else if ([anchor isEqualToString:@"top"] || [anchor isEqualToString:@"bottom"]) {
+        CGFloat baseX = 0.0;
         if ([align isEqualToString:@"center"]) {
-            x = (size.width - assetSize.width) / 2.0 + offsetX;
+            baseX = size.width / 2.0;
         } else if ([align isEqualToString:@"trailing"]) {
-            x = size.width - assetSize.width + offsetX;
+            baseX = size.width;
+        }
+        x = baseX + offsetX - (assetSize.width / 2.0);
+        if ([align isEqualToString:@"center"]) {
+            x = (size.width / 2.0) + offsetX - (assetSize.width / 2.0);
+        } else if ([align isEqualToString:@"trailing"]) {
+            x = size.width + offsetX - (assetSize.width / 2.0);
         }
     } else if ([align isEqualToString:@"center"]) {
         x = (size.width - assetSize.width) / 2.0 + offsetX;
@@ -682,6 +759,117 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     }
 
     return CGRectMake(x, y, assetSize.width, assetSize.height);
+}
+
++ (NSArray<NSDictionary<NSString *, id> *> *)buttonProfilesForChromeInfo:(NSDictionary *)chromeInfo
+                                                               chromeSize:(CGSize)chromeSize
+                                                             chromeOffset:(CGPoint)chromeOffset {
+    NSDictionary *json = chromeInfo[@"json"];
+    NSString *chromePath = chromeInfo[@"chromePath"];
+    NSArray *inputs = [json[@"inputs"] isKindOfClass:[NSArray class]] ? json[@"inputs"] : @[];
+    NSMutableArray<NSDictionary<NSString *, id> *> *buttons = [NSMutableArray arrayWithCapacity:inputs.count];
+
+    for (id inputValue in inputs) {
+        if (![inputValue isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        NSDictionary *input = inputValue;
+        NSString *name = [input[@"name"] isKindOfClass:[NSString class]] ? input[@"name"] : @"";
+        NSString *assetName = [input[@"image"] isKindOfClass:[NSString class]] ? input[@"image"] : @"";
+        if (name.length == 0 || assetName.length == 0) {
+            continue;
+        }
+
+        NSString *assetPath = [self resolvedChromeAssetPathForName:assetName chromePath:chromePath];
+        CGSize assetSize = [self PDFPageSizeAtPath:assetPath];
+        if (assetSize.width <= 0.0 || assetSize.height <= 0.0) {
+            continue;
+        }
+
+        CGRect rect = [self inputFrameForInput:input assetSize:assetSize inSize:chromeSize];
+        rect = CGRectOffset(rect, chromeOffset.x, chromeOffset.y);
+        if (CGRectGetWidth(rect) <= 0.0 || CGRectGetHeight(rect) <= 0.0) {
+            continue;
+        }
+
+        NSDictionary *offsets = [input[@"offsets"] isKindOfClass:[NSDictionary class]] ? input[@"offsets"] : @{};
+        NSDictionary *normalOffset = [offsets[@"normal"] isKindOfClass:[NSDictionary class]] ? offsets[@"normal"] : @{};
+        NSDictionary *rolloverOffset = [offsets[@"rollover"] isKindOfClass:[NSDictionary class]] ? offsets[@"rollover"] : normalOffset;
+        NSString *label = [input[@"accessibilityTitle"] isKindOfClass:[NSString class]] ? input[@"accessibilityTitle"] : name;
+        NSString *type = [input[@"type"] isKindOfClass:[NSString class]] ? input[@"type"] : @"";
+        NSString *anchor = [input[@"anchor"] isKindOfClass:[NSString class]] ? input[@"anchor"] : @"";
+        NSString *align = [input[@"align"] isKindOfClass:[NSString class]] ? input[@"align"] : @"";
+        NSString *imageDownName = [input[@"imageDown"] isKindOfClass:[NSString class]] ? input[@"imageDown"] : @"";
+        NSString *imageDownDrawMode = [input[@"imageDownDrawMode"] isKindOfClass:[NSString class]] ? input[@"imageDownDrawMode"] : @"";
+        BOOL onTop = [input[@"onTop"] respondsToSelector:@selector(boolValue)] && [input[@"onTop"] boolValue];
+
+        NSMutableDictionary<NSString *, id> *button = [@{
+            @"name": name,
+            @"label": label,
+            @"type": type,
+            @"imageName": assetName,
+            @"x": @(CGRectGetMinX(rect)),
+            @"y": @(CGRectGetMinY(rect)),
+            @"width": @(CGRectGetWidth(rect)),
+            @"height": @(CGRectGetHeight(rect)),
+            @"anchor": anchor,
+            @"align": align,
+            @"onTop": @(onTop),
+            @"normalOffset": @{
+                @"x": @([self numberValue:normalOffset[@"x"]]),
+                @"y": @([self numberValue:normalOffset[@"y"]]),
+            },
+            @"rolloverOffset": @{
+                @"x": @([self numberValue:rolloverOffset[@"x"]]),
+                @"y": @([self numberValue:rolloverOffset[@"y"]]),
+            },
+        } mutableCopy];
+
+        if (imageDownName.length > 0) {
+            button[@"imageDownName"] = imageDownName;
+        }
+        if (imageDownDrawMode.length > 0) {
+            button[@"imageDownDrawMode"] = imageDownDrawMode;
+        }
+
+        if ([input[@"usagePage"] respondsToSelector:@selector(unsignedIntValue)]) {
+            button[@"usagePage"] = @([input[@"usagePage"] unsignedIntValue]);
+        }
+        if ([input[@"usage"] respondsToSelector:@selector(unsignedIntValue)]) {
+            button[@"usage"] = @([input[@"usage"] unsignedIntValue]);
+        }
+
+        [buttons addObject:button];
+    }
+
+    return buttons;
+}
+
++ (nullable NSDictionary *)inputNamed:(NSString *)buttonName
+                            chromeInfo:(NSDictionary *)chromeInfo
+                                 error:(NSError * _Nullable __autoreleasing *)error {
+    NSString *normalizedName = [[buttonName ?: @"" stringByDeletingPathExtension] lowercaseString];
+    NSDictionary *json = chromeInfo[@"json"];
+    NSArray *inputs = [json[@"inputs"] isKindOfClass:[NSArray class]] ? json[@"inputs"] : @[];
+    for (id inputValue in inputs) {
+        if (![inputValue isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        NSDictionary *input = inputValue;
+        NSString *name = [input[@"name"] isKindOfClass:[NSString class]] ? input[@"name"] : @"";
+        if ([name.lowercaseString isEqualToString:normalizedName]) {
+            return input;
+        }
+    }
+
+    if (error != NULL) {
+        *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                     code:15
+                                 userInfo:@{
+            NSLocalizedDescriptionKey: [NSString stringWithFormat:@"The device chrome did not expose a button named `%@`.", buttonName ?: @""],
+        }];
+    }
+    return nil;
 }
 
 + (CGSize)screenSizeForChromeInfo:(NSDictionary *)chromeInfo

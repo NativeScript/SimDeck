@@ -554,7 +554,13 @@ struct WebRtcStreamCommand {
 }
 
 fn webrtc_control_message_is_move(message: &ControlMessage) -> bool {
-    matches!(message, ControlMessage::Touch { phase, .. } if phase == "moved")
+    matches!(
+        message,
+        ControlMessage::Touch { phase, .. }
+            | ControlMessage::EdgeTouch { phase, .. }
+            | ControlMessage::MultiTouch { phase, .. }
+            if phase == "moved"
+    )
 }
 
 fn is_h264_codec(codec: &str) -> bool {

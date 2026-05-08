@@ -11,18 +11,18 @@ use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tokio::task;
-use tokio::time::{sleep, timeout, Instant};
+use tokio::time::{sleep_until, timeout, Instant};
 use tracing::debug;
 
 // This channel carries encoded H.264 access units. Subscribers must not miss
 // ordinary P-frames: dropping compressed references creates decoder artifacts
 // even on a perfect localhost link. Coalescing is only safe before encoding.
 const FRAME_BROADCAST_CAPACITY: usize = 128;
-const MIN_REFRESH_INTERVAL_MS: u64 = 16;
 const MIN_KEYFRAME_INTERVAL_MS: u64 = 250;
 const DEFAULT_SHARED_REFRESH_FPS: u64 = 60;
 const MIN_SHARED_REFRESH_FPS: u64 = 15;
 const MAX_SHARED_REFRESH_FPS: u64 = 240;
+const MIN_REFRESH_INTERVAL_US: u64 = 1_000_000 / MAX_SHARED_REFRESH_FPS;
 
 pub struct SimulatorSession {
     inner: Arc<SimulatorSessionInner>,
@@ -41,7 +41,7 @@ struct SimulatorSessionInner {
     display_width: AtomicU64,
     display_height: AtomicU64,
     frame_sequence: AtomicU64,
-    last_refresh_ms: AtomicU64,
+    last_refresh_us: AtomicU64,
     last_keyframe_ms: AtomicU64,
     active_frame_subscribers: AtomicU64,
     refresh_pump_running: AtomicBool,
@@ -93,7 +93,7 @@ impl SimulatorSession {
             display_width: AtomicU64::new(0),
             display_height: AtomicU64::new(0),
             frame_sequence: AtomicU64::new(0),
-            last_refresh_ms: AtomicU64::new(0),
+            last_refresh_us: AtomicU64::new(0),
             last_keyframe_ms: AtomicU64::new(0),
             active_frame_subscribers: AtomicU64::new(0),
             refresh_pump_running: AtomicBool::new(false),
@@ -206,7 +206,9 @@ impl SimulatorSession {
             return;
         }
         self.inner.last_keyframe_ms.store(now, Ordering::Relaxed);
-        self.inner.last_refresh_ms.store(now, Ordering::Relaxed);
+        self.inner
+            .last_refresh_us
+            .store(now_us(), Ordering::Relaxed);
         self.inner
             .metrics
             .keyframe_requests
@@ -217,7 +219,9 @@ impl SimulatorSession {
     fn request_keyframe_immediate(&self) {
         let now = now_ms();
         self.inner.last_keyframe_ms.store(now, Ordering::Relaxed);
-        self.inner.last_refresh_ms.store(now, Ordering::Relaxed);
+        self.inner
+            .last_refresh_us
+            .store(now_us(), Ordering::Relaxed);
         self.inner
             .metrics
             .keyframe_requests
@@ -228,12 +232,27 @@ impl SimulatorSession {
     pub fn reconfigure_video_encoder(&self) {
         *self.inner.latest_keyframe.write().unwrap() = None;
         self.inner.last_keyframe_ms.store(0, Ordering::Relaxed);
-        self.inner.last_refresh_ms.store(0, Ordering::Relaxed);
+        self.inner.last_refresh_us.store(0, Ordering::Relaxed);
         self.inner.native.reconfigure_video_encoder();
     }
 
     pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
         self.inner.native.send_touch(x, y, phase)
+    }
+
+    pub fn send_edge_touch(&self, x: f64, y: f64, phase: &str, edge: u32) -> Result<(), AppError> {
+        self.inner.native.send_edge_touch(x, y, phase, edge)
+    }
+
+    pub fn send_multitouch(
+        &self,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        phase: &str,
+    ) -> Result<(), AppError> {
+        self.inner.native.send_multitouch(x1, y1, x2, y2, phase)
     }
 
     pub fn send_key(&self, key_code: u16, modifiers: u32) -> Result<(), AppError> {
@@ -242,6 +261,22 @@ impl SimulatorSession {
 
     pub fn press_home(&self) -> Result<(), AppError> {
         self.inner.native.press_home()
+    }
+
+    pub fn press_button(&self, button: &str, duration_ms: u32) -> Result<(), AppError> {
+        self.inner.native.press_button(button, duration_ms)
+    }
+
+    pub fn send_button(
+        &self,
+        button: &str,
+        pressed: bool,
+        usage_page: Option<u32>,
+        usage: Option<u32>,
+    ) -> Result<(), AppError> {
+        self.inner
+            .native
+            .send_button(button, pressed, usage_page, usage)
     }
 
     pub fn open_app_switcher(&self) -> Result<(), AppError> {
@@ -319,6 +354,7 @@ impl SimulatorSessionInner {
 
         let inner = self.clone();
         tokio::spawn(async move {
+            let mut next_tick = Instant::now();
             loop {
                 if inner.active_frame_subscribers.load(Ordering::Relaxed) == 0 {
                     inner.refresh_pump_running.store(false, Ordering::Release);
@@ -335,18 +371,24 @@ impl SimulatorSessionInner {
                 }
 
                 inner.request_refresh();
-                sleep(shared_refresh_interval()).await;
+                let refresh_interval = shared_refresh_interval();
+                next_tick += refresh_interval;
+                let now = Instant::now();
+                if next_tick <= now {
+                    next_tick = now + refresh_interval;
+                }
+                sleep_until(next_tick).await;
             }
         });
     }
 
     fn request_refresh(&self) {
-        let now = now_ms();
-        let previous = self.last_refresh_ms.load(Ordering::Relaxed);
-        if now.saturating_sub(previous) < MIN_REFRESH_INTERVAL_MS {
+        let now = now_us();
+        let previous = self.last_refresh_us.load(Ordering::Relaxed);
+        if now.saturating_sub(previous) < MIN_REFRESH_INTERVAL_US {
             return;
         }
-        self.last_refresh_ms.store(now, Ordering::Relaxed);
+        self.last_refresh_us.store(now, Ordering::Relaxed);
         self.native.request_refresh();
     }
 
@@ -435,12 +477,37 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn now_us() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_micros() as u64
+}
+
 fn shared_refresh_interval() -> Duration {
-    let fps = std::env::var("SIMDECK_REALTIME_FPS")
+    let target_fps = std::env::var("SIMDECK_REALTIME_FPS")
         .or_else(|_| std::env::var("SIMDECK_LOCAL_STREAM_FPS"))
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(DEFAULT_SHARED_REFRESH_FPS)
         .clamp(MIN_SHARED_REFRESH_FPS, MAX_SHARED_REFRESH_FPS);
+    let fps = if realtime_stream_enabled() {
+        target_fps.saturating_mul(2)
+    } else {
+        target_fps
+    }
+    .clamp(MIN_SHARED_REFRESH_FPS, MAX_SHARED_REFRESH_FPS);
     Duration::from_micros(1_000_000 / fps)
+}
+
+fn realtime_stream_enabled() -> bool {
+    std::env::var("SIMDECK_REALTIME_STREAM")
+        .map(|value| {
+            let value = value.trim();
+            value == "1"
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("yes")
+                || value.eq_ignore_ascii_case("on")
+        })
+        .unwrap_or(false)
 }

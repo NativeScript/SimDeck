@@ -1,8 +1,11 @@
 import { accessTokenFromLocation, apiRequest } from "./client";
 import { apiUrl } from "./config";
 import type {
+  ButtonPayload,
+  EdgeTouchPayload,
   KeyPayload,
   LaunchPayload,
+  MultiTouchPayload,
   OpenUrlPayload,
   SimulatorMetadata,
   SimulatorResponse,
@@ -11,7 +14,10 @@ import type {
 
 export type ControlMessage =
   | ({ type: "touch" } & TouchPayload)
+  | ({ type: "edgeTouch" } & EdgeTouchPayload)
+  | ({ type: "multiTouch" } & MultiTouchPayload)
   | ({ type: "key" } & KeyPayload)
+  | ({ type: "button" } & ButtonPayload)
   | { type: "dismissKeyboard" }
   | { type: "home" }
   | { type: "appSwitcher" }
@@ -22,7 +28,12 @@ export type ControlMessage =
 async function postSimulatorAction(
   udid: string,
   action: string,
-  payload?: KeyPayload | LaunchPayload | OpenUrlPayload | TouchPayload,
+  payload?:
+    | ButtonPayload
+    | KeyPayload
+    | LaunchPayload
+    | OpenUrlPayload
+    | TouchPayload,
 ): Promise<SimulatorMetadata | null> {
   const response = await apiRequest<SimulatorResponse | { ok: boolean }>(
     `/api/simulators/${udid}/${action}`,
@@ -82,6 +93,10 @@ export function dismissKeyboard(udid: string) {
 
 export function pressHome(udid: string) {
   return postSimulatorAction(udid, "home");
+}
+
+export function pressSimulatorButton(udid: string, payload: ButtonPayload) {
+  return postSimulatorAction(udid, "button", payload);
 }
 
 export function openAppSwitcher(udid: string) {

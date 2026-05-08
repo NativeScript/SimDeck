@@ -60,6 +60,13 @@ unsafe extern "C" {
     ) -> *mut c_char;
     pub fn xcw_native_render_chrome_png(
         udid: *const c_char,
+        include_buttons: bool,
+        error_message: *mut *mut c_char,
+    ) -> xcw_native_owned_bytes;
+    pub fn xcw_native_render_chrome_button_png(
+        udid: *const c_char,
+        button_name: *const c_char,
+        pressed: bool,
         error_message: *mut *mut c_char,
     ) -> xcw_native_owned_bytes;
     pub fn xcw_native_render_screen_mask_png(
@@ -106,6 +113,15 @@ unsafe extern "C" {
         udid: *const c_char,
         button_name: *const c_char,
         duration_ms: u32,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_send_button(
+        udid: *const c_char,
+        button_name: *const c_char,
+        pressed: bool,
+        has_usage: bool,
+        usage_page: u32,
+        usage: u32,
         error_message: *mut *mut c_char,
     ) -> bool;
     pub fn xcw_native_rotate_right(udid: *const c_char, error_message: *mut *mut c_char) -> bool;
@@ -197,6 +213,23 @@ unsafe extern "C" {
         phase: *const c_char,
         error_message: *mut *mut c_char,
     ) -> bool;
+    pub fn xcw_native_session_send_edge_touch(
+        handle: *mut c_void,
+        x: f64,
+        y: f64,
+        phase: *const c_char,
+        edge: u32,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_session_send_multitouch(
+        handle: *mut c_void,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        phase: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> bool;
     pub fn xcw_native_session_send_key(
         handle: *mut c_void,
         key_code: u16,
@@ -205,6 +238,21 @@ unsafe extern "C" {
     ) -> bool;
     pub fn xcw_native_session_press_home(
         handle: *mut c_void,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_session_press_button(
+        handle: *mut c_void,
+        button_name: *const c_char,
+        duration_ms: u32,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_session_send_button(
+        handle: *mut c_void,
+        button_name: *const c_char,
+        pressed: bool,
+        has_usage: bool,
+        usage_page: u32,
+        usage: u32,
         error_message: *mut *mut c_char,
     ) -> bool;
     pub fn xcw_native_session_open_app_switcher(

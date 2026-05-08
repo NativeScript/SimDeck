@@ -130,6 +130,10 @@ simdeck dismiss-keyboard <UDID>
 simdeck button <UDID> home
 simdeck button <UDID> lock --duration-ms 1000
 simdeck button <UDID> side-button
+simdeck button <UDID> volume-up
+simdeck button <UDID> volume-down
+simdeck button <UDID> action --duration-ms 1000
+simdeck button <UDID> mute
 simdeck button <UDID> siri
 simdeck button <UDID> apple-pay
 simdeck home <UDID>

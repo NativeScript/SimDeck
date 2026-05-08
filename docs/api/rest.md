@@ -346,8 +346,21 @@ Content-Type: application/json
 { "button": "lock", "durationMs": 50 }
 ```
 
-Supported button names match the CLI: `home`, `lock`, `side-button`, `siri`,
-and `apple-pay`. `durationMs` defaults to `0`.
+Supported button names match the CLI and chrome controls: `home`, `lock`,
+`power`, `side-button`, `volume-up`, `volume-down`, `action`, `mute`,
+`app-switcher`, `siri`, and `apple-pay`. `durationMs` defaults to `0` and is
+used for press-and-hold interactions.
+
+For live chrome interactions, send explicit button edges instead of a completed
+press:
+
+```json
+{ "button": "power", "phase": "down" }
+```
+
+`phase` accepts `down`, `up`, `began`, `ended`, and `cancelled`. Chrome controls
+may also pass `usagePage` and `usage` from the device profile when an exact HID
+usage is available.
 
 ### `POST /api/simulators/{udid}/home`
 
@@ -383,15 +396,40 @@ Returns the bezel layout for the simulator:
   "screenY": 35,
   "screenWidth": 1170,
   "screenHeight": 2532,
-  "cornerRadius": 220
+  "cornerRadius": 220,
+  "buttons": [
+    {
+      "name": "power",
+      "label": "Sleep/Wake",
+      "x": 1210,
+      "y": 420,
+      "width": 18,
+      "height": 112,
+      "anchor": "right",
+      "onTop": false,
+      "normalOffset": { "x": -2, "y": 420 },
+      "rolloverOffset": { "x": -4, "y": 420 },
+      "imageName": "SideButton",
+      "imageDownName": "SideButtonPressed"
+    }
+  ]
 }
 ```
 
-The browser client uses this to compose chrome around the live frame.
+The browser client uses this to compose chrome around the live frame and to
+render physical button sprites over or under the device body.
 
 ### `GET /api/simulators/{udid}/chrome.png`
 
-Returns the rendered bezel as a PNG. Cache headers are set to `no-cache, no-store, must-revalidate` so changes (e.g. after a device rotation) are picked up immediately.
+Returns the rendered bezel as a PNG. Pass `?buttons=false` to omit physical
+button sprites when the client renders them interactively. Cache headers are set
+to `no-cache, no-store, must-revalidate` so changes (e.g. after a device
+rotation) are picked up immediately.
+
+### `GET /api/simulators/{udid}/chrome-button/{button}.png`
+
+Returns a rendered physical button sprite. Pass `?pressed=true` for the
+pressed-state sprite when the device profile exposes one.
 
 ## Accessibility
 

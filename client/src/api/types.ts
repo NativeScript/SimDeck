@@ -62,6 +62,27 @@ export interface ChromeProfile {
   screenHeight: number;
   cornerRadius: number;
   hasScreenMask?: boolean;
+  buttons?: ChromeButtonProfile[];
+}
+
+export interface ChromeButtonProfile {
+  name: string;
+  label?: string;
+  type?: string;
+  imageName?: string;
+  imageDownName?: string;
+  imageDownDrawMode?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  anchor?: "left" | "right" | "top" | "bottom" | string;
+  align?: string;
+  onTop?: boolean;
+  usagePage?: number;
+  usage?: number;
+  normalOffset?: { x: number; y: number };
+  rolloverOffset?: { x: number; y: number };
 }
 
 export interface AccessibilityFrame {
@@ -187,9 +208,29 @@ export interface TouchPayload {
   phase: TouchPhase;
 }
 
+export interface EdgeTouchPayload extends TouchPayload {
+  edge: "left" | "top" | "bottom" | "right" | "none";
+}
+
+export interface MultiTouchPayload {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  phase: TouchPhase;
+}
+
 export interface KeyPayload {
   keyCode: number;
   modifiers: number;
+}
+
+export interface ButtonPayload {
+  button: string;
+  durationMs?: number;
+  phase?: "down" | "up" | "began" | "ended" | "cancelled";
+  usagePage?: number;
+  usage?: number;
 }
 
 export interface LaunchPayload {

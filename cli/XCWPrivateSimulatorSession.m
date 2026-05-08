@@ -253,6 +253,42 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
     return [_displayBridge sendTouchAtNormalizedX:normalizedX normalizedY:normalizedY phase:touchPhase error:error];
 }
 
+- (BOOL)sendEdgeTouchWithNormalizedX:(double)normalizedX
+                          normalizedY:(double)normalizedY
+                                phase:(NSString *)phase
+                                 edge:(NSInteger)edge
+                                error:(NSError * _Nullable __autoreleasing *)error {
+    DFPrivateSimulatorTouchPhase touchPhase = DFPrivateSimulatorTouchPhaseMoved;
+    if (![self touchPhaseFromString:phase outPhase:&touchPhase error:error]) {
+        return NO;
+    }
+
+    DFPrivateSimulatorTouchEdge touchEdge = DFPrivateSimulatorTouchEdgeNone;
+    switch (edge) {
+    case DFPrivateSimulatorTouchEdgeLeft:
+        touchEdge = DFPrivateSimulatorTouchEdgeLeft;
+        break;
+    case DFPrivateSimulatorTouchEdgeTop:
+        touchEdge = DFPrivateSimulatorTouchEdgeTop;
+        break;
+    case DFPrivateSimulatorTouchEdgeBottom:
+        touchEdge = DFPrivateSimulatorTouchEdgeBottom;
+        break;
+    case DFPrivateSimulatorTouchEdgeRight:
+        touchEdge = DFPrivateSimulatorTouchEdgeRight;
+        break;
+    default:
+        touchEdge = DFPrivateSimulatorTouchEdgeNone;
+        break;
+    }
+
+    return [_displayBridge sendEdgeTouchAtNormalizedX:normalizedX
+                                          normalizedY:normalizedY
+                                                phase:touchPhase
+                                                 edge:touchEdge
+                                                error:error];
+}
+
 - (BOOL)sendMultiTouchWithNormalizedX1:(double)normalizedX1
                            normalizedY1:(double)normalizedY1
                            normalizedX2:(double)normalizedX2
@@ -305,6 +341,24 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
 
 - (BOOL)pressHomeButton:(NSError * _Nullable __autoreleasing *)error {
     return [_displayBridge pressHomeButton:error];
+}
+
+- (BOOL)pressHardwareButtonNamed:(NSString *)buttonName
+                       durationMs:(NSUInteger)durationMs
+                            error:(NSError * _Nullable __autoreleasing *)error {
+    return [_displayBridge pressHardwareButtonNamed:buttonName durationMs:durationMs error:error];
+}
+
+- (BOOL)sendHardwareButtonNamed:(NSString *)buttonName
+                         pressed:(BOOL)pressed
+                       usagePage:(NSNumber *)usagePage
+                           usage:(NSNumber *)usage
+                           error:(NSError * _Nullable __autoreleasing *)error {
+    return [_displayBridge sendHardwareButtonNamed:buttonName
+                                           pressed:pressed
+                                         usagePage:usagePage
+                                             usage:usage
+                                             error:error];
 }
 
 - (BOOL)openAppSwitcher:(NSError * _Nullable __autoreleasing *)error {

@@ -21,6 +21,11 @@ NS_ASSUME_NONNULL_BEGIN
                    y:(double)y
                phase:(NSString *)phase
                error:(NSError * _Nullable * _Nullable)error;
+- (BOOL)sendEdgeTouchAtX:(double)x
+                       y:(double)y
+                   phase:(NSString *)phase
+                    edge:(NSInteger)edge
+                   error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)sendMultiTouchAtX1:(double)x1
                         y1:(double)y1
                         x2:(double)x2
@@ -31,6 +36,14 @@ NS_ASSUME_NONNULL_BEGIN
           modifiers:(uint32_t)modifiers
               error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)pressHome:(NSError * _Nullable * _Nullable)error;
+- (BOOL)pressHardwareButtonNamed:(NSString *)buttonName
+                       durationMs:(NSUInteger)durationMs
+                            error:(NSError * _Nullable * _Nullable)error;
+- (BOOL)sendHardwareButtonNamed:(NSString *)buttonName
+                         pressed:(BOOL)pressed
+                       usagePage:(nullable NSNumber *)usagePage
+                           usage:(nullable NSNumber *)usage
+                           error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)openAppSwitcher:(NSError * _Nullable * _Nullable)error;
 - (BOOL)rotateRight:(NSError * _Nullable * _Nullable)error;
 - (BOOL)rotateLeft:(NSError * _Nullable * _Nullable)error;

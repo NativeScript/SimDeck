@@ -117,6 +117,18 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
     return [self.session sendTouchWithNormalizedX:x normalizedY:y phase:phase error:error];
 }
 
+- (BOOL)sendEdgeTouchAtX:(double)x
+                       y:(double)y
+                   phase:(NSString *)phase
+                    edge:(NSInteger)edge
+                   error:(NSError * _Nullable __autoreleasing *)error {
+    return [self.session sendEdgeTouchWithNormalizedX:x
+                                          normalizedY:y
+                                                phase:phase
+                                                 edge:edge
+                                                error:error];
+}
+
 - (BOOL)sendMultiTouchAtX1:(double)x1
                         y1:(double)y1
                         x2:(double)x2
@@ -139,6 +151,24 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
 
 - (BOOL)pressHome:(NSError * _Nullable __autoreleasing *)error {
     return [self.session pressHomeButton:error];
+}
+
+- (BOOL)pressHardwareButtonNamed:(NSString *)buttonName
+                       durationMs:(NSUInteger)durationMs
+                            error:(NSError * _Nullable __autoreleasing *)error {
+    return [self.session pressHardwareButtonNamed:buttonName durationMs:durationMs error:error];
+}
+
+- (BOOL)sendHardwareButtonNamed:(NSString *)buttonName
+                         pressed:(BOOL)pressed
+                       usagePage:(NSNumber *)usagePage
+                           usage:(NSNumber *)usage
+                           error:(NSError * _Nullable __autoreleasing *)error {
+    return [self.session sendHardwareButtonNamed:buttonName
+                                         pressed:pressed
+                                       usagePage:usagePage
+                                           usage:usage
+                                           error:error];
 }
 
 - (BOOL)openAppSwitcher:(NSError * _Nullable __autoreleasing *)error {

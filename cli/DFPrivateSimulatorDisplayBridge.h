@@ -12,6 +12,14 @@ typedef NS_ENUM(NSInteger, DFPrivateSimulatorTouchPhase) {
     DFPrivateSimulatorTouchPhaseCancelled = 3,
 } NS_SWIFT_NAME(PrivateSimulatorTouchPhase);
 
+typedef NS_ENUM(NSInteger, DFPrivateSimulatorTouchEdge) {
+    DFPrivateSimulatorTouchEdgeNone = 0,
+    DFPrivateSimulatorTouchEdgeLeft = 1,
+    DFPrivateSimulatorTouchEdgeTop = 2,
+    DFPrivateSimulatorTouchEdgeBottom = 3,
+    DFPrivateSimulatorTouchEdgeRight = 4,
+} NS_SWIFT_NAME(PrivateSimulatorTouchEdge);
+
 NS_SWIFT_NAME(PrivateSimulatorDisplayBridgeDelegate)
 @protocol DFPrivateSimulatorDisplayBridgeDelegate <NSObject>
 
@@ -47,6 +55,12 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
                          phase:(DFPrivateSimulatorTouchPhase)phase
                          error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendTouch(normalizedX:normalizedY:phase:));
 
+- (BOOL)sendEdgeTouchAtNormalizedX:(double)normalizedX
+                        normalizedY:(double)normalizedY
+                              phase:(DFPrivateSimulatorTouchPhase)phase
+                               edge:(DFPrivateSimulatorTouchEdge)edge
+                              error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendEdgeTouch(normalizedX:normalizedY:phase:edge:));
+
 - (BOOL)sendMultiTouchAtNormalizedX1:(double)normalizedX1
                           normalizedY1:(double)normalizedY1
                           normalizedX2:(double)normalizedX2
@@ -66,6 +80,11 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
 - (BOOL)pressHardwareButtonNamed:(NSString *)buttonName
                        durationMs:(NSUInteger)durationMs
                             error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(pressHardwareButton(named:durationMs:));
+- (BOOL)sendHardwareButtonNamed:(NSString *)buttonName
+                         pressed:(BOOL)pressed
+                       usagePage:(nullable NSNumber *)usagePage
+                           usage:(nullable NSNumber *)usage
+                           error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendHardwareButton(named:pressed:usagePage:usage:));
 
 - (BOOL)rotateRight:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(rotateRight());
 - (BOOL)rotateLeft:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(rotateLeft());

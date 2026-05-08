@@ -181,7 +181,7 @@ char *xcw_native_get_chrome_profile(const char *udid, char **error_message) {
     }
 }
 
-xcw_native_owned_bytes xcw_native_render_chrome_png(const char *udid, char **error_message) {
+xcw_native_owned_bytes xcw_native_render_chrome_png(const char *udid, bool include_buttons, char **error_message) {
     @autoreleasepool {
         NSDictionary *simulator = XCWSimulatorRecordForUDID(udid, error_message);
         if (simulator == nil) {
@@ -191,7 +191,30 @@ xcw_native_owned_bytes xcw_native_render_chrome_png(const char *udid, char **err
         NSError *renderError = nil;
         NSString *deviceName = simulator[@"deviceTypeName"] ?: simulator[@"name"] ?: @"";
         NSData *pngData = [XCWChromeRenderer PNGDataForDeviceName:deviceName
+                                                   includeButtons:include_buttons
                                                             error:&renderError];
+        if (pngData == nil) {
+            XCWSetErrorMessage(error_message, renderError);
+            return (xcw_native_owned_bytes){0};
+        }
+
+        return XCWOwnedBytesFromData(pngData);
+    }
+}
+
+xcw_native_owned_bytes xcw_native_render_chrome_button_png(const char *udid, const char *button_name, bool pressed, char **error_message) {
+    @autoreleasepool {
+        NSDictionary *simulator = XCWSimulatorRecordForUDID(udid, error_message);
+        if (simulator == nil) {
+            return (xcw_native_owned_bytes){0};
+        }
+
+        NSError *renderError = nil;
+        NSString *deviceName = simulator[@"deviceTypeName"] ?: simulator[@"name"] ?: @"";
+        NSData *pngData = [XCWChromeRenderer buttonPNGDataForDeviceName:deviceName
+                                                              buttonName:XCWStringFromCString(button_name)
+                                                                 pressed:pressed
+                                                                   error:&renderError];
         if (pngData == nil) {
             XCWSetErrorMessage(error_message, renderError);
             return (xcw_native_owned_bytes){0};
@@ -536,6 +559,26 @@ bool xcw_native_press_button(const char *udid, const char *button_name, uint32_t
     }
 }
 
+bool xcw_native_send_button(const char *udid, const char *button_name, bool pressed, bool has_usage, uint32_t usage_page, uint32_t usage, char **error_message) {
+    @autoreleasepool {
+        DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
+        if (bridge == nil) {
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [bridge sendHardwareButtonNamed:XCWStringFromCString(button_name)
+                                          pressed:pressed
+                                        usagePage:has_usage ? @(usage_page) : nil
+                                            usage:has_usage ? @(usage) : nil
+                                            error:&error];
+        [bridge disconnect];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
 bool xcw_native_rotate_right(const char *udid, char **error_message) {
     @autoreleasepool {
         DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
@@ -724,6 +767,21 @@ bool xcw_native_session_send_touch(void *handle, double x, double y, const char 
     }
 }
 
+bool xcw_native_session_send_edge_touch(void *handle, double x, double y, const char *phase, uint32_t edge, char **error_message) {
+    @autoreleasepool {
+        NSError *error = nil;
+        BOOL ok = [XCWNativeSessionFromHandle(handle) sendEdgeTouchAtX:x
+                                                                     y:y
+                                                                 phase:XCWStringFromCString(phase)
+                                                                  edge:(NSInteger)edge
+                                                                 error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
 bool xcw_native_session_send_multitouch(void *handle, double x1, double y1, double x2, double y2, const char *phase, char **error_message) {
     @autoreleasepool {
         NSError *error = nil;
@@ -757,6 +815,34 @@ bool xcw_native_session_press_home(void *handle, char **error_message) {
     @autoreleasepool {
         NSError *error = nil;
         BOOL ok = [XCWNativeSessionFromHandle(handle) pressHome:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_session_press_button(void *handle, const char *button_name, uint32_t duration_ms, char **error_message) {
+    @autoreleasepool {
+        NSError *error = nil;
+        BOOL ok = [XCWNativeSessionFromHandle(handle) pressHardwareButtonNamed:XCWStringFromCString(button_name)
+                                                                    durationMs:(NSUInteger)duration_ms
+                                                                         error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_session_send_button(void *handle, const char *button_name, bool pressed, bool has_usage, uint32_t usage_page, uint32_t usage, char **error_message) {
+    @autoreleasepool {
+        NSError *error = nil;
+        BOOL ok = [XCWNativeSessionFromHandle(handle) sendHardwareButtonNamed:XCWStringFromCString(button_name)
+                                                                      pressed:pressed
+                                                                    usagePage:has_usage ? @(usage_page) : nil
+                                                                        usage:has_usage ? @(usage) : nil
+                                                                        error:&error];
         if (!ok) {
             XCWSetErrorMessage(error_message, error);
         }

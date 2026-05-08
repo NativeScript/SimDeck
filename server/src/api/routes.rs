@@ -269,9 +269,29 @@ pub(crate) enum ControlMessage {
         y: f64,
         phase: String,
     },
+    EdgeTouch {
+        x: f64,
+        y: f64,
+        phase: String,
+        edge: String,
+    },
+    MultiTouch {
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        phase: String,
+    },
     Key {
         key_code: u16,
         modifiers: Option<u32>,
+    },
+    Button {
+        button: String,
+        duration_ms: Option<u32>,
+        phase: Option<String>,
+        usage_page: Option<u32>,
+        usage: Option<u32>,
     },
     DismissKeyboard,
     Home,
@@ -294,6 +314,20 @@ struct ButtonPayload {
     button: String,
     #[serde(rename = "durationMs")]
     duration_ms: Option<u32>,
+    phase: Option<String>,
+    #[serde(rename = "usagePage")]
+    usage_page: Option<u32>,
+    usage: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct ChromePngQuery {
+    buttons: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ChromeButtonPngQuery {
+    pressed: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -552,6 +586,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/rotate-right", post(rotate_right))
         .route("/api/simulators/{udid}/chrome-profile", get(chrome_profile))
         .route("/api/simulators/{udid}/chrome.png", get(chrome_png))
+        .route(
+            "/api/simulators/{udid}/chrome-button/{button}",
+            get(chrome_button_png),
+        )
         .route(
             "/api/simulators/{udid}/screen-mask.png",
             get(screen_mask_png),
@@ -1656,7 +1694,25 @@ async fn run_control_queue(
 }
 
 fn control_message_is_move(message: &ControlMessage) -> bool {
-    matches!(message, ControlMessage::Touch { phase, .. } if phase == "moved")
+    matches!(
+        message,
+        ControlMessage::Touch { phase, .. }
+            | ControlMessage::EdgeTouch { phase, .. }
+            | ControlMessage::MultiTouch { phase, .. }
+            if phase == "moved"
+    )
+}
+
+fn edge_name_to_hid_value(edge: &str) -> Option<u32> {
+    let edge = edge.trim().to_ascii_lowercase();
+    match edge.as_str() {
+        "left" => Some(1),
+        "top" => Some(2),
+        "bottom" => Some(3),
+        "right" => Some(4),
+        "none" => Some(0),
+        _ => None,
+    }
 }
 
 pub(crate) async fn run_control_message(
@@ -1672,10 +1728,63 @@ pub(crate) async fn run_control_message(
             }
             session.send_touch(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), &phase)
         }
+        ControlMessage::EdgeTouch { x, y, phase, edge } => {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(AppError::bad_request(
+                    "`x` and `y` must be finite normalized numbers.",
+                ));
+            }
+            let edge = edge_name_to_hid_value(edge.as_str()).ok_or_else(|| {
+                AppError::bad_request("`edge` must be `left`, `top`, `bottom`, `right`, or `none`.")
+            })?;
+            session.send_edge_touch(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), &phase, edge)
+        }
+        ControlMessage::MultiTouch {
+            x1,
+            y1,
+            x2,
+            y2,
+            phase,
+        } => {
+            if !x1.is_finite() || !y1.is_finite() || !x2.is_finite() || !y2.is_finite() {
+                return Err(AppError::bad_request(
+                    "`x1`, `y1`, `x2`, and `y2` must be finite normalized numbers.",
+                ));
+            }
+            session.send_multitouch(
+                x1.clamp(0.0, 1.0),
+                y1.clamp(0.0, 1.0),
+                x2.clamp(0.0, 1.0),
+                y2.clamp(0.0, 1.0),
+                &phase,
+            )
+        }
         ControlMessage::Key {
             key_code,
             modifiers,
         } => session.send_key(key_code, modifiers.unwrap_or(0)),
+        ControlMessage::Button {
+            button,
+            duration_ms,
+            phase,
+            usage_page,
+            usage,
+        } => {
+            if let Some(phase) = phase {
+                let pressed = match phase.as_str() {
+                    "down" | "began" => true,
+                    "up" | "ended" | "cancelled" => false,
+                    _ => {
+                        return Err(AppError::bad_request(
+                            "`phase` must be `down`, `up`, `began`, `ended`, or `cancelled`.",
+                        ))
+                    }
+                };
+                session.send_button(&button, pressed, usage_page, usage)
+            } else {
+                session.press_button(&button, duration_ms.unwrap_or(0))
+            }
+        }
         ControlMessage::DismissKeyboard => session.send_key(41, 0),
         ControlMessage::Home => session.press_home(),
         ControlMessage::AppSwitcher => session.open_app_switcher(),
@@ -1748,10 +1857,32 @@ async fn press_button(
     if payload.button.trim().is_empty() {
         return Err(AppError::bad_request("Request body must include `button`."));
     }
-    run_bridge_action(state, move |bridge| {
-        bridge.press_button(&udid, &payload.button, payload.duration_ms.unwrap_or(0))
-    })
-    .await?;
+    if let Some(phase) = payload.phase.as_deref() {
+        let pressed = match phase {
+            "down" | "began" => true,
+            "up" | "ended" | "cancelled" => false,
+            _ => {
+                return Err(AppError::bad_request(
+                    "`phase` must be `down`, `up`, `began`, `ended`, or `cancelled`.",
+                ))
+            }
+        };
+        run_bridge_action(state, move |bridge| {
+            bridge.send_button(
+                &udid,
+                &payload.button,
+                pressed,
+                payload.usage_page,
+                payload.usage,
+            )
+        })
+        .await?;
+    } else {
+        run_bridge_action(state, move |bridge| {
+            bridge.press_button(&udid, &payload.button, payload.duration_ms.unwrap_or(0))
+        })
+        .await?;
+    }
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -1798,8 +1929,66 @@ async fn chrome_profile(
 async fn chrome_png(
     State(state): State<AppState>,
     Path(udid): Path<String>,
+    Query(query): Query<ChromePngQuery>,
 ) -> Result<(StatusCode, HeaderMap, Vec<u8>), AppError> {
-    let png = run_bridge_action(state, move |bridge| bridge.chrome_png(&udid)).await?;
+    let include_buttons = query
+        .buttons
+        .as_deref()
+        .map(|value| !value.eq_ignore_ascii_case("false"))
+        .unwrap_or(true);
+    let png = run_bridge_action(state, move |bridge| {
+        bridge.chrome_png_with_buttons(&udid, include_buttons)
+    })
+    .await?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
+    headers.insert(
+        header::CACHE_CONTROL,
+        "no-cache, no-store, must-revalidate".parse().unwrap(),
+    );
+    Ok((StatusCode::OK, headers, png))
+}
+
+fn parse_asset_bool(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+async fn chrome_button_png(
+    State(state): State<AppState>,
+    Path((udid, button)): Path<(String, String)>,
+    Query(query): Query<ChromeButtonPngQuery>,
+) -> Result<(StatusCode, HeaderMap, Vec<u8>), AppError> {
+    let button_name = button.strip_suffix(".png").unwrap_or(&button).to_owned();
+    let png = if let Some(pressed) = query.pressed.as_deref().map(parse_asset_bool) {
+        run_bridge_action(state, move |bridge| {
+            bridge.chrome_button_png(&udid, &button_name, pressed)
+        })
+        .await?
+    } else if let Some(base_name) = button_name.strip_suffix("-down").map(str::to_owned) {
+        let exact_udid = udid.clone();
+        let exact_name = button_name.clone();
+        match run_bridge_action(state.clone(), move |bridge| {
+            bridge.chrome_button_png(&exact_udid, &exact_name, false)
+        })
+        .await
+        {
+            Ok(png) => png,
+            Err(_) => {
+                run_bridge_action(state, move |bridge| {
+                    bridge.chrome_button_png(&udid, &base_name, true)
+                })
+                .await?
+            }
+        }
+    } else {
+        run_bridge_action(state, move |bridge| {
+            bridge.chrome_button_png(&udid, &button_name, false)
+        })
+        .await?
+    };
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
     headers.insert(
