@@ -58,9 +58,7 @@ const WEBRTC_FULL_ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(3);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 const WEBRTC_PEER_DISCONNECTED_TIMEOUT: Duration = Duration::from_secs(12);
 const ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY: usize = 128;
-const DEFAULT_ANDROID_WEBRTC_MAX_EDGE: u32 = 960;
-const DEFAULT_ANDROID_WEBRTC_FPS: u64 = 60;
-const MAX_ANDROID_WEBRTC_FPS: u64 = 120;
+const ANDROID_WEBRTC_FPS: u64 = 30;
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<WebRtcMediaStreamToken>>>> =
     OnceLock::new();
 const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 16;
@@ -124,11 +122,14 @@ pub async fn create_answer(
             "WebRTC preview supports media tracks only.",
         ));
     }
-    if let Some(stream_config) = payload.stream_config.as_ref() {
-        apply_stream_quality_payload(&state, stream_config)?;
+    let is_android = android::is_android_id(&udid);
+    if !is_android {
+        if let Some(stream_config) = payload.stream_config.as_ref() {
+            apply_stream_quality_payload(&state, stream_config)?;
+        }
     }
 
-    let source = if android::is_android_id(&udid) {
+    let source = if is_android {
         WebRtcVideoSource::Android(
             AndroidWebRtcSource::start(
                 state.android.clone(),
@@ -593,13 +594,8 @@ fn attach_android_data_channel(
                         let _ = stream_control_tx.send(command);
                     }
                     WebRtcDataChannelMessage::StreamQuality { config } => {
-                        if let Err(error) = apply_stream_quality_payload(&state, &config) {
-                            warn!(
-                                "Android WebRTC stream quality update failed for {udid}: {error}"
-                            );
-                        } else {
-                            source.request_keyframe();
-                        }
+                        let _ = config;
+                        source.request_keyframe();
                     }
                 }
                 return;
@@ -1106,9 +1102,9 @@ impl AndroidWebRtcSource {
         bridge: android::AndroidBridge,
         metrics: Arc<crate::metrics::counters::Metrics>,
         udid: String,
-        max_edge: u32,
+        max_edge: Option<u32>,
     ) -> Result<Self, AppError> {
-        let mut frame_stream = bridge.grpc_frame_stream(&udid, Some(max_edge)).await?;
+        let mut frame_stream = bridge.grpc_frame_stream(&udid, max_edge).await?;
         let (sender, _) = broadcast::channel(ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY);
         let (shutdown_tx, _) = broadcast::channel(1);
         let inner = Arc::new(AndroidWebRtcSourceInner {
@@ -1397,28 +1393,16 @@ unsafe fn take_native_error(raw: *mut i8) -> Option<AppError> {
     Some(AppError::native(message))
 }
 
-fn android_webrtc_max_edge() -> u32 {
-    let android_cap = std::env::var("SIMDECK_ANDROID_WEBRTC_MAX_EDGE")
+fn android_webrtc_max_edge() -> Option<u32> {
+    std::env::var("SIMDECK_ANDROID_WEBRTC_MAX_EDGE")
         .ok()
         .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(DEFAULT_ANDROID_WEBRTC_MAX_EDGE)
-        .clamp(360, 2400);
-    std::env::var("SIMDECK_REALTIME_MAX_EDGE")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .map(|value| value.clamp(360, 2400).min(android_cap))
-        .unwrap_or(android_cap)
+        .filter(|value| *value > 0)
+        .map(|value| value.clamp(360, 4096))
 }
 
 fn android_webrtc_frame_interval() -> Duration {
-    let fps = std::env::var("SIMDECK_REALTIME_FPS")
-        .or_else(|_| std::env::var("SIMDECK_LOCAL_STREAM_FPS"))
-        .or_else(|_| std::env::var("SIMDECK_ANDROID_WEBRTC_FPS"))
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_ANDROID_WEBRTC_FPS)
-        .clamp(15, MAX_ANDROID_WEBRTC_FPS);
-    Duration::from_micros(1_000_000 / fps)
+    Duration::from_micros(1_000_000 / ANDROID_WEBRTC_FPS)
 }
 
 #[derive(Clone)]

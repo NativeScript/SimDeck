@@ -1874,10 +1874,8 @@ async fn handle_android_frame_socket(
         ))
         .await;
 
-    let min_frame_gap = max_fps
-        .filter(|fps| *fps > 0)
-        .map(|fps| Duration::from_millis(1000 / u64::from(fps.min(60))))
-        .unwrap_or_else(|| Duration::from_millis(83));
+    let fps = max_fps.unwrap_or(30).clamp(1, 30);
+    let min_frame_gap = Duration::from_micros(1_000_000 / u64::from(fps));
     let mut last_sent_at = Instant::now() - min_frame_gap;
 
     loop {

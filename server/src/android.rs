@@ -16,7 +16,7 @@ use tonic::transport::{Channel, Endpoint};
 
 const ANDROID_ID_PREFIX: &str = "android:";
 const DEFAULT_GRPC_PORT_BASE: u16 = 8554;
-const DEFAULT_ANDROID_STREAM_MAX_EDGE: u32 = 960;
+const ANDROID_GRPC_FRAME_MESSAGE_LIMIT: usize = 64 * 1024 * 1024;
 const ANDROID_TOUCH_IDENTIFIER: i32 = 1;
 const RUNNING_EMULATOR_CACHE_TTL: Duration = Duration::from_secs(2);
 const AVD_GRPC_PORT_CACHE_TTL: Duration = Duration::from_secs(60);
@@ -460,11 +460,9 @@ impl AndroidBridge {
             display: 0,
             transport: None,
         };
-        if let Ok(serial) = self.resolve_serial(&avd_name) {
+        if let (Some(max_edge), Ok(serial)) = (max_edge, self.resolve_serial(&avd_name)) {
             if let Ok((width, height)) = self.screen_size_for_serial(&serial) {
-                let max_edge = max_edge
-                    .unwrap_or(DEFAULT_ANDROID_STREAM_MAX_EDGE)
-                    .clamp(240, 2400) as f64;
+                let max_edge = max_edge.clamp(240, 2400) as f64;
                 let largest = width.max(height);
                 if largest > max_edge {
                     let scale = max_edge / largest;
@@ -483,7 +481,8 @@ impl AndroidBridge {
                     "Unable to connect to Android emulator gRPC: {error}"
                 ))
             })?;
-        let mut grpc = tonic::client::Grpc::new(endpoint);
+        let mut grpc = tonic::client::Grpc::new(endpoint)
+            .max_decoding_message_size(ANDROID_GRPC_FRAME_MESSAGE_LIMIT);
         grpc.ready().await.map_err(|error| {
             AppError::native(format!("Android emulator gRPC is not ready: {error}"))
         })?;
