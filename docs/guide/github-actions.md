@@ -62,7 +62,7 @@ permissions:
   actions: read
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 concurrency:
   group: simdeck-ios-pr-${{ github.event.issue.number }}
