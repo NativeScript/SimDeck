@@ -1313,7 +1313,7 @@ export function AppShell({
   const screenOnlyStyle =
     !viewportChromeProfile && isAndroidViewport
       ? ({
-          borderRadius: "10px",
+          borderRadius: "0",
         } satisfies CSSProperties)
       : !viewportChromeProfile && chromeProfile && chromeProfile.screenWidth > 0
         ? ({

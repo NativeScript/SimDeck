@@ -1609,7 +1609,7 @@
 
 .device-screen.android-screen {
   background: transparent;
-  border-radius: 10px;
+  border-radius: 0;
 }
 
 .stream-canvas {
