@@ -353,6 +353,13 @@ interface WebCodecsVideoDecoderConstructor {
   }>;
 }
 
+interface WebRtcAnswerPayload extends RTCSessionDescriptionInit {
+  video?: {
+    height?: number;
+    width?: number;
+  };
+}
+
 interface PendingVideoFrame {
   frame: WebCodecsVideoFrame;
   sequence: number | null;
@@ -1532,7 +1539,7 @@ class WebRtcStreamClient implements StreamClientBackend {
       target,
       localDescription,
     );
-    const answer = (await response.json()) as RTCSessionDescriptionInit;
+    const answer = (await response.json()) as WebRtcAnswerPayload;
     if (generation !== this.connectGeneration) {
       return;
     }
@@ -1541,6 +1548,15 @@ class WebRtcStreamClient implements StreamClientBackend {
     );
     this.postDiagnostics(target, `${options.detailPrefix}-answer`);
     await peerConnection.setRemoteDescription(answer);
+    if (
+      typeof answer.video?.width === "number" &&
+      typeof answer.video?.height === "number" &&
+      answer.video.width > 0 &&
+      answer.video.height > 0
+    ) {
+      this.syncCanvasSize(answer.video.width, answer.video.height);
+      this.reportVideoConfig(answer.video.width, answer.video.height);
+    }
   }
 
   destroy() {
@@ -1687,16 +1703,24 @@ class WebRtcStreamClient implements StreamClientBackend {
           return;
         }
         const now = performance.now();
-        const hasRenderedFrame = this.stats.renderedFrames > 0;
+        const hasMediaProgress =
+          this.hasRenderedFrame ||
+          this.stats.renderedFrames > 0 ||
+          this.stats.decodedFrames > 0 ||
+          this.stats.receivedPackets > 0;
         const frameAgeMs =
           this.lastVideoFrameAt > 0 ? now - this.lastVideoFrameAt : Infinity;
-        if (!hasRenderedFrame) {
+        if (!hasMediaProgress) {
           this.handleConnectionError(
             target,
             generation,
             new Error("WebRTC video stalled before rendering fresh frames."),
             "first-frame-timeout",
           );
+          return;
+        }
+        if (!this.hasRenderedFrame) {
+          this.scheduleFrameWatchdog(target, generation);
           return;
         }
         if (frameAgeMs > WEBRTC_STALLED_FRAME_TIMEOUT_MS) {

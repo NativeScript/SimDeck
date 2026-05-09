@@ -89,6 +89,14 @@ pub struct WebRtcAnswerPayload {
     pub sdp: String,
     #[serde(rename = "type")]
     pub kind: String,
+    pub video: WebRtcVideoMetadata,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebRtcVideoMetadata {
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -289,6 +297,8 @@ pub async fn create_answer(
         summarize_sdp_candidate_types(&local_description.sdp)
     );
 
+    let first_frame_width = first_frame.width;
+    let first_frame_height = first_frame.height;
     let (cancellation_token, cancellation) =
         register_webrtc_media_stream(&udid, payload.client_id.as_deref(), true);
     tokio::spawn(
@@ -309,6 +319,10 @@ pub async fn create_answer(
     Ok(WebRtcAnswerPayload {
         sdp: local_description.sdp,
         kind: "answer".to_owned(),
+        video: WebRtcVideoMetadata {
+            width: first_frame_width,
+            height: first_frame_height,
+        },
     })
 }
 
