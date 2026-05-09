@@ -78,6 +78,7 @@ export default defineConfig({
             { text: "LAN Access", link: "/guide/lan-access" },
             { text: "Project Daemon", link: "/guide/daemon" },
             { text: "Testing", link: "/guide/testing" },
+            { text: "GitHub Actions", link: "/guide/github-actions" },
           ],
         },
         {

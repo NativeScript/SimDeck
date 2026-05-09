@@ -1,0 +1,113 @@
+name: Upload iOS Simulator App for SimDeck
+description: Package one iOS Simulator .app bundle and upload it using SimDeck's artifact naming convention.
+
+inputs:
+  app-path:
+    description: Path to the built .app bundle. When omitted, app-glob is used.
+    required: false
+    default: ""
+  app-glob:
+    description: Glob used to find the built .app bundle when app-path is omitted.
+    required: false
+    default: "**/*-iphonesimulator/*.app"
+  artifact-prefix:
+    description: Artifact prefix. The final name defaults to <artifact-prefix>-<artifact-sha>.
+    required: false
+    default: ios-simulator-app
+  artifact-name:
+    description: Exact artifact name to upload. Overrides artifact-prefix and artifact-sha when set.
+    required: false
+    default: ""
+  artifact-sha:
+    description: Commit SHA used in the default artifact name. Defaults to the PR head SHA or github.sha.
+    required: false
+    default: ""
+  retention-days:
+    description: Artifact retention in days.
+    required: false
+    default: "7"
+
+outputs:
+  artifact-name:
+    description: Uploaded artifact name.
+    value: ${{ steps.package.outputs.artifact_name }}
+  zip-path:
+    description: Path to the packaged .app.zip file.
+    value: ${{ steps.package.outputs.zip_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Package simulator app
+      id: package
+      shell: bash
+      env:
+        APP_PATH_INPUT: ${{ inputs.app-path }}
+        APP_GLOB: ${{ inputs.app-glob }}
+        ARTIFACT_PREFIX: ${{ inputs.artifact-prefix }}
+        ARTIFACT_NAME_INPUT: ${{ inputs.artifact-name }}
+        ARTIFACT_SHA_INPUT: ${{ inputs.artifact-sha }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        GITHUB_SHA_VALUE: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+
+        if [[ -n "${APP_PATH_INPUT}" ]]; then
+          app_path="${APP_PATH_INPUT}"
+        else
+          app_path="$(APP_GLOB="${APP_GLOB}" python3 - <<'PY'
+        import glob
+        import os
+        import sys
+
+        matches = sorted(
+            path
+            for path in glob.glob(os.environ["APP_GLOB"], recursive=True)
+            if os.path.isdir(path) and path.endswith(".app")
+        )
+        if not matches:
+            raise SystemExit(1)
+        print(matches[0])
+        PY
+          )" || {
+            echo "No simulator .app bundle matched '${APP_GLOB}'" >&2
+            exit 1
+          }
+        fi
+
+        if [[ ! -d "${app_path}" || "${app_path}" != *.app ]]; then
+          echo "Expected an .app directory, got: ${app_path}" >&2
+          exit 1
+        fi
+
+        artifact_sha="${ARTIFACT_SHA_INPUT:-${PR_HEAD_SHA:-${GITHUB_SHA_VALUE}}}"
+        if [[ -z "${artifact_sha}" ]]; then
+          echo "Could not resolve artifact SHA" >&2
+          exit 1
+        fi
+
+        if [[ -n "${ARTIFACT_NAME_INPUT}" ]]; then
+          artifact_name="${ARTIFACT_NAME_INPUT}"
+        else
+          artifact_name="${ARTIFACT_PREFIX}-${artifact_sha}"
+        fi
+
+        package_dir="${RUNNER_TEMP:-/tmp}/simdeck-ios-app"
+        rm -rf "${package_dir}"
+        mkdir -p "${package_dir}"
+        app_name="$(basename "${app_path}")"
+        zip_path="${package_dir}/${app_name}.zip"
+        ditto -c -k --sequesterRsrc --keepParent "${app_path}" "${zip_path}"
+
+        echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+        echo "zip_path=${zip_path}" >> "${GITHUB_OUTPUT}"
+        echo "Packaged ${app_path} as ${zip_path}"
+        echo "Artifact name: ${artifact_name}"
+
+    - name: Upload simulator app artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.package.outputs.artifact_name }}
+        path: ${{ steps.package.outputs.zip_path }}
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}
