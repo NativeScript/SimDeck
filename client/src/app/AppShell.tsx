@@ -23,7 +23,6 @@ import {
   openSimulatorUrl,
   pressHome,
   pressSimulatorButton,
-  rotateLeft,
   rotateRight,
   simulatorControlSocketUrl,
   shutdownSimulator,
@@ -41,6 +40,7 @@ import type {
   TouchPhase,
 } from "../api/types";
 import { AccessibilityInspector } from "../features/accessibility/AccessibilityInspector";
+import { DevToolsPanel } from "../features/devtools/DevToolsPanel";
 import { isEditableTarget } from "../features/input/keycodes";
 import { useKeyboardInput } from "../features/input/useKeyboardInput";
 import { usePointerInput } from "../features/input/usePointerInput";
@@ -86,9 +86,11 @@ import {
 import { useElementSize } from "../shared/hooks/useElementSize";
 import {
   ACCESSIBILITY_SOURCE_STORAGE_KEY,
+  CHROME_DEVTOOLS_VISIBLE_STORAGE_KEY,
   clearLegacyVolatileUiState,
   DEFAULT_VIEWPORT_STATE,
   DEBUG_VISIBLE_STORAGE_KEY,
+  DEVTOOLS_VISIBLE_STORAGE_KEY,
   HIERARCHY_VISIBLE_STORAGE_KEY,
   nextAccessibilitySourcePreference,
   readPersistedUiState,
@@ -97,6 +99,7 @@ import {
   sanitizeAccessibilitySources,
   TOUCH_OVERLAY_VISIBLE_STORAGE_KEY,
   viewportStateForUDID,
+  WEBKIT_INSPECTOR_VISIBLE_STORAGE_KEY,
   writePersistedUiState,
   writeStoredFlag,
 } from "./uiState";
@@ -348,6 +351,12 @@ export function AppShell({
   );
   const [hierarchyVisible, setHierarchyVisible] = useState(() =>
     readStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY),
+  );
+  const [devToolsVisible, setDevToolsVisible] = useState(
+    () =>
+      readStoredFlag(DEVTOOLS_VISIBLE_STORAGE_KEY) ||
+      readStoredFlag(CHROME_DEVTOOLS_VISIBLE_STORAGE_KEY) ||
+      readStoredFlag(WEBKIT_INSPECTOR_VISIBLE_STORAGE_KEY),
   );
   const [selectedUDID, setSelectedUDID] = useState(initialSelectedUDID ?? "");
   const [search, setSearch] = useState("");
@@ -753,8 +762,16 @@ export function AppShell({
   }, [hierarchyVisible]);
 
   useEffect(() => {
+    writeStoredFlag(DEVTOOLS_VISIBLE_STORAGE_KEY, devToolsVisible);
+  }, [devToolsVisible]);
+
+  useEffect(() => {
     writeStoredFlag(TOUCH_OVERLAY_VISIBLE_STORAGE_KEY, touchOverlayVisible);
   }, [touchOverlayVisible]);
+
+  const toggleDevTools = useCallback(() => {
+    setDevToolsVisible((current) => !current);
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -1815,20 +1832,6 @@ export function AppShell({
             );
           }
         }}
-        onRotateLeft={() => {
-          if (!selectedSimulator) {
-            return;
-          }
-          beginZoomAnimation();
-          if (sendControl(selectedSimulator.udid, { type: "rotateLeft" })) {
-            setRotationQuarterTurns((current) => (current + 3) % 4);
-            return;
-          }
-          void runAction(async () => {
-            await rotateLeft(selectedSimulator.udid);
-            setRotationQuarterTurns((current) => (current + 3) % 4);
-          }, false);
-        }}
         onOpenBundlePrompt={promptForBundleID}
         onOpenUrlPrompt={promptForURL}
         onRotateRight={() => {
@@ -1873,6 +1876,7 @@ export function AppShell({
           }
         }}
         onToggleDebug={() => setDebugVisible((current) => !current)}
+        onToggleDevTools={toggleDevTools}
         onToggleHierarchy={() => {
           setHierarchyVisible((current) => !current);
           if (hierarchyVisible) {
@@ -1902,6 +1906,7 @@ export function AppShell({
           selectedSimulator?.isBooted && !selectedSimulatorTransitionKind,
         )}
         touchOverlayVisible={touchOverlayVisible}
+        devToolsVisible={devToolsVisible}
       />
       <SimulatorViewport
         accessibilityHoveredId={accessibilityHoveredId}
@@ -2002,6 +2007,14 @@ export function AppShell({
         touchIndicators={touchIndicators}
         touchOverlayVisible={touchOverlayVisible}
         viewMode={viewMode}
+        devtoolsPanel={
+          devToolsVisible ? (
+            <DevToolsPanel
+              onClose={() => setDevToolsVisible(false)}
+              selectedSimulator={selectedSimulator}
+            />
+          ) : null
+        }
         zoomDockRef={handleZoomDockRef}
         zoomAnimating={zoomAnimating}
       />

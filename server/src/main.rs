@@ -2,6 +2,7 @@ mod api;
 mod auth;
 mod config;
 mod core_simulator;
+mod devtools;
 mod error;
 mod inspector;
 mod logging;
@@ -12,6 +13,7 @@ mod service;
 mod simulators;
 mod static_files;
 mod transport;
+mod webkit;
 
 use anyhow::Context;
 use api::routes::{router, AppState};

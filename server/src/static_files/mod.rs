@@ -9,11 +9,38 @@ pub async fn serve_static(
     uri: Uri,
     access_token: Option<String>,
 ) -> Result<Response<Body>, StatusCode> {
+    serve_static_inner(root, None, true, method, uri, access_token).await
+}
+
+pub async fn serve_static_under(
+    root: PathBuf,
+    mount_prefix: &str,
+    method: Method,
+    uri: Uri,
+    access_token: Option<String>,
+) -> Result<Response<Body>, StatusCode> {
+    serve_static_inner(root, Some(mount_prefix), false, method, uri, access_token).await
+}
+
+async fn serve_static_inner(
+    root: PathBuf,
+    mount_prefix: Option<&str>,
+    fallback_to_index: bool,
+    method: Method,
+    uri: Uri,
+    access_token: Option<String>,
+) -> Result<Response<Body>, StatusCode> {
     if method != Method::GET && method != Method::HEAD {
         return Err(StatusCode::METHOD_NOT_ALLOWED);
     }
 
-    let path = uri.path();
+    let mut path = uri.path();
+    if let Some(prefix) = mount_prefix {
+        path = path
+            .strip_prefix(prefix)
+            .ok_or(StatusCode::NOT_FOUND)?
+            .trim_start_matches('/');
+    }
     let Some(relative_path) = safe_relative_path(path) else {
         return Err(StatusCode::BAD_REQUEST);
     };
@@ -21,7 +48,8 @@ pub async fn serve_static(
     let requested_path = root.join(&relative_path);
     let file_path = match tokio::fs::metadata(&requested_path).await {
         Ok(metadata) if metadata.is_file() => requested_path,
-        _ => root.join("index.html"),
+        _ if fallback_to_index => root.join("index.html"),
+        _ => return Err(StatusCode::NOT_FOUND),
     };
 
     let bytes = tokio::fs::read(&file_path)
@@ -87,6 +115,7 @@ fn content_type_for_path(path: &Path) -> &'static str {
         Some("css") => "text/css; charset=utf-8",
         Some("html") => "text/html; charset=utf-8",
         Some("ico") => "image/x-icon",
+        Some("avif") => "image/avif",
         Some("js") | Some("mjs") => "text/javascript; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
         Some("map") => "application/json; charset=utf-8",

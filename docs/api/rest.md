@@ -518,6 +518,116 @@ The response includes both the inspector's `result` and metadata about the inspe
 
 For the full method semantics, see the [Inspector Protocol](/api/inspector-protocol).
 
+## DevTools inspectors
+
+SimDeck serves WebKit Remote Inspector targets and Chrome DevTools Protocol
+targets separately at the API layer. The browser UI combines both sources into
+one resizeable DevTools panel with a single target list.
+
+## WebKit inspector
+
+### `GET /api/simulators/{udid}/webkit/targets`
+
+Discovers inspectable WebKit targets exposed by the simulator's `webinspectord`
+Remote Inspector socket. These are Safari pages and app web content that WebKit
+has made inspectable. On iOS 16.4 and newer, app-owned `WKWebView` instances must
+set `isInspectable = true` before they appear here.
+
+```json
+{
+  "udid": "4889B81C-FD88-49A9-BC1D-2087E7C451A2",
+  "socketPath": "/private/var/tmp/.../com.apple.webinspectord_sim.socket",
+  "targets": [
+    {
+      "id": "5049443a3731353731-1",
+      "appId": "PID:71571",
+      "appName": "Example",
+      "pageId": 1,
+      "title": "Example",
+      "url": "https://example.com/",
+      "kind": "app-web-content",
+      "inspectorUrl": "/webkit-inspector-ui/Main.html?ws=127.0.0.1:4310/api/simulators/{udid}/webkit/targets/5049443a3731353731-1/socket",
+      "webSocketUrl": "/api/simulators/{udid}/webkit/targets/5049443a3731353731-1/socket"
+    }
+  ],
+  "warnings": []
+}
+```
+
+`kind` is best-effort metadata:
+
+- `safari-page` for Mobile Safari targets.
+- `app-web-content` for app-owned inspectable web content.
+- `web-content-proxy` for WebKit proxy targets.
+
+This endpoint lists **inspectable WebKit targets**, not every `WKWebView` object
+in UIKit. AX can still reveal visible web areas that are not inspectable.
+
+### `GET /api/simulators/{udid}/webkit/targets/{targetId}/socket`
+
+Upgrades to a WebSocket. The server bridges JSON Web Inspector frontend messages
+to the simulator's binary-plist WebKit Remote Inspector protocol for the selected
+target. The `inspectorUrl` returned by `webkit/targets` points WebInspectorUI at
+this socket.
+
+### `GET /webkit-inspector-ui/Main.html`
+
+Serves the local macOS WebInspectorUI resources with a SimDeck browser host shim.
+This is authenticated like the rest of the server routes.
+
+## Chrome DevTools inspector
+
+### `GET /api/simulators/{udid}/devtools/targets`
+
+Discovers app runtime inspector sessions that can be opened with the embedded
+Chrome DevTools frontend. This includes SimDeck's in-app inspector protocol for
+React Native and NativeScript runtimes, UIKit/SwiftUI fallback metadata when
+those are the only connected logical sources, Metro React Native DevTools
+targets, and generic local Chrome Inspector targets.
+
+```json
+{
+  "udid": "4889B81C-FD88-49A9-BC1D-2087E7C451A2",
+  "targets": [
+    {
+      "id": "sdi-73214",
+      "title": "React Native: Example",
+      "type": "page",
+      "url": "simdeck://com.example.Example",
+      "description": "SimDeck React Native inspector target",
+      "devtoolsFrontendUrl": "/chrome-devtools-ui/inspector.html?ws=127.0.0.1:4310/api/simulators/{udid}/devtools/targets/sdi-73214/socket",
+      "webSocketDebuggerUrl": "ws://127.0.0.1:4310/api/simulators/{udid}/devtools/targets/sdi-73214/socket",
+      "source": "react-native",
+      "processIdentifier": 73214,
+      "bundleIdentifier": "com.example.Example",
+      "appName": "Example"
+    }
+  ],
+  "warnings": []
+}
+```
+
+Metro-discovered targets use `source: "react-native-metro"` and point at
+`/chrome-devtools-ui/rn_fusebox.html` when the target supports the React Native
+Fusebox frontend. SimDeck probes common Metro ports and matching local
+Node/React Native listener ports instead of assuming one fixed port. Generic
+Chrome Inspector targets use `source: "chrome-inspector"` and are discovered from
+common Inspector ports such as `9222-9230` plus matching local Chrome/Node
+listener ports. Proxied targets return a SimDeck `webSocketDebuggerUrl`; SimDeck
+then connects to the upstream `/inspector/debug` or Chrome DevTools WebSocket.
+
+### `GET /api/simulators/{udid}/devtools/targets/{targetId}/socket`
+
+Upgrades to a WebSocket speaking enough of the Chrome DevTools Protocol for the
+frontend to open a target, evaluate console expressions through
+`View.evaluateScript`, and render the published logical hierarchy as DOM nodes.
+
+### `GET /chrome-devtools-ui/inspector.html`
+
+Serves the bundled Chrome DevTools frontend. SimDeck uses the React Native
+debugger frontend package for these static assets and copies them into
+`client/dist/chrome-devtools-ui` during the client build.
+
 ## NativeScript inspector hub
 
 ### `GET /api/inspector/connect`

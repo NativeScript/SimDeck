@@ -40,6 +40,52 @@ export interface SimulatorsResponse {
   simulators: SimulatorMetadata[];
 }
 
+export interface WebKitTarget {
+  id: string;
+  appId: string;
+  appName?: string | null;
+  pageId: number;
+  title?: string | null;
+  url?: string | null;
+  kind: "safari-page" | "app-web-content" | "web-content-proxy" | string;
+  inspectorUrl: string;
+  webSocketUrl: string;
+}
+
+export interface WebKitTargetDiscovery {
+  udid: string;
+  socketPath?: string | null;
+  targets: WebKitTarget[];
+  warnings: string[];
+}
+
+export interface ChromeDevToolsTarget {
+  id: string;
+  appName?: string | null;
+  bundleIdentifier?: string | null;
+  description: string;
+  devtoolsFrontendUrl: string;
+  processIdentifier: number;
+  source:
+    | "react-native"
+    | "react-native-metro"
+    | "chrome-inspector"
+    | "nativescript"
+    | "swiftui"
+    | "in-app-inspector"
+    | string;
+  title: string;
+  type: string;
+  url: string;
+  webSocketDebuggerUrl: string;
+}
+
+export interface ChromeDevToolsTargetDiscovery {
+  udid: string;
+  targets: ChromeDevToolsTarget[];
+  warnings: string[];
+}
+
 export interface HealthResponse {
   ok: boolean;
   videoCodec?: string;

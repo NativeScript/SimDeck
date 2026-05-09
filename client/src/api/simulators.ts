@@ -2,11 +2,13 @@ import { apiRequest } from "./client";
 import type {
   AccessibilitySourcePreference,
   AccessibilityTreeResponse,
+  ChromeDevToolsTargetDiscovery,
   ChromeProfile,
   InspectorRequestResponse,
   SimulatorLogsResponse,
   SimulatorMetadata,
   SimulatorsResponse,
+  WebKitTargetDiscovery,
 } from "./types";
 
 export async function listSimulators(
@@ -71,6 +73,26 @@ export async function fetchSimulatorLogs(
   const query = params.size > 0 ? `?${params}` : "";
   return apiRequest<SimulatorLogsResponse>(
     `/api/simulators/${udid}/logs${query}`,
+  );
+}
+
+export async function fetchWebKitTargets(
+  udid: string,
+  options: RequestInit = {},
+): Promise<WebKitTargetDiscovery> {
+  return apiRequest<WebKitTargetDiscovery>(
+    `/api/simulators/${encodeURIComponent(udid)}/webkit/targets`,
+    options,
+  );
+}
+
+export async function fetchChromeDevToolsTargets(
+  udid: string,
+  options: RequestInit = {},
+): Promise<ChromeDevToolsTargetDiscovery> {
+  return apiRequest<ChromeDevToolsTargetDiscovery>(
+    `/api/simulators/${encodeURIComponent(udid)}/devtools/targets`,
+    options,
   );
 }
 
