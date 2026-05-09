@@ -1280,6 +1280,7 @@ export function AppShell({
     viewportChromeProfile,
     chromeScreenRect,
   );
+  const isAndroidViewport = isAndroidSimulator(selectedSimulator);
   const chromeScreenStyle =
     viewportChromeProfile && chromeScreenRect
       ? ({
@@ -1310,15 +1311,19 @@ export function AppShell({
         } satisfies CSSProperties)
       : null;
   const screenOnlyStyle =
-    !viewportChromeProfile && chromeProfile && chromeProfile.screenWidth > 0
+    !viewportChromeProfile && isAndroidViewport
       ? ({
-          borderRadius: `${Math.min(
-            chromeProfile.cornerRadius *
-              (DEVICE_SCREEN_WIDTH / chromeProfile.screenWidth),
-            DEVICE_SCREEN_WIDTH / 2,
-          )}px`,
+          borderRadius: "10px",
         } satisfies CSSProperties)
-      : null;
+      : !viewportChromeProfile && chromeProfile && chromeProfile.screenWidth > 0
+        ? ({
+            borderRadius: `${Math.min(
+              chromeProfile.cornerRadius *
+                (DEVICE_SCREEN_WIDTH / chromeProfile.screenWidth),
+              DEVICE_SCREEN_WIDTH / 2,
+            )}px`,
+          } satisfies CSSProperties)
+        : null;
   const viewportScreenStyle = chromeScreenStyle ?? screenOnlyStyle;
   const shellStyle = viewportChromeProfile
     ? {
@@ -2046,6 +2051,7 @@ export function AppShell({
         outerCanvasRef={handleOuterCanvasRef}
         rotationQuarterTurns={rotationQuarterTurns}
         screenAspect={screenAspect}
+        screenClassName={isAndroidViewport ? "android-screen" : undefined}
         selectedSimulator={selectedSimulator}
         shellStyle={shellStyle}
         streamCanvasRef={handleStreamCanvasRef}
@@ -2215,6 +2221,14 @@ function normalizeMaxEdge(
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.round(value)
     : fallback;
+}
+
+function isAndroidSimulator(simulator: SimulatorMetadata | null): boolean {
+  return Boolean(
+    simulator?.platform === "android-emulator" ||
+    simulator?.deviceTypeIdentifier === "android-emulator" ||
+    simulator?.udid.startsWith("android:"),
+  );
 }
 
 function streamConfigsEqual(left: StreamConfig, right: StreamConfig): boolean {

@@ -464,17 +464,24 @@ function NodeDetails({
   node: AccessibilityNode;
   selectedSimulator: SimulatorMetadata | null;
 }) {
+  const isAndroid = isAndroidSimulator(selectedSimulator);
   const details = [
     ["Type", accessibilityKind(node)],
     ["Label", primaryAccessibilityText(node)],
     ["Source", sourceLocationText(node)],
-    ["Identifier", accessibilityIdentifier(node)],
+    [
+      isAndroid ? "Resource ID" : "Identifier",
+      isAndroid
+        ? (node.androidResourceId ?? "")
+        : accessibilityIdentifier(node),
+    ],
     ["Inspector ID", node.inspectorId ?? ""],
     ["Module", node.moduleName ?? ""],
     ["NativeScript", nativeScriptDescription(node.nativeScript)],
     ["React Native", reactNativeDescription(node.reactNative)],
     ["Flutter", flutterDescription(node.flutter)],
-    ["UIKit Class", node.className ?? ""],
+    [isAndroid ? "Android Class" : "UIKit Class", node.className ?? ""],
+    ["Package", isAndroid ? (node.androidPackage ?? "") : ""],
     ["Last JS", lastUIKitScriptText(node)],
     ["Value", node.AXValue ?? ""],
     ["Role", node.role ?? ""],
@@ -483,6 +490,15 @@ function NodeDetails({
     ["SwiftUI", swiftUIDescription(node.swiftUI)],
     ["Enabled", node.enabled == null ? "" : node.enabled ? "true" : "false"],
     ["Hidden", node.isHidden == null ? "" : node.isHidden ? "true" : "false"],
+    ["Clickable", boolDetail(isAndroid, node.clickable)],
+    ["Long Clickable", boolDetail(isAndroid, node.longClickable)],
+    ["Focusable", boolDetail(isAndroid, node.focusable)],
+    ["Focused", boolDetail(isAndroid, node.focused)],
+    ["Scrollable", boolDetail(isAndroid, node.scrollable)],
+    ["Checkable", boolDetail(isAndroid, node.checkable)],
+    ["Checked", boolDetail(isAndroid, node.checked)],
+    ["Selected", boolDetail(isAndroid, node.selected)],
+    ["Password", boolDetail(isAndroid, node.password)],
     ["Alpha", node.alpha == null ? "" : String(round(node.alpha))],
     ["Frame", validFrame(node.frame) ? frameText(node.frame) : ""],
     ["PID", node.pid == null ? "" : String(node.pid)],
@@ -502,6 +518,18 @@ function NodeDetails({
       <UIKitScriptEditor node={node} selectedSimulator={selectedSimulator} />
     </div>
   );
+}
+
+function isAndroidSimulator(simulator: SimulatorMetadata | null): boolean {
+  return Boolean(
+    simulator?.platform === "android-emulator" ||
+    simulator?.deviceTypeIdentifier === "android-emulator" ||
+    simulator?.udid.startsWith("android:"),
+  );
+}
+
+function boolDetail(include: boolean, value: boolean | null | undefined) {
+  return include && value != null ? (value ? "true" : "false") : "";
 }
 
 function UIKitScriptEditor({
@@ -737,6 +765,7 @@ const HIERARCHY_SOURCE_ORDER: AccessibilitySource[] = [
   "flutter",
   "swiftui",
   "in-app-inspector",
+  "android-uiautomator",
   "native-ax",
 ];
 
@@ -769,6 +798,9 @@ function sourceLabel(source: AccessibilitySource): string {
   }
   if (source === "swiftui") {
     return "SwiftUI";
+  }
+  if (source === "android-uiautomator") {
+    return "Android";
   }
   return source === "in-app-inspector" ? "UIKit" : "Native AX";
 }

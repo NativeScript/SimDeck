@@ -58,7 +58,7 @@ const WEBRTC_FULL_ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(3);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 const WEBRTC_PEER_DISCONNECTED_TIMEOUT: Duration = Duration::from_secs(12);
 const ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY: usize = 128;
-const DEFAULT_ANDROID_WEBRTC_MAX_EDGE: u32 = 1280;
+const DEFAULT_ANDROID_WEBRTC_MAX_EDGE: u32 = 960;
 const DEFAULT_ANDROID_WEBRTC_FPS: u64 = 60;
 const MAX_ANDROID_WEBRTC_FPS: u64 = 120;
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<WebRtcMediaStreamToken>>>> =
@@ -1096,7 +1096,7 @@ impl AndroidWebRtcSource {
     ) -> Result<Self, AppError> {
         let mut frame_stream = bridge.grpc_frame_stream(&udid, Some(max_edge)).await?;
         let (sender, _) = broadcast::channel(ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY);
-        let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, _) = broadcast::channel(1);
         let inner = Arc::new(AndroidWebRtcSourceInner {
             udid: udid.clone(),
             encoder_handle: AtomicUsize::new(0),
@@ -1130,34 +1130,52 @@ impl AndroidWebRtcSource {
             .store(user_data as usize, Ordering::Release);
 
         let source = Self { inner };
-        let task_inner = Arc::downgrade(&source.inner);
+        let latest_frame = Arc::new(Mutex::new(None::<android::AndroidFrame>));
+        let reader_inner = Arc::downgrade(&source.inner);
+        let reader_latest_frame = latest_frame.clone();
+        let mut reader_shutdown_rx = source.inner.shutdown_tx.subscribe();
         tokio::spawn(async move {
-            let min_frame_gap = android_webrtc_frame_interval();
-            let mut last_encoded_at = Instant::now() - min_frame_gap;
             loop {
                 tokio::select! {
-                    _ = shutdown_rx.recv() => break,
+                    _ = reader_shutdown_rx.recv() => break,
                     frame = frame_stream.next_frame() => {
-                        let frame = match frame {
-                            Ok(Some(frame)) => frame,
+                        match frame {
+                            Ok(Some(frame)) => {
+                                *reader_latest_frame.lock().unwrap() = Some(frame);
+                            }
                             Ok(None) => break,
                             Err(error) => {
-                                let udid = task_inner
+                                let udid = reader_inner
                                     .upgrade()
                                     .map(|inner| inner.udid.clone())
                                     .unwrap_or_else(|| "android".to_owned());
                                 warn!("Android WebRTC raw frame stream failed for {udid}: {error}");
                                 break;
                             }
-                        };
-                        let Some(inner) = task_inner.upgrade() else {
+                        }
+                    }
+                }
+            }
+        });
+
+        let encoder_inner = Arc::downgrade(&source.inner);
+        let encoder_latest_frame = latest_frame;
+        let mut encoder_shutdown_rx = source.inner.shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let min_frame_gap = android_webrtc_frame_interval();
+            let mut ticker = time::interval(min_frame_gap);
+            ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = encoder_shutdown_rx.recv() => break,
+                    _ = ticker.tick() => {
+                        let Some(inner) = encoder_inner.upgrade() else {
                             break;
                         };
-                        let now = Instant::now();
-                        if now.duration_since(last_encoded_at) < min_frame_gap {
+                        let frame = encoder_latest_frame.lock().unwrap().take();
+                        let Some(frame) = frame else {
                             continue;
-                        }
-                        last_encoded_at = now;
+                        };
                         let handle = inner.encoder_handle.load(Ordering::Acquire);
                         let udid = inner.udid.clone();
                         let encode_result = task::spawn_blocking(move || {
@@ -1358,11 +1376,16 @@ unsafe fn take_native_error(raw: *mut i8) -> Option<AppError> {
 }
 
 fn android_webrtc_max_edge() -> u32 {
-    std::env::var("SIMDECK_ANDROID_WEBRTC_MAX_EDGE")
+    let android_cap = std::env::var("SIMDECK_ANDROID_WEBRTC_MAX_EDGE")
         .ok()
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(DEFAULT_ANDROID_WEBRTC_MAX_EDGE)
-        .clamp(360, 2400)
+        .clamp(360, 2400);
+    std::env::var("SIMDECK_REALTIME_MAX_EDGE")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .map(|value| value.clamp(360, 2400).min(android_cap))
+        .unwrap_or(android_cap)
 }
 
 fn android_webrtc_frame_interval() -> Duration {

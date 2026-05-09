@@ -57,6 +57,7 @@ interface SimulatorViewportProps {
   outerCanvasRef: Ref<HTMLDivElement | null>;
   rotationQuarterTurns: number;
   screenAspect: string;
+  screenClassName?: string;
   selectedSimulator: SimulatorMetadata | null;
   shellStyle: CSSProperties | null;
   streamBackend: string;
@@ -114,6 +115,7 @@ export function SimulatorViewport({
   outerCanvasRef,
   rotationQuarterTurns,
   screenAspect,
+  screenClassName,
   selectedSimulator,
   shellStyle,
   streamBackend,
@@ -200,6 +202,7 @@ export function SimulatorViewport({
                   onStartPanning={onStartPanning}
                   rotationQuarterTurns={rotationQuarterTurns}
                   screenAspect={screenAspect}
+                  screenClassName={screenClassName}
                   shellStyle={shellStyle}
                   simulatorName={selectedSimulator.name}
                   streamBackend={streamBackend}

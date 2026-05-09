@@ -1086,6 +1086,8 @@ fn android_node_value(node: roxmltree::Node<'_, '_>, depth: usize, max_depth: us
     let text = node.attribute("text").unwrap_or("");
     let content_desc = node.attribute("content-desc").unwrap_or("");
     let label = if !text.is_empty() { text } else { content_desc };
+    let resource_id = node.attribute("resource-id").unwrap_or("");
+    let role = android_role(node, short_class);
     let mut children = Vec::new();
     if depth < max_depth {
         for child in node.children().filter(|child| child.has_tag_name("node")) {
@@ -1094,15 +1096,27 @@ fn android_node_value(node: roxmltree::Node<'_, '_>, depth: usize, max_depth: us
     }
     json!({
         "source": "android-uiautomator",
-        "type": map_android_class(short_class),
-        "role": map_android_class(short_class),
+        "type": android_type(short_class, class_name),
+        "role": role,
         "className": class_name,
-        "AXIdentifier": node.attribute("resource-id").unwrap_or(""),
+        "AXIdentifier": resource_id,
         "AXLabel": label,
         "AXValue": text,
+        "androidClass": class_name,
+        "androidPackage": node.attribute("package").unwrap_or(""),
+        "androidResourceId": resource_id,
+        "checkable": bool_attr(node, "checkable"),
+        "checked": bool_attr(node, "checked"),
+        "clickable": bool_attr(node, "clickable"),
+        "focusable": bool_attr(node, "focusable"),
+        "focused": bool_attr(node, "focused"),
+        "longClickable": bool_attr(node, "long-clickable"),
+        "password": bool_attr(node, "password"),
+        "scrollable": bool_attr(node, "scrollable"),
+        "selected": bool_attr(node, "selected"),
         "text": text,
         "title": label,
-        "enabled": node.attribute("enabled") == Some("true"),
+        "enabled": bool_attr(node, "enabled"),
         "isHidden": node.attribute("visible-to-user") == Some("false"),
         "frame": frame_value(bounds.0, bounds.1, bounds.2, bounds.3),
         "frameInScreen": frame_value(bounds.0, bounds.1, bounds.2, bounds.3),
@@ -1132,7 +1146,26 @@ fn frame_value(x: f64, y: f64, width: f64, height: f64) -> Value {
     json!({ "x": x, "y": y, "width": width, "height": height })
 }
 
-fn map_android_class(class_name: &str) -> &'static str {
+fn bool_attr(node: roxmltree::Node<'_, '_>, name: &str) -> bool {
+    node.attribute(name) == Some("true")
+}
+
+fn android_type(short_class: &str, class_name: &str) -> String {
+    let fallback = if short_class.is_empty() {
+        class_name
+    } else {
+        short_class
+    };
+    if fallback.is_empty() {
+        "View".to_owned()
+    } else {
+        fallback.to_owned()
+    }
+}
+
+fn android_role(node: roxmltree::Node<'_, '_>, class_name: &str) -> &'static str {
+    let clickable = bool_attr(node, "clickable");
+    let scrollable = bool_attr(node, "scrollable");
     match class_name {
         "Button" | "ImageButton" | "FloatingActionButton" => "button",
         "EditText" => "textField",
@@ -1142,10 +1175,18 @@ fn map_android_class(class_name: &str) -> &'static str {
         "RadioButton" => "radioButton",
         "Switch" | "ToggleButton" => "switch",
         "SeekBar" => "slider",
-        "RecyclerView" | "ListView" => "table",
-        "ScrollView" | "HorizontalScrollView" | "NestedScrollView" => "scrollView",
+        "RecyclerView" | "ListView" | "GridView" => "collection",
+        "ScrollView" | "HorizontalScrollView" | "NestedScrollView" | "ViewPager" => "scrollView",
         "WebView" => "webView",
-        _ => "other",
+        "ProgressBar" => "progressIndicator",
+        "Spinner" => "popUpButton",
+        "TabWidget" | "TabLayout" => "tabGroup",
+        "Toolbar" | "ActionBar" => "toolbar",
+        "ViewGroup" | "FrameLayout" | "LinearLayout" | "RelativeLayout" | "ConstraintLayout"
+        | "CoordinatorLayout" | "DrawerLayout" => "container",
+        _ if scrollable => "scrollView",
+        _ if clickable => "button",
+        _ => "view",
     }
 }
 
@@ -1178,6 +1219,41 @@ fn android_log_level(line: &str) -> &'static str {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn android_nodes_keep_class_type_and_semantic_role() {
+        let document = roxmltree::Document::parse(
+            r#"<node class="android.view.ViewGroup" package="com.example" resource-id="com.example:id/hotseat" bounds="[0,1873][1080,2400]" enabled="true" visible-to-user="true" clickable="false" scrollable="false" />"#,
+        )
+        .unwrap();
+
+        let value = android_node_value(document.root_element(), 0, 10);
+
+        assert_eq!(value["type"], "ViewGroup");
+        assert_eq!(value["role"], "container");
+        assert_eq!(value["AXIdentifier"], "com.example:id/hotseat");
+        assert_eq!(value["androidClass"], "android.view.ViewGroup");
+        assert_eq!(value["androidResourceId"], "com.example:id/hotseat");
+        assert_eq!(value["enabled"], true);
+    }
+
+    #[test]
+    fn clickable_unknown_android_nodes_are_buttons() {
+        let document = roxmltree::Document::parse(
+            r#"<node class="com.example.CustomTile" bounds="[10,20][110,70]" enabled="true" visible-to-user="true" clickable="true" />"#,
+        )
+        .unwrap();
+
+        let value = android_node_value(document.root_element(), 0, 10);
+
+        assert_eq!(value["type"], "CustomTile");
+        assert_eq!(value["role"], "button");
+    }
 }
 
 #[allow(dead_code)]
