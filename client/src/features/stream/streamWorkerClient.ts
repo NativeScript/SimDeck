@@ -224,6 +224,7 @@ export function buildStreamTarget(
   udid: string,
   options: {
     clientId?: string;
+    platform?: string;
     remote?: boolean;
     streamConfig?: StreamConfig;
     transport?: StreamTransport;
@@ -231,6 +232,7 @@ export function buildStreamTarget(
 ): StreamConnectTarget {
   return {
     clientId: options.clientId,
+    platform: options.platform,
     remote: options.remote,
     streamConfig: options.streamConfig,
     transport: options.transport,
@@ -2725,9 +2727,12 @@ export class StreamWorkerClient {
   };
 }
 
-function preferredStreamBackend(
+export function preferredStreamBackend(
   target?: StreamConnectTarget | null,
 ): "auto" | StreamBackend {
+  if (isAndroidStreamTarget(target)) {
+    return "webrtc";
+  }
   const value =
     target?.transport ??
     new URLSearchParams(window.location.search).get("stream");
@@ -2737,7 +2742,12 @@ function preferredStreamBackend(
   return value === "webrtc" ? "webrtc" : "auto";
 }
 
-function initialStreamBackend(target: StreamConnectTarget): StreamBackend {
+export function initialStreamBackend(
+  target: StreamConnectTarget,
+): StreamBackend {
+  if (isAndroidStreamTarget(target)) {
+    return "webrtc";
+  }
   const preferredBackend = preferredStreamBackend(target);
   if (preferredBackend === "h264-ws") {
     return canUseH264WebSocket() ? "h264-ws" : "webrtc";
@@ -2755,4 +2765,11 @@ function nextAutoFallbackBackend(
     return canUseH264WebSocket() ? "h264-ws" : null;
   }
   return null;
+}
+
+function isAndroidStreamTarget(target?: StreamConnectTarget | null): boolean {
+  return (
+    target?.platform === "android-emulator" ||
+    Boolean(target?.udid.startsWith("android:"))
+  );
 }

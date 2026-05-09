@@ -1176,6 +1176,9 @@ impl AndroidWebRtcSource {
                         let Some(frame) = frame else {
                             continue;
                         };
+                        if inner.latest_keyframe.read().unwrap().is_none() {
+                            inner.request_keyframe();
+                        }
                         let handle = inner.encoder_handle.load(Ordering::Acquire);
                         let udid = inner.udid.clone();
                         let encode_result = task::spawn_blocking(move || {
@@ -1233,15 +1236,7 @@ impl AndroidWebRtcSource {
     fn request_refresh(&self) {}
 
     fn request_keyframe(&self) {
-        self.inner
-            .metrics
-            .keyframe_requests
-            .fetch_add(1, Ordering::Relaxed);
-        unsafe {
-            ffi::xcw_native_h264_encoder_request_keyframe(
-                self.inner.encoder_handle.load(Ordering::Acquire) as *mut c_void,
-            );
-        }
+        self.inner.request_keyframe();
     }
 }
 
@@ -1279,6 +1274,19 @@ unsafe extern "C" fn android_h264_encoder_frame_callback(
 }
 
 impl AndroidWebRtcSourceInner {
+    fn request_keyframe(&self) {
+        self.metrics
+            .keyframe_requests
+            .fetch_add(1, Ordering::Relaxed);
+        let encoder_handle = self.encoder_handle.load(Ordering::Acquire);
+        if encoder_handle == 0 {
+            return;
+        }
+        unsafe {
+            ffi::xcw_native_h264_encoder_request_keyframe(encoder_handle as *mut c_void);
+        }
+    }
+
     fn handle_encoded_frame(&self, frame: &ffi::xcw_native_frame) {
         let description = unsafe { copy_native_shared_bytes(frame.description) };
         let Some(data) = (unsafe { copy_native_shared_bytes(frame.data) }) else {

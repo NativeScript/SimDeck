@@ -301,6 +301,7 @@ export function useLiveStream({
 
     const targetKey = [
       simulator.udid,
+      simulator.platform ?? "",
       remote ? "remote" : "local",
       streamTransport,
     ].join("|");
@@ -316,6 +317,7 @@ export function useLiveStream({
     workerClient.connect(
       buildStreamTarget(simulator.udid, {
         clientId: clientTelemetryIdRef.current,
+        platform: simulator.platform,
         remote,
         streamConfig,
         transport: streamTransport,
@@ -324,6 +326,7 @@ export function useLiveStream({
   }, [
     canvasElement,
     simulator?.isBooted,
+    simulator?.platform,
     simulator?.udid,
     paused,
     remote,
