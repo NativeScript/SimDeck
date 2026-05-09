@@ -90,6 +90,7 @@ import {
   DEFAULT_VIEWPORT_STATE,
   DEBUG_VISIBLE_STORAGE_KEY,
   HIERARCHY_VISIBLE_STORAGE_KEY,
+  nextAccessibilitySourcePreference,
   readPersistedUiState,
   readStoredAccessibilitySource,
   readStoredFlag,
@@ -912,24 +913,13 @@ export function AppShell({
       setAccessibilityError(
         roots.length === 0 ? (snapshot.fallbackReason ?? "") : "",
       );
-      if (
-        snapshot.source === "native-ax" &&
-        availableSources.includes("nativescript") &&
-        accessibilityPreferredSource !== "nativescript"
-      ) {
-        setAccessibilityPreferredSource("nativescript");
-      } else if (
-        snapshot.source === "native-ax" &&
-        availableSources.includes("swiftui") &&
-        accessibilityPreferredSource !== "swiftui"
-      ) {
-        setAccessibilityPreferredSource("swiftui");
-      }
-      if (
-        accessibilityPreferredSource !== "auto" &&
-        !availableSources.includes(accessibilityPreferredSource)
-      ) {
-        setAccessibilityPreferredSource(snapshot.source);
+      const nextPreferredSource = nextAccessibilitySourcePreference(
+        accessibilityPreferredSource,
+        snapshot.source,
+        availableSources,
+      );
+      if (nextPreferredSource) {
+        setAccessibilityPreferredSource(nextPreferredSource);
       }
       if (roots.length === 0) {
         setAccessibilitySelectedId("");

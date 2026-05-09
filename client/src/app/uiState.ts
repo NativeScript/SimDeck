@@ -114,6 +114,39 @@ export function sanitizeAccessibilitySources(
   return ACCESSIBILITY_SOURCE_ORDER.filter((source) => sourceSet.has(source));
 }
 
+export function preferredRicherAccessibilitySource(
+  availableSources: AccessibilitySource[],
+): AccessibilitySource | null {
+  return (
+    ACCESSIBILITY_SOURCE_ORDER.find(
+      (source) => source !== "native-ax" && availableSources.includes(source),
+    ) ?? null
+  );
+}
+
+export function nextAccessibilitySourcePreference(
+  currentPreference: AccessibilitySourcePreference,
+  snapshotSource: AccessibilitySource,
+  availableSources: AccessibilitySource[],
+): AccessibilitySourcePreference | null {
+  const richerSource = preferredRicherAccessibilitySource(availableSources);
+  if (
+    snapshotSource === "native-ax" &&
+    currentPreference !== "native-ax" &&
+    richerSource &&
+    currentPreference !== richerSource
+  ) {
+    return richerSource;
+  }
+  if (
+    currentPreference !== "auto" &&
+    !availableSources.includes(currentPreference)
+  ) {
+    return richerSource ?? snapshotSource;
+  }
+  return null;
+}
+
 export function isAccessibilitySource(
   value: unknown,
 ): value is AccessibilitySource {

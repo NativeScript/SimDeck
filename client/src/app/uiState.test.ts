@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_VIEWPORT_STATE,
+  nextAccessibilitySourcePreference,
+  preferredRicherAccessibilitySource,
   readStoredFlag,
   sanitizeAccessibilitySources,
   sanitizePersistedUiState,
@@ -21,6 +23,41 @@ describe("uiState", () => {
         "in-app-inspector",
       ]),
     ).toEqual(["nativescript", "swiftui", "in-app-inspector", "native-ax"]);
+  });
+
+  it("prefers a richer hierarchy source over native accessibility", () => {
+    expect(
+      preferredRicherAccessibilitySource([
+        "native-ax",
+        "in-app-inspector",
+        "react-native",
+      ]),
+    ).toBe("react-native");
+    expect(preferredRicherAccessibilitySource(["native-ax"])).toBeNull();
+  });
+
+  it("moves away from native accessibility when a richer source is available", () => {
+    expect(
+      nextAccessibilitySourcePreference("auto", "native-ax", [
+        "react-native",
+        "native-ax",
+      ]),
+    ).toBe("react-native");
+    expect(
+      nextAccessibilitySourcePreference("native-ax", "native-ax", [
+        "react-native",
+        "native-ax",
+      ]),
+    ).toBeNull();
+  });
+
+  it("uses a richer fallback when the selected source disappears", () => {
+    expect(
+      nextAccessibilitySourcePreference("swiftui", "native-ax", [
+        "in-app-inspector",
+        "native-ax",
+      ]),
+    ).toBe("in-app-inspector");
   });
 
   it("sanitizes persisted viewport state and falls back to defaults", () => {
