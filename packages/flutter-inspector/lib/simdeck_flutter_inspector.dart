@@ -11,6 +11,8 @@ import 'package:flutter/widgets.dart';
 
 const String _protocolVersion = '0.1';
 const MethodChannel _channel = MethodChannel('simdeck_flutter_inspector');
+const int _defaultHierarchyMaxDepth = 48;
+const int _maxHierarchyDepth = 64;
 
 SimDeckFlutterInspector? _sharedInspector;
 
@@ -66,6 +68,9 @@ class SimDeckFlutterInspector {
 
   final SimDeckFlutterInspectorOptions options;
   final Expando<String> _ids = Expando<String>('simdeckFlutterInspectorId');
+  final Expando<Object> _sourceLocations = Expando<Object>(
+    'simdeckFlutterSourceLocation',
+  );
   final Map<String, Element> _objects = <String, Element>{};
   final Map<int, _FrameCacheEntry> _frameCache = <int, _FrameCacheEntry>{};
   int _nextObjectId = 1;
@@ -360,7 +365,7 @@ class SimDeckFlutterInspector {
       final node = _elementNode(
         root,
         includeHidden: params['includeHidden'] == true,
-        maxDepth: _optionalInt(params['maxDepth']),
+        maxDepth: _hierarchyMaxDepth(params['maxDepth']),
         depth: 0,
         context: context,
       );
@@ -387,7 +392,7 @@ class SimDeckFlutterInspector {
     final node = _elementNode(
       element,
       includeHidden: true,
-      maxDepth: _optionalInt(params['maxDepth']),
+      maxDepth: _hierarchyMaxDepth(params['maxDepth']),
       depth: 0,
       context: _TraversalContext(),
     );
@@ -543,14 +548,23 @@ class SimDeckFlutterInspector {
       return null;
     }
 
+    final type = element.widget.runtimeType.toString();
+    final renderObject = element.findRenderObject();
+    final frame = _frameFor(renderObject);
+    final semantics = _semanticsInfo(renderObject);
+    final sourceLocation = _shouldReadSourceLocation(element, semantics)
+        ? _sourceLocation(element)
+        : null;
+    final transparent = _isTransparentWrapper(element, semantics);
+    final childDepth = transparent ? depth : depth + 1;
     final children = <Map<String, Object?>>[];
-    if (maxDepth == null || depth < maxDepth) {
+    if (maxDepth == null || transparent || depth < maxDepth) {
       element.visitChildren((child) {
         final node = _elementNode(
           child,
           includeHidden: includeHidden,
           maxDepth: maxDepth,
-          depth: depth + 1,
+          depth: childDepth,
           context: context,
         );
         if (node != null) {
@@ -559,17 +573,17 @@ class SimDeckFlutterInspector {
       });
     }
 
+    if (transparent && children.length == 1) {
+      return children.single;
+    }
+
     final id = _objectId(element);
-    final renderObject = element.findRenderObject();
-    final frame = _frameFor(renderObject);
-    final semantics = _semanticsInfo(renderObject);
     final title = _nodeTitle(element, semantics);
-    final sourceLocation = _sourceLocation(element);
     return <String, Object?>{
       'id': id,
       'inspectorId': id,
-      'type': element.widget.runtimeType.toString(),
-      'displayName': element.widget.runtimeType.toString(),
+      'type': type,
+      'displayName': type,
       'title': title,
       'source': 'flutter',
       'sourceLocation': sourceLocation,
@@ -584,7 +598,7 @@ class SimDeckFlutterInspector {
       'isHidden': hidden,
       'custom_actions': semantics?['actions'],
       'flutter': <String, Object?>{
-        'widgetType': element.widget.runtimeType.toString(),
+        'widgetType': type,
         'elementType': element.runtimeType.toString(),
         'stateType': element is StatefulElement
             ? element.state.runtimeType.toString()
@@ -732,6 +746,14 @@ class SimDeckFlutterInspector {
     return actions.toList()..sort();
   }
 
+  int? _hierarchyMaxDepth(Object? value) {
+    final requested = _optionalInt(value) ?? _defaultHierarchyMaxDepth;
+    if (requested < 0) {
+      return 0;
+    }
+    return math.min(requested, _maxHierarchyDepth);
+  }
+
   String _objectId(Element element) {
     final existing = _ids[element];
     if (existing != null) {
@@ -835,6 +857,12 @@ class SimDeckFlutterInspector {
     if (!WidgetInspectorService.instance.isWidgetCreationTracked()) {
       return null;
     }
+    final cached = _sourceLocations[element];
+    if (cached != null) {
+      return identical(cached, _noSourceLocation)
+          ? null
+          : cached as Map<String, Object?>;
+    }
     try {
       final json = element.toDiagnosticsNode().toJsonMap(
         InspectorSerializationDelegate(
@@ -844,18 +872,35 @@ class SimDeckFlutterInspector {
       );
       final location = _objectMap(json['creationLocation']);
       if (location == null) {
+        _sourceLocations[element] = _noSourceLocation;
         return null;
       }
-      return <String, Object?>{
+      final sourceLocation = <String, Object?>{
         'file': location['file'],
         'line': location['line'],
         'column': location['column'],
         'name': location['name'],
         'kind': 'flutter',
       };
+      _sourceLocations[element] = sourceLocation;
+      return sourceLocation;
     } catch (_) {
+      _sourceLocations[element] = _noSourceLocation;
       return null;
     }
+  }
+
+  bool _shouldReadSourceLocation(
+    Element element,
+    Map<String, Object?>? semantics,
+  ) {
+    if (!WidgetInspectorService.instance.isWidgetCreationTracked()) {
+      return false;
+    }
+    final type = element.widget.runtimeType.toString();
+    return element.widget.key != null ||
+        _hasSemanticContent(semantics) ||
+        !_isFrameworkWrapperType(type);
   }
 
   String _nodeTitle(Element element, Map<String, Object?>? semantics) {
@@ -906,6 +951,13 @@ class SimDeckFlutterInspector {
       }
     }
     return false;
+  }
+
+  bool _isTransparentWrapper(Element element, Map<String, Object?>? semantics) {
+    if (element.widget.key != null || _hasSemanticContent(semantics)) {
+      return false;
+    }
+    return _isFrameworkWrapperType(element.widget.runtimeType.toString());
   }
 
   Map<String, Object?> _diagnosticProperties(Object object) {
@@ -965,6 +1017,64 @@ class _FrameCacheEntry {
 
   final Map<String, Object?> frame;
   final DateTime measuredAt;
+}
+
+final Object _noSourceLocation = Object();
+
+const Set<String> _frameworkWrapperTypes = <String>{
+  'Actions',
+  '_ActionsScope',
+  'AnimatedTheme',
+  'Builder',
+  'CheckedModeBanner',
+  'DefaultSelectionStyle',
+  'DefaultTextEditingShortcuts',
+  'Directionality',
+  'Focus',
+  '_FocusInheritedScope',
+  '_FocusScopeWithExternalFocusNode',
+  'FocusTraversalGroup',
+  'HeroControllerScope',
+  'Localizations',
+  '_LocalizationsScope',
+  'MaterialApp',
+  'MediaQuery',
+  '_MediaQueryFromView',
+  'NotificationListener<NavigationNotification>',
+  'Overlay',
+  'RawView',
+  '_RawViewInternal',
+  'RootWidget',
+  'ScrollConfiguration',
+  'Semantics',
+  'Shortcuts',
+  '_ShortcutsMarker',
+  'Theme',
+  'Title',
+  'View',
+  '_ViewScope',
+  'WidgetsApp',
+  '_WidgetsAppState',
+  '_PipelineOwnerScope',
+  '_InheritedTheme',
+};
+
+bool _isFrameworkWrapperType(String type) =>
+    type.startsWith('_') || _frameworkWrapperTypes.contains(type);
+
+bool _hasSemanticContent(Map<String, Object?>? semantics) {
+  if (semantics == null) {
+    return false;
+  }
+  final label = _firstString(<Object?>[
+    semantics['identifier'],
+    semantics['label'],
+    semantics['value'],
+    semantics['hint'],
+    semantics['tooltip'],
+  ]);
+  final actions = semantics['actions'];
+  return label != null || (actions is List && actions.isNotEmpty);
 }
 
 Map<String, Object?> _inspectorError(Object error) {
