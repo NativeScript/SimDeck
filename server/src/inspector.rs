@@ -613,6 +613,14 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
     if react_native_available {
         sources.push("react-native".to_owned());
     }
+    let flutter_available = info
+        .get("flutter")
+        .and_then(|value| value.get("available"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if flutter_available {
+        sources.push("flutter".to_owned());
+    }
     let app_hierarchy = info.get("appHierarchy");
     let app_hierarchy_available = app_hierarchy
         .and_then(|value| value.get("available"))
@@ -626,6 +634,7 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         match app_hierarchy_source {
             "nativescript" => sources.push("nativescript".to_owned()),
             "react-native" => push_unique_source(&mut sources, "react-native"),
+            "flutter" => push_unique_source(&mut sources, "flutter"),
             "swiftui" => push_unique_source(&mut sources, "swiftui"),
             _ => {}
         }
@@ -634,7 +643,7 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         .get("uikit")
         .and_then(|value| value.get("available"))
         .and_then(Value::as_bool)
-        .unwrap_or(!react_native_available);
+        .unwrap_or(!(react_native_available || flutter_available));
     if uikit_available {
         sources.push("in-app-inspector".to_owned());
     }
@@ -842,6 +851,23 @@ mod tests {
         })
     }
 
+    fn flutter_inspector_info() -> Value {
+        json!({
+            "protocolVersion": "1.0",
+            "bundleIdentifier": "com.example.FlutterApp",
+            "processIdentifier": 456,
+            "flutter": {
+                "available": true,
+                "widgetCreationTracked": true
+            },
+            "appHierarchy": {
+                "available": true,
+                "source": "flutter"
+            },
+            "uikit": { "available": false }
+        })
+    }
+
     #[tokio::test]
     async fn registry_advertisement_publishes_and_removes_live_inspector() {
         let path = registry_test_path("publish");
@@ -864,6 +890,25 @@ mod tests {
 
         registry.remove(123).await.unwrap();
         assert!(registry.read_live_entries().await.is_empty());
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("json.lock"));
+    }
+
+    #[tokio::test]
+    async fn registry_advertisement_publishes_flutter_source() {
+        let path = registry_test_path("publish-flutter");
+        let registry = registry_entry(&path);
+
+        registry
+            .upsert(456, flutter_inspector_info())
+            .await
+            .unwrap();
+
+        let entries = registry.read_live_entries().await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].process_identifier, 456);
+        assert_eq!(entries[0].available_sources, vec!["flutter".to_owned()]);
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(path.with_extension("json.lock"));

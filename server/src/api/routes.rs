@@ -3478,12 +3478,16 @@ async fn registry_inspector_session(
 }
 
 fn inspector_session_from_published(inspector: PublishedInspector) -> InspectorSession {
+    let mut available_sources = inspector_available_sources(&inspector.info);
+    for source in inspector.available_sources {
+        push_unique_source(&mut available_sources, &source);
+    }
     InspectorSession {
         transport: InspectorSessionTransport::RemoteDaemon {
             server_url: inspector.server_url,
             access_token: inspector.access_token,
         },
-        available_sources: inspector.available_sources,
+        available_sources,
         info: inspector.info,
         process_identifier: inspector.process_identifier,
     }
@@ -4786,6 +4790,31 @@ mod tests {
         assert_eq!(metadata["transport"], "remote-websocket");
         assert_eq!(metadata["daemonUrl"], "http://127.0.0.1:4310");
         assert!(metadata["port"].is_null());
+    }
+
+    #[test]
+    fn published_inspector_session_merges_sources_from_info() {
+        let session = inspector_session_from_published(PublishedInspector {
+            access_token: "secret-token".to_owned(),
+            available_sources: vec![SOURCE_UIKIT.to_owned()],
+            daemon_id: "daemon-a".to_owned(),
+            info: json!({
+                "bundleIdentifier": "com.example.FlutterApp",
+                "processIdentifier": 42,
+                "flutter": { "available": true },
+                "appHierarchy": { "available": true, "source": SOURCE_FLUTTER },
+                "uikit": { "available": false }
+            }),
+            process_identifier: 42,
+            server_url: "http://127.0.0.1:4310".to_owned(),
+            updated_at_unix_ms: 1,
+        });
+
+        assert_eq!(
+            session.available_sources,
+            vec![SOURCE_FLUTTER.to_owned(), SOURCE_UIKIT.to_owned()]
+        );
+        assert_eq!(inspector_session_score(&session), 1);
     }
 
     #[test]
