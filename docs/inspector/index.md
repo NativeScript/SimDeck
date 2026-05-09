@@ -26,9 +26,10 @@ The HTTP API picks the most specific source available, falls back to the next on
 
 The server resolves which inspector belongs to the simulator by:
 
-1. Checking every connected NativeScript inspector for a process running on the target UDID.
-2. Probing TCP `47370–47402` on `127.0.0.1` for a Swift inspector agent and matching its `processIdentifier` against the UDID's processes via `ps`.
-3. Falling back to AX when neither matches.
+1. Checking every connected WebSocket runtime inspector for a process running on the target UDID.
+2. Reading `~/.simdeck/inspectors.json` for inspectors published by other SimDeck daemons, validating the process against the target UDID, and relaying requests through the owning daemon.
+3. Probing TCP `47370–47402` on `127.0.0.1` for a Swift inspector agent and matching its `processIdentifier` against the UDID's processes via `ps`.
+4. Falling back to AX when none match.
 
 Every accessibility tree response includes:
 

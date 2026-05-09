@@ -26,6 +26,8 @@ GET /api/inspector/connect
 
 After connection the server sends `Inspector.getInfo` and waits for a response that includes a `processIdentifier`. Once that arrives, the server treats the WebSocket as the preferred transport for that PID and routes inspector requests there.
 
+While the inspector is registered, the daemon advertises it in `~/.simdeck/inspectors.json` so other local SimDeck daemons can find the owning daemon and relay requests to the same app inspector.
+
 A polling fallback is available for environments without WebSocket support:
 
 - `GET /api/inspector/poll?processIdentifier=<pid>` — long-polls for the next request, returning `204 No Content` if nothing arrives within 25 seconds.
@@ -276,8 +278,10 @@ Text("Continue")
 When you call the inspector via `POST /api/simulators/{udid}/inspector/request`, the SimDeck server enforces an allow-list to keep the HTTP surface small:
 
 - `Runtime.ping`
+- `Inspector.getInfo`
 - `View.get`
 - `View.evaluateScript`
+- `View.getHierarchy`
 - `View.getProperties`
 - `View.setProperty`
 - `View.listActions`

@@ -16,6 +16,11 @@
       "types": "./dist/index.d.ts",
       "react-native": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./auto": {
+      "types": "./dist/auto.d.ts",
+      "react-native": "./src/auto.ts",
+      "default": "./dist/auto.js"
     }
   },
   "scripts": {
@@ -34,7 +39,10 @@
     "inspector",
     "simdeck"
   ],
-  "sideEffects": false,
+  "sideEffects": [
+    "./src/auto.ts",
+    "./dist/auto.js"
+  ],
   "peerDependencies": {
     "react": ">=18.0.0",
     "react-native": ">=0.72.0"

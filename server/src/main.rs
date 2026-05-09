@@ -18,7 +18,7 @@ use api::routes::{router, AppState};
 use axum::Router;
 use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
-use inspector::InspectorHub;
+use inspector::{InspectorHub, InspectorRegistryAdvertisement};
 use logs::LogRegistry;
 use metrics::counters::Metrics;
 use native::bridge::{NativeBridge, NativeInputSession};
@@ -5167,7 +5167,7 @@ async fn serve(
     let bridge = NativeBridge;
     let registry = SessionRegistry::new(bridge, metrics.clone());
     let logs = LogRegistry::default();
-    let inspectors = InspectorHub::default();
+    let inspectors = InspectorHub::with_registry(InspectorRegistryAdvertisement::new(&config));
     let state = AppState {
         config: config.clone(),
         registry,

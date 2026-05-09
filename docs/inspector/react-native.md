@@ -13,7 +13,26 @@ cd ios && pod install
 
 ## Start the inspector
 
-Call `startSimDeckReactNativeInspector(...)` before `AppRegistry.registerComponent(...)` so the package can install the React Fiber hook before the app's first render.
+Import the auto entrypoint before `AppRegistry.registerComponent(...)` so the package can install the React Fiber hook before the app's first render. For Expo Router, import it before `expo-router/entry`.
+
+```ts
+import "react-native-simdeck/auto";
+import "expo-router/entry";
+```
+
+For manual React Native entrypoints:
+
+```ts
+import "react-native-simdeck/auto";
+import { AppRegistry } from "react-native";
+import App from "./App";
+
+AppRegistry.registerComponent("Example", () => App);
+```
+
+The auto entrypoint no-ops outside development, reads `EXPO_PUBLIC_SIMDECK_PORT` when present, and otherwise scans common SimDeck daemon ports.
+
+If you need explicit options, call `startSimDeckReactNativeInspector(...)` before registering the app:
 
 ```ts
 import { AppRegistry } from "react-native";

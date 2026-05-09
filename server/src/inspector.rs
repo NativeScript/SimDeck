@@ -1,18 +1,30 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
+use std::env;
+use std::fs;
+use std::io;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
+use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 use tokio::time::{timeout, Instant};
 use tracing::{debug, warn};
 
 const INSPECTOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const INSPECTOR_REGISTRY_HEARTBEAT: Duration = Duration::from_secs(10);
+pub const INSPECTOR_REGISTRY_TTL: Duration = Duration::from_secs(45);
 const MAX_POLLED_AGENTS: usize = 64;
 const POLLED_INFO_REQUEST_ID: u64 = 0;
 const POLLED_AGENT_TTL: Duration = Duration::from_secs(60);
+const REGISTRY_VERSION: u32 = 1;
+static REGISTRY_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 type InspectorResponse = Result<Value, String>;
 type PendingResponseSender = oneshot::Sender<InspectorResponse>;
@@ -21,6 +33,7 @@ type PendingResponses = Arc<Mutex<HashMap<u64, PendingResponseSender>>>;
 #[derive(Clone, Default)]
 pub struct InspectorHub {
     inner: Arc<Mutex<InspectorHubState>>,
+    registry: Option<InspectorRegistryAdvertisement>,
 }
 
 #[derive(Default)]
@@ -44,6 +57,42 @@ pub struct ConnectedInspector {
     pub info: Value,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishedInspector {
+    pub access_token: String,
+    pub available_sources: Vec<String>,
+    pub daemon_id: String,
+    pub info: Value,
+    pub process_identifier: i64,
+    pub server_url: String,
+    pub updated_at_unix_ms: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InspectorRegistryFile {
+    version: u32,
+    inspectors: Vec<PublishedInspector>,
+}
+
+impl Default for InspectorRegistryFile {
+    fn default() -> Self {
+        Self {
+            version: REGISTRY_VERSION,
+            inspectors: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct InspectorRegistryAdvertisement {
+    access_token: String,
+    daemon_id: String,
+    path: PathBuf,
+    server_url: String,
+}
+
 #[derive(Clone)]
 struct InspectorAgentHandle {
     connection_id: u64,
@@ -57,6 +106,13 @@ struct InspectorAgentHandle {
 }
 
 impl InspectorHub {
+    pub fn with_registry(registry: InspectorRegistryAdvertisement) -> Self {
+        Self {
+            inner: Arc::default(),
+            registry: Some(registry),
+        }
+    }
+
     pub async fn handle_socket(&self, socket: WebSocket) {
         let connection_id = self.allocate_connection_id().await;
         let (mut sender, mut receiver) = socket.split();
@@ -168,6 +224,13 @@ impl InspectorHub {
             .collect()
     }
 
+    pub async fn published_inspectors(&self) -> Vec<PublishedInspector> {
+        let Some(registry) = self.registry.as_ref() else {
+            return Vec::new();
+        };
+        registry.read_live_entries().await
+    }
+
     pub async fn ensure_polled_agent(&self, process_identifier: i64) -> Result<(), String> {
         {
             let mut inner = self.inner.lock().await;
@@ -274,22 +337,39 @@ impl InspectorHub {
             "Registered NativeScript inspector for process {}.",
             process_identifier
         );
+        let connection_id = agent.connection_id;
+        let info = agent.info.clone();
         self.inner
             .lock()
             .await
             .agents
             .insert(process_identifier, agent);
+        if !info.is_null() {
+            self.publish_inspector(process_identifier, &info).await;
+            self.start_registry_heartbeat(process_identifier, connection_id);
+        }
     }
 
     async fn unregister(&self, process_identifier: i64, connection_id: u64) {
         let mut inner = self.inner.lock().await;
-        if inner
+        let removed = if inner
             .agents
             .get(&process_identifier)
             .map(|agent| agent.connection_id)
             == Some(connection_id)
         {
             inner.agents.remove(&process_identifier);
+            true
+        } else {
+            false
+        };
+        drop(inner);
+        if removed {
+            if let Some(registry) = self.registry.as_ref() {
+                if let Err(error) = registry.remove(process_identifier).await {
+                    debug!("Failed to remove SimDeck inspector registry entry: {error}");
+                }
+            }
         }
     }
 
@@ -301,10 +381,269 @@ impl InspectorHub {
             return;
         }
 
+        let mut heartbeat_connection_id = None;
         let mut inner = self.inner.lock().await;
         if let Some(agent) = inner.agents.get_mut(&process_identifier) {
-            agent.info = info;
+            if agent.info.is_null() {
+                heartbeat_connection_id = Some(agent.connection_id);
+            }
+            agent.info = info.clone();
         }
+        drop(inner);
+        self.publish_inspector(process_identifier, &info).await;
+        if let Some(connection_id) = heartbeat_connection_id {
+            self.start_registry_heartbeat(process_identifier, connection_id);
+        }
+    }
+
+    async fn publish_inspector(&self, process_identifier: i64, info: &Value) {
+        let Some(registry) = self.registry.as_ref() else {
+            return;
+        };
+        if let Err(error) = registry.upsert(process_identifier, info.clone()).await {
+            debug!("Failed to publish SimDeck inspector registry entry: {error}");
+        }
+    }
+
+    fn start_registry_heartbeat(&self, process_identifier: i64, connection_id: u64) {
+        let hub = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(INSPECTOR_REGISTRY_HEARTBEAT);
+            loop {
+                interval.tick().await;
+                let info = {
+                    let inner = hub.inner.lock().await;
+                    let Some(agent) = inner.agents.get(&process_identifier) else {
+                        break;
+                    };
+                    if agent.connection_id != connection_id {
+                        break;
+                    }
+                    agent.info.clone()
+                };
+                if info.is_null() {
+                    continue;
+                }
+                hub.publish_inspector(process_identifier, &info).await;
+            }
+        });
+    }
+}
+
+impl InspectorRegistryAdvertisement {
+    pub fn new(config: &crate::config::Config) -> Self {
+        Self {
+            access_token: config.access_token.clone(),
+            daemon_id: format!("{}:{}", process::id(), config.http_port),
+            path: inspector_registry_path(),
+            server_url: registry_server_url(config),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn for_test(
+        path: PathBuf,
+        daemon_id: impl Into<String>,
+        server_url: impl Into<String>,
+        access_token: impl Into<String>,
+    ) -> Self {
+        Self {
+            access_token: access_token.into(),
+            daemon_id: daemon_id.into(),
+            path,
+            server_url: server_url.into(),
+        }
+    }
+
+    async fn upsert(&self, process_identifier: i64, info: Value) -> io::Result<()> {
+        let _lock = RegistryFileLock::acquire(&self.path)?;
+        let mut registry = read_registry_file(&self.path);
+        prune_registry_file(&mut registry);
+        registry.inspectors.retain(|entry| {
+            !(entry.process_identifier == process_identifier && entry.daemon_id == self.daemon_id)
+        });
+        registry.inspectors.push(PublishedInspector {
+            access_token: self.access_token.clone(),
+            available_sources: inspector_available_sources(&info),
+            daemon_id: self.daemon_id.clone(),
+            info,
+            process_identifier,
+            server_url: self.server_url.clone(),
+            updated_at_unix_ms: now_unix_ms(),
+        });
+        write_registry_file(&self.path, &registry)
+    }
+
+    async fn remove(&self, process_identifier: i64) -> io::Result<()> {
+        let _lock = RegistryFileLock::acquire(&self.path)?;
+        let mut registry = read_registry_file(&self.path);
+        let original_len = registry.inspectors.len();
+        registry.inspectors.retain(|entry| {
+            !(entry.process_identifier == process_identifier && entry.daemon_id == self.daemon_id)
+        });
+        prune_registry_file(&mut registry);
+        if registry.inspectors.len() != original_len {
+            write_registry_file(&self.path, &registry)?;
+        }
+        Ok(())
+    }
+
+    async fn read_live_entries(&self) -> Vec<PublishedInspector> {
+        let _lock = RegistryFileLock::acquire(&self.path).ok();
+        let mut registry = read_registry_file(&self.path);
+        prune_registry_file(&mut registry);
+        registry.inspectors
+    }
+}
+
+struct RegistryFileLock {
+    #[cfg(unix)]
+    file: fs::File,
+}
+
+impl RegistryFileLock {
+    fn acquire(path: &Path) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let lock_path = path.with_extension("json.lock");
+            let file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(false)
+                .open(lock_path)?;
+            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+            if result != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Self { file })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Ok(Self {})
+        }
+    }
+}
+
+impl Drop for RegistryFileLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        unsafe {
+            let _ = libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+fn inspector_registry_path() -> PathBuf {
+    env::var_os("SIMDECK_INSPECTOR_REGISTRY_PATH")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".simdeck")))
+        .unwrap_or_else(|| env::temp_dir().join("simdeck"))
+        .join("inspectors.json")
+}
+
+fn registry_server_url(config: &crate::config::Config) -> String {
+    let host = if config.bind_ip.is_loopback() || config.bind_ip.is_unspecified() {
+        "127.0.0.1".to_owned()
+    } else {
+        config.advertise_host.clone()
+    };
+    format!("http://{}:{}", http_host(&host), config.http_port)
+}
+
+fn http_host(host: &str) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    }
+}
+
+fn read_registry_file(path: &Path) -> InspectorRegistryFile {
+    let Ok(data) = fs::read_to_string(path) else {
+        return InspectorRegistryFile::default();
+    };
+    serde_json::from_str(&data).unwrap_or_default()
+}
+
+fn write_registry_file(path: &Path, registry: &InspectorRegistryFile) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary_path = path.with_extension(format!(
+        "json.{}.{}.tmp",
+        process::id(),
+        REGISTRY_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let data = serde_json::to_vec_pretty(registry).map_err(io::Error::other)?;
+    fs::write(&temporary_path, data)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&temporary_path, fs::Permissions::from_mode(0o600));
+    }
+    fs::rename(temporary_path, path)
+}
+
+fn prune_registry_file(registry: &mut InspectorRegistryFile) {
+    let cutoff = now_unix_ms().saturating_sub(INSPECTOR_REGISTRY_TTL.as_millis() as u64);
+    registry.version = REGISTRY_VERSION;
+    registry
+        .inspectors
+        .retain(|entry| entry.updated_at_unix_ms >= cutoff);
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn inspector_available_sources(info: &Value) -> Vec<String> {
+    let mut sources = Vec::new();
+    let react_native_available = info
+        .get("reactNative")
+        .and_then(|value| value.get("available"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if react_native_available {
+        sources.push("react-native".to_owned());
+    }
+    let app_hierarchy = info.get("appHierarchy");
+    let app_hierarchy_available = app_hierarchy
+        .and_then(|value| value.get("available"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let app_hierarchy_source = app_hierarchy
+        .and_then(|value| value.get("source"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if app_hierarchy_available {
+        match app_hierarchy_source {
+            "nativescript" => sources.push("nativescript".to_owned()),
+            "react-native" => push_unique_source(&mut sources, "react-native"),
+            "swiftui" => push_unique_source(&mut sources, "swiftui"),
+            _ => {}
+        }
+    }
+    let uikit_available = info
+        .get("uikit")
+        .and_then(|value| value.get("available"))
+        .and_then(Value::as_bool)
+        .unwrap_or(!react_native_available);
+    if uikit_available {
+        sources.push("in-app-inspector".to_owned());
+    }
+    sources
+}
+
+fn push_unique_source(sources: &mut Vec<String>, source: &str) {
+    if !sources.iter().any(|value| value == source) {
+        sources.push(source.to_owned());
     }
 }
 
@@ -456,5 +795,151 @@ async fn fail_all_pending(pending: &PendingResponses, message: &str) {
     let mut pending = pending.lock().await;
     for (_, response_tx) in pending.drain() {
         let _ = response_tx.send(Err(message.to_owned()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        now_unix_ms, write_registry_file, InspectorHub, InspectorRegistryAdvertisement,
+        InspectorRegistryFile, PublishedInspector, INSPECTOR_REGISTRY_TTL, REGISTRY_VERSION,
+    };
+    use serde_json::{json, Value};
+    use std::{
+        env, fs,
+        path::{Path, PathBuf},
+        process,
+        time::Duration,
+    };
+
+    fn registry_test_path(name: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "simdeck-inspector-registry-{name}-{}-{}.json",
+            process::id(),
+            now_unix_ms()
+        ))
+    }
+
+    fn registry_entry(path: &Path) -> InspectorRegistryAdvertisement {
+        InspectorRegistryAdvertisement::for_test(
+            path.to_path_buf(),
+            "daemon-a",
+            "http://127.0.0.1:4310",
+            "token-a",
+        )
+    }
+
+    fn inspector_info() -> Value {
+        json!({
+            "protocolVersion": "1.0",
+            "bundleIdentifier": "com.example.App",
+            "processIdentifier": 123,
+            "appHierarchy": {
+                "available": true,
+                "source": "nativescript"
+            },
+            "uikit": { "available": true }
+        })
+    }
+
+    #[tokio::test]
+    async fn registry_advertisement_publishes_and_removes_live_inspector() {
+        let path = registry_test_path("publish");
+        let registry = registry_entry(&path);
+
+        registry.upsert(123, inspector_info()).await.unwrap();
+
+        let entries = registry.read_live_entries().await;
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.process_identifier, 123);
+        assert_eq!(entry.daemon_id, "daemon-a");
+        assert_eq!(entry.server_url, "http://127.0.0.1:4310");
+        assert_eq!(entry.access_token, "token-a");
+        assert_eq!(
+            entry.available_sources,
+            vec!["nativescript".to_owned(), "in-app-inspector".to_owned()]
+        );
+        assert_eq!(entry.info["bundleIdentifier"], "com.example.App");
+
+        registry.remove(123).await.unwrap();
+        assert!(registry.read_live_entries().await.is_empty());
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("json.lock"));
+    }
+
+    #[tokio::test]
+    async fn polled_inspector_info_response_publishes_registry_entry() {
+        let path = registry_test_path("polled");
+        let registry = registry_entry(&path);
+        let hub = InspectorHub::with_registry(registry.clone());
+
+        hub.ensure_polled_agent(123).await.unwrap();
+        let request = hub.poll(123, Duration::ZERO).await.unwrap().unwrap();
+        assert_eq!(request["method"], "Inspector.getInfo");
+
+        hub.complete_response(
+            123,
+            json!({
+                "id": request["id"].clone(),
+                "result": inspector_info()
+            }),
+        )
+        .await
+        .unwrap();
+
+        let entries = registry.read_live_entries().await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].process_identifier, 123);
+        assert_eq!(entries[0].info["bundleIdentifier"], "com.example.App");
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("json.lock"));
+    }
+
+    #[tokio::test]
+    async fn registry_reader_ignores_stale_inspectors() {
+        let path = registry_test_path("stale");
+        let registry = registry_entry(&path);
+        let stale_time = now_unix_ms()
+            .saturating_sub(INSPECTOR_REGISTRY_TTL.as_millis() as u64)
+            .saturating_sub(1);
+        write_registry_file(
+            &path,
+            &InspectorRegistryFile {
+                version: REGISTRY_VERSION,
+                inspectors: vec![
+                    PublishedInspector {
+                        access_token: "stale-token".to_owned(),
+                        available_sources: vec!["nativescript".to_owned()],
+                        daemon_id: "stale-daemon".to_owned(),
+                        info: inspector_info(),
+                        process_identifier: 111,
+                        server_url: "http://127.0.0.1:4311".to_owned(),
+                        updated_at_unix_ms: stale_time,
+                    },
+                    PublishedInspector {
+                        access_token: "fresh-token".to_owned(),
+                        available_sources: vec!["react-native".to_owned()],
+                        daemon_id: "fresh-daemon".to_owned(),
+                        info: inspector_info(),
+                        process_identifier: 222,
+                        server_url: "http://127.0.0.1:4312".to_owned(),
+                        updated_at_unix_ms: now_unix_ms(),
+                    },
+                ],
+            },
+        )
+        .unwrap();
+
+        let entries = registry.read_live_entries().await;
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].process_identifier, 222);
+        assert_eq!(entries[0].daemon_id, "fresh-daemon");
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("json.lock"));
     }
 }

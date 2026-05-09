@@ -8,9 +8,16 @@ export interface SimDeckReactNativeInspectorOptions {
   host?: string;
   path?: string;
   port?: number;
+  ports?: number[];
   reconnect?: boolean;
   secure?: boolean;
 }
+
+type NormalizedSimDeckReactNativeInspectorOptions = Required<
+  Omit<SimDeckReactNativeInspectorOptions, "ports">
+> & {
+  ports: number[];
+};
 
 interface InspectorRequest {
   id?: number | string | null;
@@ -126,7 +133,8 @@ export function stopSimDeckReactNativeInspector(): void {
 }
 
 export class SimDeckReactNativeInspector {
-  private readonly options: Required<SimDeckReactNativeInspectorOptions>;
+  private readonly options: NormalizedSimDeckReactNativeInspectorOptions;
+  private currentPortIndex = 0;
   private readonly ids = new WeakMap<object, string>();
   private readonly objects = new Map<string, Fiber>();
   private registry = installReactFiberHook();
@@ -139,13 +147,15 @@ export class SimDeckReactNativeInspector {
   private pendingSourceLocations = new Set<string>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private socket: InspectorSocket | null = null;
-  private sourceLocationCache = new Map<string, JSONObject | null>();
+  private sourceLocationCache = new Map<string, JSONObject>();
 
   constructor(options: SimDeckReactNativeInspectorOptions = {}) {
+    const ports = normalizedPorts(options);
     this.options = {
       host: options.host ?? "127.0.0.1",
       path: options.path ?? "/api/inspector/connect",
-      port: options.port ?? 4310,
+      port: ports[0] ?? 4310,
+      ports,
       reconnect: options.reconnect ?? true,
       secure: options.secure ?? false,
     };
@@ -180,15 +190,16 @@ export class SimDeckReactNativeInspector {
   private async startAsync(): Promise<void> {
     await this.loadMetadata();
     const scheme = this.options.secure ? "wss" : "ws";
-    const url = `${scheme}://${this.options.host}:${this.options.port}${this.options.path}`;
+    const url = `${scheme}://${this.options.host}:${this.currentPort()}${this.options.path}`;
     let announced = false;
     const socket = createInspectorSocket(url, {
       onClose: () => {
-        if (this.socket === socket) {
+        const isActiveSocket = this.socket === socket;
+        if (isActiveSocket) {
           this.socket = null;
         }
-        if (this.options.reconnect) {
-          this.scheduleReconnect();
+        if (isActiveSocket && this.options.reconnect) {
+          this.scheduleReconnect(!announced);
         }
       },
       onError: () => {
@@ -222,9 +233,13 @@ export class SimDeckReactNativeInspector {
     this.startPolling();
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(advancePort = false): void {
     if (this.reconnectTimer) {
       return;
+    }
+    if (advancePort) {
+      this.currentPortIndex =
+        (this.currentPortIndex + 1) % this.options.ports.length;
     }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -297,7 +312,11 @@ export class SimDeckReactNativeInspector {
 
   private httpBaseUrl(): string {
     const scheme = this.options.secure ? "https" : "http";
-    return `${scheme}://${this.options.host}:${this.options.port}`;
+    return `${scheme}://${this.options.host}:${this.currentPort()}`;
+  }
+
+  private currentPort(): number {
+    return this.options.ports[this.currentPortIndex] ?? this.options.port;
   }
 
   private async handleMessage(
@@ -702,7 +721,9 @@ export class SimDeckReactNativeInspector {
       this.pendingSourceLocations.add(key);
       void resolveSourceLocationForFiber(fiber).then((location) => {
         this.pendingSourceLocations.delete(key);
-        this.sourceLocationCache.set(key, location);
+        if (location) {
+          this.sourceLocationCache.set(key, location);
+        }
       });
     }
     return Promise.resolve(null);
@@ -916,6 +937,23 @@ function safeReactDevToolsHook(): Record<string, any> | null {
   }
 }
 
+function normalizedPorts(
+  options: SimDeckReactNativeInspectorOptions,
+): number[] {
+  const ports = [options.port, ...(options.ports ?? [])].filter(
+    (port): port is number =>
+      typeof port === "number" && Number.isInteger(port) && port > 0,
+  );
+  const seen = new Set<number>();
+  for (const port of ports) {
+    seen.add(port);
+  }
+  if (seen.size === 0) {
+    seen.add(4310);
+  }
+  return Array.from(seen);
+}
+
 function createInspectorSocket(
   url: string,
   handlers: {
@@ -1101,6 +1139,9 @@ function sourceLocationsFromStack(stackLike: unknown): SourceLocation[] {
     if (!match) {
       continue;
     }
+    if (/^https?:\/\//.test(match[1]) && !isMetroBundleUrl(match[1])) {
+      continue;
+    }
     locations.push({
       fileName: match[1],
       lineNumber: Number(match[2]),
@@ -1140,7 +1181,7 @@ async function symbolicateSourceLocations(
         headers: { "Content-Type": "application/json" },
         method: "POST",
       },
-      50,
+      1500,
     );
     if (!response.ok) {
       return [];
@@ -1196,7 +1237,10 @@ function bestSourceLocation(
     if (!location?.file) {
       return false;
     }
-    return !isGeneratedBundleLocation(location);
+    const file = String(location.file);
+    return (
+      !isGeneratedBundleLocation(location) && !isExternalHttpSourceFile(file)
+    );
   });
   return (
     usable.find((location) => isAppSourceFile(String(location.file))) ??
@@ -1231,11 +1275,16 @@ function isGeneratedBundleLocation(location: JSONObject): boolean {
 }
 
 function isMetroBundleUrl(file: string): boolean {
-  return /^https?:\/\/[^/]+\/.*index\.bundle/.test(file);
+  return /^https?:\/\/[^/]+\/.*\.bundle(?:$|[/?#]|\/\/)/.test(file);
+}
+
+function isExternalHttpSourceFile(file: string): boolean {
+  return /^https?:\/\//.test(file) && !isMetroBundleUrl(file);
 }
 
 function isAppSourceFile(file: string): boolean {
   return (
+    !isExternalHttpSourceFile(file) &&
     !isFrameworkSourceFile(file) &&
     !file.includes("/node_modules/") &&
     !file.includes("/Libraries/")

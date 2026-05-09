@@ -229,19 +229,14 @@ React Native apps can expose their component tree and Metro dev-mode source
 locations with the React Native inspector package:
 
 ```ts
-import { AppRegistry } from "react-native";
-import { startSimDeckReactNativeInspector } from "react-native-simdeck";
-import App from "./App";
-
-if (__DEV__) {
-  startSimDeckReactNativeInspector({ port: 4310 });
-}
-
-AppRegistry.registerComponent("Example", () => App);
+import "react-native-simdeck/auto";
+import "expo-router/entry";
 ```
 
-Call it before `AppRegistry.registerComponent(...)` so the package can capture
-React Fiber commits.
+Import it before `expo-router/entry` or `AppRegistry.registerComponent(...)`
+so the package can capture React Fiber commits. The auto entrypoint no-ops
+outside development, reads `EXPO_PUBLIC_SIMDECK_PORT` when present, and
+otherwise scans common SimDeck daemon ports.
 
 ## VS Code
 

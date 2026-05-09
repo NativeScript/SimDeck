@@ -487,9 +487,11 @@ Content-Type: application/json
 
 Allowed methods (the server enforces this allow-list):
 
+- `Inspector.getInfo`
 - `Runtime.ping`
 - `View.get`
 - `View.evaluateScript`
+- `View.getHierarchy`
 - `View.getProperties`
 - `View.setProperty`
 - `View.listActions`
@@ -505,6 +507,7 @@ The response includes both the inspector's `result` and metadata about the inspe
     "bundleName": "MyApp",
     "transport": "websocket",
     "processIdentifier": 73214,
+    "daemonUrl": null,
     "host": "127.0.0.1",
     "port": null,
     "displayScale": 3,
@@ -523,9 +526,27 @@ Upgrades to a WebSocket. Used by the [`@nativescript/simdeck-inspector`](/inspec
 
 After connection the server sends `Inspector.getInfo` and waits for a response that includes a `processIdentifier`. Once registered, the server uses this socket as the preferred transport for `accessibility-tree` and `inspector/request` calls that target the same process.
 
+Registered WebSocket and polled inspectors are advertised in `~/.simdeck/inspectors.json` with the owning daemon URL, access token, process id, and advertised hierarchy sources. Other SimDeck daemons read this registry, validate that the process belongs to the requested simulator, and relay inspector requests through the owning daemon. Entries are refreshed while the inspector is alive and expire automatically if the daemon or app exits.
+
 ### `GET /api/inspector/poll?processIdentifier=...`
 
 Long-poll fallback for environments where the WebSocket transport is not viable. Returns the next pending request as JSON, or `204 No Content` after 25 seconds with no work.
+
+### `POST /api/inspector/request`
+
+Protected daemon-to-daemon relay endpoint. A daemon uses this after discovering a matching inspector in `~/.simdeck/inspectors.json`; app runtimes and browsers should use the WebSocket/poll endpoints or `POST /api/simulators/{udid}/inspector/request` instead.
+
+```http
+POST /api/inspector/request
+Content-Type: application/json
+X-SimDeck-Token: <owning-daemon-token>
+
+{
+  "processIdentifier": 73214,
+  "method": "Runtime.ping",
+  "params": null
+}
+```
 
 ### `POST /api/inspector/response`
 

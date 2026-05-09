@@ -2,7 +2,7 @@ use crate::api::json::json;
 use crate::auth;
 use crate::config::Config;
 use crate::error::AppError;
-use crate::inspector::InspectorHub;
+use crate::inspector::{InspectorHub, PublishedInspector};
 use crate::logs::LogRegistry;
 use crate::metrics::counters::{ClientStreamStats, Metrics};
 use crate::native::bridge::{LogFilters, NativeBridge};
@@ -27,7 +27,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
@@ -492,6 +492,14 @@ struct InspectorRequestPayload {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct InspectorDirectRequestPayload {
+    process_identifier: i64,
+    method: String,
+    params: Option<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct InspectorPollQuery {
     #[serde(alias = "pid")]
     process_identifier: i64,
@@ -534,6 +542,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/inspector/connect", get(native_inspector_connect))
         .route("/api/inspector/poll", get(inspector_poll))
+        .route("/api/inspector/request", post(inspector_direct_request))
         .route("/api/inspector/response", post(inspector_response))
         .route("/api/simulators", get(list_simulators))
         .route("/api/simulators/{udid}/boot", post(boot_simulator))
@@ -988,6 +997,37 @@ async fn inspector_poll(
         Some(request) => Ok(Json(request).into_response()),
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }
+}
+
+async fn inspector_direct_request(
+    State(state): State<AppState>,
+    Json(payload): Json<InspectorDirectRequestPayload>,
+) -> Result<Json<Value>, AppError> {
+    if payload.process_identifier <= 0 {
+        return Err(AppError::bad_request(
+            "`processIdentifier` must be a positive process id.",
+        ));
+    }
+    let method = payload.method.trim();
+    if !is_allowed_inspector_proxy_method(method) {
+        return Err(AppError::bad_request(format!(
+            "Unsupported inspector proxy method `{method}`."
+        )));
+    }
+
+    let wait = inspector_request_timeout(method);
+    let result = state
+        .inspectors
+        .query_with_timeout(
+            payload.process_identifier,
+            method,
+            payload.params.unwrap_or(Value::Null),
+            wait,
+        )
+        .await
+        .map_err(AppError::native)?;
+
+    Ok(json(json_value!({ "result": result })))
 }
 
 async fn inspector_response(
@@ -2936,7 +2976,8 @@ async fn inspector_request(
 fn is_allowed_inspector_proxy_method(method: &str) -> bool {
     matches!(
         method,
-        "Runtime.ping"
+        "Inspector.getInfo"
+            | "Runtime.ping"
             | "View.get"
             | "View.evaluateScript"
             | "View.getHierarchy"
@@ -2945,6 +2986,14 @@ fn is_allowed_inspector_proxy_method(method: &str) -> bool {
             | "View.listActions"
             | "View.perform"
     )
+}
+
+fn inspector_request_timeout(method: &str) -> Duration {
+    if method == "View.getHierarchy" {
+        CONNECTED_INSPECTOR_HIERARCHY_TIMEOUT
+    } else {
+        Duration::from_secs(10)
+    }
 }
 
 async fn simulator_logs(
@@ -3013,10 +3062,16 @@ struct InspectorSession {
     process_identifier: i64,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum InspectorSessionTransport {
     Connected,
-    Tcp { port: u16 },
+    Tcp {
+        port: u16,
+    },
+    RemoteDaemon {
+        server_url: String,
+        access_token: String,
+    },
 }
 
 async fn inspector_session_for_state(
@@ -3031,10 +3086,14 @@ async fn inspector_session_for_state(
         Ok(session) => return Ok(session),
         Err(error) => error,
     };
+    let registry_error = match registry_inspector_session(state, udid, frontmost_pid).await {
+        Ok(session) => return Ok(session),
+        Err(error) => error,
+    };
 
     match inspector_session(udid, frontmost_pid).await {
         Ok(session) => Ok(session),
-        Err(tcp_error) => Err(format!("{connected_error} {tcp_error}")),
+        Err(tcp_error) => Err(format!("{connected_error} {registry_error} {tcp_error}")),
     }
 }
 
@@ -3079,6 +3138,67 @@ async fn connected_inspector_session(
             "No connected WebSocket inspector matched simulator {udid}. Found inspectors for {}.",
             probed_inspectors.join(", ")
         ))
+    }
+}
+
+async fn registry_inspector_session(
+    state: &AppState,
+    udid: &str,
+    frontmost_pid: Option<i64>,
+) -> Result<InspectorSession, String> {
+    let mut probed_inspectors = Vec::new();
+    let mut candidates = Vec::new();
+    for inspector in state.inspectors.published_inspectors().await {
+        if frontmost_pid.is_some_and(|pid| pid != inspector.process_identifier) {
+            probed_inspectors.push(format!(
+                "background registry process {}",
+                inspector.process_identifier
+            ));
+            continue;
+        }
+        if !inspector_process_belongs_to_udid(udid, inspector.process_identifier).await? {
+            probed_inspectors.push(format!("registry process {}", inspector.process_identifier));
+            continue;
+        }
+        let session = inspector_session_from_published(inspector);
+        if query_inspector_session(state, &session, "Runtime.ping", Value::Null)
+            .await
+            .is_err()
+        {
+            probed_inspectors.push(format!(
+                "unreachable registry process {}",
+                session.process_identifier
+            ));
+            continue;
+        }
+        candidates.push(session);
+    }
+
+    if let Some(session) = best_inspector_session(candidates) {
+        return Ok(session);
+    }
+
+    if probed_inspectors.is_empty() {
+        Err(format!(
+            "No published app inspector found for simulator {udid}."
+        ))
+    } else {
+        Err(format!(
+            "No published app inspector matched simulator {udid}. Found inspectors for {}.",
+            probed_inspectors.join(", ")
+        ))
+    }
+}
+
+fn inspector_session_from_published(inspector: PublishedInspector) -> InspectorSession {
+    InspectorSession {
+        transport: InspectorSessionTransport::RemoteDaemon {
+            server_url: inspector.server_url,
+            access_token: inspector.access_token,
+        },
+        available_sources: inspector.available_sources,
+        info: inspector.info,
+        process_identifier: inspector.process_identifier,
     }
 }
 
@@ -3293,20 +3413,29 @@ async fn query_inspector_session(
     method: &str,
     params: Value,
 ) -> Result<Value, String> {
-    match session.transport {
+    match &session.transport {
         InspectorSessionTransport::Connected => {
-            let wait = if method == "View.getHierarchy" {
-                CONNECTED_INSPECTOR_HIERARCHY_TIMEOUT
-            } else {
-                Duration::from_secs(10)
-            };
+            let wait = inspector_request_timeout(method);
             state
                 .inspectors
                 .query_with_timeout(session.process_identifier, method, params, wait)
                 .await
         }
         InspectorSessionTransport::Tcp { port } => {
-            query_inspector_agent_on_port(port, method, params).await
+            query_inspector_agent_on_port(*port, method, params).await
+        }
+        InspectorSessionTransport::RemoteDaemon {
+            server_url,
+            access_token,
+        } => {
+            query_remote_daemon_inspector(
+                server_url,
+                access_token,
+                session.process_identifier,
+                method,
+                params,
+            )
+            .await
         }
     }
 }
@@ -3551,15 +3680,23 @@ fn inspector_metadata(
     process_identifier: i64,
     transport: &InspectorSessionTransport,
 ) -> Value {
-    let (transport_name, port) = match transport {
-        InspectorSessionTransport::Connected => ("websocket", Value::Null),
-        InspectorSessionTransport::Tcp { port } => ("tcp+ndjson", Value::Number((*port).into())),
+    let (transport_name, port, daemon_url) = match transport {
+        InspectorSessionTransport::Connected => ("websocket", Value::Null, Value::Null),
+        InspectorSessionTransport::Tcp { port } => {
+            ("tcp+ndjson", Value::Number((*port).into()), Value::Null)
+        }
+        InspectorSessionTransport::RemoteDaemon { server_url, .. } => (
+            "remote-websocket",
+            Value::Null,
+            Value::String(server_url.clone()),
+        ),
     };
     json_value!({
         "bundleIdentifier": info.get("bundleIdentifier").cloned().unwrap_or(Value::Null),
         "bundleName": info.get("bundleName").cloned().unwrap_or(Value::Null),
         "coordinateSpace": hierarchy.get("coordinateSpace").cloned().unwrap_or(Value::Null),
         "displayScale": hierarchy.get("displayScale").cloned().unwrap_or_else(|| info.get("displayScale").cloned().unwrap_or(Value::Null)),
+        "daemonUrl": daemon_url,
         "host": INSPECTOR_AGENT_HOST,
         "port": port,
         "processIdentifier": process_identifier,
@@ -3631,6 +3768,116 @@ async fn query_inspector_agent_on_port(
     Err(format!(
         "Inspector connection closed before method {method} returned a response."
     ))
+}
+
+async fn query_remote_daemon_inspector(
+    server_url: &str,
+    access_token: &str,
+    process_identifier: i64,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    let endpoint = InspectorDaemonEndpoint::parse(server_url)?;
+    let body = json_value!({
+        "processIdentifier": process_identifier,
+        "method": method,
+        "params": params,
+    })
+    .to_string();
+    let request = format!(
+        "POST /api/inspector/request HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\n{}: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        endpoint.host_header(),
+        crate::auth::ACCESS_TOKEN_HEADER,
+        access_token,
+        body.len(),
+        body
+    );
+    let mut stream = timeout(
+        INSPECTOR_AGENT_TIMEOUT,
+        TcpStream::connect((endpoint.host.as_str(), endpoint.port)),
+    )
+    .await
+    .map_err(|_| format!("Timed out connecting to published SimDeck daemon at {server_url}."))?
+    .map_err(|error| {
+        format!("Unable to connect to published SimDeck daemon at {server_url}: {error}")
+    })?;
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .map_err(|error| format!("Unable to write published inspector request: {error}"))?;
+
+    let mut response = Vec::new();
+    timeout(INSPECTOR_AGENT_TIMEOUT, stream.read_to_end(&mut response))
+        .await
+        .map_err(|_| format!("Timed out waiting for published inspector method {method}."))?
+        .map_err(|error| format!("Unable to read published inspector response: {error}"))?;
+    let response = String::from_utf8_lossy(&response);
+    let (headers, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "Published inspector returned malformed HTTP.".to_owned())?;
+    let status_line = headers.lines().next().unwrap_or_default();
+    if !status_line.contains(" 2") {
+        return Err(format!(
+            "Published inspector method {method} failed with {status_line}: {body}"
+        ));
+    }
+    let value: Value = serde_json::from_str(body.trim()).map_err(|error| {
+        format!("Published inspector returned malformed JSON for method {method}: {error}")
+    })?;
+    value
+        .get("result")
+        .cloned()
+        .ok_or_else(|| format!("Published inspector method {method} did not include a result."))
+}
+
+struct InspectorDaemonEndpoint {
+    host: String,
+    port: u16,
+}
+
+impl InspectorDaemonEndpoint {
+    fn parse(server_url: &str) -> Result<Self, String> {
+        let authority = server_url
+            .trim()
+            .strip_prefix("http://")
+            .ok_or_else(|| format!("Published inspector URL must use http://: {server_url}"))?
+            .split('/')
+            .next()
+            .unwrap_or_default();
+        let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+            let (host, rest) = rest
+                .split_once(']')
+                .ok_or_else(|| format!("Published inspector URL has invalid host: {server_url}"))?;
+            let port = rest
+                .strip_prefix(':')
+                .ok_or_else(|| format!("Published inspector URL is missing a port: {server_url}"))?
+                .parse::<u16>()
+                .map_err(|error| format!("Published inspector URL has invalid port: {error}"))?;
+            (host.to_owned(), port)
+        } else {
+            let (host, port) = authority.rsplit_once(':').ok_or_else(|| {
+                format!("Published inspector URL is missing a port: {server_url}")
+            })?;
+            let port = port
+                .parse::<u16>()
+                .map_err(|error| format!("Published inspector URL has invalid port: {error}"))?;
+            (host.to_owned(), port)
+        };
+        if host.trim().is_empty() {
+            return Err(format!(
+                "Published inspector URL has empty host: {server_url}"
+            ));
+        }
+        Ok(Self { host, port })
+    }
+
+    fn host_header(&self) -> String {
+        if self.host.contains(':') {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
 }
 
 async fn inspector_process_belongs_to_udid(udid: &str, pid: i64) -> Result<bool, String> {
@@ -3964,7 +4211,8 @@ mod tests {
     use super::{
         attach_tree_metadata, available_sources_for_snapshot, best_inspector_session,
         compact_accessibility_snapshot, element_matches_selector, first_matching_element,
-        inspector_available_sources, normalize_inspector_node,
+        inspector_available_sources, inspector_metadata, inspector_session_from_published,
+        inspector_session_score, is_inspector_agent_transport_path, normalize_inspector_node,
         normalize_screen_point_from_snapshot, normalized_gesture_coordinates,
         parse_lsof_tcp_listener, resolved_stream_quality_limits, split_filter_values,
         stream_quality_profile, suppress_native_ax_translation_error, tap_point_from_snapshot,
@@ -3972,6 +4220,7 @@ mod tests {
         InspectorSessionTransport, StreamQualityLimits, StreamQualityPayload, SOURCE_NATIVE_AX,
         SOURCE_NATIVE_SCRIPT, SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
     };
+    use crate::inspector::PublishedInspector;
     use crate::transport::packet::FramePacket;
     use bytes::Bytes;
     use serde_json::{json, Value};
@@ -4124,6 +4373,49 @@ mod tests {
         let best = best_inspector_session(vec![uikit, react_native]).unwrap();
 
         assert_eq!(best.process_identifier, 2);
+    }
+
+    #[test]
+    fn published_inspector_session_uses_remote_daemon_transport() {
+        let session = inspector_session_from_published(PublishedInspector {
+            access_token: "secret-token".to_owned(),
+            available_sources: vec![SOURCE_REACT_NATIVE.to_owned()],
+            daemon_id: "daemon-a".to_owned(),
+            info: json!({
+                "bundleIdentifier": "com.example.App",
+                "protocolVersion": "1.0"
+            }),
+            process_identifier: 42,
+            server_url: "http://127.0.0.1:4310".to_owned(),
+            updated_at_unix_ms: 1,
+        });
+
+        assert_eq!(inspector_session_score(&session), 0);
+        let InspectorSessionTransport::RemoteDaemon {
+            server_url,
+            access_token,
+        } = &session.transport
+        else {
+            panic!("published inspector should use remote daemon transport");
+        };
+        assert_eq!(server_url, "http://127.0.0.1:4310");
+        assert_eq!(access_token, "secret-token");
+
+        let metadata = inspector_metadata(
+            &session.info,
+            &json!({ "displayScale": 3.0 }),
+            session.process_identifier,
+            &session.transport,
+        );
+        assert_eq!(metadata["transport"], "remote-websocket");
+        assert_eq!(metadata["daemonUrl"], "http://127.0.0.1:4310");
+        assert!(metadata["port"].is_null());
+    }
+
+    #[test]
+    fn direct_inspector_request_endpoint_requires_api_auth() {
+        assert!(is_inspector_agent_transport_path("/api/inspector/connect"));
+        assert!(!is_inspector_agent_transport_path("/api/inspector/request"));
     }
 
     #[test]

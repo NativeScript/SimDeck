@@ -11,7 +11,26 @@ cd ios && pod install
 
 ## Start
 
-Install the inspector before `AppRegistry.registerComponent(...)` so it can capture React commits and retain component source locations.
+Install the inspector before `AppRegistry.registerComponent(...)` so it can capture React commits and retain component source locations. For Expo Router, import it before `expo-router/entry`.
+
+```ts
+import "react-native-simdeck/auto";
+import "expo-router/entry";
+```
+
+For manual React Native entrypoints:
+
+```ts
+import "react-native-simdeck/auto";
+import { AppRegistry } from "react-native";
+import App from "./App";
+
+AppRegistry.registerComponent("Example", () => App);
+```
+
+The auto entrypoint no-ops outside development, reads `EXPO_PUBLIC_SIMDECK_PORT` when present, and otherwise scans common SimDeck daemon ports.
+
+If you need explicit options, call the manual API before registering the app:
 
 ```ts
 import { AppRegistry } from "react-native";
