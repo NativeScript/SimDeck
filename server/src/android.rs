@@ -434,18 +434,15 @@ impl AndroidBridge {
     pub fn chrome_profile(&self, id: &str) -> Result<Value, AppError> {
         let serial = self.serial_for_id(id)?;
         let (width, height) = self.screen_size_for_serial(&serial)?;
-        let horizontal_bezel = (width * 0.055).clamp(48.0, 80.0);
-        let vertical_bezel = (height * 0.04).clamp(64.0, 104.0);
         Ok(json!({
-            "totalWidth": width + horizontal_bezel * 2.0,
-            "totalHeight": height + vertical_bezel * 2.0,
-            "screenX": horizontal_bezel,
-            "screenY": vertical_bezel,
+            "totalWidth": width,
+            "totalHeight": height,
+            "screenX": 0,
+            "screenY": 0,
             "screenWidth": width,
             "screenHeight": height,
-            "cornerRadius": (width * 0.055).clamp(32.0, 56.0),
+            "cornerRadius": 0,
             "hasScreenMask": false,
-            "chromeStyle": "css-android",
         }))
     }
 

@@ -118,7 +118,7 @@ export interface ChromeProfile {
   screenWidth: number;
   screenHeight: number;
   cornerRadius: number;
-  chromeStyle?: "asset" | "css-android" | string;
+  chromeStyle?: "asset" | string;
   hasScreenMask?: boolean;
   buttons?: ChromeButtonProfile[];
 }

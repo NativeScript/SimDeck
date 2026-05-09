@@ -51,4 +51,16 @@ describe("simulatorDisplay", () => {
       ),
     ).toBe(false);
   });
+
+  it("keeps native chrome off for Android emulators", () => {
+    expect(
+      shouldRenderNativeChrome(
+        simulator({
+          deviceTypeIdentifier: "android-emulator",
+          name: "SimDeck Pixel",
+          platform: "android-emulator",
+        }),
+      ),
+    ).toBe(false);
+  });
 });

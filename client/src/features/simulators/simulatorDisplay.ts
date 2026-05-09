@@ -14,9 +14,6 @@ export function simulatorRuntimeLabel(simulator: SimulatorMetadata): string {
 export function shouldRenderNativeChrome(
   simulator: SimulatorMetadata,
 ): boolean {
-  if (simulator.platform === "android-emulator") {
-    return true;
-  }
   const identifier = simulator.deviceTypeIdentifier ?? "";
   const name = simulator.name ?? "";
   const deviceTypeName = simulator.deviceTypeName ?? "";

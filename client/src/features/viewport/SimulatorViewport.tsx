@@ -20,7 +20,6 @@ interface SimulatorViewportProps {
   chromeLoaded: boolean;
   chromeRequired: boolean;
   chromeScreenStyle: CSSProperties | null;
-  chromeStyle?: string;
   chromeUrl: string;
   deviceFrameStyle: CSSProperties;
   devicePresentationStyle: CSSProperties;
@@ -83,7 +82,6 @@ export function SimulatorViewport({
   chromeLoaded,
   chromeRequired,
   chromeScreenStyle,
-  chromeStyle,
   chromeUrl,
   deviceFrameStyle,
   devicePresentationStyle,
@@ -181,7 +179,6 @@ export function SimulatorViewport({
                   accessibilitySelectedId={accessibilitySelectedId}
                   chromeProfile={chromeProfile}
                   chromeScreenStyle={chromeScreenStyle}
-                  chromeStyle={chromeStyle}
                   chromeUrl={chromeUrl}
                   chromeButtonUrl={chromeButtonUrl}
                   hasFrame={hasFrame}

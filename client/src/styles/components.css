@@ -1503,57 +1503,6 @@
   position: relative;
 }
 
-.android-css-shell {
-  overflow: hidden;
-  border-radius: 64px;
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.12), transparent 22%),
-    linear-gradient(315deg, rgba(0, 0, 0, 0.42), transparent 34%), #17191f;
-  box-shadow:
-    inset 0 0 0 2px rgba(255, 255, 255, 0.08),
-    inset 0 0 0 9px rgba(0, 0, 0, 0.34),
-    0 24px 70px rgba(0, 0, 0, 0.38);
-}
-
-.android-css-shell::before {
-  position: absolute;
-  top: 26px;
-  left: 50%;
-  z-index: 3;
-  width: 84px;
-  height: 9px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.72);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
-  content: "";
-  transform: translateX(-50%);
-}
-
-.android-css-shell::after {
-  position: absolute;
-  top: 22px;
-  right: 38%;
-  z-index: 3;
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
-  background:
-    radial-gradient(
-      circle at 58% 42%,
-      rgba(105, 150, 180, 0.9),
-      transparent 24%
-    ),
-    #08090c;
-  box-shadow:
-    inset 0 0 0 2px rgba(255, 255, 255, 0.06),
-    0 0 0 1px rgba(0, 0, 0, 0.7);
-  content: "";
-}
-
-.android-css-shell .chrome-screen {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
-}
-
 .device-chrome {
   position: absolute;
   inset: 0;
