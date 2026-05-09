@@ -39,15 +39,15 @@ client/
     └── styles/
 ```
 
-| Folder                    | Responsibility                                                          |
-| ------------------------- | ----------------------------------------------------------------------- |
-| `api/`                    | Typed wrappers around the SimDeck REST API and shared TypeScript types. |
-| `features/simulators/`    | Sidebar list of simulators plus boot/shutdown affordances.              |
-| `features/viewport/`      | Frame canvas, chrome compositing, hit testing.                          |
+| Folder                    | Responsibility                                                               |
+| ------------------------- | ---------------------------------------------------------------------------- |
+| `api/`                    | Typed wrappers around the SimDeck REST API and shared TypeScript types.      |
+| `features/simulators/`    | Sidebar list of simulators plus boot/shutdown affordances.                   |
+| `features/viewport/`      | Frame canvas, chrome compositing, hit testing.                               |
 | `features/stream/`        | WebRTC H.264 client for iOS and Android, receiver stats, and frame plumbing. |
-| `features/input/`         | Touch / keyboard / hardware-button affordances.                         |
-| `features/accessibility/` | Accessibility tree pane and source switcher.                            |
-| `features/toolbar/`       | Top toolbar (rotate, home, app switcher, dark mode toggle, refresh).    |
+| `features/input/`         | Touch / keyboard / hardware-button affordances.                              |
+| `features/accessibility/` | Accessibility tree pane and source switcher.                                 |
+| `features/toolbar/`       | Top toolbar (rotate, home, app switcher, dark mode toggle, refresh).         |
 
 ## Bootstrap flow
 

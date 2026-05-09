@@ -22,6 +22,9 @@ const RUNNING_EMULATOR_CACHE_TTL: Duration = Duration::from_secs(2);
 const AVD_GRPC_PORT_CACHE_TTL: Duration = Duration::from_secs(60);
 const SCREEN_SIZE_CACHE_TTL: Duration = Duration::from_secs(60);
 
+type TimedMap<T> = Option<(Instant, HashMap<String, T>)>;
+type ScreenSizeCache = HashMap<String, (Instant, (f64, f64))>;
+
 #[derive(Clone, Default)]
 pub struct AndroidBridge;
 
@@ -244,7 +247,7 @@ impl AndroidBridge {
 
     pub fn pasteboard_text(&self, id: &str) -> Result<String, AppError> {
         let serial = self.serial_for_id(id)?;
-        Ok(self.run_adb_shell(&serial, "cmd clipboard get")?)
+        self.run_adb_shell(&serial, "cmd clipboard get")
     }
 
     pub fn send_touch(&self, id: &str, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
@@ -732,7 +735,7 @@ impl AndroidBridge {
     }
 
     fn running_emulators(&self) -> Result<HashMap<String, String>, AppError> {
-        static CACHE: OnceLock<Mutex<Option<(Instant, HashMap<String, String>)>>> = OnceLock::new();
+        static CACHE: OnceLock<Mutex<TimedMap<String>>> = OnceLock::new();
         let cache = CACHE.get_or_init(|| Mutex::new(None));
         if let Some((updated_at, running)) = cache.lock().unwrap().as_ref() {
             if updated_at.elapsed() < RUNNING_EMULATOR_CACHE_TTL {
@@ -766,7 +769,7 @@ impl AndroidBridge {
     }
 
     fn grpc_port_for_avd(&self, avd_name: &str) -> Result<u16, AppError> {
-        static CACHE: OnceLock<Mutex<Option<(Instant, HashMap<String, u16>)>>> = OnceLock::new();
+        static CACHE: OnceLock<Mutex<TimedMap<u16>>> = OnceLock::new();
         let cache = CACHE.get_or_init(|| Mutex::new(None));
         if let Some((updated_at, ports)) = cache.lock().unwrap().as_ref() {
             if updated_at.elapsed() < AVD_GRPC_PORT_CACHE_TTL {
@@ -793,7 +796,7 @@ impl AndroidBridge {
     }
 
     fn screen_size_for_serial(&self, serial: &str) -> Result<(f64, f64), AppError> {
-        static CACHE: OnceLock<Mutex<HashMap<String, (Instant, (f64, f64))>>> = OnceLock::new();
+        static CACHE: OnceLock<Mutex<ScreenSizeCache>> = OnceLock::new();
         let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         if let Some((updated_at, size)) = cache.lock().unwrap().get(serial) {
             if updated_at.elapsed() < SCREEN_SIZE_CACHE_TTL {
