@@ -206,7 +206,10 @@ function isTransparentHitTestBlocker(item: AccessibilityTreeItem): boolean {
 
   const rawClassName = cleanText(node.className);
   const type = cleanText(node.type);
-  if (!isTransparentContainerClass(rawClassName) && type !== "UIView") {
+  if (
+    !isTransparentContainerClass(rawClassName) &&
+    !isTransparentContainerClass(type)
+  ) {
     return false;
   }
 
@@ -214,16 +217,22 @@ function isTransparentHitTestBlocker(item: AccessibilityTreeItem): boolean {
 }
 
 function isTransparentContainerClass(value: string | null): boolean {
+  const className = unqualifiedClassName(value);
   return (
-    value === "UIView" ||
-    value === "UITransitionView" ||
-    value === "UIDropShadowView" ||
-    value === "UIViewControllerWrapperView" ||
-    value === "UINavigationTransitionView" ||
-    value === "_UITouchPassthroughView" ||
-    value === "_UIFloatingBarContainerView" ||
-    Boolean(value?.includes("FloatingBarHostingView"))
+    className === "UIView" ||
+    className === "UITransitionView" ||
+    className === "UIDropShadowView" ||
+    className === "UIViewControllerWrapperView" ||
+    className === "UINavigationTransitionView" ||
+    className === "_UITabBarContainerView" ||
+    className === "_UITouchPassthroughView" ||
+    className === "_UIFloatingBarContainerView" ||
+    Boolean(className?.includes("FloatingBarHostingView"))
   );
+}
+
+function unqualifiedClassName(value: string | null): string | null {
+  return value?.split(".").pop()?.trim() || value;
 }
 
 function hasMeaningfulNodeContent(node: AccessibilityNode): boolean {

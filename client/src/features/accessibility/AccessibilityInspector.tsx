@@ -256,11 +256,12 @@ export function AccessibilityInspector({
               >
                 {sourceOptions.map((option) => (
                   <button
+                    aria-pressed={option === source}
                     className={`hierarchy-source-pill source-${option} ${option === source ? "active" : ""}`}
                     disabled={option === source || !selectedSimulator?.isBooted}
                     key={option}
                     onClick={() => onSourceChange(option)}
-                    title={`Show ${sourceLabel(option)} hierarchy`}
+                    title={`${option === source ? "Showing" : "Show"} ${sourceLabel(option)} hierarchy`}
                     type="button"
                   >
                     {sourceLabel(option)}

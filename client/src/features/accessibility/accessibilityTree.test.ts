@@ -209,4 +209,42 @@ describe("findAccessibilityItemAtPoint", () => {
     expect(item?.node.type).toBe("Label");
     expect(item?.id).toBe("0.0");
   });
+
+  it("ignores module-qualified transparent UIKit tab bar containers", () => {
+    const roots: AccessibilityNode[] = [
+      {
+        type: "UIWindow",
+        frame: { x: 0, y: 0, width: 402, height: 874 },
+        children: [
+          {
+            type: "Label",
+            title: "Dashboard",
+            frame: { x: 24, y: 160, width: 220, height: 44 },
+            source: "in-app-inspector",
+          },
+          {
+            className: "UIKit._UITabBarContainerView",
+            source: "in-app-inspector",
+            title: "UIKit._UITabBarContainerView",
+            type: "UIKit._UITabBarContainerView",
+            frame: { x: 0, y: 0, width: 402, height: 874 },
+            children: [
+              {
+                className: "UIKit.UIView",
+                source: "in-app-inspector",
+                title: "UIKit.UIView",
+                type: "UIKit.UIView",
+                frame: { x: 0, y: 825, width: 402, height: 49 },
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const item = findAccessibilityItemAtPoint(roots, { x: 0.12, y: 0.208 });
+
+    expect(item?.node.type).toBe("Label");
+    expect(item?.id).toBe("0.0");
+  });
 });
