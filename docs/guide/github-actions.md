@@ -80,18 +80,21 @@ jobs:
         with:
           pr_number: ${{ github.event.issue.number }}
           command: ${{ github.event.comment.body }}
+          command_comment_id: ${{ github.event.comment.id }}
+          command_comment_author: ${{ github.event.comment.user.login }}
           build_workflow: build-ios-simulator.yml
           bundle_id: com.example.app
 ```
 
 When triggered, the session action:
 
-- creates one status comment and edits that same comment as the session changes;
+- reacts to the command comment immediately;
 - installs `simdeck` and `cloudflared` on a single macOS runner;
 - starts SimDeck with software encoding and the `tiny` stream profile by default;
 - prefers `iPhone 17 Pro`, then falls back to the newest available iPhone simulator;
 - restores the CoreSimulator device cache when available;
-- posts the Cloudflare Tunnel URL only after a simulator UDID has been selected;
+- posts the first bot comment only after a simulator UDID has been selected,
+  mentioning the requester when `command_comment_author` is set;
 - downloads the simulator app artifact for the PR head commit, installs it, and
   launches it;
 - stops after 30 minutes by default, or earlier if the simulator shuts down.
@@ -115,16 +118,18 @@ Supported quality values are `tiny`, `low`, `economy`, `fast`, `smooth`,
 
 The most common session action inputs are:
 
-| Input               | Default                   | Purpose                                      |
-| ------------------- | ------------------------- | -------------------------------------------- |
-| `bundle_id`         | empty                     | Fallback app bundle id to launch.            |
-| `build_workflow`    | `build-ios-simulator.yml` | Workflow file that uploads the app artifact. |
-| `artifact_prefix`   | `ios-simulator-app`       | Prefix used for `<prefix>-<sha>` artifacts.  |
-| `simdeck_version`   | `latest`                  | npm version or dist-tag to install.          |
-| `stream_profile`    | `tiny`                    | Default stream quality profile.              |
-| `simulator_name`    | `iPhone 17 Pro`           | Preferred simulator device name.             |
-| `keepalive_seconds` | `1800`                    | Session lifetime after app launch.           |
-| `simulator_cache`   | `true`                    | Restore and save CoreSimulator device cache. |
+| Input                    | Default                   | Purpose                                       |
+| ------------------------ | ------------------------- | --------------------------------------------- |
+| `bundle_id`              | empty                     | Fallback app bundle id to launch.             |
+| `build_workflow`         | `build-ios-simulator.yml` | Workflow file that uploads the app artifact.  |
+| `command_comment_id`     | empty                     | Comment id to react to immediately.           |
+| `command_comment_author` | empty                     | GitHub user to mention when the URL is ready. |
+| `artifact_prefix`        | `ios-simulator-app`       | Prefix used for `<prefix>-<sha>` artifacts.   |
+| `simdeck_version`        | `latest`                  | npm version or dist-tag to install.           |
+| `stream_profile`         | `tiny`                    | Default stream quality profile.               |
+| `simulator_name`         | `iPhone 17 Pro`           | Preferred simulator device name.              |
+| `keepalive_seconds`      | `1800`                    | Session lifetime after app launch.            |
+| `simulator_cache`        | `true`                    | Restore and save CoreSimulator device cache.  |
 
 The caller workflow owns job-level settings such as `runs-on`,
 `timeout-minutes`, permissions, and concurrency. Pin `NativeScript/SimDeck` to a
