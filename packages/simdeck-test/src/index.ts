@@ -9,6 +9,7 @@ import path from "node:path";
 export type SimDeckLaunchOptions = {
   cliPath?: string;
   projectRoot?: string;
+  udid?: string;
   keepDaemon?: boolean;
   isolated?: boolean;
   port?: number;
@@ -16,16 +17,29 @@ export type SimDeckLaunchOptions = {
 };
 
 export type QueryOptions = {
-  source?: "auto" | "nativescript" | "uikit" | "native-ax";
+  source?:
+    | "auto"
+    | "nativescript"
+    | "react-native"
+    | "swiftui"
+    | "uikit"
+    | "native-ax";
   maxDepth?: number;
   includeHidden?: boolean;
 };
 
 export type ElementSelector = {
+  text?: string;
   id?: string;
   label?: string;
   value?: string;
   type?: string;
+  index?: number;
+  enabled?: boolean;
+  checked?: boolean;
+  focused?: boolean;
+  selected?: boolean;
+  regex?: boolean;
 };
 
 export type TapOptions = QueryOptions & {
@@ -34,49 +48,80 @@ export type TapOptions = QueryOptions & {
   pollMs?: number;
 };
 
+type DeviceMethod<TArgs extends unknown[], TResult> = {
+  (...args: TArgs): Promise<TResult>;
+  (udid: string, ...args: TArgs): Promise<TResult>;
+};
+
+type DeviceNoArgMethod<TResult> = {
+  (): Promise<TResult>;
+  (udid: string): Promise<TResult>;
+};
+
 export type SimDeckSession = {
   endpoint: string;
   pid: number;
   projectRoot: string;
+  udid?: string;
+  device(udid: string): SimDeckSession;
   list(): Promise<unknown>;
-  install(udid: string, appPath: string): Promise<void>;
-  uninstall(udid: string, bundleId: string): Promise<void>;
-  launch(udid: string, bundleId: string): Promise<void>;
-  openUrl(udid: string, url: string): Promise<void>;
-  tap(udid: string, x: number, y: number): Promise<void>;
-  tapElement(
-    udid: string,
-    selector: ElementSelector,
-    options?: TapOptions,
-  ): Promise<void>;
-  touch(udid: string, x: number, y: number, phase: string): Promise<void>;
-  key(udid: string, keyCode: number, modifiers?: number): Promise<void>;
-  button(udid: string, button: string, durationMs?: number): Promise<void>;
-  pasteboardSet(udid: string, text: string): Promise<void>;
-  pasteboardGet(udid: string): Promise<string>;
-  chromeProfile(udid: string): Promise<unknown>;
-  tree(udid: string, options?: QueryOptions): Promise<unknown>;
-  query(
-    udid: string,
-    selector: ElementSelector,
-    options?: QueryOptions,
-  ): Promise<unknown[]>;
-  assert(
-    udid: string,
-    selector: ElementSelector,
-    options?: QueryOptions,
-  ): Promise<unknown>;
-  waitFor(
-    udid: string,
-    selector: ElementSelector,
-    options?: QueryOptions & { timeoutMs?: number; pollMs?: number },
-  ): Promise<unknown>;
-  batch(
-    udid: string,
-    steps: unknown[],
-    continueOnError?: boolean,
-  ): Promise<unknown>;
-  screenshot(udid: string): Promise<Buffer>;
+  install: DeviceMethod<[appPath: string], void>;
+  uninstall: DeviceMethod<[bundleId: string], void>;
+  launch: DeviceMethod<[bundleId: string], void>;
+  openUrl: DeviceMethod<[url: string], void>;
+  tap: DeviceMethod<[x: number, y: number], void>;
+  tapElement: DeviceMethod<
+    [selector: ElementSelector, options?: TapOptions],
+    void
+  >;
+  touch: DeviceMethod<[x: number, y: number, phase: string], void>;
+  key: DeviceMethod<[keyCode: number, modifiers?: number], void>;
+  button: DeviceMethod<[button: string, durationMs?: number], void>;
+  pasteboardSet: DeviceMethod<[text: string], void>;
+  pasteboardGet: DeviceNoArgMethod<string>;
+  chromeProfile: DeviceNoArgMethod<unknown>;
+  tree: DeviceMethod<[options?: QueryOptions], unknown>;
+  query: DeviceMethod<
+    [selector: ElementSelector, options?: QueryOptions],
+    unknown[]
+  >;
+  assert: DeviceMethod<
+    [selector: ElementSelector, options?: QueryOptions],
+    unknown
+  >;
+  assertNot: DeviceMethod<
+    [selector: ElementSelector, options?: QueryOptions],
+    unknown
+  >;
+  waitFor: DeviceMethod<
+    [
+      selector: ElementSelector,
+      options?: QueryOptions & { timeoutMs?: number; pollMs?: number },
+    ],
+    unknown
+  >;
+  waitForNot: DeviceMethod<
+    [
+      selector: ElementSelector,
+      options?: QueryOptions & { timeoutMs?: number; pollMs?: number },
+    ],
+    unknown
+  >;
+  scrollUntilVisible: DeviceMethod<
+    [
+      selector: ElementSelector,
+      options?: QueryOptions & {
+        timeoutMs?: number;
+        pollMs?: number;
+        direction?: "up" | "down" | "left" | "right";
+        durationMs?: number;
+        steps?: number;
+      },
+    ],
+    unknown
+  >;
+  batch: DeviceMethod<[steps: unknown[], continueOnError?: boolean], unknown>;
+  screenshot: DeviceNoArgMethod<Buffer>;
   close(): void;
 };
 
@@ -103,166 +148,268 @@ export async function connect(
         cwd: options.projectRoot,
       });
   const endpoint = result.url;
-  const session: SimDeckSession = {
-    endpoint,
-    pid: result.pid,
-    projectRoot: result.projectRoot,
-    list: () => requestJson(endpoint, "GET", "/api/simulators"),
-    install: (udid, appPath) =>
-      requestOk(
-        endpoint,
-        `/api/simulators/${encodeURIComponent(udid)}/install`,
-        {
-          appPath,
-        },
-      ),
-    uninstall: (udid, bundleId) =>
-      requestOk(
-        endpoint,
-        `/api/simulators/${encodeURIComponent(udid)}/uninstall`,
-        {
-          bundleId,
-        },
-      ),
-    launch: (udid, bundleId) =>
-      requestOk(
-        endpoint,
-        `/api/simulators/${encodeURIComponent(udid)}/launch`,
-        {
-          bundleId,
-        },
-      ),
-    openUrl: (udid, url) =>
-      requestOk(
-        endpoint,
-        `/api/simulators/${encodeURIComponent(udid)}/open-url`,
-        {
-          url,
-        },
-      ),
-    tap: (udid, x, y) =>
-      requestOk(endpoint, `/api/simulators/${encodeURIComponent(udid)}/tap`, {
-        x,
-        y,
-        normalized: true,
-      }),
-    tapElement: (udid, selector, tapOptions) =>
-      requestOk(endpoint, `/api/simulators/${encodeURIComponent(udid)}/tap`, {
-        selector: selectorPayload(selector),
-        ...tapOptions,
-      }),
-    touch: (udid, x, y, phase) =>
-      requestOk(endpoint, `/api/simulators/${encodeURIComponent(udid)}/touch`, {
-        x,
-        y,
-        phase,
-      }),
-    key: (udid, keyCode, modifiers = 0) =>
-      requestOk(endpoint, `/api/simulators/${encodeURIComponent(udid)}/key`, {
-        keyCode,
-        modifiers,
-      }),
-    button: (udid, button, durationMs = 0) =>
-      requestOk(
-        endpoint,
-        `/api/simulators/${encodeURIComponent(udid)}/button`,
-        {
-          button,
-          durationMs,
-        },
-      ),
-    pasteboardSet: (udid, text) =>
-      requestOk(
-        endpoint,
-        `/api/simulators/${encodeURIComponent(udid)}/pasteboard`,
-        {
-          text,
-        },
-      ),
-    pasteboardGet: async (udid) => {
-      const result = await requestJson<{ text?: string }>(
-        endpoint,
-        "GET",
-        `/api/simulators/${encodeURIComponent(udid)}/pasteboard`,
+  const createSession = (boundUdid?: string): SimDeckSession => {
+    const requireUdid = (method: string): string => {
+      if (boundUdid) return boundUdid;
+      throw new Error(
+        `${method} requires a UDID. Pass connect({ udid }) or call ${method}(udid, ...).`,
       );
-      return result.text ?? "";
-    },
-    chromeProfile: (udid) =>
-      requestJson(
-        endpoint,
-        "GET",
-        `/api/simulators/${encodeURIComponent(udid)}/chrome-profile`,
-      ),
-    tree: (udid, treeOptions) =>
-      requestJson(
-        endpoint,
-        "GET",
-        `/api/simulators/${encodeURIComponent(udid)}/accessibility-tree?${treeQuery(treeOptions)}`,
-      ),
-    query: async (udid, selector, treeOptions) => {
-      const result = await requestJson<{ matches: unknown[] }>(
-        endpoint,
-        "POST",
-        `/api/simulators/${encodeURIComponent(udid)}/query`,
-        {
-          selector: selectorPayload(selector),
-          ...treeOptions,
-        },
-      );
-      return result.matches;
-    },
-    assert: (udid, selector, assertOptions) =>
-      requestJson(
-        endpoint,
-        "POST",
-        `/api/simulators/${encodeURIComponent(udid)}/assert`,
-        {
-          selector: selectorPayload(selector),
-          ...assertOptions,
-        },
-      ),
-    waitFor: (udid, selector, waitOptions) =>
-      requestJson(
-        endpoint,
-        "POST",
-        `/api/simulators/${encodeURIComponent(udid)}/wait-for`,
-        {
-          selector: selectorPayload(selector),
-          ...waitOptions,
-        },
-      ),
-    batch: (udid, steps, continueOnError = false) =>
-      requestJson(
-        endpoint,
-        "POST",
-        `/api/simulators/${encodeURIComponent(udid)}/batch`,
-        {
-          steps,
-          continueOnError,
-        },
-      ),
-    screenshot: (udid) =>
-      requestBuffer(
-        endpoint,
-        `/api/simulators/${encodeURIComponent(udid)}/screenshot.png`,
-      ),
-    close: () => {
-      if (options.keepDaemon) {
-        return;
+    };
+    const splitDeviceArgs = (
+      method: string,
+      args: unknown[],
+      boundArity: number,
+    ): [string, unknown[]] => {
+      if (typeof args[0] === "string" && args.length > boundArity) {
+        return [args[0], args.slice(1)];
       }
-      if (result.child) {
-        result.child.kill();
-        if (result.isolatedRoot) {
-          fs.rmSync(result.isolatedRoot, { recursive: true, force: true });
+      return [requireUdid(method), args];
+    };
+    const splitDeviceNoArg = (
+      method: string,
+      args: unknown[],
+    ): [string, unknown[]] => {
+      if (typeof args[0] === "string") {
+        return [args[0], args.slice(1)];
+      }
+      return [requireUdid(method), args];
+    };
+    return {
+      endpoint,
+      pid: result.pid,
+      projectRoot: result.projectRoot,
+      udid: boundUdid,
+      device: (udid: string) => createSession(udid),
+      list: () => requestJson(endpoint, "GET", "/api/simulators"),
+      install: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("install", args, 1);
+        return requestOk(
+          endpoint,
+          `/api/simulators/${encodeURIComponent(udid)}/install`,
+          { appPath: rest[0] },
+        );
+      },
+      uninstall: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("uninstall", args, 1);
+        return requestOk(
+          endpoint,
+          `/api/simulators/${encodeURIComponent(udid)}/uninstall`,
+          { bundleId: rest[0] },
+        );
+      },
+      launch: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("launch", args, 1);
+        return requestOk(
+          endpoint,
+          `/api/simulators/${encodeURIComponent(udid)}/launch`,
+          { bundleId: rest[0] },
+        );
+      },
+      openUrl: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("openUrl", args, 1);
+        return requestOk(
+          endpoint,
+          `/api/simulators/${encodeURIComponent(udid)}/open-url`,
+          { url: rest[0] },
+        );
+      },
+      tap: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("tap", args, 2);
+        return requestOk(
+          endpoint,
+          `/api/simulators/${encodeURIComponent(udid)}/tap`,
+          {
+            x: rest[0],
+            y: rest[1],
+            normalized: true,
+          },
+        );
+      },
+      tapElement: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("tapElement", args, 1);
+        return requestOk(
+          endpoint,
+          `/api/simulators/${encodeURIComponent(udid)}/tap`,
+          {
+            selector: selectorPayload(rest[0] as ElementSelector),
+            ...(rest[1] as TapOptions | undefined),
+          },
+        );
+      },
+      touch: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("touch", args, 3);
+        return requestOk(
+          endpoint,
+          `/api/simulators/${encodeURIComponent(udid)}/touch`,
+          {
+            x: rest[0],
+            y: rest[1],
+            phase: rest[2],
+          },
+        );
+      },
+      key: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("key", args, 1);
+        return requestOk(
+          endpoint,
+          `/api/simulators/${encodeURIComponent(udid)}/key`,
+          {
+            keyCode: rest[0],
+            modifiers: rest[1] ?? 0,
+          },
+        );
+      },
+      button: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("button", args, 1);
+        return requestOk(
+          endpoint,
+          `/api/simulators/${encodeURIComponent(udid)}/button`,
+          { button: rest[0], durationMs: rest[1] ?? 0 },
+        );
+      },
+      pasteboardSet: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("pasteboardSet", args, 1);
+        return requestOk(
+          endpoint,
+          `/api/simulators/${encodeURIComponent(udid)}/pasteboard`,
+          { text: rest[0] },
+        );
+      },
+      pasteboardGet: async (...args: unknown[]) => {
+        const [udid] = splitDeviceNoArg("pasteboardGet", args);
+        const result = await requestJson<{ text?: string }>(
+          endpoint,
+          "GET",
+          `/api/simulators/${encodeURIComponent(udid)}/pasteboard`,
+        );
+        return result.text ?? "";
+      },
+      chromeProfile: (...args: unknown[]) => {
+        const [udid] = splitDeviceNoArg("chromeProfile", args);
+        return requestJson(
+          endpoint,
+          "GET",
+          `/api/simulators/${encodeURIComponent(udid)}/chrome-profile`,
+        );
+      },
+      tree: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("tree", args, 0);
+        return requestJson(
+          endpoint,
+          "GET",
+          `/api/simulators/${encodeURIComponent(udid)}/accessibility-tree?${treeQuery(rest[0] as QueryOptions | undefined)}`,
+        );
+      },
+      query: async (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("query", args, 1);
+        const result = await requestJson<{ matches: unknown[] }>(
+          endpoint,
+          "POST",
+          `/api/simulators/${encodeURIComponent(udid)}/query`,
+          {
+            selector: selectorPayload(rest[0] as ElementSelector),
+            ...(rest[1] as QueryOptions | undefined),
+          },
+        );
+        return result.matches;
+      },
+      assert: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("assert", args, 1);
+        return requestJson(
+          endpoint,
+          "POST",
+          `/api/simulators/${encodeURIComponent(udid)}/assert`,
+          {
+            selector: selectorPayload(rest[0] as ElementSelector),
+            ...(rest[1] as QueryOptions | undefined),
+          },
+        );
+      },
+      assertNot: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("assertNot", args, 1);
+        return requestJson(
+          endpoint,
+          "POST",
+          `/api/simulators/${encodeURIComponent(udid)}/assert-not`,
+          {
+            selector: selectorPayload(rest[0] as ElementSelector),
+            ...(rest[1] as QueryOptions | undefined),
+          },
+        );
+      },
+      waitFor: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("waitFor", args, 1);
+        return requestJson(
+          endpoint,
+          "POST",
+          `/api/simulators/${encodeURIComponent(udid)}/wait-for`,
+          {
+            selector: selectorPayload(rest[0] as ElementSelector),
+            ...(rest[1] as QueryOptions | undefined),
+          },
+        );
+      },
+      waitForNot: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("waitForNot", args, 1);
+        return requestJson(
+          endpoint,
+          "POST",
+          `/api/simulators/${encodeURIComponent(udid)}/wait-for-not`,
+          {
+            selector: selectorPayload(rest[0] as ElementSelector),
+            ...(rest[1] as QueryOptions | undefined),
+          },
+        );
+      },
+      scrollUntilVisible: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("scrollUntilVisible", args, 1);
+        return requestJson(
+          endpoint,
+          "POST",
+          `/api/simulators/${encodeURIComponent(udid)}/scroll-until-visible`,
+          {
+            selector: selectorPayload(rest[0] as ElementSelector),
+            ...(rest[1] as QueryOptions | undefined),
+          },
+        );
+      },
+      batch: (...args: unknown[]) => {
+        const [udid, rest] = splitDeviceArgs("batch", args, 1);
+        return requestJson(
+          endpoint,
+          "POST",
+          `/api/simulators/${encodeURIComponent(udid)}/batch`,
+          {
+            steps: rest[0],
+            continueOnError: rest[1] ?? false,
+          },
+        );
+      },
+      screenshot: (...args: unknown[]) => {
+        const [udid] = splitDeviceNoArg("screenshot", args);
+        return requestBuffer(
+          endpoint,
+          `/api/simulators/${encodeURIComponent(udid)}/screenshot.png`,
+        );
+      },
+      close: () => {
+        if (options.keepDaemon) {
+          return;
         }
-        return;
-      }
-      if (result.started) {
-        spawnSync(cliPath, ["daemon", "stop"], { cwd: options.projectRoot });
-      }
-    },
+        if (result.child) {
+          result.child.kill();
+          if (result.isolatedRoot) {
+            fs.rmSync(result.isolatedRoot, { recursive: true, force: true });
+          }
+          return;
+        }
+        if (result.started) {
+          spawnSync(cliPath, ["daemon", "stop"], { cwd: options.projectRoot });
+        }
+      },
+    } as SimDeckSession;
   };
-  return session;
+  return createSession(options.udid);
 }
 
 async function startIsolatedDaemon(
@@ -499,11 +646,18 @@ function treeQuery(options: QueryOptions = {}): string {
 
 function selectorPayload(
   selector: ElementSelector,
-): Record<string, string | undefined> {
+): Record<string, string | number | boolean | undefined> {
   return {
+    text: selector.text,
     id: selector.id,
     label: selector.label,
     value: selector.value,
     elementType: selector.type,
+    index: selector.index,
+    enabled: selector.enabled,
+    checked: selector.checked,
+    focused: selector.focused,
+    selected: selector.selected,
+    regex: selector.regex,
   };
 }

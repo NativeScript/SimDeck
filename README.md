@@ -194,11 +194,11 @@ coordinates directly.
 ```ts
 import { connect } from "simdeck/test";
 
-const sim = await connect();
+const sim = await connect({ udid: "<udid>" });
 try {
-  await sim.tap("<udid>", 0.5, 0.5);
-  await sim.waitFor("<udid>", { label: "Continue" });
-  await sim.screenshot("<udid>");
+  await sim.tap(0.5, 0.5);
+  await sim.waitFor({ label: "Continue" });
+  await sim.screenshot();
 } finally {
   sim.close();
 }
@@ -206,6 +206,12 @@ try {
 
 `connect()` starts the project daemon when needed, reuses it when it is already
 healthy, and only stops daemons it started itself.
+
+Run common Maestro YAML flows against the same daemon-backed iOS Simulator API:
+
+```sh
+simdeck maestro test <udid> flow.yaml --artifacts-dir artifacts/maestro
+```
 
 ## NativeScript Inspector
 

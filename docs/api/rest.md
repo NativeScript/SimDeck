@@ -469,6 +469,55 @@ The response always includes:
 
 Returns the AX-style accessibility description of the topmost element at a screen point. `x` and `y` are in UIKit screen points and must be finite, non-negative numbers.
 
+### `POST /api/simulators/{udid}/query`
+
+Returns compact accessibility matches for a selector:
+
+```json
+{
+  "selector": {
+    "text": "Continue",
+    "id": "continue-button",
+    "elementType": "Button",
+    "enabled": true,
+    "regex": false
+  },
+  "source": "auto",
+  "maxDepth": 8,
+  "limit": 20
+}
+```
+
+Selectors can match `text`, `id`, `label`, `value`, `elementType`, `index`, `enabled`, `checked`, `focused`, and `selected`. Set `regex: true` to use regular expression matching for string fields.
+
+### `POST /api/simulators/{udid}/wait-for`
+
+Polls until a selector appears. `assert` is an alias with the same payload shape:
+
+```json
+{
+  "selector": { "text": "Welcome", "regex": true },
+  "timeoutMs": 5000,
+  "pollMs": 100
+}
+```
+
+Use `POST /api/simulators/{udid}/wait-for-not` or `/assert-not` for negative assertions.
+
+### `POST /api/simulators/{udid}/scroll-until-visible`
+
+Scrolls and polls until the selector appears:
+
+```json
+{
+  "selector": { "text": "Settings" },
+  "direction": "down",
+  "timeoutMs": 10000
+}
+```
+
+`direction` accepts `up`, `down`, `left`, and `right`.
+
 ## Inspector proxy
 
 ### `POST /api/simulators/{udid}/inspector/request`
