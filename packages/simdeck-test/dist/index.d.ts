@@ -7,7 +7,13 @@ export type SimDeckLaunchOptions = {
   videoCodec?: "auto" | "hardware" | "software" | "h264-software";
 };
 export type QueryOptions = {
-  source?: "auto" | "nativescript" | "uikit" | "native-ax";
+  source?:
+    | "auto"
+    | "nativescript"
+    | "react-native"
+    | "flutter"
+    | "uikit"
+    | "native-ax";
   maxDepth?: number;
   includeHidden?: boolean;
 };

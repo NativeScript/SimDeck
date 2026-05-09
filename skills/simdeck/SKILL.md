@@ -67,12 +67,14 @@ simdeck describe <UDID> --format compact-json
 simdeck describe <UDID> --point 120,240
 simdeck describe <UDID> --source auto
 simdeck describe <UDID> --source nativescript
+simdeck describe <UDID> --source react-native
+simdeck describe <UDID> --source flutter
 simdeck describe <UDID> --source uikit
 simdeck describe <UDID> --source native-ax
 simdeck describe <UDID> --direct
 ```
 
-Use `--source auto` with the project daemon. Use `--direct` or `--source native-ax` for the private CoreSimulator accessibility bridge. NativeScript inspector runtime can add richer hierarchy data.
+Use `--source auto` with the project daemon. Use `--direct` or `--source native-ax` for the private CoreSimulator accessibility bridge. NativeScript, React Native, and Flutter inspector runtimes can add richer hierarchy data.
 
 Prefer selectors, coordinates only when needed. Selector taps go through the daemon and wait for the element server-side.
 

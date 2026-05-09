@@ -16,7 +16,7 @@ It does **not** see:
 - NativeScript logical tree nodes.
 - UIView properties that aren't part of the accessibility surface.
 
-For those, you need to link the [Swift in-app agent](/inspector/swift), attach the SwiftUI root publisher, or use the [NativeScript runtime inspector](/inspector/nativescript).
+For those, you need to link the [Swift in-app agent](/inspector/swift), attach the SwiftUI root publisher, or use a framework runtime inspector such as [NativeScript](/inspector/nativescript), [React Native](/inspector/react-native), or [Flutter](/inspector/flutter).
 
 ## When AX is the right call
 

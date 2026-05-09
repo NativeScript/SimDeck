@@ -632,6 +632,7 @@ enum DescribeUiSource {
     Auto,
     Nativescript,
     ReactNative,
+    Flutter,
     Uikit,
     NativeAx,
 }
@@ -3555,6 +3556,7 @@ impl DescribeUiSource {
             Self::Auto => "auto",
             Self::Nativescript => "nativescript",
             Self::ReactNative => "react-native",
+            Self::Flutter => "flutter",
             Self::Uikit => "uikit",
             Self::NativeAx => "native-ax",
         }

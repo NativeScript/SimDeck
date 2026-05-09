@@ -624,6 +624,12 @@
   color: color-mix(in srgb, #61dafb 78%, var(--text));
 }
 
+.hierarchy-source-pill.source-flutter {
+  border-color: color-mix(in srgb, #54c5f8 50%, var(--border));
+  background: color-mix(in srgb, #54c5f8 14%, transparent);
+  color: color-mix(in srgb, #54c5f8 80%, var(--text));
+}
+
 .hierarchy-source-pill.source-swiftui {
   border-color: color-mix(in srgb, #ff6b9d 50%, var(--border));
   background: color-mix(in srgb, #ff6b9d 14%, transparent);

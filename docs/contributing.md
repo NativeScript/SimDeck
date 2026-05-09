@@ -51,6 +51,7 @@ To run only the production server:
 | `cli/`                             | Objective-C native bridge for private CoreSimulator and SimulatorKit APIs.                                 |
 | `client/`                          | React UI served at `/`.                                                                                    |
 | `packages/nativescript-inspector/` | TypeScript runtime for the NativeScript inspector.                                                         |
+| `packages/flutter-inspector/`      | Flutter runtime plugin for publishing widget, render, and semantics hierarchy data.                        |
 | `packages/inspector-agent/`        | Swift Package for the Swift in-app inspector agent.                                                        |
 | `packages/simdeck-test/`           | JS/TS testing API for daemon-backed simulator automation.                                                  |
 | `packages/vscode-extension/`       | VS Code extension that opens the simulator inside an editor panel.                                         |
@@ -66,6 +67,8 @@ If you contribute, keep these invariants in mind. They are also enforced by the 
 - Rust server logic stays under `server/`.
 - Browser-only presentation logic stays in `client/`.
 - NativeScript app runtime inspection logic stays in `packages/nativescript-inspector/`.
+- React Native app runtime inspection logic stays in `packages/react-native-inspector/`.
+- Flutter app runtime inspection logic stays in `packages/flutter-inspector/`.
 - Prefer adding a server endpoint before adding client-only assumptions.
 - Don't add a Node or Swift dependency to solve work that already fits in Foundation/AppKit.
 - When touching private API usage, keep the adaptation small and explicit and document any simulator/runtime assumptions in `AGENTS.md`.

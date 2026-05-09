@@ -2,13 +2,14 @@
 
 SimDeck blends three different ways to inspect what an iOS app is rendering:
 
-| Source                   | Coverage                                                                                                                 | When to use it                                                                   |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| **Native AX**            | Any simulator app via the Simulator accessibility stack.                                                                 | Default fallback.                                                                |
-| **Swift in-app agent**   | Apps that link `SimDeckInspectorAgent` in DEBUG.                                                                         | Best for native iOS apps you control.                                            |
-| **NativeScript runtime** | NativeScript apps that import `@nativescript/simdeck-inspector`.                                                         | Best for NativeScript apps — exposes the logical view tree, not just UIKit.      |
-| **React Native runtime** | React Native apps that import `react-native-simdeck`.                                                                    | Best for React Native apps — exposes components and Metro source locations.      |
-| **DevTools panel**       | Safari/WebKit targets, Metro React Native targets, Chrome Inspector targets, and SimDeck app runtime inspector sessions. | Best when you want a familiar browser inspector for app runtimes or web content. |
+| Source                   | Coverage                                                                                                                 | When to use it                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| **Native AX**            | Any simulator app via the Simulator accessibility stack.                                                                 | Default fallback.                                                                                  |
+| **Swift in-app agent**   | Apps that link `SimDeckInspectorAgent` in DEBUG.                                                                         | Best for native iOS apps you control.                                                              |
+| **NativeScript runtime** | NativeScript apps that import `@nativescript/simdeck-inspector`.                                                         | Best for NativeScript apps — exposes the logical view tree, not just UIKit.                        |
+| **React Native runtime** | React Native apps that import `react-native-simdeck`.                                                                    | Best for React Native apps — exposes components and Metro source locations.                        |
+| **Flutter runtime**      | Flutter apps that import `simdeck_flutter_inspector`.                                                                    | Best for Flutter apps — exposes widgets, render frames, semantics actions, and creation locations. |
+| **DevTools panel**       | Safari/WebKit targets, Metro React Native targets, Chrome Inspector targets, and SimDeck app runtime inspector sessions. | Best when you want a familiar browser inspector for app runtimes or web content.                   |
 
 The HTTP API picks the most specific source available, falls back to the next one when something goes wrong, and tells the client which sources were available so the UI can offer a switch.
 
@@ -21,6 +22,7 @@ The HTTP API picks the most specific source available, falls back to the next on
 | `auto` _(default)_ / unset   | Use the most accurate source available, falling back to AX.                                            |
 | `nativescript` / `ns`        | Force the NativeScript logical tree if a NativeScript inspector is connected for the foreground app.   |
 | `react-native` / `rn`        | Force the React Native component tree if a React Native inspector is connected for the foreground app. |
+| `flutter` / `fl`             | Force the Flutter widget tree if a Flutter inspector is connected for the foreground app.              |
 | `swiftui` / `swift-ui`       | Force the published SwiftUI logical tree if the Swift agent root publisher is installed in the app.    |
 | `uikit` / `in-app-inspector` | Force the raw UIKit hierarchy from any in-app inspector (NativeScript or Swift agent).                 |
 | `native-ax` / `ax`           | Always use the native accessibility snapshot.                                                          |
@@ -36,10 +38,11 @@ Every accessibility tree response includes:
 
 ```json
 {
-  "source": "nativescript|react-native|swiftui|in-app-inspector|native-ax",
+  "source": "nativescript|react-native|flutter|swiftui|in-app-inspector|native-ax",
   "availableSources": [
     "nativescript",
     "react-native",
+    "flutter",
     "swiftui",
     "in-app-inspector",
     "native-ax"
@@ -57,6 +60,7 @@ Every accessibility tree response includes:
 - **You ship a NativeScript app.** Use the [NativeScript runtime inspector](/inspector/nativescript). It connects outbound to the SimDeck server and publishes both the NativeScript logical tree and the underlying UIKit hierarchy.
 - **You ship a React Native app.** Use the [React Native runtime inspector](/inspector/react-native). It connects outbound to the SimDeck server and publishes the React component tree with dev-mode source locations.
 - **You want DevTools for React Native, Safari/WebKit, Chrome Inspector, or a connected app runtime.** Use the DevTools toolbar toggle. It shows one target list for WebKit Remote Inspector targets, Metro React Native targets, local Chrome Inspector ports, and connected React Native or NativeScript SimDeck inspector sessions.
+- **You ship a Flutter app.** Use the [Flutter runtime inspector](/inspector/flutter). It connects outbound to the SimDeck server and publishes the Flutter widget tree with render frames, semantics metadata, and debug creation locations.
 - **You can't link anything into the app.** Stick with [AX snapshot](/inspector/accessibility). It only sees what the iOS accessibility stack exposes, but it works for every app.
 
 ## Editing properties

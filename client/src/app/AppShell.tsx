@@ -106,8 +106,10 @@ import {
 
 const ACCESSIBILITY_REFRESH_MS = 1500;
 const REACT_NATIVE_ACCESSIBILITY_REFRESH_MS = 500;
+const FLUTTER_ACCESSIBILITY_REFRESH_MS = 1000;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
+const FLUTTER_INSPECTOR_MAX_DEPTH = 48;
 const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
 const LOCAL_STREAM_DEFAULTS: StreamConfig = {
   encoder: "auto",
@@ -913,7 +915,9 @@ export function AppShell({
           maxDepth:
             accessibilityPreferredSource === "native-ax"
               ? DEFAULT_ACCESSIBILITY_MAX_DEPTH
-              : LOGICAL_INSPECTOR_MAX_DEPTH,
+              : accessibilityPreferredSource === "flutter"
+                ? FLUTTER_INSPECTOR_MAX_DEPTH
+                : LOGICAL_INSPECTOR_MAX_DEPTH,
         },
       );
       if (accessibilityRequestIdRef.current !== requestId) {
@@ -993,7 +997,10 @@ export function AppShell({
       accessibilityPreferredSource === "react-native" ||
       accessibilitySource === "react-native"
         ? REACT_NATIVE_ACCESSIBILITY_REFRESH_MS
-        : ACCESSIBILITY_REFRESH_MS;
+        : accessibilityPreferredSource === "flutter" ||
+            accessibilitySource === "flutter"
+          ? FLUTTER_ACCESSIBILITY_REFRESH_MS
+          : ACCESSIBILITY_REFRESH_MS;
     const interval = window.setInterval(() => {
       void loadAccessibilityTree();
     }, refreshMs);

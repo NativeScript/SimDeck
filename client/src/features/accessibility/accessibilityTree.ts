@@ -131,7 +131,7 @@ function buildItem(
   id: string,
   depth: number,
 ): AccessibilityTreeItem {
-  const compacted = compactReactNativeChain(node, id);
+  const compacted = compactInspectorChain(node, id);
   return {
     chain: compacted.chain,
     children: (compacted.node.children ?? []).map((child, index) =>
@@ -143,7 +143,7 @@ function buildItem(
   };
 }
 
-function compactReactNativeChain(
+function compactInspectorChain(
   node: AccessibilityNode,
   id: string,
 ): {
@@ -155,9 +155,9 @@ function compactReactNativeChain(
   let current = node;
   let currentId = id;
 
-  while (canCompactReactNativeNode(current)) {
+  while (canCompactInspectorNode(current)) {
     const child = current.children?.[0];
-    if (!child || child.source !== "react-native") {
+    if (!child || child.source !== current.source) {
       break;
     }
     chain.push(current);
@@ -168,14 +168,39 @@ function compactReactNativeChain(
   return { chain, id: currentId, node: current };
 }
 
-function canCompactReactNativeNode(node: AccessibilityNode): boolean {
-  if (node.source !== "react-native" || node.children?.length !== 1) {
+function canCompactInspectorNode(node: AccessibilityNode): boolean {
+  if (node.children?.length !== 1) {
     return false;
   }
+  if (node.source === "react-native") {
+    return canCompactReactNativeNode(node);
+  }
+  if (node.source === "flutter") {
+    return canCompactFlutterNode(node);
+  }
+  return false;
+}
+
+function canCompactReactNativeNode(node: AccessibilityNode): boolean {
   if (primarySourceLocationFile(node) || isRouteDisplayName(node)) {
     return false;
   }
   return !hasMeaningfulNodeContent(node);
+}
+
+function canCompactFlutterNode(node: AccessibilityNode): boolean {
+  if (flutterBoolean(node, "transparent")) {
+    return true;
+  }
+  if (hasMeaningfulNodeContent(node)) {
+    return false;
+  }
+  const type = cleanText(node.type);
+  if (!isFlutterTransparentContainerType(type)) {
+    return false;
+  }
+  const sourceLocation = primarySourceLocationFile(node);
+  return !sourceLocation || isFlutterFrameworkContainerType(type);
 }
 
 function findContainingItem(
@@ -200,6 +225,16 @@ function findContainingItem(
 
 function isTransparentHitTestBlocker(item: AccessibilityTreeItem): boolean {
   const node = item.node;
+  if (node.source === "flutter") {
+    if (flutterBoolean(node, "transparent")) {
+      return true;
+    }
+    return (
+      !hasMeaningfulNodeContent(node) &&
+      isFlutterTransparentContainerType(cleanText(node.type))
+    );
+  }
+
   if (node.source !== "in-app-inspector" || node.nativeScript) {
     return false;
   }
@@ -234,6 +269,152 @@ function isTransparentContainerClass(value: string | null): boolean {
 function unqualifiedClassName(value: string | null): string | null {
   return value?.split(".").pop()?.trim() || value;
 }
+
+function flutterBoolean(node: AccessibilityNode, key: string): boolean {
+  return node.flutter?.[key] === true;
+}
+
+function isFlutterTransparentContainerType(value: string | null): boolean {
+  const type = unqualifiedClassName(value);
+  return Boolean(
+    type &&
+    (type.startsWith("_") ||
+      flutterTransparentContainerTypes.has(type) ||
+      flutterFrameworkContainerTypes.has(type)),
+  );
+}
+
+function isFlutterFrameworkContainerType(value: string | null): boolean {
+  const type = unqualifiedClassName(value);
+  return Boolean(
+    type &&
+    (type.startsWith("_") ||
+      flutterFrameworkContainerTypes.has(type) ||
+      flutterTransparentContainerTypes.has(type)),
+  );
+}
+
+const flutterTransparentContainerTypes = new Set([
+  "AbsorbPointer",
+  "Actions",
+  "Align",
+  "AnimatedBuilder",
+  "AnimatedContainer",
+  "AnimatedDefaultTextStyle",
+  "AnimatedOpacity",
+  "AnimatedPadding",
+  "AnimatedPhysicalModel",
+  "AnimatedPositioned",
+  "AnimatedTheme",
+  "AspectRatio",
+  "AutomaticKeepAlive",
+  "BlockSemantics",
+  "Builder",
+  "Center",
+  "ClipPath",
+  "ClipRRect",
+  "ClipRect",
+  "Column",
+  "ConstrainedBox",
+  "Container",
+  "CustomMultiChildLayout",
+  "CustomPaint",
+  "CustomSingleChildLayout",
+  "DecoratedBox",
+  "DefaultSelectionStyle",
+  "DefaultTextStyle",
+  "ExcludeSemantics",
+  "Directionality",
+  "Expanded",
+  "Flexible",
+  "Focus",
+  "FocusScope",
+  "FocusTraversalGroup",
+  "FractionalTranslation",
+  "GestureDetector",
+  "IconButtonTheme",
+  "IgnorePointer",
+  "Ink",
+  "IndexedSemantics",
+  "InputDecorator",
+  "IntrinsicHeight",
+  "IntrinsicWidth",
+  "KeepAlive",
+  "KeyedSubtree",
+  "LayoutId",
+  "LayoutBuilder",
+  "LimitedBox",
+  "Listener",
+  "ListenableBuilder",
+  "ListView",
+  "Material",
+  "MatrixTransition",
+  "MediaQuery",
+  "MouseRegion",
+  "NotificationListener",
+  "Offstage",
+  "Opacity",
+  "OverflowBox",
+  "Padding",
+  "PhysicalModel",
+  "PhysicalShape",
+  "Positioned",
+  "PositionedDirectional",
+  "PrimaryScrollController",
+  "RawGestureDetector",
+  "RepaintBoundary",
+  "RestorationScope",
+  "RootRestorationScope",
+  "Row",
+  "SafeArea",
+  "Scaffold",
+  "ScrollNotificationObserver",
+  "Scrollable",
+  "Semantics",
+  "SharedAppData",
+  "SizeChangedLayoutNotifier",
+  "SizedBox",
+  "SliverList",
+  "SliverPadding",
+  "Stack",
+  "TapRegionSurface",
+  "TextFieldTapRegion",
+  "TextSelectionGestureDetector",
+  "Theme",
+  "TickerMode",
+  "Transform",
+  "UnmanagedRestorationScope",
+  "UndoHistory",
+  "ValueListenableBuilder",
+  "Viewport",
+]);
+
+const flutterFrameworkContainerTypes = new Set([
+  "CheckedModeBanner",
+  "CupertinoPageTransition",
+  "CupertinoTheme",
+  "DecoratedBoxTransition",
+  "DefaultTextEditingShortcuts",
+  "HeroControllerScope",
+  "IconTheme",
+  "InheritedCupertinoTheme",
+  "ShortcutRegistrar",
+  "Localizations",
+  "MaterialApp",
+  "ModalBarrier",
+  "Navigator",
+  "Overlay",
+  "PageStorage",
+  "RawView",
+  "RootWidget",
+  "ScaffoldMessenger",
+  "ScrollConfiguration",
+  "Shortcuts",
+  "SlideTransition",
+  "Title",
+  "View",
+  "WidgetsApp",
+]);
 
 function hasMeaningfulNodeContent(node: AccessibilityNode): boolean {
   const generatedNames = new Set(

@@ -135,6 +135,10 @@ export default defineConfig({
               text: "React Native Runtime",
               link: "/inspector/react-native",
             },
+            {
+              text: "Flutter Runtime",
+              link: "/inspector/flutter",
+            },
           ],
         },
       ],

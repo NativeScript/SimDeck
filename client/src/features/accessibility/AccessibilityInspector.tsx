@@ -146,7 +146,7 @@ export function AccessibilityInspector({
 
     const tree = buildAccessibilityTree(roots);
     const storedExpandedIds =
-      source === "react-native"
+      source === "react-native" || source === "flutter"
         ? []
         : readStoredStringArray(expandedStorageKey(udid));
     setExpandedIds(
@@ -154,7 +154,7 @@ export function AccessibilityInspector({
         ? new Set(storedExpandedIds)
         : defaultExpandedAccessibilityIds(
             tree,
-            source === "react-native" ? 2 : 10,
+            source === "react-native" || source === "flutter" ? 2 : 10,
           ),
     );
     expandedInitializedKeyRef.current = expansionKey;
@@ -467,6 +467,7 @@ function NodeDetails({
     ["Module", node.moduleName ?? ""],
     ["NativeScript", nativeScriptDescription(node.nativeScript)],
     ["React Native", reactNativeDescription(node.reactNative)],
+    ["Flutter", flutterDescription(node.flutter)],
     ["UIKit Class", node.className ?? ""],
     ["Last JS", lastUIKitScriptText(node)],
     ["Value", node.AXValue ?? ""],
@@ -727,6 +728,7 @@ function errorMessage(error: unknown): string {
 const HIERARCHY_SOURCE_ORDER: AccessibilitySource[] = [
   "nativescript",
   "react-native",
+  "flutter",
   "swiftui",
   "in-app-inspector",
   "native-ax",
@@ -755,6 +757,9 @@ function sourceLabel(source: AccessibilitySource): string {
   }
   if (source === "react-native") {
     return "React Native";
+  }
+  if (source === "flutter") {
+    return "Flutter";
   }
   if (source === "swiftui") {
     return "SwiftUI";
@@ -793,6 +798,17 @@ function reactNativeDescription(
   const nativeID =
     typeof value.nativeID === "string" ? `nativeID ${value.nativeID}` : "";
   return [tag, testID, nativeID].filter(Boolean).join(" / ");
+}
+
+function flutterDescription(value: Record<string, unknown> | null | undefined) {
+  if (!value) {
+    return "";
+  }
+  const widgetType =
+    typeof value.widgetType === "string" ? value.widgetType : "";
+  const stateType = typeof value.stateType === "string" ? value.stateType : "";
+  const key = typeof value.key === "string" ? value.key : "";
+  return [widgetType, stateType, key].filter(Boolean).join(" / ");
 }
 
 function lastUIKitScriptText(node: AccessibilityNode): string {
