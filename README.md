@@ -47,6 +47,9 @@ view inside the editor.
 
 Full documentation lives at [simdeck.nativescript.org](https://simdeck.nativescript.org/), with guides, the CLI reference, the REST API, the video pipeline, and the inspector protocols.
 
+For hosted pull request simulator sessions, use the GitHub Actions integration
+documented in the [GitHub Actions guide](https://simdeck.nativescript.org/guide/github-actions).
+
 ## Quick start
 
 ```sh

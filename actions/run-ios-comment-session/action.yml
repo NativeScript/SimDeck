@@ -1,0 +1,740 @@
+name: Run iOS App in SimDeck
+
+description: Start a Cloudflare Tunnel-backed SimDeck iOS session for a pull request simulator app artifact.
+
+inputs:
+  pr_number:
+    description: Pull request number to run in SimDeck.
+    required: true
+  command:
+    description: Original issue comment body. Flags such as no-cache-sim, latest-device, and quality=tiny are honored.
+    required: false
+    default: simdeck run ios
+  pr_sha:
+    description: Optional pull request head SHA. When omitted, the action resolves it through the GitHub API.
+    required: false
+    default: ""
+  build_workflow:
+    description: Workflow file name that uploads the iOS simulator app artifact.
+    required: false
+    default: build-ios-simulator.yml
+  artifact_prefix:
+    description: Artifact prefix. The default artifact name is <artifact_prefix>-<pr_sha>.
+    required: false
+    default: ios-simulator-app
+  artifact_name:
+    description: Exact artifact name to download. Overrides artifact_prefix when set.
+    required: false
+    default: ""
+  bundle_id:
+    description: Bundle id to launch when the app Info.plist does not contain a concrete CFBundleIdentifier.
+    required: false
+    default: ""
+  keepalive_seconds:
+    description: How long to keep the session open after launch.
+    required: false
+    default: "1800"
+  simdeck_package:
+    description: npm package name to install.
+    required: false
+    default: simdeck
+  simdeck_version:
+    description: npm package version or dist-tag.
+    required: false
+    default: latest
+  simdeck_port:
+    description: Local daemon port on the runner.
+    required: false
+    default: "4310"
+  stream_profile:
+    description: SimDeck stream quality profile.
+    required: false
+    default: tiny
+  simulator_name:
+    description: Preferred iOS simulator device name.
+    required: false
+    default: iPhone 17 Pro
+  device_strategy:
+    description: Fallback selection strategy when simulator_name is unavailable. Use latest or small.
+    required: false
+    default: latest
+  simulator_cache:
+    description: Restore and save the CoreSimulator device cache.
+    required: false
+    default: "true"
+  cache_version:
+    description: Manual cache key suffix for CoreSimulator cache experiments.
+    required: false
+    default: v1
+  public_health_check:
+    description: Verify the public Cloudflare Tunnel health endpoint before continuing.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare SimDeck session inputs
+      shell: bash
+      env:
+        GH_TOKEN_VALUE: ${{ github.token }}
+        REPO_VALUE: ${{ github.repository }}
+        PR_NUMBER_VALUE: ${{ inputs.pr_number }}
+        PR_SHA_INPUT_VALUE: ${{ inputs.pr_sha }}
+        SIMDECK_COMMENT_BODY_VALUE: ${{ inputs.command }}
+        SIMDECK_BUNDLE_ID_VALUE: ${{ inputs.bundle_id }}
+        SIMDECK_PORT_VALUE: ${{ inputs.simdeck_port }}
+        SIMDECK_PACKAGE_VALUE: ${{ inputs.simdeck_package }}
+        SIMDECK_VERSION_VALUE: ${{ inputs.simdeck_version }}
+        INPUT_STREAM_PROFILE_VALUE: ${{ inputs.stream_profile }}
+        INPUT_SIMULATOR_NAME_VALUE: ${{ inputs.simulator_name }}
+        INPUT_DEVICE_STRATEGY_VALUE: ${{ inputs.device_strategy }}
+        INPUT_SIMULATOR_CACHE_VALUE: ${{ inputs.simulator_cache }}
+        INPUT_PUBLIC_HEALTH_CHECK_VALUE: ${{ inputs.public_health_check }}
+        KEEPALIVE_SECONDS_VALUE: ${{ inputs.keepalive_seconds }}
+        BUILD_WORKFLOW_VALUE: ${{ inputs.build_workflow }}
+        ARTIFACT_PREFIX_VALUE: ${{ inputs.artifact_prefix }}
+        ARTIFACT_NAME_INPUT_VALUE: ${{ inputs.artifact_name }}
+      run: |
+        set -euo pipefail
+
+        write_env() {
+          local name="$1"
+          local value="$2"
+          local delimiter="SIMDECK_${name}_$(uuidgen | tr '[:lower:]' '[:upper:]')"
+          {
+            echo "${name}<<${delimiter}"
+            printf '%s\n' "${value}"
+            echo "${delimiter}"
+          } >> "${GITHUB_ENV}"
+        }
+
+        write_env "GH_TOKEN" "${GH_TOKEN_VALUE}"
+        write_env "REPO" "${REPO_VALUE}"
+        write_env "PR_NUMBER" "${PR_NUMBER_VALUE}"
+        write_env "PR_SHA_INPUT" "${PR_SHA_INPUT_VALUE}"
+        write_env "SIMDECK_COMMENT_BODY" "${SIMDECK_COMMENT_BODY_VALUE}"
+        write_env "SIMDECK_BUNDLE_ID" "${SIMDECK_BUNDLE_ID_VALUE}"
+        write_env "SIMDECK_PORT" "${SIMDECK_PORT_VALUE}"
+        write_env "SIMDECK_PACKAGE" "${SIMDECK_PACKAGE_VALUE}"
+        write_env "SIMDECK_VERSION" "${SIMDECK_VERSION_VALUE}"
+        write_env "INPUT_STREAM_PROFILE" "${INPUT_STREAM_PROFILE_VALUE}"
+        write_env "INPUT_SIMULATOR_NAME" "${INPUT_SIMULATOR_NAME_VALUE}"
+        write_env "INPUT_DEVICE_STRATEGY" "${INPUT_DEVICE_STRATEGY_VALUE}"
+        write_env "INPUT_SIMULATOR_CACHE" "${INPUT_SIMULATOR_CACHE_VALUE}"
+        write_env "INPUT_PUBLIC_HEALTH_CHECK" "${INPUT_PUBLIC_HEALTH_CHECK_VALUE}"
+        write_env "KEEPALIVE_SECONDS" "${KEEPALIVE_SECONDS_VALUE}"
+        write_env "BUILD_WORKFLOW" "${BUILD_WORKFLOW_VALUE}"
+        write_env "ARTIFACT_PREFIX" "${ARTIFACT_PREFIX_VALUE}"
+        write_env "ARTIFACT_NAME_INPUT" "${ARTIFACT_NAME_INPUT_VALUE}"
+        write_env "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24" "true"
+    - name: Create status comment and resolve flags
+      shell: bash
+      run: |
+        set -euo pipefail
+        status_body="Starting a SimDeck iOS session for this pull request. I will update this comment with the tunnel URL when it is ready."
+        status_comment_id=""
+
+        for attempt in {1..5}; do
+          if comment_id="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="${status_body}" --jq '.id')"; then
+            status_comment_id="${comment_id}"
+            echo "SIMDECK_STATUS_COMMENT_ID=${status_comment_id}" >> "${GITHUB_ENV}"
+            break
+          fi
+          sleep $((attempt * 5))
+        done
+
+        if [[ -z "${status_comment_id}" ]]; then
+          exit 1
+        fi
+
+        body="${SIMDECK_COMMENT_BODY}"
+        simulator_cache=0
+        if [[ "${INPUT_SIMULATOR_CACHE}" == "true" ]]; then
+          simulator_cache=1
+        fi
+
+        simulator_name="${INPUT_SIMULATOR_NAME}"
+        device_strategy="${INPUT_DEVICE_STRATEGY:-latest}"
+        stream_profile="${INPUT_STREAM_PROFILE:-tiny}"
+        public_health_check=0
+        if [[ "${INPUT_PUBLIC_HEALTH_CHECK}" == "true" ]]; then
+          public_health_check=1
+        fi
+
+        if [[ "${body}" == *" no-cache-sim"* ]]; then
+          simulator_cache=0
+        fi
+        if [[ "${body}" == *" latest-device"* ]]; then
+          simulator_name=""
+          device_strategy=latest
+        fi
+        if [[ "${body}" == *" small-device"* ]]; then
+          simulator_name=""
+          device_strategy=small
+        fi
+        for profile in tiny low economy fast smooth balanced full quality ci-software; do
+          if [[ "${body}" == *" ${profile}"* || "${body}" == *" quality=${profile}"* ]]; then
+            stream_profile="${profile}"
+          fi
+        done
+        if [[ "${body}" == *" public-health"* ]]; then
+          public_health_check=1
+        fi
+
+        echo "SIMDECK_SIMULATOR_CACHE=${simulator_cache}" >> "${GITHUB_ENV}"
+        echo "SIMDECK_SIMULATOR_NAME=${simulator_name}" >> "${GITHUB_ENV}"
+        echo "SIMDECK_DEVICE_STRATEGY=${device_strategy}" >> "${GITHUB_ENV}"
+        echo "SIMDECK_STREAM_PROFILE=${stream_profile}" >> "${GITHUB_ENV}"
+        echo "SIMDECK_PUBLIC_HEALTH_CHECK=${public_health_check}" >> "${GITHUB_ENV}"
+        echo "Simulator cache: ${simulator_cache}"
+        echo "Preferred simulator: ${simulator_name:-<none>}"
+        echo "Device strategy: ${device_strategy}"
+        echo "Stream profile: ${stream_profile}"
+
+    - name: Install tools, start SimDeck and tunnel
+      id: stream
+      shell: bash
+      run: |
+        set -euo pipefail
+        npm_prefix="${GITHUB_WORKSPACE}/.tools/npm-global"
+        cloudflared_dir="${GITHUB_WORKSPACE}/.tools/cloudflared"
+        simdeck_dir="${GITHUB_WORKSPACE}/.tools/simdeck"
+        bin_dir="${GITHUB_WORKSPACE}/.tools/bin"
+        mkdir -p "${npm_prefix}" "${cloudflared_dir}" "${simdeck_dir}" "${bin_dir}"
+
+        export NPM_CONFIG_PREFIX="${npm_prefix}"
+        export PATH="${bin_dir}:${npm_prefix}/bin:${cloudflared_dir}:${PATH}"
+
+        echo "${bin_dir}" >> "${GITHUB_PATH}"
+        echo "${npm_prefix}/bin" >> "${GITHUB_PATH}"
+        echo "${cloudflared_dir}" >> "${GITHUB_PATH}"
+
+        (
+          metadata_url="https://registry.npmjs.org/${SIMDECK_PACKAGE}/${SIMDECK_VERSION:-latest}"
+          metadata="$(curl -fsSL "${metadata_url}")"
+          tarball="$(SIMDECK_METADATA="${metadata}" python3 -c 'import json, os; print(json.loads(os.environ["SIMDECK_METADATA"])["dist"]["tarball"])')"
+          version="$(SIMDECK_METADATA="${metadata}" python3 -c 'import json, os; print(json.loads(os.environ["SIMDECK_METADATA"])["version"])')"
+          rm -rf "${simdeck_dir:?}/"*
+          curl -fsSL "${tarball}" | tar -xz -C "${simdeck_dir}" --strip-components=1
+          chmod +x "${simdeck_dir}/bin/simdeck.mjs" "${simdeck_dir}/build/simdeck-bin"
+          ln -sf "${simdeck_dir}/bin/simdeck.mjs" "${bin_dir}/simdeck"
+          echo "Installed ${SIMDECK_PACKAGE} ${version}"
+        ) &
+        simdeck_install_pid="$!"
+
+        (
+          case "$(uname -m)" in
+            arm64) cloudflared_arch="arm64" ;;
+            x86_64) cloudflared_arch="amd64" ;;
+            *)
+              echo "Unsupported macOS architecture: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${cloudflared_arch}.tgz" \
+            | tar -xz -C "${cloudflared_dir}"
+          chmod +x "${cloudflared_dir}/cloudflared"
+        ) &
+        cloudflared_install_pid="$!"
+
+        wait "${simdeck_install_pid}"
+        wait "${cloudflared_install_pid}"
+
+        simdeck --version
+        cloudflared --version
+        access_token="$(openssl rand -hex 32)"
+        metadata_path="${RUNNER_TEMP:-/tmp}/simdeck-daemon-${GITHUB_RUN_ID}.json"
+        case "${SIMDECK_STREAM_PROFILE}" in
+          tiny)
+            stream_max_edge=540
+            stream_fps=24
+            stream_min_bitrate=600000
+            stream_bits_per_pixel=2
+            ;;
+          low | economy)
+            stream_max_edge=720
+            stream_fps=30
+            stream_min_bitrate=900000
+            stream_bits_per_pixel=2
+            ;;
+          *)
+            stream_max_edge=960
+            stream_fps=30
+            stream_min_bitrate=1200000
+            stream_bits_per_pixel=2
+            ;;
+        esac
+
+        simdeck daemon stop || true
+        existing_pid="$(lsof -ti tcp:"${SIMDECK_PORT}" -sTCP:LISTEN | head -n 1 || true)"
+        if [[ -n "${existing_pid}" ]]; then
+          kill "${existing_pid}" || true
+          sleep 2
+        fi
+        if lsof -ti tcp:"${SIMDECK_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+          echo "Port ${SIMDECK_PORT} is still in use before starting SimDeck" >&2
+          lsof -nP -iTCP:"${SIMDECK_PORT}" -sTCP:LISTEN >&2 || true
+          exit 1
+        fi
+
+        SIMDECK_VIDEO_CODEC=software \
+          SIMDECK_ALLOWED_ORIGINS='*' \
+          SIMDECK_REALTIME_STREAM=1 \
+          SIMDECK_STREAM_QUALITY_PROFILE="${SIMDECK_STREAM_PROFILE}" \
+          SIMDECK_REALTIME_MAX_EDGE="${stream_max_edge}" \
+          SIMDECK_REALTIME_FPS="${stream_fps}" \
+          SIMDECK_REALTIME_MIN_BITRATE="${stream_min_bitrate}" \
+          SIMDECK_REALTIME_BITS_PER_PIXEL="${stream_bits_per_pixel}" \
+          SIMDECK_LOCAL_STREAM_FPS="${stream_fps}" \
+          simdeck daemon run \
+          --project-root "${GITHUB_WORKSPACE}" \
+          --metadata-path "${metadata_path}" \
+          --port "${SIMDECK_PORT}" \
+          --bind 127.0.0.1 \
+          --video-codec software \
+          --stream-quality "${SIMDECK_STREAM_PROFILE}" \
+          --local-stream-fps "${stream_fps}" \
+          --access-token "${access_token}" \
+          --pairing-code 000000 \
+          > simdeck-daemon.log 2>&1 &
+        echo "$!" > simdeck.pid
+
+        cloudflared tunnel --url "http://127.0.0.1:${SIMDECK_PORT}" --protocol http2 --no-autoupdate > cloudflared.log 2>&1 &
+        echo "$!" > cloudflared.pid
+
+        local_health_url="http://127.0.0.1:${SIMDECK_PORT}/api/health?simdeckToken=${access_token}"
+        local_ready=0
+        for attempt in {1..120}; do
+          if ! kill -0 "$(cat simdeck.pid)" 2>/dev/null; then
+            cat simdeck-daemon.log >&2
+            echo "SimDeck daemon exited before becoming healthy" >&2
+            exit 1
+          fi
+          if curl -fsS "${local_health_url}" >/dev/null; then
+            local_ready=1
+            break
+          fi
+          sleep 0.25
+        done
+        if [[ "${local_ready}" -ne 1 ]]; then
+          cat simdeck-daemon.log >&2
+          echo "SimDeck daemon did not become healthy" >&2
+          exit 1
+        fi
+
+        tunnel_url=""
+        for attempt in {1..120}; do
+          tunnel_url="$(grep -Eo 'https://[-a-zA-Z0-9.]+\.trycloudflare\.com' cloudflared.log | head -n 1 || true)"
+          if [[ -n "${tunnel_url}" ]]; then
+            break
+          fi
+          sleep 0.25
+        done
+
+        if [[ -z "${tunnel_url}" ]]; then
+          cat cloudflared.log >&2
+          echo "Cloudflare Tunnel did not produce a public URL" >&2
+          exit 1
+        fi
+
+        echo "url=${tunnel_url}" >> "${GITHUB_OUTPUT}"
+        echo "access_token=${access_token}" >> "${GITHUB_OUTPUT}"
+
+        public_health_url="${tunnel_url}/api/health?simdeckToken=${access_token}"
+        tunnel_host="${tunnel_url#https://}"
+        tunnel_host="${tunnel_host%%/*}"
+
+        public_health_check() {
+          curl -fsS "${public_health_url}" -o public-health.json ||
+            curl -fsS --resolve "${tunnel_host}:443:104.16.230.132" "${public_health_url}" -o public-health.json ||
+            curl -fsS --resolve "${tunnel_host}:443:104.16.231.132" "${public_health_url}" -o public-health.json
+        }
+
+        verify_public_health() {
+          python3 - <<'PY'
+        import json
+
+        with open("public-health.json", "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+
+        if data.get("ok") is not True:
+            raise SystemExit("Public health check failed")
+        PY
+        }
+
+        if [[ "${SIMDECK_PUBLIC_HEALTH_CHECK}" != "1" ]]; then
+          exit 0
+        fi
+
+        for attempt in {1..10}; do
+          if public_health_check && verify_public_health; then
+            exit 0
+          fi
+          sleep 1
+        done
+
+        echo "SimDeck public health check failed through Cloudflare Tunnel" >&2
+        cat cloudflared.log >&2
+        exit 1
+
+    - name: Resolve PR head
+      id: pr
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -n "${PR_SHA_INPUT}" ]]; then
+          sha="${PR_SHA_INPUT}"
+        else
+          sha="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+        fi
+        echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+
+    - name: Start simulator artifact download
+      shell: bash
+      run: |
+        set -euo pipefail
+        sha="${{ steps.pr.outputs.sha }}"
+        if [[ -n "${ARTIFACT_NAME_INPUT}" ]]; then
+          artifact_name="${ARTIFACT_NAME_INPUT}"
+        else
+          artifact_name="${ARTIFACT_PREFIX}-${sha}"
+        fi
+        mkdir -p downloaded-app
+        rm -f /tmp/simdeck-artifact-download.status app-download.log
+
+        (
+          set +e
+          {
+            run_id=""
+            for attempt in {1..30}; do
+              run_id="$(gh api -X GET "repos/${REPO}/actions/artifacts?name=${artifact_name}&per_page=100" \
+                --jq '.artifacts[] | select(.expired == false) | .workflow_run.id' \
+                | head -n 1 || true)"
+
+              if [[ -z "${run_id}" && -n "${BUILD_WORKFLOW}" ]]; then
+                run_id="$(gh api --paginate "repos/${REPO}/actions/workflows/${BUILD_WORKFLOW}/runs?per_page=100" \
+                  --jq ".workflow_runs[] | select(.head_sha == \"${sha}\" and .conclusion == \"success\") | .id" \
+                  | head -n 1 || true)"
+              fi
+
+              if [[ -n "${run_id}" ]]; then
+                echo "Using build workflow run ${run_id} for ${sha}"
+                gh run download "${run_id}" --repo "${REPO}" --name "${artifact_name}" --dir downloaded-app
+                exit_code="$?"
+                echo "${exit_code}" > /tmp/simdeck-artifact-download.status
+                exit "${exit_code}"
+              fi
+
+              echo "Waiting for artifact '${artifact_name}' for PR head ${sha} (${attempt}/30)"
+              sleep 20
+            done
+
+            echo "No successful '${artifact_name}' artifact was found for PR head ${sha}." >&2
+            echo "1" > /tmp/simdeck-artifact-download.status
+            exit 1
+          } > app-download.log 2>&1
+        ) &
+        echo "$!" > /tmp/simdeck-artifact-download.pid
+
+    - name: Select Xcode
+      id: xcode
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+        xcodebuild -version
+        xcodebuild -showsdks
+        xcode_key="$(xcodebuild -version | shasum -a 256 | awk '{ print $1 }')"
+        echo "cache_key=${xcode_key}" >> "${GITHUB_OUTPUT}"
+
+    - name: Restore CoreSimulator device cache
+      id: coresim-cache
+      if: env.SIMDECK_SIMULATOR_CACHE == '1'
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/Library/Developer/CoreSimulator/Devices
+        key: coresim-devices-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.cache_key }}-${{ env.SIMDECK_SIMULATOR_NAME }}-${{ env.SIMDECK_DEVICE_STRATEGY }}-${{ inputs.cache_version }}
+
+    - name: Select and preboot simulator
+      shell: bash
+      run: |
+        set -euo pipefail
+        date +%s > /tmp/sim-boot-start
+
+        udid="$(xcrun simctl list devices available --json | SIMDECK_SIMULATOR_NAME="${SIMDECK_SIMULATOR_NAME}" SIMDECK_DEVICE_STRATEGY="${SIMDECK_DEVICE_STRATEGY}" python3 -c '
+        import json
+        import re
+        import os
+        import sys
+
+        def small_device_score(name: str) -> int:
+            normalized = name.lower()
+            scores = [
+                ("iphone se", 0),
+                ("iphone 16e", 1),
+                ("iphone 15", 2),
+                ("iphone 16", 3),
+                ("iphone 17", 4),
+                ("plus", 30),
+                ("pro max", 40),
+                ("pro", 20),
+            ]
+            score = 10
+            for needle, value in scores:
+                if needle in normalized:
+                    score = min(score, value)
+            return score
+
+        data = json.load(sys.stdin)
+        preferred_name = os.environ.get("SIMDECK_SIMULATOR_NAME", "").strip().lower()
+        strategy = os.environ.get("SIMDECK_DEVICE_STRATEGY", "latest")
+        choices = []
+        for runtime, devices in data.get("devices", {}).items():
+            if "iOS" not in runtime:
+                continue
+            version = tuple(int(x) for x in re.findall(r"\d+", runtime)[:3]) or (0,)
+            for index, device in enumerate(devices):
+                name = device.get("name", "")
+                if device.get("isAvailable") and "iPhone" in name:
+                    choices.append((version, index, device["udid"], name))
+
+        if not choices:
+            raise SystemExit("No available iPhone simulator was found")
+
+        exact = []
+        if preferred_name:
+            exact = [choice for choice in choices if choice[3].lower() == preferred_name]
+
+        if exact:
+            exact.sort(key=lambda choice: (choice[0], -choice[1]), reverse=True)
+            selected = exact[0]
+            reason = f"preferred simulator {selected[3]}"
+        elif strategy == "small":
+            choices.sort(key=lambda choice: (choice[0], -small_device_score(choice[3]), -choice[1]), reverse=True)
+            selected = choices[0]
+            reason = f"{strategy} strategy"
+        else:
+            choices.sort(key=lambda choice: (choice[0], -choice[1]), reverse=True)
+            selected = choices[0]
+            reason = f"{strategy} strategy"
+
+        print(selected[2])
+        print(f"Selected {selected[3]} using {reason}", file=sys.stderr)
+        ')"
+
+        echo "SIMULATOR_UDID=${udid}" >> "${GITHUB_ENV}"
+        echo "Prebooting ${udid}"
+        xcrun simctl boot "${udid}" || true
+        (
+          xcrun simctl bootstatus "${udid}" -b > /tmp/sim-boot.log 2>&1
+          date +%s > /tmp/sim-boot-end
+        ) &
+
+    - name: Update status comment with selected simulator URL
+      shell: bash
+      run: |
+        set -euo pipefail
+        cat > comment.md <<'EOF'
+        SimDeck iOS session is ready: [Open SimDeck](${{ steps.stream.outputs.url }}?simdeckToken=${{ steps.stream.outputs.access_token }}&device=${{ env.SIMULATOR_UDID }})
+
+        The selected simulator is booting and the PR app will launch here once its build artifact is installed.
+
+        This session will stop after ${{ inputs.keepalive_seconds }} seconds, or earlier if the simulator shuts down.
+        EOF
+
+        body="$(cat comment.md)"
+        for attempt in {1..5}; do
+          if [[ -n "${SIMDECK_STATUS_COMMENT_ID:-}" ]] && gh api -X PATCH "repos/${REPO}/issues/comments/${SIMDECK_STATUS_COMMENT_ID}" -f body="${body}"; then
+            exit 0
+          fi
+          sleep $((attempt * 5))
+        done
+
+        exit 1
+
+    - name: Wait for simulator artifact download
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        pid="$(cat /tmp/simdeck-artifact-download.pid)"
+        while kill -0 "${pid}" 2>/dev/null; do
+          sleep 2
+        done
+
+        cat app-download.log
+        status="$(cat /tmp/simdeck-artifact-download.status 2>/dev/null || echo 1)"
+        if [[ "${status}" -ne 0 ]]; then
+          exit "${status}"
+        fi
+
+    - name: Install and launch app
+      id: simulator
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        app_path="$(find downloaded-app -name '*.app' -type d | head -n 1)"
+        if [[ -z "${app_path}" ]]; then
+          app_zip="$(find downloaded-app -name '*.app.zip' -type f | head -n 1)"
+          if [[ -z "${app_zip}" ]]; then
+            app_zip="$(find downloaded-app -name '*.zip' -type f | head -n 1)"
+          fi
+          if [[ -z "${app_zip}" ]]; then
+            echo "No downloaded .app bundle or .app.zip artifact was found" >&2
+            find downloaded-app -maxdepth 3 -type f -print >&2
+            exit 1
+          fi
+
+          mkdir -p unpacked-app
+          ditto -x -k "${app_zip}" unpacked-app
+          app_path="$(find unpacked-app -name '*.app' -type d | head -n 1)"
+        fi
+
+        if [[ -z "${app_path}" ]]; then
+          echo "The artifact did not contain an .app bundle" >&2
+          exit 1
+        fi
+
+        udid="${SIMULATOR_UDID}"
+        echo "udid=${udid}" >> "${GITHUB_OUTPUT}"
+
+        bundle_id="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "${app_path}/Info.plist" 2>/dev/null || true)"
+        if [[ -z "${bundle_id}" || "${bundle_id}" == *'$('* || "${bundle_id}" == *'${'* ]]; then
+          bundle_id="${SIMDECK_BUNDLE_ID}"
+          fi
+          if [[ -z "${bundle_id}" ]]; then
+            echo "Could not determine app bundle id. Pass bundle_id to the SimDeck session action." >&2
+            exit 1
+          fi
+        echo "bundle_id=${bundle_id}" >> "${GITHUB_OUTPUT}"
+
+        install_start="$(date +%s)"
+        installed=0
+        for attempt in {1..60}; do
+          if xcrun simctl install "${udid}" "${app_path}"; then
+            installed=1
+            break
+          fi
+          echo "Install attempt ${attempt} failed while simulator is booting; retrying."
+          sleep 3
+        done
+        if [[ "${installed}" -ne 1 ]]; then
+          cat /tmp/sim-boot.log || true
+          echo "Could not install ${app_path} on ${udid}" >&2
+          exit 1
+        fi
+        echo "App install became available after $(( $(date +%s) - install_start )) seconds."
+
+        launch_start="$(date +%s)"
+        launched=0
+        for attempt in {1..40}; do
+          if xcrun simctl launch "${udid}" "${bundle_id}"; then
+            launched=1
+            break
+          fi
+          echo "Launch attempt ${attempt} failed while simulator is finishing boot; retrying."
+          sleep 3
+        done
+        if [[ "${launched}" -ne 1 ]]; then
+          cat /tmp/sim-boot.log || true
+          echo "Could not launch ${bundle_id} on ${udid}" >&2
+          exit 1
+        fi
+        echo "App launch became available after $(( $(date +%s) - launch_start )) seconds."
+
+        if [[ -f /tmp/sim-boot-start && -f /tmp/sim-boot-end ]]; then
+          echo "Simulator boot took $(( $(cat /tmp/sim-boot-end) - $(cat /tmp/sim-boot-start) )) seconds."
+        fi
+
+    - name: Save CoreSimulator device cache
+      if: env.SIMDECK_SIMULATOR_CACHE == '1' && steps.coresim-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/Library/Developer/CoreSimulator/Devices
+        key: coresim-devices-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.cache_key }}-${{ env.SIMDECK_SIMULATOR_NAME }}-${{ env.SIMDECK_DEVICE_STRATEGY }}-${{ inputs.cache_version }}
+
+    - name: Update status comment after app launch
+      shell: bash
+      run: |
+        cat > comment.md <<'EOF'
+        SimDeck iOS session is ready: [Open SimDeck](${{ steps.stream.outputs.url }}?simdeckToken=${{ steps.stream.outputs.access_token }}&device=${{ steps.simulator.outputs.udid }})
+
+        App: `${{ steps.simulator.outputs.bundle_id }}`
+        Commit: `${{ steps.pr.outputs.sha }}`
+
+        This session will stop after ${{ inputs.keepalive_seconds }} seconds, or earlier if the simulator shuts down.
+        EOF
+
+        body="$(cat comment.md)"
+        for attempt in {1..5}; do
+          if [[ -n "${SIMDECK_STATUS_COMMENT_ID:-}" ]] && gh api -X PATCH "repos/${REPO}/issues/comments/${SIMDECK_STATUS_COMMENT_ID}" -f body="${body}"; then
+            exit 0
+          fi
+          sleep $((attempt * 5))
+        done
+
+        exit 1
+
+    - name: Keep session alive
+      shell: bash
+      run: |
+        set -euo pipefail
+        udid="${{ steps.simulator.outputs.udid }}"
+        end=$((SECONDS + KEEPALIVE_SECONDS))
+
+        while (( SECONDS < end )); do
+          if [[ -f simdeck.pid ]] && ! kill -0 "$(cat simdeck.pid)" 2>/dev/null; then
+            echo "SimDeck daemon process exited; stopping session."
+            exit 1
+          fi
+
+          state="$(xcrun simctl list devices | awk -v udid="${udid}" '$0 ~ udid { print $0 }')"
+          if [[ "${state}" != *"(Booted)"* ]]; then
+            echo "Simulator ${udid} is no longer booted; stopping session."
+            exit 0
+          fi
+
+          curl -fsS "http://127.0.0.1:${SIMDECK_PORT}/api/health?simdeckToken=${{ steps.stream.outputs.access_token }}" >/dev/null
+          sleep 15
+        done
+
+    - name: Stop session
+      if: always()
+      shell: bash
+      run: |
+        set +e
+        if [[ -f cloudflared.pid ]]; then
+          kill "$(cat cloudflared.pid)"
+        fi
+        if [[ -f simdeck.pid ]]; then
+          kill "$(cat simdeck.pid)"
+        fi
+        simdeck daemon stop
+        if [[ -n "${SIMULATOR_UDID:-}" ]]; then
+          xcrun simctl shutdown "${SIMULATOR_UDID}"
+        fi
+
+    - name: Update status comment at end
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        commit_sha="${{ steps.pr.outputs.sha }}"
+        if [[ -z "${commit_sha}" ]]; then
+          commit_sha="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/dev/null || true)"
+        fi
+        if [[ -z "${commit_sha}" ]]; then
+          commit_sha="${GITHUB_SHA}"
+        fi
+
+        body="SimDeck iOS session for commit \`${commit_sha}\` has ended. Re-run it by commenting \`simdeck run ios\`."
+        for attempt in {1..5}; do
+          if [[ -n "${SIMDECK_STATUS_COMMENT_ID:-}" ]] && gh api -X PATCH "repos/${REPO}/issues/comments/${SIMDECK_STATUS_COMMENT_ID}" -f body="${body}"; then
+            exit 0
+          fi
+          sleep $((attempt * 5))
+        done
+        exit 0
