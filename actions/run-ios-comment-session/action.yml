@@ -10,6 +10,18 @@ inputs:
     description: Original issue comment body. Flags such as no-cache-sim, latest-device, and quality=tiny are honored.
     required: false
     default: simdeck run ios
+  command_comment_id:
+    description: GitHub issue comment id that triggered the session. When set, the action reacts to this comment immediately.
+    required: false
+    default: ""
+  command_comment_author:
+    description: GitHub username to mention when the URL is ready.
+    required: false
+    default: ""
+  command_reaction:
+    description: Reaction to add to the triggering comment. Use one of +1, -1, laugh, confused, heart, hooray, rocket, eyes.
+    required: false
+    default: eyes
   pr_sha:
     description: Optional pull request head SHA. When omitted, the action resolves it through the GitHub API.
     required: false
@@ -82,6 +94,9 @@ runs:
         PR_NUMBER_VALUE: ${{ inputs.pr_number }}
         PR_SHA_INPUT_VALUE: ${{ inputs.pr_sha }}
         SIMDECK_COMMENT_BODY_VALUE: ${{ inputs.command }}
+        COMMAND_COMMENT_ID_VALUE: ${{ inputs.command_comment_id }}
+        COMMAND_COMMENT_AUTHOR_VALUE: ${{ inputs.command_comment_author }}
+        COMMAND_REACTION_VALUE: ${{ inputs.command_reaction }}
         SIMDECK_BUNDLE_ID_VALUE: ${{ inputs.bundle_id }}
         SIMDECK_PORT_VALUE: ${{ inputs.simdeck_port }}
         SIMDECK_PACKAGE_VALUE: ${{ inputs.simdeck_package }}
@@ -114,6 +129,9 @@ runs:
         write_env "PR_NUMBER" "${PR_NUMBER_VALUE}"
         write_env "PR_SHA_INPUT" "${PR_SHA_INPUT_VALUE}"
         write_env "SIMDECK_COMMENT_BODY" "${SIMDECK_COMMENT_BODY_VALUE}"
+        write_env "COMMAND_COMMENT_ID" "${COMMAND_COMMENT_ID_VALUE}"
+        write_env "COMMAND_COMMENT_AUTHOR" "${COMMAND_COMMENT_AUTHOR_VALUE}"
+        write_env "COMMAND_REACTION" "${COMMAND_REACTION_VALUE}"
         write_env "SIMDECK_BUNDLE_ID" "${SIMDECK_BUNDLE_ID_VALUE}"
         write_env "SIMDECK_PORT" "${SIMDECK_PORT_VALUE}"
         write_env "SIMDECK_PACKAGE" "${SIMDECK_PACKAGE_VALUE}"
@@ -128,24 +146,17 @@ runs:
         write_env "ARTIFACT_PREFIX" "${ARTIFACT_PREFIX_VALUE}"
         write_env "ARTIFACT_NAME_INPUT" "${ARTIFACT_NAME_INPUT_VALUE}"
         write_env "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24" "true"
-    - name: Create status comment and resolve flags
+    - name: React to command and resolve flags
       shell: bash
       run: |
         set -euo pipefail
-        status_body="Starting a SimDeck iOS session for this pull request. I will update this comment with the tunnel URL when it is ready."
-        status_comment_id=""
 
-        for attempt in {1..5}; do
-          if comment_id="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="${status_body}" --jq '.id')"; then
-            status_comment_id="${comment_id}"
-            echo "SIMDECK_STATUS_COMMENT_ID=${status_comment_id}" >> "${GITHUB_ENV}"
-            break
-          fi
-          sleep $((attempt * 5))
-        done
-
-        if [[ -z "${status_comment_id}" ]]; then
-          exit 1
+        if [[ -n "${COMMAND_COMMENT_ID:-}" && -n "${COMMAND_REACTION:-}" ]]; then
+          gh api \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${REPO}/issues/comments/${COMMAND_COMMENT_ID}/reactions" \
+            -f content="${COMMAND_REACTION}" >/dev/null || true
         fi
 
         body="${SIMDECK_COMMENT_BODY}"
@@ -536,8 +547,13 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        mention=""
+        if [[ -n "${COMMAND_COMMENT_AUTHOR:-}" ]]; then
+          mention="@${COMMAND_COMMENT_AUTHOR} "
+        fi
+
         cat > comment.md <<'EOF'
-        SimDeck iOS session is ready: [Open SimDeck](${{ steps.stream.outputs.url }}?simdeckToken=${{ steps.stream.outputs.access_token }}&device=${{ env.SIMULATOR_UDID }})
+        __MENTION__SimDeck iOS session is ready: [Open SimDeck](${{ steps.stream.outputs.url }}?simdeckToken=${{ steps.stream.outputs.access_token }}&device=${{ env.SIMULATOR_UDID }})
 
         The selected simulator is booting and the PR app will launch here once its build artifact is installed.
 
@@ -545,8 +561,14 @@ runs:
         EOF
 
         body="$(cat comment.md)"
+        body="${body/__MENTION__/${mention}}"
         for attempt in {1..5}; do
-          if [[ -n "${SIMDECK_STATUS_COMMENT_ID:-}" ]] && gh api -X PATCH "repos/${REPO}/issues/comments/${SIMDECK_STATUS_COMMENT_ID}" -f body="${body}"; then
+          if [[ -n "${SIMDECK_STATUS_COMMENT_ID:-}" ]]; then
+            if gh api -X PATCH "repos/${REPO}/issues/comments/${SIMDECK_STATUS_COMMENT_ID}" -f body="${body}"; then
+              exit 0
+            fi
+          elif comment_id="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="${body}" --jq '.id')"; then
+            echo "SIMDECK_STATUS_COMMENT_ID=${comment_id}" >> "${GITHUB_ENV}"
             exit 0
           fi
           sleep $((attempt * 5))
