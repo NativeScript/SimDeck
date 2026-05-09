@@ -64,7 +64,7 @@ class SimDeckFlutterInspectorOptions {
 
 class SimDeckFlutterInspector {
   SimDeckFlutterInspector([SimDeckFlutterInspectorOptions? options])
-    : options = options ?? const SimDeckFlutterInspectorOptions();
+      : options = options ?? const SimDeckFlutterInspectorOptions();
 
   final SimDeckFlutterInspectorOptions options;
   final Expando<String> _ids = Expando<String>('simdeckFlutterInspectorId');
@@ -320,8 +320,8 @@ class SimDeckFlutterInspector {
       },
       'flutter': <String, Object?>{
         'available': true,
-        'widgetCreationTracked': WidgetInspectorService.instance
-            .isWidgetCreationTracked(),
+        'widgetCreationTracked':
+            WidgetInspectorService.instance.isWidgetCreationTracked(),
       },
       'uikit': <String, Object?>{'available': false, 'propertyEditing': false},
     };
@@ -332,9 +332,8 @@ class SimDeckFlutterInspector {
       return _metadata!;
     }
     final view = _firstFlutterView();
-    final logicalSize = view == null
-        ? Size.zero
-        : view.physicalSize / view.devicePixelRatio;
+    final logicalSize =
+        view == null ? Size.zero : view.physicalSize / view.devicePixelRatio;
     final fallback = <String, Object?>{
       'processIdentifier': io.pid,
       'bundleIdentifier': io.Platform.resolvedExecutable,
@@ -556,6 +555,7 @@ class SimDeckFlutterInspector {
         ? _sourceLocation(element)
         : null;
     final transparent = _isTransparentWrapper(element, semantics);
+    final transparentHitTarget = _isTransparentHitTarget(element, semantics);
     final childDepth = transparent ? depth : depth + 1;
     final children = <Map<String, Object?>>[];
     if (maxDepth == null || transparent || depth < maxDepth) {
@@ -605,6 +605,8 @@ class SimDeckFlutterInspector {
             : null,
         'key': element.widget.key?.toString(),
         'depth': element.depth,
+        'transparent': transparentHitTarget,
+        'compacted': transparent,
       },
       'semantics': semantics,
       'children': children,
@@ -630,7 +632,10 @@ class SimDeckFlutterInspector {
       if (node == null || frame == null || !_frameContains(frame, point)) {
         return;
       }
-      chain.add(node);
+      final flutter = _objectMap(node['flutter']);
+      if (flutter?['transparent'] != true) {
+        chain.add(node);
+      }
       element.visitChildren(visit);
     }
 
@@ -783,8 +788,7 @@ class SimDeckFlutterInspector {
       'protocolVersion': _protocolVersion,
       'processIdentifier': metadata['processIdentifier'] ?? io.pid,
       'bundleIdentifier': metadata['bundleIdentifier'],
-      'displayScale':
-          metadata['displayScale'] ??
+      'displayScale': metadata['displayScale'] ??
           _firstFlutterView()?.devicePixelRatio ??
           1.0,
       'coordinateSpace': 'screen-points',
@@ -865,11 +869,11 @@ class SimDeckFlutterInspector {
     }
     try {
       final json = element.toDiagnosticsNode().toJsonMap(
-        InspectorSerializationDelegate(
-          service: WidgetInspectorService.instance,
-          subtreeDepth: 0,
-        ),
-      );
+            InspectorSerializationDelegate(
+              service: WidgetInspectorService.instance,
+              subtreeDepth: 0,
+            ),
+          );
       final location = _objectMap(json['creationLocation']);
       if (location == null) {
         _sourceLocations[element] = _noSourceLocation;
@@ -954,10 +958,46 @@ class SimDeckFlutterInspector {
   }
 
   bool _isTransparentWrapper(Element element, Map<String, Object?>? semantics) {
-    if (element.widget.key != null || _hasSemanticContent(semantics)) {
+    final type = element.widget.runtimeType.toString();
+    if (_isTransparentContainerType(type)) {
+      return !_isSemanticContentWidgetType(type, semantics);
+    }
+    if (_hasSemanticContent(semantics)) {
       return false;
     }
-    return _isFrameworkWrapperType(element.widget.runtimeType.toString());
+    if (element.widget.key != null) {
+      return false;
+    }
+    return false;
+  }
+
+  bool _isTransparentHitTarget(
+    Element element,
+    Map<String, Object?>? semantics,
+  ) {
+    final type = element.widget.runtimeType.toString();
+    if (_isTransparentContainerType(type)) {
+      return !_isSemanticContentWidgetType(type, semantics);
+    }
+    return !_hasSemanticContent(semantics) && _isTransparentContainerType(type);
+  }
+
+  bool _isTransparentContainerType(String type) {
+    return _isFrameworkWrapperType(type) ||
+        _isFlutterPassThroughWidgetType(type);
+  }
+
+  bool _isSemanticContentWidgetType(
+    String type,
+    Map<String, Object?>? semantics,
+  ) {
+    final baseType = _baseWidgetType(type);
+    if (baseType == 'Semantics') {
+      return _hasSemanticContent(semantics);
+    }
+    return baseType == 'Text' ||
+        baseType == 'RichText' ||
+        baseType == 'EditableText';
   }
 
   Map<String, Object?> _diagnosticProperties(Object object) {
@@ -1004,7 +1044,7 @@ class SimDeckFlutterInspectorFailure implements Exception {
 
 class _TraversalContext {
   _TraversalContext()
-    : deadline = DateTime.now().add(const Duration(seconds: 3));
+      : deadline = DateTime.now().add(const Duration(seconds: 3));
 
   final DateTime deadline;
   int remainingNodes = 3500;
@@ -1027,6 +1067,9 @@ const Set<String> _frameworkWrapperTypes = <String>{
   'AnimatedTheme',
   'Builder',
   'CheckedModeBanner',
+  'CupertinoPageTransition',
+  'CupertinoTheme',
+  'DecoratedBoxTransition',
   'DefaultSelectionStyle',
   'DefaultTextEditingShortcuts',
   'Directionality',
@@ -1035,20 +1078,28 @@ const Set<String> _frameworkWrapperTypes = <String>{
   '_FocusScopeWithExternalFocusNode',
   'FocusTraversalGroup',
   'HeroControllerScope',
+  'IconTheme',
+  'InheritedCupertinoTheme',
   'Localizations',
   '_LocalizationsScope',
   'MaterialApp',
   'MediaQuery',
   '_MediaQueryFromView',
+  'ModalBarrier',
+  'Navigator',
   'NotificationListener<NavigationNotification>',
   'Overlay',
+  'PageStorage',
   'RawView',
   '_RawViewInternal',
   'RootWidget',
+  'ScaffoldMessenger',
   'ScrollConfiguration',
+  'ShortcutRegistrar',
   'Semantics',
   'Shortcuts',
   '_ShortcutsMarker',
+  'SlideTransition',
   'Theme',
   'Title',
   'View',
@@ -1059,8 +1110,109 @@ const Set<String> _frameworkWrapperTypes = <String>{
   '_InheritedTheme',
 };
 
-bool _isFrameworkWrapperType(String type) =>
-    type.startsWith('_') || _frameworkWrapperTypes.contains(type);
+const Set<String> _flutterPassThroughWidgetTypes = <String>{
+  'AbsorbPointer',
+  'Align',
+  'AnimatedBuilder',
+  'AnimatedDefaultTextStyle',
+  'AnimatedOpacity',
+  'AnimatedPadding',
+  'AnimatedPhysicalModel',
+  'AnimatedPositioned',
+  'AnimatedContainer',
+  'AspectRatio',
+  'AutomaticKeepAlive',
+  'BlockSemantics',
+  'Center',
+  'ClipPath',
+  'ClipRRect',
+  'ClipRect',
+  'Column',
+  'ConstrainedBox',
+  'Container',
+  'CustomMultiChildLayout',
+  'CustomPaint',
+  'CustomSingleChildLayout',
+  'DecoratedBox',
+  'DefaultTextStyle',
+  'ExcludeSemantics',
+  'Expanded',
+  'Flexible',
+  'FocusScope',
+  'FractionalTranslation',
+  'GestureDetector',
+  'IgnorePointer',
+  'IconButtonTheme',
+  'Ink',
+  'IndexedSemantics',
+  'InputDecorator',
+  'IntrinsicHeight',
+  'IntrinsicWidth',
+  'KeepAlive',
+  'KeyedSubtree',
+  'LayoutId',
+  'LayoutBuilder',
+  'LimitedBox',
+  'Listener',
+  'ListenableBuilder',
+  'ListView',
+  'Material',
+  'MatrixTransition',
+  'MouseRegion',
+  'NotificationListener',
+  'Offstage',
+  'Opacity',
+  'OverflowBox',
+  'Padding',
+  'PhysicalModel',
+  'PhysicalShape',
+  'Positioned',
+  'PositionedDirectional',
+  'PrimaryScrollController',
+  'RawGestureDetector',
+  'RepaintBoundary',
+  'RestorationScope',
+  'RootRestorationScope',
+  'Row',
+  'SafeArea',
+  'Scaffold',
+  'ScrollNotificationObserver',
+  'Scrollable',
+  'SharedAppData',
+  'SizeChangedLayoutNotifier',
+  'SizedBox',
+  'SliverList',
+  'SliverPadding',
+  'Stack',
+  'TapRegionSurface',
+  'TextFieldTapRegion',
+  'TextSelectionGestureDetector',
+  'TickerMode',
+  'Transform',
+  'UndoHistory',
+  'UnmanagedRestorationScope',
+  'ValueListenableBuilder',
+  'Viewport',
+};
+
+bool _isFrameworkWrapperType(String type) {
+  final baseType = _baseWidgetType(type);
+  return type.startsWith('_') ||
+      baseType.startsWith('_') ||
+      _frameworkWrapperTypes.contains(type) ||
+      _frameworkWrapperTypes.contains(baseType);
+}
+
+bool _isFlutterPassThroughWidgetType(String type) {
+  final baseType = _baseWidgetType(type);
+  return _flutterPassThroughWidgetTypes.contains(type) ||
+      _flutterPassThroughWidgetTypes.contains(baseType);
+}
+
+String _baseWidgetType(String type) {
+  final genericStart = type.indexOf('<');
+  return genericStart < 0 ? type : type.substring(0, genericStart);
+}
 
 bool _hasSemanticContent(Map<String, Object?>? semantics) {
   if (semantics == null) {

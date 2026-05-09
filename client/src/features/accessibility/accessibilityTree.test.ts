@@ -114,6 +114,52 @@ describe("buildAccessibilityTree", () => {
     expect(tree[0].node.type).toBe("Text");
     expect(tree[0].chain.map((node) => node.type)).toEqual(["Wrap", "RCTView"]);
   });
+
+  it("compacts one-child Flutter layout wrappers but keeps app components", () => {
+    const roots: AccessibilityNode[] = [
+      {
+        source: "flutter",
+        type: "InspectorDemoHome",
+        title: "InspectorDemoHome",
+        sourceLocation: { file: "/tmp/demo/lib/main.dart" },
+        children: [
+          {
+            source: "flutter",
+            type: "Padding",
+            title: "Padding",
+            sourceLocation: { file: "/tmp/demo/lib/main.dart" },
+            flutter: { transparent: true },
+            children: [
+              {
+                source: "flutter",
+                type: "Center",
+                title: "Center",
+                sourceLocation: { file: "/tmp/demo/lib/main.dart" },
+                flutter: { transparent: true },
+                children: [
+                  {
+                    source: "flutter",
+                    type: "Text",
+                    title: "Continue",
+                    AXLabel: "Continue",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const tree = buildAccessibilityTree(roots);
+
+    expect(tree[0].node.type).toBe("InspectorDemoHome");
+    expect(tree[0].children[0].node.type).toBe("Text");
+    expect(tree[0].children[0].chain.map((node) => node.type)).toEqual([
+      "Padding",
+      "Center",
+    ]);
+  });
 });
 
 describe("findAccessibilityItemAtPoint", () => {
@@ -245,6 +291,38 @@ describe("findAccessibilityItemAtPoint", () => {
     const item = findAccessibilityItemAtPoint(roots, { x: 0.12, y: 0.208 });
 
     expect(item?.node.type).toBe("Label");
+    expect(item?.id).toBe("0.0");
+  });
+
+  it("ignores transparent Flutter overlays that cover selectable content", () => {
+    const roots: AccessibilityNode[] = [
+      {
+        source: "flutter",
+        type: "Stack",
+        frame: { x: 0, y: 0, width: 400, height: 800 },
+        flutter: { transparent: true },
+        children: [
+          {
+            source: "flutter",
+            type: "FilledButton",
+            title: "Continue",
+            AXLabel: "Continue",
+            frame: { x: 100, y: 300, width: 200, height: 60 },
+          },
+          {
+            source: "flutter",
+            type: "Listener",
+            title: "Listener",
+            frame: { x: 0, y: 0, width: 400, height: 800 },
+            flutter: { transparent: true },
+          },
+        ],
+      },
+    ];
+
+    const item = findAccessibilityItemAtPoint(roots, { x: 0.5, y: 0.4125 });
+
+    expect(item?.node.type).toBe("FilledButton");
     expect(item?.id).toBe("0.0");
   });
 });

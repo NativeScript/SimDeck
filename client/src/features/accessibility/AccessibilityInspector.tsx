@@ -146,7 +146,7 @@ export function AccessibilityInspector({
 
     const tree = buildAccessibilityTree(roots);
     const storedExpandedIds =
-      source === "react-native"
+      source === "react-native" || source === "flutter"
         ? []
         : readStoredStringArray(expandedStorageKey(udid));
     setExpandedIds(
@@ -154,7 +154,7 @@ export function AccessibilityInspector({
         ? new Set(storedExpandedIds)
         : defaultExpandedAccessibilityIds(
             tree,
-            source === "react-native" ? 2 : 10,
+            source === "react-native" || source === "flutter" ? 2 : 10,
           ),
     );
     expandedInitializedKeyRef.current = expansionKey;
