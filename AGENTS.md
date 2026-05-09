@@ -20,6 +20,9 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
   Defines REST routes for simulator control, health, metrics, and chrome assets.
 - `server/src/transport/webrtc.rs`
   Exposes the H.264 WebRTC offer/answer endpoint for browser live video.
+- `server/src/webkit.rs`
+  Discovers simulator WebKit Remote Inspector targets and bridges WebInspectorUI
+  WebSocket traffic to the simulator `webinspectord` binary-plist socket.
 - `server/src/simulators/registry.rs`
   Tracks Rust-side simulator session state and lazy native attachment by UDID.
 - `cli/XCWSimctl.*`
@@ -71,6 +74,7 @@ Private simulator behavior is implemented locally in:
 
 The current repo uses the private boot path, private display bridge, and private accessibility translation bridge directly. The browser streams frames from that bridge, injects touch and keyboard events through the same native session layer, inspects accessibility through `AccessibilityPlatformTranslation`, and renders device chrome from `cli/XCWChromeRenderer.*`.
 Physical chrome button support uses DeviceKit `chrome.json` input geometry for browser hit targets. Volume, action, and mute buttons dispatch through `IndigoHIDMessageForHIDArbitrary` with consumer/telephony HID usage pairs from the device chrome metadata; home, lock, and app-switcher remain on the existing SimulatorKit button paths.
+WebKit inspection uses the simulator `webinspectord` Unix socket named `com.apple.webinspectord_sim.socket` and WebKit's binary-plist Remote Inspector selectors. It lists only WebKit content that the runtime exposes as inspectable. For app-owned `WKWebView` on iOS 16.4 and newer, the app must set `isInspectable = true`.
 
 ## Build and Run
 

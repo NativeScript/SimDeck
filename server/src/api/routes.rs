@@ -1,6 +1,7 @@
 use crate::api::json::json;
 use crate::auth;
 use crate::config::Config;
+use crate::devtools;
 use crate::error::AppError;
 use crate::inspector::{InspectorHub, PublishedInspector};
 use crate::logs::LogRegistry;
@@ -8,13 +9,15 @@ use crate::metrics::counters::{ClientStreamStats, Metrics};
 use crate::native::bridge::{LogFilters, NativeBridge};
 use crate::simulators::registry::SessionRegistry;
 use crate::simulators::session::SimulatorSession;
+use crate::static_files;
 use crate::transport::packet::FramePacket;
+use crate::webkit;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Path, Query, State};
-use axum::http::{header, HeaderMap, Method, Request, StatusCode};
+use axum::http::{header, HeaderMap, Method, Request, StatusCode, Uri};
 use axum::middleware::{from_fn_with_state, Next};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use bytes::{Bytes, BytesMut};
@@ -544,6 +547,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/inspector/poll", get(inspector_poll))
         .route("/api/inspector/request", post(inspector_direct_request))
         .route("/api/inspector/response", post(inspector_response))
+        .route("/chrome-devtools-ui", get(chrome_devtools_ui_redirect))
+        .route("/chrome-devtools-ui/{*path}", get(chrome_devtools_ui_file))
+        .route("/webkit-inspector-ui", get(webkit_inspector_ui_redirect))
+        .route(
+            "/webkit-inspector-ui/{*path}",
+            get(webkit_inspector_ui_file),
+        )
         .route("/api/simulators", get(list_simulators))
         .route("/api/simulators/{udid}/boot", post(boot_simulator))
         .route("/api/simulators/{udid}/shutdown", post(shutdown_simulator))
@@ -614,6 +624,19 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/simulators/{udid}/inspector/request",
             post(inspector_request),
+        )
+        .route("/api/simulators/{udid}/webkit/targets", get(webkit_targets))
+        .route(
+            "/api/simulators/{udid}/webkit/targets/{target_id}/socket",
+            get(webkit_target_socket),
+        )
+        .route(
+            "/api/simulators/{udid}/devtools/targets",
+            get(chrome_devtools_targets),
+        )
+        .route(
+            "/api/simulators/{udid}/devtools/targets/{target_id}/socket",
+            get(chrome_devtools_target_socket),
         )
         .route("/api/simulators/{udid}/logs", get(simulator_logs))
         .route_layer(from_fn_with_state(state.clone(), require_api_auth))
@@ -733,6 +756,245 @@ async fn metrics(State(state): State<AppState>) -> Json<Value> {
         );
     }
     json(snapshot)
+}
+
+async fn webkit_targets(
+    State(_state): State<AppState>,
+    Path(udid): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<webkit::WebKitTargetDiscovery>, AppError> {
+    let origin = request_origin(&headers);
+    let targets = webkit::discover_targets(&udid, origin.as_deref()).await?;
+    Ok(Json(targets))
+}
+
+async fn webkit_target_socket(
+    Path((udid, target_id)): Path<(String, String)>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    ws.on_upgrade(move |socket| webkit::attach_websocket(udid, target_id, socket))
+}
+
+async fn chrome_devtools_targets(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<devtools::ChromeDevToolsTargetDiscovery>, AppError> {
+    let origin = request_origin(&headers);
+    let mut warnings = Vec::new();
+    let mut inspector_warnings = Vec::new();
+    let simulator = match list_simulators_cached(state.clone(), false).await {
+        Ok(simulators) => simulators
+            .into_iter()
+            .find(|simulator| simulator.udid == udid),
+        Err(error) => {
+            warnings.push(format!(
+                "Unable to load simulator metadata for DevTools discovery: {error}"
+            ));
+            None
+        }
+    };
+    let mut sessions = match inspector_sessions_for_udid(&state, &udid).await {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            inspector_warnings.push(error);
+            Vec::new()
+        }
+    };
+    if sessions.is_empty() {
+        match inspector_session_for_state(&state, &udid).await {
+            Ok(session) => sessions.push(session),
+            Err(error) => inspector_warnings.push(error),
+        }
+    }
+    let mut targets: Vec<devtools::ChromeDevToolsTarget> = sessions
+        .iter()
+        .map(|session| {
+            let source = chrome_devtools_source_for_session(session);
+            devtools::build_target(
+                &udid,
+                origin.as_deref(),
+                &session.info,
+                session.process_identifier,
+                source,
+            )
+        })
+        .collect();
+    let (mut external_targets, external_warnings) = devtools::discover_external_devtools_targets(
+        &udid,
+        origin.as_deref(),
+        simulator.as_ref().map(|simulator| simulator.name.as_str()),
+        simulator
+            .as_ref()
+            .map(|simulator| simulator.device_type_name.as_str()),
+    )
+    .await;
+    targets.append(&mut external_targets);
+    if targets.is_empty() {
+        warnings.extend(inspector_warnings);
+    }
+    warnings.extend(external_warnings);
+    Ok(Json(devtools::ChromeDevToolsTargetDiscovery {
+        udid,
+        targets,
+        warnings,
+    }))
+}
+
+async fn chrome_devtools_target_socket(
+    State(state): State<AppState>,
+    Path((udid, target_id)): Path<(String, String)>,
+    websocket: WebSocketUpgrade,
+) -> Response {
+    websocket.on_upgrade(move |socket| async move {
+        if target_id.starts_with("metro-") || target_id.starts_with("cdp-") {
+            match devtools::proxied_websocket_url_for_target(&target_id).await {
+                Ok(upstream_url) => devtools::proxy_websocket(socket, upstream_url).await,
+                Err(error) => {
+                    tracing::debug!(
+                        "Proxied DevTools target socket failed for {udid}/{target_id}: {error}"
+                    );
+                }
+            }
+        } else {
+            match chrome_devtools_socket_session(&state, &udid, &target_id).await {
+                Ok((runtime, query)) => devtools::handle_socket(socket, runtime, query).await,
+                Err(error) => {
+                    tracing::debug!(
+                        "Chrome DevTools target socket failed for {udid}/{target_id}: {error}"
+                    );
+                }
+            }
+        }
+    })
+}
+
+async fn chrome_devtools_socket_session(
+    state: &AppState,
+    udid: &str,
+    target_id: &str,
+) -> Result<
+    (
+        devtools::ChromeDevToolsTargetRuntime,
+        devtools::DevToolsQuery,
+    ),
+    String,
+> {
+    let process_identifier = target_id
+        .strip_prefix("sdi-")
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| "Invalid Chrome DevTools target id.".to_owned())?;
+    let session = inspector_session_for_process(state, udid, process_identifier).await?;
+    let source = chrome_devtools_source_for_session(&session);
+    let target = devtools::build_target(
+        udid,
+        None,
+        &session.info,
+        session.process_identifier,
+        source,
+    );
+    let runtime = devtools::runtime_from_target(&target);
+    let query_state = state.clone();
+    let query_session = session.clone();
+    let query: devtools::DevToolsQuery = Arc::new(move |method, params| {
+        let state = query_state.clone();
+        let session = query_session.clone();
+        Box::pin(async move { query_inspector_session(&state, &session, &method, params).await })
+    });
+    Ok((runtime, query))
+}
+
+fn chrome_devtools_source_for_session(session: &InspectorSession) -> &str {
+    if session
+        .available_sources
+        .iter()
+        .any(|source| source == SOURCE_REACT_NATIVE)
+    {
+        return SOURCE_REACT_NATIVE;
+    }
+    if session
+        .available_sources
+        .iter()
+        .any(|source| source == SOURCE_NATIVE_SCRIPT)
+    {
+        return SOURCE_NATIVE_SCRIPT;
+    }
+    if session
+        .available_sources
+        .iter()
+        .any(|source| source == SOURCE_SWIFTUI)
+    {
+        return SOURCE_SWIFTUI;
+    }
+    SOURCE_UIKIT
+}
+
+async fn chrome_devtools_ui_redirect() -> Redirect {
+    Redirect::temporary("/chrome-devtools-ui/inspector.html")
+}
+
+async fn chrome_devtools_ui_file(method: Method, uri: Uri) -> Response {
+    let Some(root) = devtools::chrome_devtools_frontend_root() else {
+        return AppError::not_found("Chrome DevTools frontend resources are not available.")
+            .into_response();
+    };
+    match static_files::serve_static_under(root, "/chrome-devtools-ui", method, uri, None).await {
+        Ok(response) => response,
+        Err(status) => status.into_response(),
+    }
+}
+
+async fn webkit_inspector_ui_redirect() -> Redirect {
+    Redirect::temporary("/webkit-inspector-ui/Main.html")
+}
+
+async fn webkit_inspector_ui_file(method: Method, uri: Uri) -> Response {
+    let Some(root) = webkit::webkit_inspector_ui_root() else {
+        return AppError::not_found("WebInspectorUI resources are not available on this Mac.")
+            .into_response();
+    };
+    if uri.path().trim_end_matches('/') == "/webkit-inspector-ui/Main.html" {
+        if method != Method::GET && method != Method::HEAD {
+            return StatusCode::METHOD_NOT_ALLOWED.into_response();
+        }
+        let main_html = match tokio::fs::read_to_string(root.join("Main.html")).await {
+            Ok(main_html) => main_html,
+            Err(_) => return StatusCode::NOT_FOUND.into_response(),
+        };
+        let body = if method == Method::HEAD {
+            Body::empty()
+        } else {
+            Body::from(webkit::inject_frontend_host(&main_html))
+        };
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(
+                header::CACHE_CONTROL,
+                "no-store, no-cache, must-revalidate, max-age=0",
+            )
+            .header(header::PRAGMA, "no-cache")
+            .header(header::EXPIRES, "0")
+            .body(body)
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    }
+    match static_files::serve_static_under(root, "/webkit-inspector-ui", method, uri, None).await {
+        Ok(response) => response,
+        Err(status) => status.into_response(),
+    }
+}
+
+fn request_origin(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            headers
+                .get(header::HOST)
+                .and_then(|value| value.to_str().ok())
+                .map(|host| format!("http://{host}"))
+        })
 }
 
 async fn stream_quality(State(state): State<AppState>) -> Json<Value> {
@@ -3097,6 +3359,23 @@ async fn inspector_session_for_state(
     }
 }
 
+async fn inspector_session_for_process(
+    state: &AppState,
+    udid: &str,
+    process_identifier: i64,
+) -> Result<InspectorSession, String> {
+    let connected_error =
+        match connected_inspector_session(state, udid, Some(process_identifier)).await {
+            Ok(session) => return Ok(session),
+            Err(error) => error,
+        };
+
+    match inspector_session(udid, Some(process_identifier)).await {
+        Ok(session) => Ok(session),
+        Err(tcp_error) => Err(format!("{connected_error} {tcp_error}")),
+    }
+}
+
 async fn connected_inspector_session(
     state: &AppState,
     udid: &str,
@@ -3200,6 +3479,64 @@ fn inspector_session_from_published(inspector: PublishedInspector) -> InspectorS
         info: inspector.info,
         process_identifier: inspector.process_identifier,
     }
+}
+
+async fn inspector_sessions_for_udid(
+    state: &AppState,
+    udid: &str,
+) -> Result<Vec<InspectorSession>, String> {
+    let mut probed_inspectors = Vec::new();
+    let mut candidates = Vec::new();
+    for inspector in state.inspectors.connected().await {
+        if inspector_process_belongs_to_udid(udid, inspector.process_identifier).await? {
+            candidates.push(InspectorSession {
+                transport: InspectorSessionTransport::Connected,
+                available_sources: inspector_available_sources(&inspector.info),
+                info: inspector.info,
+                process_identifier: inspector.process_identifier,
+            });
+            continue;
+        }
+
+        probed_inspectors.push(format!("process {}", inspector.process_identifier));
+    }
+
+    for inspector in state.inspectors.published_inspectors().await {
+        if !inspector_process_belongs_to_udid(udid, inspector.process_identifier).await? {
+            probed_inspectors.push(format!("registry process {}", inspector.process_identifier));
+            continue;
+        }
+        if candidates.iter().any(|session: &InspectorSession| {
+            session.process_identifier == inspector.process_identifier
+        }) {
+            continue;
+        }
+        let session = inspector_session_from_published(inspector);
+        if query_inspector_session(state, &session, "Runtime.ping", Value::Null)
+            .await
+            .is_err()
+        {
+            probed_inspectors.push(format!(
+                "unreachable registry process {}",
+                session.process_identifier
+            ));
+            continue;
+        }
+        candidates.push(session);
+    }
+
+    if candidates.is_empty() {
+        if probed_inspectors.is_empty() {
+            return Err(format!("No app inspector found for simulator {udid}."));
+        }
+        return Err(format!(
+            "No app inspector matched simulator {udid}. Found inspectors for {}.",
+            probed_inspectors.join(", ")
+        ));
+    }
+
+    candidates.sort_by_key(inspector_session_score);
+    Ok(candidates)
 }
 
 async fn inspector_session(

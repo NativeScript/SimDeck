@@ -12,6 +12,7 @@ import { SimulatorMenu } from "../simulators/SimulatorMenu";
 
 interface ToolbarProps {
   debugVisible: boolean;
+  devToolsVisible: boolean;
   error: string;
   filteredSimulators: SimulatorMetadata[];
   hierarchyVisible: boolean;
@@ -24,7 +25,6 @@ interface ToolbarProps {
   onOpenAppSwitcher: () => void;
   onOpenBundlePrompt: () => void;
   onOpenUrlPrompt: () => void;
-  onRotateLeft: () => void;
   onRotateRight: () => void;
   onShutdown: () => void;
   onStreamEncoderChange: (encoder: StreamEncoder) => void;
@@ -33,6 +33,7 @@ interface ToolbarProps {
   onStreamTransportChange: (transport: StreamTransport) => void;
   onToggleAppearance: () => void;
   onToggleDebug: () => void;
+  onToggleDevTools: () => void;
   onToggleHierarchy: () => void;
   onToggleMenu: () => void;
   onToggleTouchOverlay: () => void;
@@ -54,6 +55,7 @@ interface ToolbarProps {
 export function Toolbar({
   closeMenu,
   debugVisible,
+  devToolsVisible,
   error,
   filteredSimulators,
   hierarchyVisible,
@@ -68,7 +70,6 @@ export function Toolbar({
   onOpenAppSwitcher,
   onOpenBundlePrompt,
   onOpenUrlPrompt,
-  onRotateLeft,
   onRotateRight,
   onShutdown,
   onStreamEncoderChange,
@@ -77,6 +78,7 @@ export function Toolbar({
   onStreamTransportChange,
   onToggleAppearance,
   onToggleDebug,
+  onToggleDevTools,
   onToggleHierarchy,
   onToggleMenu,
   onToggleTouchOverlay,
@@ -134,7 +136,6 @@ export function Toolbar({
           onDismissKeyboard={onDismissKeyboard}
           onOpenBundlePrompt={onOpenBundlePrompt}
           onOpenUrlPrompt={onOpenUrlPrompt}
-          onRotateLeft={onRotateLeft}
           onStreamEncoderChange={onStreamEncoderChange}
           onStreamFpsChange={onStreamFpsChange}
           onStreamQualityChange={onStreamQualityChange}
@@ -222,14 +223,6 @@ export function Toolbar({
               <AppearanceIcon />
             </button>
             <button
-              aria-label="Rotate Left"
-              className="tbtn icon-btn toolbar-mobile-hidden"
-              onClick={onRotateLeft}
-              title="Rotate Left"
-            >
-              <RotateLeftIcon />
-            </button>
-            <button
               aria-label="Rotate Right"
               className="tbtn icon-btn"
               onClick={onRotateRight}
@@ -249,6 +242,15 @@ export function Toolbar({
             {errorCopied ? "Copied" : error}
           </button>
         ) : null}
+        <button
+          aria-label="Toggle DevTools"
+          className={`tbtn icon-btn ${devToolsVisible ? "active" : ""}`}
+          onClick={onToggleDevTools}
+          title="Toggle DevTools"
+          type="button"
+        >
+          <DevToolsIcon />
+        </button>
       </div>
     </header>
   );
@@ -314,20 +316,6 @@ function AppearanceIcon() {
   );
 }
 
-function RotateLeftIcon() {
-  return (
-    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
-      <path
-        d="M5.2 4H3.3V2.1M3.5 4A5.4 5.4 0 1 1 2.9 10"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.45"
-      />
-    </svg>
-  );
-}
-
 function RotateRightIcon() {
   return (
     <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
@@ -359,6 +347,26 @@ function HierarchyIcon() {
         stroke="currentColor"
         strokeLinecap="round"
         strokeWidth="1.35"
+      />
+    </svg>
+  );
+}
+
+function DevToolsIcon() {
+  return (
+    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
+      <path
+        d="M3.3 3.3h9.4c.6 0 1 .4 1 1v7.4c0 .6-.4 1-1 1H3.3c-.6 0-1-.4-1-1V4.3c0-.6.4-1 1-1Z"
+        stroke="currentColor"
+        strokeLinejoin="round"
+        strokeWidth="1.35"
+      />
+      <path
+        d="M5.4 6.2 3.9 8l1.5 1.8M10.6 6.2 12.1 8l-1.5 1.8M8.8 5.9 7.2 10.1"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.25"
       />
     </svg>
   );

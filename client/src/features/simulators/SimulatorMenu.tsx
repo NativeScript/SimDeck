@@ -22,7 +22,6 @@ interface SimulatorMenuProps {
   onDismissKeyboard: () => void;
   onOpenBundlePrompt: () => void;
   onOpenUrlPrompt: () => void;
-  onRotateLeft: () => void;
   onStreamEncoderChange: (encoder: StreamEncoder) => void;
   onStreamFpsChange: (fps: StreamFps) => void;
   onStreamQualityChange: (quality: StreamQualityPreset) => void;
@@ -52,7 +51,6 @@ export function SimulatorMenu({
   onDismissKeyboard,
   onOpenBundlePrompt,
   onOpenUrlPrompt,
-  onRotateLeft,
   onStreamEncoderChange,
   onStreamFpsChange,
   onStreamQualityChange,
@@ -235,15 +233,6 @@ export function SimulatorMenu({
                   }}
                 >
                   Toggle Appearance
-                </button>
-                <button
-                  className="menu-action mobile-menu-action"
-                  onClick={() => {
-                    onRotateLeft();
-                    onCloseMenu();
-                  }}
-                >
-                  Rotate Left
                 </button>
                 <button className="menu-action" onClick={onToggleDebug}>
                   {debugVisible ? "Hide Debug Info" : "Show Debug Info"}

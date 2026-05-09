@@ -92,5 +92,8 @@
     "prettier": "^3.6.2",
     "typescript": "^5.9.2",
     "vitepress": "^1.6.4"
+  },
+  "dependencies": {
+    "@react-native/debugger-frontend": "^0.85.2"
   }
 }

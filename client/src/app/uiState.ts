@@ -23,6 +23,11 @@ export interface PersistedUiState {
 export const UI_STATE_STORAGE_KEY = "xcw-ui-state";
 export const DEBUG_VISIBLE_STORAGE_KEY = "xcw-debug-visible";
 export const HIERARCHY_VISIBLE_STORAGE_KEY = "xcw-hierarchy-visible";
+export const DEVTOOLS_VISIBLE_STORAGE_KEY = "xcw-devtools-visible";
+export const WEBKIT_INSPECTOR_VISIBLE_STORAGE_KEY =
+  "xcw-webkit-inspector-visible";
+export const CHROME_DEVTOOLS_VISIBLE_STORAGE_KEY =
+  "xcw-chrome-devtools-visible";
 export const ACCESSIBILITY_SOURCE_STORAGE_KEY = "xcw-hierarchy-source";
 export const TOUCH_OVERLAY_VISIBLE_STORAGE_KEY = "xcw-touch-overlay-visible";
 

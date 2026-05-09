@@ -65,6 +65,7 @@ interface SimulatorViewportProps {
   touchIndicators: TouchIndicator[];
   touchOverlayVisible: boolean;
   viewMode: ViewMode;
+  devtoolsPanel: ReactNode;
   zoomDockRef: Ref<HTMLDivElement | null>;
   zoomAnimating: boolean;
 }
@@ -120,6 +121,7 @@ export function SimulatorViewport({
   touchIndicators,
   touchOverlayVisible,
   viewMode,
+  devtoolsPanel,
   zoomDockRef,
   zoomAnimating,
 }: SimulatorViewportProps) {
@@ -238,6 +240,7 @@ export function SimulatorViewport({
           </div>
         ) : null}
       </div>
+      {devtoolsPanel}
     </div>
   );
 }

@@ -180,6 +180,27 @@
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
   }
 
+  .webkit-panel {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
+    z-index: 18;
+    flex: none;
+    width: min(720px, calc(100vw - 16px));
+    min-width: 0;
+    max-width: calc(100vw - 16px);
+    max-height: none;
+    height: calc(100% - 16px);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+  }
+
+  .webkit-resize-x {
+    display: none;
+  }
+
   .toolbar-sim-detail {
     display: none;
   }
