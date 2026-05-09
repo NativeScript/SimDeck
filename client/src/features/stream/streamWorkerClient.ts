@@ -3147,7 +3147,7 @@ export function preferredStreamBackend(
   target?: StreamConnectTarget | null,
 ): "auto" | StreamBackend {
   if (isAndroidStreamTarget(target)) {
-    return "android-raw";
+    return target?.remote ? "webrtc" : "android-raw";
   }
   const value =
     target?.transport ??
@@ -3162,7 +3162,7 @@ export function initialStreamBackend(
   target: StreamConnectTarget,
 ): StreamBackend {
   if (isAndroidStreamTarget(target)) {
-    return "android-raw";
+    return target.remote ? "webrtc" : "android-raw";
   }
   const preferredBackend = preferredStreamBackend(target);
   if (preferredBackend === "h264-ws") {

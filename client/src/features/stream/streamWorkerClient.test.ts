@@ -25,4 +25,14 @@ describe("streamWorkerClient", () => {
     expect(preferredStreamBackend(target)).toBe("android-raw");
     expect(initialStreamBackend(target)).toBe("android-raw");
   });
+
+  it("keeps remote Android streams on encoded WebRTC", () => {
+    const target = buildStreamTarget("android:Pixel_8", {
+      remote: true,
+      transport: "h264",
+    });
+
+    expect(preferredStreamBackend(target)).toBe("webrtc");
+    expect(initialStreamBackend(target)).toBe("webrtc");
+  });
 });
