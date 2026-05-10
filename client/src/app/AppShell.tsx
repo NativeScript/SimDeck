@@ -688,17 +688,28 @@ export function AppShell({
   const shouldRenderChrome =
     selectedSimulator != null && shouldRenderNativeChrome(selectedSimulator);
   const viewportChromeProfile = shouldRenderChrome ? chromeProfile : null;
-  const effectiveDeviceNaturalSize = useMemo(
-    () =>
+  const isAndroidViewport = isAndroidSimulator(selectedSimulator);
+  const effectiveDeviceNaturalSize = useMemo(() => {
+    const displaySize = simulatorDisplaySize(selectedSimulator);
+    if (isAndroidViewport && displaySize) {
+      return displaySize;
+    }
+    return (
       deviceNaturalSize ??
       (!shouldRenderChrome && chromeProfile
         ? {
             width: chromeProfile.screenWidth,
             height: chromeProfile.screenHeight,
           }
-        : simulatorDisplaySize(selectedSimulator)),
-    [chromeProfile, deviceNaturalSize, selectedSimulator, shouldRenderChrome],
-  );
+        : displaySize)
+    );
+  }, [
+    chromeProfile,
+    deviceNaturalSize,
+    isAndroidViewport,
+    selectedSimulator,
+    shouldRenderChrome,
+  ]);
 
   const zoomDockReservedHeight =
     zoomDockElement && typeof window !== "undefined"
@@ -1280,7 +1291,6 @@ export function AppShell({
     viewportChromeProfile,
     chromeScreenRect,
   );
-  const isAndroidViewport = isAndroidSimulator(selectedSimulator);
   const chromeScreenStyle =
     viewportChromeProfile && chromeScreenRect
       ? ({

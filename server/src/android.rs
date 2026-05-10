@@ -516,15 +516,21 @@ impl AndroidBridge {
             display: 0,
             transport: None,
         };
-        if let (Some(max_edge), Ok(serial)) = (max_edge, self.resolve_serial(&avd_name)) {
+        if let Ok(serial) = self.resolve_serial(&avd_name) {
             if let Ok((width, height)) = self.screen_size_for_serial(&serial) {
-                let max_edge = max_edge.clamp(240, 2400) as f64;
-                let largest = width.max(height);
-                if largest > max_edge {
-                    let scale = max_edge / largest;
-                    format.width = (width * scale).round().max(1.0) as u32;
-                    format.height = (height * scale).round().max(1.0) as u32;
+                let mut target_width = width;
+                let mut target_height = height;
+                if let Some(max_edge) = max_edge {
+                    let max_edge = max_edge.clamp(240, 2400) as f64;
+                    let largest = width.max(height);
+                    if largest > max_edge {
+                        let scale = max_edge / largest;
+                        target_width = (width * scale).round().max(1.0);
+                        target_height = (height * scale).round().max(1.0);
+                    }
                 }
+                format.width = target_width.round().max(1.0) as u32;
+                format.height = target_height.round().max(1.0) as u32;
             }
         }
 
