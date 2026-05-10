@@ -21,6 +21,11 @@ const ANDROID_TOUCH_IDENTIFIER: i32 = 1;
 const RUNNING_EMULATOR_CACHE_TTL: Duration = Duration::from_secs(2);
 const AVD_GRPC_PORT_CACHE_TTL: Duration = Duration::from_secs(60);
 const SCREEN_SIZE_CACHE_TTL: Duration = Duration::from_secs(60);
+const MODIFIER_SHIFT: u32 = 1 << 0;
+const MODIFIER_CONTROL: u32 = 1 << 1;
+const MODIFIER_OPTION: u32 = 1 << 2;
+const MODIFIER_COMMAND: u32 = 1 << 3;
+const MODIFIER_CAPS_LOCK: u32 = 1 << 4;
 
 type TimedMap<T> = Option<(Instant, HashMap<String, T>)>;
 type ScreenSizeCache = HashMap<String, (Instant, (f64, f64))>;
@@ -316,37 +321,58 @@ impl AndroidBridge {
         Ok(())
     }
 
-    pub fn send_key(&self, id: &str, key_code: u16, _modifiers: u32) -> Result<(), AppError> {
-        if self
-            .send_key_grpc(id, grpc::KeyboardEvent::usb_keypress(i32::from(key_code)))
-            .is_ok()
-        {
-            return Ok(());
+    pub fn send_key(&self, id: &str, key_code: u16, modifiers: u32) -> Result<(), AppError> {
+        if let Some(text) = hid_text_for_key(key_code, modifiers) {
+            return self.type_text_adb(id, &text);
         }
+
         let serial = self.serial_for_id(id)?;
         let android_key = android_key_code(key_code);
-        self.run_adb([
-            "-s",
-            &serial,
-            "shell",
-            "input",
-            "keyevent",
-            &android_key.to_string(),
-        ])?;
-        Ok(())
+        if has_android_key_modifiers(modifiers) {
+            return self.press_android_key_combination(&serial, android_key, modifiers);
+        }
+        self.press_android_key(&serial, android_key)
     }
 
     pub fn type_text(&self, id: &str, text: &str) -> Result<(), AppError> {
-        if self
-            .send_key_grpc(id, grpc::KeyboardEvent::text(text.to_owned()))
-            .is_ok()
-        {
-            return Ok(());
-        }
+        self.type_text_adb(id, text)
+    }
+
+    pub fn dismiss_keyboard(&self, id: &str) -> Result<(), AppError> {
         let serial = self.serial_for_id(id)?;
-        let escaped = text.replace('%', "%25").replace(' ', "%s");
+        self.press_android_key(&serial, 4)
+    }
+
+    fn type_text_adb(&self, id: &str, text: &str) -> Result<(), AppError> {
+        let serial = self.serial_for_id(id)?;
+        let escaped = android_input_text_arg(text);
         self.run_adb(["-s", &serial, "shell", "input", "text", &escaped])?;
         Ok(())
+    }
+
+    fn press_android_key(&self, serial: &str, key_code: u16) -> Result<(), AppError> {
+        let key_code = key_code.to_string();
+        self.run_adb(["-s", serial, "shell", "input", "keyevent", &key_code])?;
+        Ok(())
+    }
+
+    fn press_android_key_combination(
+        &self,
+        serial: &str,
+        key_code: u16,
+        modifiers: u32,
+    ) -> Result<(), AppError> {
+        let mut parts = vec!["input".to_owned(), "keycombination".to_owned()];
+        parts.extend(
+            android_modifier_key_codes(modifiers)
+                .into_iter()
+                .map(|key| key.to_string()),
+        );
+        parts.push(key_code.to_string());
+        match self.run_adb_shell(serial, &parts.join(" ")) {
+            Ok(_) => Ok(()),
+            Err(_) => self.press_android_key(serial, key_code),
+        }
     }
 
     pub fn press_home(&self, id: &str) -> Result<(), AppError> {
@@ -608,19 +634,6 @@ impl AndroidBridge {
             thread::sleep(Duration::from_millis((duration_ms / steps).max(1)));
         }
         self.send_touch_grpc(id, end_x, end_y, "ended")
-    }
-
-    fn send_key_grpc(&self, id: &str, event: grpc::KeyboardEvent) -> Result<(), AppError> {
-        self.block_on_grpc(async {
-            let avd_name = avd_from_id(id)?;
-            self.grpc_unary_for_avd::<grpc::KeyboardEvent, grpc::Empty>(
-                &avd_name,
-                "/android.emulation.control.EmulatorController/sendKey",
-                event,
-            )
-            .await?;
-            Ok(())
-        })
     }
 
     fn block_on_grpc<F, T>(&self, future: F) -> Result<T, AppError>
@@ -1189,17 +1202,147 @@ fn android_role(node: roxmltree::Node<'_, '_>, class_name: &str) -> &'static str
 
 fn android_key_code(hid: u16) -> u16 {
     match hid {
+        4..=29 => 29 + (hid - 4),
+        30 => 8,
+        31 => 9,
+        32 => 10,
+        33 => 11,
+        34 => 12,
+        35 => 13,
+        36 => 14,
+        37 => 15,
+        38 => 16,
+        39 => 7,
         40 => 66,
         41 => 111,
         42 => 67,
         43 => 61,
         44 => 62,
+        45 => 69,
+        46 => 70,
+        47 => 71,
+        48 => 72,
+        49 => 73,
+        51 => 74,
+        52 => 75,
+        53 => 68,
+        54 => 55,
+        55 => 56,
+        56 => 76,
+        57 => 115,
+        58..=69 => 131 + (hid - 58),
+        73 => 124,
+        74 => 122,
+        75 => 92,
+        76 => 112,
+        77 => 123,
+        78 => 93,
         79 => 22,
         80 => 21,
         81 => 20,
         82 => 19,
         _ => hid,
     }
+}
+
+fn hid_text_for_key(hid: u16, modifiers: u32) -> Option<String> {
+    if modifiers & (MODIFIER_CONTROL | MODIFIER_OPTION | MODIFIER_COMMAND) != 0 {
+        return None;
+    }
+
+    let shifted = modifiers & MODIFIER_SHIFT != 0;
+    let caps_locked = modifiers & MODIFIER_CAPS_LOCK != 0;
+
+    if (4..=29).contains(&hid) {
+        let offset = (hid - 4) as u8;
+        let base = if shifted ^ caps_locked { b'A' } else { b'a' };
+        return Some(char::from(base + offset).to_string());
+    }
+
+    let text = match (hid, shifted) {
+        (30, false) => "1",
+        (30, true) => "!",
+        (31, false) => "2",
+        (31, true) => "@",
+        (32, false) => "3",
+        (32, true) => "#",
+        (33, false) => "4",
+        (33, true) => "$",
+        (34, false) => "5",
+        (34, true) => "%",
+        (35, false) => "6",
+        (35, true) => "^",
+        (36, false) => "7",
+        (36, true) => "&",
+        (37, false) => "8",
+        (37, true) => "*",
+        (38, false) => "9",
+        (38, true) => "(",
+        (39, false) => "0",
+        (39, true) => ")",
+        (44, _) => " ",
+        (45, false) => "-",
+        (45, true) => "_",
+        (46, false) => "=",
+        (46, true) => "+",
+        (47, false) => "[",
+        (47, true) => "{",
+        (48, false) => "]",
+        (48, true) => "}",
+        (49, false) => "\\",
+        (49, true) => "|",
+        (51, false) => ";",
+        (51, true) => ":",
+        (52, false) => "'",
+        (52, true) => "\"",
+        (53, false) => "`",
+        (53, true) => "~",
+        (54, false) => ",",
+        (54, true) => "<",
+        (55, false) => ".",
+        (55, true) => ">",
+        (56, false) => "/",
+        (56, true) => "?",
+        _ => return None,
+    };
+    Some(text.to_owned())
+}
+
+fn android_input_text_arg(text: &str) -> String {
+    let mut escaped = String::new();
+    for character in text.chars() {
+        match character {
+            ' ' => escaped.push_str("%s"),
+            '%' => escaped.push_str("%25"),
+            '&' | '(' | ')' | '<' | '>' | ';' | '|' | '*' | '\\' | '"' | '\'' | '`' | '$' => {
+                escaped.push('\\');
+                escaped.push(character);
+            }
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn has_android_key_modifiers(modifiers: u32) -> bool {
+    modifiers & (MODIFIER_SHIFT | MODIFIER_CONTROL | MODIFIER_OPTION | MODIFIER_COMMAND) != 0
+}
+
+fn android_modifier_key_codes(modifiers: u32) -> Vec<u16> {
+    let mut keys = Vec::new();
+    if modifiers & MODIFIER_CONTROL != 0 {
+        keys.push(113);
+    }
+    if modifiers & MODIFIER_OPTION != 0 {
+        keys.push(57);
+    }
+    if modifiers & MODIFIER_SHIFT != 0 {
+        keys.push(59);
+    }
+    if modifiers & MODIFIER_COMMAND != 0 {
+        keys.push(117);
+    }
+    keys
 }
 
 fn android_log_level(line: &str) -> &'static str {
@@ -1250,6 +1393,58 @@ mod tests {
 
         assert_eq!(value["type"], "CustomTile");
         assert_eq!(value["role"], "button");
+    }
+
+    #[test]
+    fn android_key_code_maps_usb_hid_keyboard_usages() {
+        assert_eq!(android_key_code(4), 29);
+        assert_eq!(android_key_code(29), 54);
+        assert_eq!(android_key_code(30), 8);
+        assert_eq!(android_key_code(39), 7);
+        assert_eq!(android_key_code(40), 66);
+        assert_eq!(android_key_code(42), 67);
+        assert_eq!(android_key_code(58), 131);
+        assert_eq!(android_key_code(69), 142);
+        assert_eq!(android_key_code(73), 124);
+        assert_eq!(android_key_code(79), 22);
+    }
+
+    #[test]
+    fn hid_text_for_key_uses_shift_and_caps_for_printable_input() {
+        assert_eq!(hid_text_for_key(4, 0).as_deref(), Some("a"));
+        assert_eq!(hid_text_for_key(4, MODIFIER_SHIFT).as_deref(), Some("A"));
+        assert_eq!(
+            hid_text_for_key(4, MODIFIER_CAPS_LOCK).as_deref(),
+            Some("A")
+        );
+        assert_eq!(
+            hid_text_for_key(4, MODIFIER_SHIFT | MODIFIER_CAPS_LOCK).as_deref(),
+            Some("a")
+        );
+        assert_eq!(hid_text_for_key(30, 0).as_deref(), Some("1"));
+        assert_eq!(hid_text_for_key(30, MODIFIER_SHIFT).as_deref(), Some("!"));
+        assert_eq!(hid_text_for_key(56, MODIFIER_SHIFT).as_deref(), Some("?"));
+        assert_eq!(hid_text_for_key(80, 0), None);
+        assert_eq!(hid_text_for_key(4, MODIFIER_COMMAND), None);
+    }
+
+    #[test]
+    fn android_input_text_arg_escapes_adb_shell_text() {
+        assert_eq!(android_input_text_arg("hello world"), "hello%sworld");
+        assert_eq!(android_input_text_arg("100%"), "100%25");
+        assert_eq!(android_input_text_arg("a&b"), "a\\&b");
+    }
+
+    #[test]
+    fn android_modifier_key_codes_match_android_meta_keys() {
+        assert_eq!(android_modifier_key_codes(MODIFIER_CONTROL), vec![113]);
+        assert_eq!(android_modifier_key_codes(MODIFIER_OPTION), vec![57]);
+        assert_eq!(android_modifier_key_codes(MODIFIER_SHIFT), vec![59]);
+        assert_eq!(android_modifier_key_codes(MODIFIER_COMMAND), vec![117]);
+        assert_eq!(
+            android_modifier_key_codes(MODIFIER_CONTROL | MODIFIER_SHIFT),
+            vec![113, 59]
+        );
     }
 }
 
@@ -1317,28 +1512,6 @@ mod grpc {
         pub key: String,
         #[prost(string, tag = "5")]
         pub text: String,
-    }
-
-    impl KeyboardEvent {
-        pub fn usb_keypress(key_code: i32) -> Self {
-            Self {
-                code_type: keyboard_event::KeyCodeType::Usb as i32,
-                event_type: keyboard_event::KeyEventType::Keypress as i32,
-                key_code,
-                key: String::new(),
-                text: String::new(),
-            }
-        }
-
-        pub fn text(text: String) -> Self {
-            Self {
-                code_type: keyboard_event::KeyCodeType::Usb as i32,
-                event_type: keyboard_event::KeyEventType::Keypress as i32,
-                key_code: 0,
-                key: String::new(),
-                text,
-            }
-        }
     }
 
     pub mod keyboard_event {

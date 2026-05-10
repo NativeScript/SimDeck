@@ -1883,7 +1883,7 @@ async fn run_android_control_message(
                         "`phase` must be `down`, `up`, `began`, `ended`, or `cancelled`.",
                     )),
                 },
-                ControlMessage::DismissKeyboard => android.send_key(&udid, 41, 0),
+                ControlMessage::DismissKeyboard => android.dismiss_keyboard(&udid),
                 ControlMessage::Home => android.press_home(&udid),
                 ControlMessage::AppSwitcher => android.open_app_switcher(&udid),
                 ControlMessage::RotateLeft | ControlMessage::RotateRight => {
@@ -2646,7 +2646,7 @@ async fn dismiss_keyboard(
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     if android::is_android_id(&udid) {
-        run_android_action(state, move |android| android.send_key(&udid, 41, 0)).await?;
+        run_android_action(state, move |android| android.dismiss_keyboard(&udid)).await?;
         return Ok(json(json_value!({ "ok": true })));
     }
     run_bridge_action(state, move |bridge| bridge.send_key(&udid, 41, 0)).await?;
@@ -3528,7 +3528,7 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
         }
         BatchStep::DismissKeyboard => {
             if android::is_android_id(&udid) {
-                run_android_action(state, move |android| android.send_key(&udid, 41, 0)).await?;
+                run_android_action(state, move |android| android.dismiss_keyboard(&udid)).await?;
                 return Ok(json_value!({ "action": "dismissKeyboard" }));
             }
             run_bridge_action(state, move |bridge| bridge.send_key(&udid, 41, 0)).await?;

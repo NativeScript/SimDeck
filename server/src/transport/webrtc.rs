@@ -857,7 +857,7 @@ async fn run_android_webrtc_control_message(
                 "`phase` must be `down`, `up`, `began`, `ended`, or `cancelled`.",
             )),
         },
-        ControlMessage::DismissKeyboard => state.android.send_key(&udid, 41, 0),
+        ControlMessage::DismissKeyboard => state.android.dismiss_keyboard(&udid),
         ControlMessage::Home => state.android.press_home(&udid),
         ControlMessage::AppSwitcher => state.android.open_app_switcher(&udid),
         ControlMessage::RotateLeft | ControlMessage::RotateRight => {
