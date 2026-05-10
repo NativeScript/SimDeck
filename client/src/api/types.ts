@@ -118,6 +118,12 @@ export interface ChromeProfile {
   screenWidth: number;
   screenHeight: number;
   cornerRadius: number;
+  cornerRadii?: {
+    topLeft?: number;
+    topRight?: number;
+    bottomRight?: number;
+    bottomLeft?: number;
+  };
   chromeStyle?: "asset" | string;
   hasScreenMask?: boolean;
   buttons?: ChromeButtonProfile[];

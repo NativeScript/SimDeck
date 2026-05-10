@@ -35,6 +35,31 @@ struct AndroidDisplayMetrics {
     width: f64,
     height: f64,
     rotation_quarter_turns: u16,
+    corner_radii: AndroidCornerRadii,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AndroidCornerRadii {
+    top_left: f64,
+    top_right: f64,
+    bottom_right: f64,
+    bottom_left: f64,
+}
+
+impl AndroidCornerRadii {
+    const ZERO: Self = Self {
+        top_left: 0.0,
+        top_right: 0.0,
+        bottom_right: 0.0,
+        bottom_left: 0.0,
+    };
+
+    fn max(self) -> f64 {
+        self.top_left
+            .max(self.top_right)
+            .max(self.bottom_right)
+            .max(self.bottom_left)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -497,7 +522,10 @@ impl AndroidBridge {
 
     pub fn chrome_profile(&self, id: &str) -> Result<Value, AppError> {
         let serial = self.serial_for_id(id)?;
-        let (width, height) = self.screen_size_for_serial(&serial)?;
+        let metrics = self.display_metrics_for_serial(&serial)?;
+        let width = metrics.width;
+        let height = metrics.height;
+        let radii = metrics.corner_radii;
         Ok(json!({
             "totalWidth": width,
             "totalHeight": height,
@@ -505,7 +533,13 @@ impl AndroidBridge {
             "screenY": 0,
             "screenWidth": width,
             "screenHeight": height,
-            "cornerRadius": 0,
+            "cornerRadius": radii.max(),
+            "cornerRadii": {
+                "topLeft": radii.top_left,
+                "topRight": radii.top_right,
+                "bottomRight": radii.bottom_right,
+                "bottomLeft": radii.bottom_left,
+            },
             "hasScreenMask": false,
         }))
     }
@@ -744,6 +778,7 @@ impl AndroidBridge {
                         width: 0.0,
                         height: 0.0,
                         rotation_quarter_turns: 0,
+                        corner_radii: AndroidCornerRadii::ZERO,
                     });
             json!({
                 "displayReady": metrics.width > 0.0 && metrics.height > 0.0,
@@ -903,6 +938,7 @@ impl AndroidBridge {
             width,
             height,
             rotation_quarter_turns: 0,
+            corner_radii: AndroidCornerRadii::ZERO,
         })
     }
 
@@ -1370,6 +1406,7 @@ fn android_display_metrics_cache() -> &'static Mutex<DisplayMetricsCache> {
 
 fn parse_android_display_metrics(output: &str) -> Option<AndroidDisplayMetrics> {
     let rotation = parse_android_display_rotation(output).unwrap_or(0);
+    let corner_radii = parse_android_rounded_corners(output).unwrap_or(AndroidCornerRadii::ZERO);
     if let Some(line) = output
         .lines()
         .find(|line| line.contains("mOverrideDisplayInfo=DisplayInfo"))
@@ -1379,6 +1416,7 @@ fn parse_android_display_metrics(output: &str) -> Option<AndroidDisplayMetrics> 
                 width,
                 height,
                 rotation_quarter_turns: rotation,
+                corner_radii,
             });
         }
     }
@@ -1387,9 +1425,42 @@ fn parse_android_display_metrics(output: &str) -> Option<AndroidDisplayMetrics> 
             width,
             height,
             rotation_quarter_turns: rotation,
+            corner_radii,
         });
     }
     None
+}
+
+fn parse_android_rounded_corners(output: &str) -> Option<AndroidCornerRadii> {
+    let mut radii = AndroidCornerRadii::ZERO;
+    let mut found = false;
+
+    for chunk in output.split("RoundedCorner{").skip(1) {
+        let section = chunk.split('}').next().unwrap_or(chunk);
+        let Some(position) = parse_named_value(section, "position=") else {
+            continue;
+        };
+        let Some(radius) =
+            parse_named_value(section, "radius=").and_then(|value| value.parse::<f64>().ok())
+        else {
+            continue;
+        };
+        match position {
+            "TopLeft" => radii.top_left = radius,
+            "TopRight" => radii.top_right = radius,
+            "BottomRight" => radii.bottom_right = radius,
+            "BottomLeft" => radii.bottom_left = radius,
+            _ => continue,
+        }
+        found = true;
+    }
+
+    found.then_some(radii)
+}
+
+fn parse_named_value<'a>(input: &'a str, key: &str) -> Option<&'a str> {
+    let (_, value) = input.split_once(key)?;
+    Some(value.split([',', '}', ']']).next().unwrap_or(value).trim())
 }
 
 fn parse_android_display_rotation(output: &str) -> Option<u16> {
@@ -1734,6 +1805,7 @@ mod tests {
                 width: 2400.0,
                 height: 1080.0,
                 rotation_quarter_turns: 3,
+                corner_radii: AndroidCornerRadii::ZERO,
             })
         );
     }
@@ -1751,6 +1823,31 @@ mod tests {
                 width: 1080.0,
                 height: 2400.0,
                 rotation_quarter_turns: 0,
+                corner_radii: AndroidCornerRadii::ZERO,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_android_display_metrics_reads_rounded_corners() {
+        let output = r#"
+DisplayDeviceInfo{"Built-in Screen", 1080 x 2400, roundedCorners RoundedCorners{[RoundedCorner{position=TopLeft, radius=104, center=Point(104, 104)}, RoundedCorner{position=TopRight, radius=104, center=Point(976, 104)}, RoundedCorner{position=BottomRight, radius=102, center=Point(978, 2298)}, RoundedCorner{position=BottomLeft, radius=102, center=Point(102, 2298)}]}}
+  mViewports=[DisplayViewport{type=INTERNAL, logicalFrame=Rect(0, 0 - 1080, 2400), physicalFrame=Rect(0, 0 - 1080, 2400)}]
+    mCurrentOrientation=0
+"#;
+
+        assert_eq!(
+            parse_android_display_metrics(output),
+            Some(AndroidDisplayMetrics {
+                width: 1080.0,
+                height: 2400.0,
+                rotation_quarter_turns: 0,
+                corner_radii: AndroidCornerRadii {
+                    top_left: 104.0,
+                    top_right: 104.0,
+                    bottom_right: 102.0,
+                    bottom_left: 102.0,
+                },
             })
         );
     }
