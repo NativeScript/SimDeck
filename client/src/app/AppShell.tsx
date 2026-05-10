@@ -1321,17 +1321,17 @@ export function AppShell({
         } satisfies CSSProperties)
       : null;
   const screenOnlyStyle =
-    !viewportChromeProfile && isAndroidViewport
-      ? null
-      : !viewportChromeProfile && chromeProfile && chromeProfile.screenWidth > 0
-        ? ({
+    !viewportChromeProfile && chromeProfile && chromeProfile.screenWidth > 0
+      ? isAndroidViewport
+        ? androidScreenRadiusStyle(chromeProfile)
+        : ({
             borderRadius: `${Math.min(
               chromeProfile.cornerRadius *
                 (DEVICE_SCREEN_WIDTH / chromeProfile.screenWidth),
               DEVICE_SCREEN_WIDTH / 2,
             )}px`,
           } satisfies CSSProperties)
-        : null;
+      : null;
   const viewportScreenStyle = chromeScreenStyle ?? screenOnlyStyle;
   const shellStyle = viewportChromeProfile
     ? {
@@ -2093,6 +2093,59 @@ export function AppShell({
       />
     </div>
   );
+}
+
+function androidScreenRadiusStyle(
+  chromeProfile: ChromeProfile,
+): CSSProperties | null {
+  if (chromeProfile.screenWidth <= 0) {
+    return null;
+  }
+
+  const scale = DEVICE_SCREEN_WIDTH / chromeProfile.screenWidth;
+  const maxRadius = DEVICE_SCREEN_WIDTH / 2;
+  const radii = chromeProfile.cornerRadii;
+  const topLeft = scaledScreenRadius(
+    radii?.topLeft ?? chromeProfile.cornerRadius,
+    scale,
+    maxRadius,
+  );
+  const topRight = scaledScreenRadius(
+    radii?.topRight ?? chromeProfile.cornerRadius,
+    scale,
+    maxRadius,
+  );
+  const bottomRight = scaledScreenRadius(
+    radii?.bottomRight ?? chromeProfile.cornerRadius,
+    scale,
+    maxRadius,
+  );
+  const bottomLeft = scaledScreenRadius(
+    radii?.bottomLeft ?? chromeProfile.cornerRadius,
+    scale,
+    maxRadius,
+  );
+
+  if (topLeft <= 0 && topRight <= 0 && bottomRight <= 0 && bottomLeft <= 0) {
+    return null;
+  }
+
+  const borderRadius = `${topLeft}px ${topRight}px ${bottomRight}px ${bottomLeft}px`;
+  return {
+    borderRadius,
+    borderTopLeftRadius: `${topLeft}px`,
+    borderTopRightRadius: `${topRight}px`,
+    borderBottomRightRadius: `${bottomRight}px`,
+    borderBottomLeftRadius: `${bottomLeft}px`,
+    clipPath: `inset(0 round ${borderRadius})`,
+  };
+}
+
+function scaledScreenRadius(radius: number, scale: number, maxRadius: number) {
+  if (!Number.isFinite(radius) || radius <= 0) {
+    return 0;
+  }
+  return Math.min(radius * scale, maxRadius);
 }
 
 function readDeviceQueryParam(): string | undefined {
