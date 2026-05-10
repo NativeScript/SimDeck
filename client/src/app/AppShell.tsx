@@ -86,7 +86,6 @@ import {
 import { useElementSize } from "../shared/hooks/useElementSize";
 import {
   ACCESSIBILITY_SOURCE_STORAGE_KEY,
-  CHROME_DEVTOOLS_VISIBLE_STORAGE_KEY,
   clearLegacyVolatileUiState,
   DEFAULT_VIEWPORT_STATE,
   DEBUG_VISIBLE_STORAGE_KEY,
@@ -99,7 +98,6 @@ import {
   sanitizeAccessibilitySources,
   TOUCH_OVERLAY_VISIBLE_STORAGE_KEY,
   viewportStateForUDID,
-  WEBKIT_INSPECTOR_VISIBLE_STORAGE_KEY,
   writePersistedUiState,
   writeStoredFlag,
 } from "./uiState";
@@ -355,10 +353,7 @@ export function AppShell({
     readStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY),
   );
   const [devToolsVisible, setDevToolsVisible] = useState(
-    () =>
-      readStoredFlag(DEVTOOLS_VISIBLE_STORAGE_KEY) ||
-      readStoredFlag(CHROME_DEVTOOLS_VISIBLE_STORAGE_KEY) ||
-      readStoredFlag(WEBKIT_INSPECTOR_VISIBLE_STORAGE_KEY),
+    () => readStoredFlag(DEVTOOLS_VISIBLE_STORAGE_KEY, false),
   );
   const [selectedUDID, setSelectedUDID] = useState(initialSelectedUDID ?? "");
   const [search, setSearch] = useState("");
