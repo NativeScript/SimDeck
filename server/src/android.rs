@@ -28,7 +28,14 @@ const MODIFIER_COMMAND: u32 = 1 << 3;
 const MODIFIER_CAPS_LOCK: u32 = 1 << 4;
 
 type TimedMap<T> = Option<(Instant, HashMap<String, T>)>;
-type ScreenSizeCache = HashMap<String, (Instant, (f64, f64))>;
+type DisplayMetricsCache = HashMap<String, (Instant, AndroidDisplayMetrics)>;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AndroidDisplayMetrics {
+    width: f64,
+    height: f64,
+    rotation_quarter_turns: u16,
+}
 
 #[derive(Clone, Default)]
 pub struct AndroidBridge;
@@ -411,8 +418,32 @@ impl AndroidBridge {
     }
 
     pub fn rotate_right(&self, id: &str) -> Result<(), AppError> {
+        self.rotate_by_quarter_turns(id, 1)
+    }
+
+    pub fn rotate_left(&self, id: &str) -> Result<(), AppError> {
+        self.rotate_by_quarter_turns(id, -1)
+    }
+
+    fn rotate_by_quarter_turns(&self, id: &str, delta: i16) -> Result<(), AppError> {
         let serial = self.serial_for_id(id)?;
-        self.run_adb(["-s", &serial, "emu", "rotate"])?;
+        let current = self
+            .display_metrics_for_serial(&serial)
+            .map(|metrics| metrics.rotation_quarter_turns)
+            .unwrap_or(0);
+        let next = (i16::try_from(current).unwrap_or(0) + delta).rem_euclid(4) as u16;
+        let rotation = next.to_string();
+        self.run_adb([
+            "-s",
+            &serial,
+            "shell",
+            "cmd",
+            "window",
+            "user-rotation",
+            "lock",
+            &rotation,
+        ])?;
+        self.invalidate_display_metrics_for_serial(&serial);
         Ok(())
     }
 
@@ -689,12 +720,18 @@ impl AndroidBridge {
     fn device_value(&self, device: AndroidDevice) -> Value {
         let id = id_for_avd(&device.avd_name);
         let private_display = if let Some(serial) = device.serial.as_deref() {
-            let (width, height) = self.screen_size_for_serial(serial).unwrap_or((0.0, 0.0));
+            let metrics =
+                self.display_metrics_for_serial(serial)
+                    .unwrap_or(AndroidDisplayMetrics {
+                        width: 0.0,
+                        height: 0.0,
+                        rotation_quarter_turns: 0,
+                    });
             json!({
-                "displayReady": width > 0.0 && height > 0.0,
+                "displayReady": metrics.width > 0.0 && metrics.height > 0.0,
                 "displayStatus": "Ready",
-                "displayWidth": width,
-                "displayHeight": height,
+                "displayWidth": metrics.width,
+                "displayHeight": metrics.height,
                 "frameSequence": 0,
                 "rotationQuarterTurns": 0,
             })
@@ -804,13 +841,32 @@ impl AndroidBridge {
     }
 
     fn screen_size_for_serial(&self, serial: &str) -> Result<(f64, f64), AppError> {
-        static CACHE: OnceLock<Mutex<ScreenSizeCache>> = OnceLock::new();
-        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-        if let Some((updated_at, size)) = cache.lock().unwrap().get(serial) {
+        let metrics = self.display_metrics_for_serial(serial)?;
+        Ok((metrics.width, metrics.height))
+    }
+
+    fn display_metrics_for_serial(&self, serial: &str) -> Result<AndroidDisplayMetrics, AppError> {
+        let cache = android_display_metrics_cache();
+        if let Some((updated_at, metrics)) = cache.lock().unwrap().get(serial) {
             if updated_at.elapsed() < SCREEN_SIZE_CACHE_TTL {
-                return Ok(*size);
+                return Ok(*metrics);
             }
         }
+        let output = self.run_adb(["-s", serial, "shell", "dumpsys", "display"])?;
+        let metrics = parse_android_display_metrics(&output)
+            .or_else(|| self.wm_display_metrics_for_serial(serial).ok())
+            .ok_or_else(|| AppError::native("Android emulator did not report display metrics."))?;
+        cache
+            .lock()
+            .unwrap()
+            .insert(serial.to_owned(), (Instant::now(), metrics));
+        Ok(metrics)
+    }
+
+    fn wm_display_metrics_for_serial(
+        &self,
+        serial: &str,
+    ) -> Result<AndroidDisplayMetrics, AppError> {
         let output = self.run_adb(["-s", serial, "shell", "wm", "size"])?;
         let size = output
             .split_whitespace()
@@ -825,11 +881,18 @@ impl AndroidBridge {
         let height = height
             .parse::<f64>()
             .map_err(|_| AppError::native("Android emulator reported an invalid height."))?;
-        cache
+        Ok(AndroidDisplayMetrics {
+            width,
+            height,
+            rotation_quarter_turns: 0,
+        })
+    }
+
+    fn invalidate_display_metrics_for_serial(&self, serial: &str) {
+        android_display_metrics_cache()
             .lock()
             .unwrap()
-            .insert(serial.to_owned(), (Instant::now(), (width, height)));
-        Ok((width, height))
+            .remove(serial);
     }
 
     fn run_adb_shell(&self, serial: &str, script: &str) -> Result<String, AppError> {
@@ -1173,6 +1236,89 @@ fn android_type(short_class: &str, class_name: &str) -> String {
     }
 }
 
+fn android_display_metrics_cache() -> &'static Mutex<DisplayMetricsCache> {
+    static CACHE: OnceLock<Mutex<DisplayMetricsCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn parse_android_display_metrics(output: &str) -> Option<AndroidDisplayMetrics> {
+    let rotation = parse_android_display_rotation(output).unwrap_or(0);
+    if let Some(line) = output
+        .lines()
+        .find(|line| line.contains("mOverrideDisplayInfo=DisplayInfo"))
+    {
+        if let Some((width, height)) = parse_display_info_app_size(line) {
+            return Some(AndroidDisplayMetrics {
+                width,
+                height,
+                rotation_quarter_turns: rotation,
+            });
+        }
+    }
+    if let Some((width, height)) = output.lines().find_map(parse_logical_frame_size) {
+        return Some(AndroidDisplayMetrics {
+            width,
+            height,
+            rotation_quarter_turns: rotation,
+        });
+    }
+    None
+}
+
+fn parse_android_display_rotation(output: &str) -> Option<u16> {
+    output
+        .lines()
+        .find(|line| line.contains("mOverrideDisplayInfo=DisplayInfo"))
+        .and_then(parse_display_info_rotation)
+        .or_else(|| {
+            output
+                .lines()
+                .find_map(|line| {
+                    line.split_once("mCurrentOrientation=")
+                        .map(|(_, value)| value)
+                })
+                .and_then(parse_rotation_token)
+        })
+}
+
+fn parse_display_info_app_size(line: &str) -> Option<(f64, f64)> {
+    let (_, value) = line.rsplit_once(", app ")?;
+    parse_size_prefix(value)
+}
+
+fn parse_display_info_rotation(line: &str) -> Option<u16> {
+    let (_, value) = line.rsplit_once(", rotation ")?;
+    parse_rotation_token(value)
+}
+
+fn parse_rotation_token(value: &str) -> Option<u16> {
+    let digits = value
+        .trim()
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .collect::<String>();
+    let rotation = digits.parse::<u16>().ok()?;
+    Some(rotation % 4)
+}
+
+fn parse_size_prefix(value: &str) -> Option<(f64, f64)> {
+    let mut parts = value.split_whitespace();
+    let width = parts.next()?.trim_end_matches(',').parse::<f64>().ok()?;
+    if parts.next()? != "x" {
+        return None;
+    }
+    let height = parts.next()?.trim_end_matches(',').parse::<f64>().ok()?;
+    Some((width, height))
+}
+
+fn parse_logical_frame_size(line: &str) -> Option<(f64, f64)> {
+    let (_, value) = line.split_once("logicalFrame=Rect(")?;
+    let (frame, _) = value.split_once(')')?;
+    let (_, max_values) = frame.split_once(" - ")?;
+    let (width, height) = max_values.split_once(',')?;
+    Some((width.trim().parse().ok()?, height.trim().parse().ok()?))
+}
+
 fn android_role(node: roxmltree::Node<'_, '_>, class_name: &str) -> &'static str {
     let clickable = bool_attr(node, "clickable");
     let scrollable = bool_attr(node, "scrollable");
@@ -1444,6 +1590,41 @@ mod tests {
         assert_eq!(
             android_modifier_key_codes(MODIFIER_CONTROL | MODIFIER_SHIFT),
             vec![113, 59]
+        );
+    }
+
+    #[test]
+    fn parse_android_display_metrics_prefers_current_app_size() {
+        let output = r#"
+  mViewports=[DisplayViewport{type=INTERNAL, logicalFrame=Rect(0, 0 - 2400, 1080), physicalFrame=Rect(0, 0 - 2400, 1080)}]
+    mCurrentOrientation=3
+    mOverrideDisplayInfo=DisplayInfo{"Built-in Screen", real 2400 x 1080, largest app 2400 x 2400, smallest app 1080 x 1080, rotation 3, state ON, app 2400 x 1080, density 420}
+"#;
+
+        assert_eq!(
+            parse_android_display_metrics(output),
+            Some(AndroidDisplayMetrics {
+                width: 2400.0,
+                height: 1080.0,
+                rotation_quarter_turns: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_android_display_metrics_falls_back_to_logical_frame() {
+        let output = r#"
+  mViewports=[DisplayViewport{type=INTERNAL, logicalFrame=Rect(0, 0 - 1080, 2400), physicalFrame=Rect(0, 0 - 1080, 2400)}]
+    mCurrentOrientation=0
+"#;
+
+        assert_eq!(
+            parse_android_display_metrics(output),
+            Some(AndroidDisplayMetrics {
+                width: 1080.0,
+                height: 2400.0,
+                rotation_quarter_turns: 0,
+            })
         );
     }
 }

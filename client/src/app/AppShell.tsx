@@ -1886,14 +1886,25 @@ export function AppShell({
           if (!selectedSimulator) {
             return;
           }
+          const androidViewport = isAndroidSimulator(selectedSimulator);
           beginZoomAnimation();
           if (sendControl(selectedSimulator.udid, { type: "rotateRight" })) {
-            setRotationQuarterTurns((current) => (current + 1) % 4);
+            if (androidViewport) {
+              setRotationQuarterTurns(0);
+              window.setTimeout(() => void refresh(), 300);
+            } else {
+              setRotationQuarterTurns((current) => (current + 1) % 4);
+            }
             return;
           }
           void runAction(async () => {
             await rotateRight(selectedSimulator.udid);
-            setRotationQuarterTurns((current) => (current + 1) % 4);
+            if (androidViewport) {
+              setRotationQuarterTurns(0);
+              await refresh();
+            } else {
+              setRotationQuarterTurns((current) => (current + 1) % 4);
+            }
           }, false);
         }}
         onStreamEncoderChange={updateStreamEncoder}

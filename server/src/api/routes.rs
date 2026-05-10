@@ -1886,9 +1886,8 @@ async fn run_android_control_message(
                 ControlMessage::DismissKeyboard => android.dismiss_keyboard(&udid),
                 ControlMessage::Home => android.press_home(&udid),
                 ControlMessage::AppSwitcher => android.open_app_switcher(&udid),
-                ControlMessage::RotateLeft | ControlMessage::RotateRight => {
-                    android.rotate_right(&udid)
-                }
+                ControlMessage::RotateLeft => android.rotate_left(&udid),
+                ControlMessage::RotateRight => android.rotate_right(&udid),
                 ControlMessage::ToggleAppearance => android.toggle_appearance(&udid),
                 ControlMessage::Touch { .. }
                 | ControlMessage::EdgeTouch { .. }
@@ -2738,7 +2737,7 @@ async fn rotate_left(
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     if android::is_android_id(&udid) {
-        run_android_action(state, move |android| android.rotate_right(&udid)).await?;
+        run_android_action(state, move |android| android.rotate_left(&udid)).await?;
         return Ok(json(json_value!({ "ok": true })));
     }
     run_bridge_action(state, move |bridge| bridge.rotate_left(&udid)).await?;
@@ -3544,7 +3543,7 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
         }
         BatchStep::RotateLeft => {
             if android::is_android_id(&udid) {
-                run_android_action(state, move |android| android.rotate_right(&udid)).await?;
+                run_android_action(state, move |android| android.rotate_left(&udid)).await?;
                 return Ok(json_value!({ "action": "rotateLeft" }));
             }
             run_bridge_action(state, move |bridge| bridge.rotate_left(&udid)).await?;

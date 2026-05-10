@@ -860,9 +860,8 @@ async fn run_android_webrtc_control_message(
         ControlMessage::DismissKeyboard => state.android.dismiss_keyboard(&udid),
         ControlMessage::Home => state.android.press_home(&udid),
         ControlMessage::AppSwitcher => state.android.open_app_switcher(&udid),
-        ControlMessage::RotateLeft | ControlMessage::RotateRight => {
-            state.android.rotate_right(&udid)
-        }
+        ControlMessage::RotateLeft => state.android.rotate_left(&udid),
+        ControlMessage::RotateRight => state.android.rotate_right(&udid),
         ControlMessage::ToggleAppearance => state.android.toggle_appearance(&udid),
     })
     .await
