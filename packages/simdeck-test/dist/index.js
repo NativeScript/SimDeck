@@ -67,11 +67,68 @@ export async function connect(options = {}) {
         y,
         phase,
       }),
+    swipe: (udid, startX, startY, endX, endY, swipeOptions = {}) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/batch`,
+        {
+          steps: [
+            {
+              action: "swipe",
+              startX,
+              startY,
+              endX,
+              endY,
+              ...swipeOptions,
+            },
+          ],
+        },
+      ),
+    gesture: (udid, preset, gestureOptions = {}) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/batch`,
+        {
+          steps: [
+            {
+              action: "gesture",
+              preset,
+              ...gestureOptions,
+            },
+          ],
+        },
+      ),
+    typeText: (udid, text, typeOptions = {}) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/batch`,
+        {
+          steps: [
+            {
+              action: "type",
+              text,
+              ...typeOptions,
+            },
+          ],
+        },
+      ),
     key: (udid, keyCode, modifiers = 0) =>
       requestOk(endpoint, `/api/simulators/${encodeURIComponent(udid)}/key`, {
         keyCode,
         modifiers,
       }),
+    keySequence: (udid, keyCodes, keySequenceOptions = {}) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/key-sequence`,
+        {
+          keyCodes,
+          ...keySequenceOptions,
+        },
+      ),
     button: (udid, button, durationMs = 0) =>
       requestOk(
         endpoint,
@@ -80,6 +137,42 @@ export async function connect(options = {}) {
           button,
           durationMs,
         },
+      ),
+    home: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/home`,
+        null,
+      ),
+    dismissKeyboard: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/dismiss-keyboard`,
+        null,
+      ),
+    appSwitcher: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/app-switcher`,
+        null,
+      ),
+    rotateLeft: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/rotate-left`,
+        null,
+      ),
+    rotateRight: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/rotate-right`,
+        null,
+      ),
+    toggleAppearance: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/toggle-appearance`,
+        null,
       ),
     pasteboardSet: (udid, text) =>
       requestOk(

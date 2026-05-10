@@ -816,14 +816,27 @@ fn studio_stream_quality_profile(
         })
 }
 
-fn command_service_url(explicit: Option<String>) -> anyhow::Result<String> {
+fn command_service_url(explicit: Option<&str>) -> anyhow::Result<String> {
     if let Some(url) = explicit
+        .map(ToOwned::to_owned)
         .or_else(|| env::var("SIMDECK_SERVER_URL").ok())
         .filter(|value| !value.trim().is_empty())
     {
         return Ok(url);
     }
     Ok(ensure_project_daemon(DaemonLaunchOptions::default())?.http_url)
+}
+
+fn command_service_url_for_udid(
+    udid: &str,
+    explicit: &Option<String>,
+    service_url: &Option<String>,
+) -> anyhow::Result<Option<String>> {
+    if android::is_android_id(udid) {
+        Ok(Some(command_service_url(explicit.as_deref())?))
+    } else {
+        Ok(service_url.clone())
+    }
 }
 
 impl Default for DaemonLaunchOptions {
@@ -2032,7 +2045,7 @@ fn main() -> anyhow::Result<()> {
             CoreSimulatorCommand::Restart => core_simulator::restart(),
         },
         Command::List => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             let simulators = service_get_json(&service_url, "/api/simulators")?
                 .get("simulators")
                 .cloned()
@@ -2044,7 +2057,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Boot { udid } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(&service_url, &udid, "boot", &Value::Null)?;
             println!(
                 "{}",
@@ -2055,7 +2068,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Shutdown { udid } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(&service_url, &udid, "shutdown", &Value::Null)?;
             println!(
                 "{}",
@@ -2066,7 +2079,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::OpenUrl { udid, url } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_open_url(&service_url, &udid, &url)?;
             println!(
                 "{}",
@@ -2077,7 +2090,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Launch { udid, bundle_id } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_launch(&service_url, &udid, &bundle_id)?;
             println!(
                 "{}",
@@ -2088,7 +2101,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::ToggleAppearance { udid } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(&service_url, &udid, "toggle-appearance", &Value::Null)?;
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "toggle-appearance" }),
@@ -2096,13 +2109,13 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Erase { udid } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(&service_url, &udid, "erase", &Value::Null)?;
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "erase" }))?;
             Ok(())
         }
         Command::Install { udid, app_path } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(
                 &service_url,
                 &udid,
@@ -2115,7 +2128,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Uninstall { udid, bundle_id } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(
                 &service_url,
                 &udid,
@@ -2129,7 +2142,7 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Pasteboard { command } => match command {
             PasteboardCommand::Get { udid } => {
-                let service_url = command_service_url(explicit_server_url.clone())?;
+                let service_url = command_service_url(explicit_server_url.as_deref())?;
                 let text = service_get_json(
                     &service_url,
                     &format!("/api/simulators/{}/pasteboard", url_path_component(&udid)),
@@ -2147,7 +2160,7 @@ fn main() -> anyhow::Result<()> {
                 stdin,
                 file,
             } => {
-                let service_url = command_service_url(explicit_server_url.clone())?;
+                let service_url = command_service_url(explicit_server_url.as_deref())?;
                 let text = read_text_input(text, stdin, file)?;
                 service_post_ok(
                     &service_url,
@@ -2166,7 +2179,7 @@ fn main() -> anyhow::Result<()> {
             seconds,
             limit,
         } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             let filters = native::bridge::LogFilters::new(Vec::new(), Vec::new(), String::new());
             let _ = filters;
             let entries = service_get_json(
@@ -2187,7 +2200,7 @@ fn main() -> anyhow::Result<()> {
             output,
             stdout,
         } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             let png = service_get_bytes(
                 &service_url,
                 &format!(
@@ -2222,7 +2235,7 @@ fn main() -> anyhow::Result<()> {
             include_hidden,
             direct,
         } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             let snapshot = describe_ui_snapshot(
                 &bridge,
                 &udid,
@@ -2250,11 +2263,8 @@ fn main() -> anyhow::Result<()> {
             if android_device && !normalized {
                 anyhow::bail!("Android touch coordinates require --normalized.");
             }
-            let command_server_url = if android_device {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref().filter(|_| normalized) {
                 if down || up {
                     let mut events = Vec::new();
@@ -2310,11 +2320,8 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
-            let command_server_url = if android::is_android_id(&udid) {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let (Some(server_url), Some(x), Some(y), true, None, None, None, None) = (
                 command_server_url.as_deref(),
                 x,
@@ -2394,11 +2401,8 @@ fn main() -> anyhow::Result<()> {
             if android_device && !normalized {
                 anyhow::bail!("Android swipe coordinates require --normalized.");
             }
-            let command_server_url = if android_device {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref().filter(|_| normalized) {
                 sleep_ms(pre_delay_ms);
                 if android_device {
@@ -2463,11 +2467,8 @@ fn main() -> anyhow::Result<()> {
             post_delay_ms,
         } => {
             let android_device = android::is_android_id(&udid);
-            let command_server_url = if android_device {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if android_device {
                 let server_url = command_server_url
                     .as_deref()
@@ -2613,11 +2614,8 @@ fn main() -> anyhow::Result<()> {
         } => {
             let key_code = parse_hid_key(&key)?;
             sleep_ms(pre_delay_ms);
-            let command_server_url = if android::is_android_id(&udid) {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref().filter(|_| duration_ms == 0) {
                 service_key(server_url, &udid, key_code, modifiers)?;
             } else if duration_ms > 0 && modifiers == 0 {
@@ -2638,11 +2636,8 @@ fn main() -> anyhow::Result<()> {
             delay_ms,
         } => {
             let keys = parse_key_list(&keycodes)?;
-            let command_server_url = if android::is_android_id(&udid) {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
                 service_key_sequence(server_url, &udid, &keys, delay_ms)?;
             } else {
@@ -2666,11 +2661,8 @@ fn main() -> anyhow::Result<()> {
         } => {
             let modifier_mask = parse_modifier_mask(&modifiers)?;
             let key_code = parse_hid_key(&key)?;
-            let command_server_url = if android::is_android_id(&udid) {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
                 service_key(server_url, &udid, key_code, modifier_mask)?;
             } else {
@@ -2688,7 +2680,7 @@ fn main() -> anyhow::Result<()> {
         } => {
             let text = read_text_input(text, stdin, file)?;
             if android::is_android_id(&udid) {
-                let server_url = command_service_url(explicit_server_url.clone())?;
+                let server_url = command_service_url(explicit_server_url.as_deref())?;
                 service_batch(
                     &server_url,
                     &udid,
@@ -2710,11 +2702,8 @@ fn main() -> anyhow::Result<()> {
             button,
             duration_ms,
         } => {
-            let command_server_url = if android::is_android_id(&udid) {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
                 service_button(server_url, &udid, &button, duration_ms)?;
             } else {
@@ -2732,11 +2721,8 @@ fn main() -> anyhow::Result<()> {
             stdin,
             continue_on_error,
         } => {
-            let command_server_url = if android::is_android_id(&udid) {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             let report = if let Some(server_url) = command_server_url.as_deref() {
                 let step_lines = read_batch_steps(steps, file, stdin)?;
                 service_batch(
@@ -2752,11 +2738,8 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::DismissKeyboard { udid } => {
-            let command_server_url = if android::is_android_id(&udid) {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "dismiss-keyboard", &Value::Null)?;
             } else {
@@ -2771,11 +2754,8 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Home { udid } => {
-            let command_server_url = if android::is_android_id(&udid) {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "home", &Value::Null)?;
             } else {
@@ -2785,11 +2765,8 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::AppSwitcher { udid } => {
-            let command_server_url = if android::is_android_id(&udid) {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "app-switcher", &Value::Null)?;
             } else {
@@ -2801,11 +2778,8 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::RotateLeft { udid } => {
-            let command_server_url = if android::is_android_id(&udid) {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "rotate-left", &Value::Null)?;
             } else {
@@ -2817,11 +2791,8 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::RotateRight { udid } => {
-            let command_server_url = if android::is_android_id(&udid) {
-                Some(command_service_url(explicit_server_url.clone())?)
-            } else {
-                service_url.clone()
-            };
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "rotate-right", &Value::Null)?;
             } else {
@@ -2833,7 +2804,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::ChromeProfile { udid } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             let profile = service_get_json(
                 &service_url,
                 &format!(

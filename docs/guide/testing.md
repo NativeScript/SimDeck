@@ -28,21 +28,29 @@ try {
 
 The current session object exposes:
 
-| Method         | Purpose                                                           |
-| -------------- | ----------------------------------------------------------------- |
-| `list()`       | Fetch simulator inventory from `GET /api/simulators`.             |
-| `launch()`     | Launch an installed bundle ID.                                    |
-| `openUrl()`    | Open a URL or deep link.                                          |
-| `tap()`        | Tap normalized screen coordinates.                                |
-| `key()`        | Send one HID key code.                                            |
-| `button()`     | Press a hardware button.                                          |
-| `tree()`       | Fetch an accessibility hierarchy.                                 |
-| `query()`      | Return compact matches for a selector.                            |
-| `waitFor()`    | Poll until a selector appears.                                    |
-| `assert()`     | Assert a selector is present.                                     |
-| `batch()`      | Run multiple REST actions through `/api/simulators/{udid}/batch`. |
-| `screenshot()` | Return a PNG buffer.                                              |
-| `close()`      | Stop the daemon if this session started it.                       |
+| Method                                 | Purpose                                                           |
+| -------------------------------------- | ----------------------------------------------------------------- |
+| `list()`                               | Fetch simulator inventory from `GET /api/simulators`.             |
+| `install()`, `uninstall()`             | Install or remove an app.                                         |
+| `launch()`                             | Launch an installed bundle ID or Android package.                 |
+| `openUrl()`                            | Open a URL or deep link.                                          |
+| `tap()`, `tapElement()`                | Tap normalized coordinates or a matching accessibility element.   |
+| `touch()`, `swipe()`, `gesture()`      | Send normalized pointer gestures.                                 |
+| `typeText()`, `key()`, `keySequence()` | Send text or HID keyboard input.                                  |
+| `button()`                             | Press a hardware button.                                          |
+| `home()`, `dismissKeyboard()`          | Trigger common system controls.                                   |
+| `appSwitcher()`                        | Open the app switcher.                                            |
+| `rotateLeft()`, `rotateRight()`        | Rotate the simulator display.                                     |
+| `toggleAppearance()`                   | Toggle light/dark appearance.                                     |
+| `pasteboardSet()`, `pasteboardGet()`   | Read or write pasteboard text.                                    |
+| `chromeProfile()`                      | Fetch screen/chrome geometry.                                     |
+| `tree()`                               | Fetch an accessibility hierarchy.                                 |
+| `query()`                              | Return compact matches for a selector.                            |
+| `waitFor()`                            | Poll until a selector appears.                                    |
+| `assert()`                             | Assert a selector is present.                                     |
+| `batch()`                              | Run multiple REST actions through `/api/simulators/{udid}/batch`. |
+| `screenshot()`                         | Return a PNG buffer.                                              |
+| `close()`                              | Stop the daemon if this session started it.                       |
 
 Selectors can match `id`, `label`, `value`, or `type`. Query options accept `source`, `maxDepth`, and `includeHidden`.
 

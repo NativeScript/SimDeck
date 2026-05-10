@@ -2,7 +2,7 @@ use crate::error::AppError;
 use bytes::BytesMut;
 use http::uri::PathAndQuery;
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
 use std::future::Future;
@@ -1629,15 +1629,6 @@ mod tests {
     }
 }
 
-#[allow(dead_code)]
-fn _dedupe(values: impl IntoIterator<Item = String>) -> Vec<String> {
-    let mut seen = HashSet::new();
-    values
-        .into_iter()
-        .filter(|value| seen.insert(value.clone()))
-        .collect()
-}
-
 mod grpc {
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Empty {}
@@ -1679,44 +1670,6 @@ mod grpc {
         pub touches: Vec<Touch>,
         #[prost(int32, tag = "2")]
         pub display: i32,
-    }
-
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct KeyboardEvent {
-        #[prost(enumeration = "keyboard_event::KeyCodeType", tag = "1")]
-        pub code_type: i32,
-        #[prost(enumeration = "keyboard_event::KeyEventType", tag = "2")]
-        pub event_type: i32,
-        #[prost(int32, tag = "3")]
-        pub key_code: i32,
-        #[prost(string, tag = "4")]
-        pub key: String,
-        #[prost(string, tag = "5")]
-        pub text: String,
-    }
-
-    pub mod keyboard_event {
-        #[derive(
-            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-        )]
-        #[repr(i32)]
-        pub enum KeyCodeType {
-            Usb = 0,
-            Evdev = 1,
-            Xkb = 2,
-            Win = 3,
-            Mac = 4,
-        }
-
-        #[derive(
-            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-        )]
-        #[repr(i32)]
-        pub enum KeyEventType {
-            Keydown = 0,
-            Keyup = 1,
-            Keypress = 2,
-        }
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]

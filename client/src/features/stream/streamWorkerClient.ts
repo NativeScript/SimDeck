@@ -2132,12 +2132,18 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.rgbaChannel = channel;
     channel.binaryType = "arraybuffer";
     channel.addEventListener("message", (event) => {
-      if (generation !== this.connectGeneration || channel !== this.rgbaChannel) {
+      if (
+        generation !== this.connectGeneration ||
+        channel !== this.rgbaChannel
+      ) {
         return;
       }
       if (hasArrayBufferMethod(event.data)) {
         void event.data.arrayBuffer().then((buffer) => {
-          if (generation === this.connectGeneration && channel === this.rgbaChannel) {
+          if (
+            generation === this.connectGeneration &&
+            channel === this.rgbaChannel
+          ) {
             this.handleRgbaMessage(buffer);
           }
         });
@@ -2204,7 +2210,13 @@ class WebRtcStreamClient implements StreamClientBackend {
     }
     assembly.buffer.set(chunk.payload, chunk.chunkOffset);
     const chunkEnd = chunk.chunkOffset + chunk.payload.byteLength;
-    if (!rangeAlreadyReceived(assembly.receivedRanges, chunk.chunkOffset, chunkEnd)) {
+    if (
+      !rangeAlreadyReceived(
+        assembly.receivedRanges,
+        chunk.chunkOffset,
+        chunkEnd,
+      )
+    ) {
       assembly.receivedRanges.push([chunk.chunkOffset, chunkEnd]);
       assembly.receivedBytes += chunk.payload.byteLength;
     }
@@ -2250,7 +2262,11 @@ class WebRtcStreamClient implements StreamClientBackend {
       frame.payload.byteLength,
     );
     try {
-      context.putImageData(new ImageData(rgba, frame.width, frame.height), 0, 0);
+      context.putImageData(
+        new ImageData(rgba, frame.width, frame.height),
+        0,
+        0,
+      );
     } catch {
       this.stats.droppedFrames += 1;
       this.onMessage({ type: "stats", stats: { ...this.stats } });
@@ -2674,7 +2690,8 @@ function shouldUseLocalAndroidRgbaWebRtc(target: StreamConnectTarget): boolean {
     !target.remote &&
     isLoopbackHost(window.location.hostname) &&
     (stream === "rgba" || stream === "webrtc-rgba") &&
-    (target.platform === "android-emulator" || target.udid.startsWith("android:"))
+    (target.platform === "android-emulator" ||
+      target.udid.startsWith("android:"))
   );
 }
 

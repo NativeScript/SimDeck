@@ -22,7 +22,8 @@ export type QueryOptions = {
     | "react-native"
     | "flutter"
     | "uikit"
-    | "native-ax";
+    | "native-ax"
+    | "android-uiautomator";
   maxDepth?: number;
   includeHidden?: boolean;
 };
@@ -38,6 +39,23 @@ export type TapOptions = QueryOptions & {
   durationMs?: number;
   waitTimeoutMs?: number;
   pollMs?: number;
+};
+
+export type SwipeOptions = {
+  durationMs?: number;
+  steps?: number;
+};
+
+export type GestureOptions = SwipeOptions & {
+  delta?: number;
+};
+
+export type TypeTextOptions = {
+  delayMs?: number;
+};
+
+export type KeySequenceOptions = {
+  delayMs?: number;
 };
 
 export type SimDeckSession = {
@@ -56,8 +74,37 @@ export type SimDeckSession = {
     options?: TapOptions,
   ): Promise<void>;
   touch(udid: string, x: number, y: number, phase: string): Promise<void>;
+  swipe(
+    udid: string,
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    options?: SwipeOptions,
+  ): Promise<unknown>;
+  gesture(
+    udid: string,
+    preset: string,
+    options?: GestureOptions,
+  ): Promise<unknown>;
+  typeText(
+    udid: string,
+    text: string,
+    options?: TypeTextOptions,
+  ): Promise<unknown>;
   key(udid: string, keyCode: number, modifiers?: number): Promise<void>;
+  keySequence(
+    udid: string,
+    keyCodes: number[],
+    options?: KeySequenceOptions,
+  ): Promise<void>;
   button(udid: string, button: string, durationMs?: number): Promise<void>;
+  home(udid: string): Promise<void>;
+  dismissKeyboard(udid: string): Promise<void>;
+  appSwitcher(udid: string): Promise<void>;
+  rotateLeft(udid: string): Promise<void>;
+  rotateRight(udid: string): Promise<void>;
+  toggleAppearance(udid: string): Promise<void>;
   pasteboardSet(udid: string, text: string): Promise<void>;
   pasteboardGet(udid: string): Promise<string>;
   chromeProfile(udid: string): Promise<unknown>;
@@ -163,11 +210,68 @@ export async function connect(
         y,
         phase,
       }),
+    swipe: (udid, startX, startY, endX, endY, swipeOptions = {}) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/batch`,
+        {
+          steps: [
+            {
+              action: "swipe",
+              startX,
+              startY,
+              endX,
+              endY,
+              ...swipeOptions,
+            },
+          ],
+        },
+      ),
+    gesture: (udid, preset, gestureOptions = {}) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/batch`,
+        {
+          steps: [
+            {
+              action: "gesture",
+              preset,
+              ...gestureOptions,
+            },
+          ],
+        },
+      ),
+    typeText: (udid, text, typeOptions = {}) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/batch`,
+        {
+          steps: [
+            {
+              action: "type",
+              text,
+              ...typeOptions,
+            },
+          ],
+        },
+      ),
     key: (udid, keyCode, modifiers = 0) =>
       requestOk(endpoint, `/api/simulators/${encodeURIComponent(udid)}/key`, {
         keyCode,
         modifiers,
       }),
+    keySequence: (udid, keyCodes, keySequenceOptions = {}) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/key-sequence`,
+        {
+          keyCodes,
+          ...keySequenceOptions,
+        },
+      ),
     button: (udid, button, durationMs = 0) =>
       requestOk(
         endpoint,
@@ -176,6 +280,42 @@ export async function connect(
           button,
           durationMs,
         },
+      ),
+    home: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/home`,
+        null,
+      ),
+    dismissKeyboard: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/dismiss-keyboard`,
+        null,
+      ),
+    appSwitcher: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/app-switcher`,
+        null,
+      ),
+    rotateLeft: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/rotate-left`,
+        null,
+      ),
+    rotateRight: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/rotate-right`,
+        null,
+      ),
+    toggleAppearance: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/toggle-appearance`,
+        null,
       ),
     pasteboardSet: (udid, text) =>
       requestOk(
