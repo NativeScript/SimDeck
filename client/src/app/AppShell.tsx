@@ -1872,9 +1872,13 @@ export function AppShell({
           if (!selectedSimulator) {
             return;
           }
-          const encoded = JSON.stringify({ type: "toggleAppearance" });
-          if (!sendWebRtcControlMessage(encoded)) {
-            void runAction(() => toggleAppearance(selectedSimulator.udid));
+          if (
+            !sendControl(selectedSimulator.udid, { type: "toggleAppearance" })
+          ) {
+            void runAction(
+              () => toggleAppearance(selectedSimulator.udid),
+              false,
+            );
           }
         }}
         onToggleDebug={() => setDebugVisible((current) => !current)}

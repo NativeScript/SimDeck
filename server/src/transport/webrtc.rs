@@ -1,6 +1,6 @@
 use crate::api::routes::{
-    apply_stream_quality_payload, run_control_message, AppState, ControlMessage,
-    StreamQualityPayload,
+    apply_stream_quality_payload, run_control_message, run_toggle_appearance_control, AppState,
+    ControlMessage, StreamQualityPayload,
 };
 use crate::error::AppError;
 use crate::metrics::counters::ClientStreamStats;
@@ -512,12 +512,7 @@ async fn run_webrtc_control_queue(
             ControlMessage::ToggleAppearance => {
                 let bridge = state.registry.bridge().clone();
                 let action_udid = udid.clone();
-                let result = task::spawn_blocking(move || bridge.toggle_appearance(&action_udid))
-                    .await
-                    .map_err(|error| {
-                        AppError::internal(format!("Failed to join control task: {error}"))
-                    })
-                    .and_then(|result| result);
+                let result = run_toggle_appearance_control(bridge, action_udid).await;
                 if let Err(error) = result {
                     warn!("WebRTC control message failed for {udid}: {error}");
                 }

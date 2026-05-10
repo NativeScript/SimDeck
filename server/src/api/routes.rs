@@ -1934,7 +1934,8 @@ async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket)
         ))
         .await;
     let (control_tx, control_rx) = mpsc::unbounded_channel::<ControlMessage>();
-    let control_task = task::spawn(run_control_queue(session, udid.clone(), control_rx));
+    let bridge = state.registry.bridge().clone();
+    let control_task = task::spawn(run_control_queue(session, bridge, udid.clone(), control_rx));
 
     while let Some(message) = receiver.next().await {
         let text = match message {
@@ -1968,6 +1969,7 @@ async fn handle_control_socket(state: AppState, udid: String, socket: WebSocket)
 
 async fn run_control_queue(
     session: SimulatorSession,
+    bridge: NativeBridge,
     udid: String,
     mut receiver: mpsc::UnboundedReceiver<ControlMessage>,
 ) {
@@ -1990,7 +1992,13 @@ async fn run_control_queue(
                 }
             }
         }
-        if let Err(error) = run_control_message(session.clone(), message).await {
+        let result = match message {
+            ControlMessage::ToggleAppearance => {
+                run_toggle_appearance_control(bridge.clone(), udid.clone()).await
+            }
+            message => run_control_message(session.clone(), message).await,
+        };
+        if let Err(error) = result {
             tracing::debug!("Control message failed for {udid}: {error}");
         }
     }
@@ -2094,11 +2102,20 @@ pub(crate) async fn run_control_message(
         ControlMessage::RotateLeft => session.rotate_left(),
         ControlMessage::RotateRight => session.rotate_right(),
         ControlMessage::ToggleAppearance => Err(AppError::bad_request(
-            "`toggleAppearance` requires the WebRTC control channel.",
+            "`toggleAppearance` requires a native bridge control handler.",
         )),
     })
     .await
     .map_err(|error| AppError::internal(format!("Failed to join control task: {error}")))?
+}
+
+pub(crate) async fn run_toggle_appearance_control(
+    bridge: NativeBridge,
+    udid: String,
+) -> Result<(), AppError> {
+    task::spawn_blocking(move || bridge.toggle_appearance(&udid))
+        .await
+        .map_err(|error| AppError::internal(format!("Failed to join control task: {error}")))?
 }
 
 async fn send_key(
