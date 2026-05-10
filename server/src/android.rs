@@ -40,7 +40,6 @@ pub struct AndroidDevice {
 pub struct AndroidFrame {
     pub width: u32,
     pub height: u32,
-    pub seq: u32,
     pub timestamp_us: u64,
     pub rgba: Vec<u8>,
 }
@@ -887,7 +886,6 @@ impl AndroidGrpcFrameStream {
         Ok(Some(AndroidFrame {
             width,
             height,
-            seq: image.seq,
             timestamp_us: image.timestamp_us,
             rgba,
         }))

@@ -437,12 +437,7 @@ export function useLiveStream({
     runtimeInfo,
     stats,
     status,
-    streamBackend:
-      stats.codec === "android-raw"
-        ? "android-raw"
-        : stats.codec === "h264-ws"
-          ? "h264-ws"
-          : "webrtc",
+    streamBackend: stats.codec === "h264-ws" ? "h264-ws" : "webrtc",
     streamCanvasKey: `stream-${streamCanvasRevision}`,
   };
 }

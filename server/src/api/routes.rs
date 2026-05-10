@@ -12,6 +12,7 @@ use crate::simulators::registry::SessionRegistry;
 use crate::simulators::session::SimulatorSession;
 use crate::static_files;
 use crate::transport::packet::FramePacket;
+use crate::transport::webrtc::AndroidWebRtcSource;
 use crate::webkit;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -34,7 +35,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::Command;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::task;
 use tokio::time::timeout;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, TraceLayer};
@@ -474,13 +475,6 @@ struct AccessibilityPointQuery {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AndroidFrameQuery {
-    max_edge: Option<u32>,
-    max_fps: Option<u32>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct AccessibilityTreeQuery {
     source: Option<String>,
     max_depth: Option<usize>,
@@ -592,10 +586,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/control", get(control_socket))
         .route("/api/simulators/{udid}/input", get(control_socket))
         .route("/api/simulators/{udid}/h264", get(h264_socket))
-        .route(
-            "/api/simulators/{udid}/android/frames",
-            get(android_frame_socket),
-        )
         .route("/api/simulators/{udid}/webrtc/offer", post(webrtc_offer))
         .route(
             "/api/simulators/{udid}/touch-sequence",
@@ -1819,122 +1809,6 @@ async fn h264_socket(
     websocket.on_upgrade(move |socket| handle_h264_socket(state, udid, query, socket))
 }
 
-async fn android_frame_socket(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Query(query): Query<AndroidFrameQuery>,
-    websocket: WebSocketUpgrade,
-) -> impl IntoResponse {
-    websocket.on_upgrade(move |socket| {
-        handle_android_frame_socket(state, udid, query.max_edge, query.max_fps, socket)
-    })
-}
-
-async fn handle_android_frame_socket(
-    state: AppState,
-    udid: String,
-    max_edge: Option<u32>,
-    max_fps: Option<u32>,
-    socket: WebSocket,
-) {
-    let (mut sender, mut receiver) = socket.split();
-    if !android::is_android_id(&udid) {
-        let _ = sender
-            .send(Message::Text(
-                json_value!({
-                    "type": "error",
-                    "error": "Android frame streaming only supports Android emulator IDs."
-                })
-                .to_string()
-                .into(),
-            ))
-            .await;
-        return;
-    }
-
-    let mut stream = match state.android.grpc_frame_stream(&udid, max_edge).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            let _ = sender
-                .send(Message::Text(
-                    json_value!({ "type": "error", "error": error.to_string() })
-                        .to_string()
-                        .into(),
-                ))
-                .await;
-            return;
-        }
-    };
-
-    let _ = sender
-        .send(Message::Text(
-            json_value!({ "type": "ready", "udid": udid, "platform": "android-emulator" })
-                .to_string()
-                .into(),
-        ))
-        .await;
-
-    let fps = max_fps.unwrap_or(30).clamp(1, 30);
-    let min_frame_gap = Duration::from_micros(1_000_000 / u64::from(fps));
-    let mut last_sent_at = Instant::now() - min_frame_gap;
-
-    loop {
-        tokio::select! {
-            message = receiver.next() => {
-                match message {
-                    Some(Ok(Message::Close(_))) | None => break,
-                    Some(Ok(_)) => {}
-                    Some(Err(_)) => break,
-                }
-            }
-            frame = stream.next_frame() => {
-                let frame = match frame {
-                    Ok(Some(frame)) => frame,
-                    Ok(None) => break,
-                    Err(error) => {
-                        let _ = sender
-                            .send(Message::Text(
-                                json_value!({ "type": "error", "error": error.to_string() })
-                                    .to_string()
-                                    .into(),
-                            ))
-                            .await;
-                        break;
-                    }
-                };
-                let now = Instant::now();
-                if now.duration_since(last_sent_at) < min_frame_gap {
-                    continue;
-                }
-                last_sent_at = now;
-                if sender
-                    .send(Message::Binary(encode_android_frame(frame).into()))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        }
-    }
-}
-
-fn encode_android_frame(frame: android::AndroidFrame) -> Vec<u8> {
-    const HEADER_LEN: usize = 32;
-    let mut bytes = Vec::with_capacity(HEADER_LEN + frame.rgba.len());
-    bytes.extend_from_slice(b"SDAF");
-    bytes.push(1);
-    bytes.push(1);
-    bytes.extend_from_slice(&[0, 0]);
-    bytes.extend_from_slice(&frame.width.to_le_bytes());
-    bytes.extend_from_slice(&frame.height.to_le_bytes());
-    bytes.extend_from_slice(&frame.seq.to_le_bytes());
-    bytes.extend_from_slice(&0u32.to_le_bytes());
-    bytes.extend_from_slice(&frame.timestamp_us.to_le_bytes());
-    bytes.extend_from_slice(&frame.rgba);
-    bytes
-}
-
 async fn handle_android_control_socket(state: AppState, udid: String, socket: WebSocket) {
     let (mut sender, mut receiver) = socket.split();
     let mut active_touch: Option<AndroidControlTouch> = None;
@@ -2121,6 +1995,11 @@ async fn handle_h264_socket(
     initial_quality: StreamQualityPayload,
     socket: WebSocket,
 ) {
+    if android::is_android_id(&udid) {
+        handle_android_h264_socket(state, udid, initial_quality, socket).await;
+        return;
+    }
+
     if initial_quality.has_any_value() {
         if let Err(error) = apply_stream_quality_payload(&state, &initial_quality) {
             tracing::debug!("Failed to apply H264 WebSocket stream quality for {udid}: {error}");
@@ -2232,6 +2111,114 @@ async fn handle_h264_socket(
     }
 }
 
+async fn handle_android_h264_socket(
+    state: AppState,
+    udid: String,
+    initial_quality: StreamQualityPayload,
+    socket: WebSocket,
+) {
+    let source = match AndroidWebRtcSource::start(
+        state.android.clone(),
+        state.metrics.clone(),
+        udid.clone(),
+        initial_quality.max_edge,
+    )
+    .await
+    {
+        Ok(source) => source,
+        Err(error) => {
+            tracing::debug!("Failed to create Android H264 WebSocket source for {udid}: {error}");
+            return;
+        }
+    };
+
+    let mut subscription = source.subscribe();
+    let (mut sender, mut receiver) = socket.split();
+    let mut decoder_synced = false;
+    let mut last_sent_sequence: Option<u64> = None;
+
+    let initial_keyframe = source
+        .wait_for_keyframe(H264_WS_KEYFRAME_WAIT_TIMEOUT)
+        .await
+        .filter(|frame| h264_ws_frame_is_decoder_sync(frame));
+
+    if let Some(keyframe) = initial_keyframe {
+        if h264_ws_frame_is_supported(&keyframe) {
+            let message_bytes = h264_ws_frame_message(&keyframe);
+            let message = Message::Binary(message_bytes);
+            if timeout(H264_WS_SEND_TIMEOUT, sender.send(message))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .is_none()
+            {
+                return;
+            }
+            last_sent_sequence = Some(keyframe.frame_sequence);
+            decoder_synced = true;
+        }
+    } else {
+        source.request_keyframe();
+    }
+
+    loop {
+        tokio::select! {
+            received = receiver.next() => {
+                let Some(received) = received else { break };
+                let message = match received {
+                    Ok(message) => message,
+                    Err(error) => {
+                        tracing::debug!("Android H264 WebSocket closed for {udid}: {error}");
+                        break;
+                    }
+                };
+                if !handle_android_h264_socket_message(&state, &source, &message) {
+                    break;
+                }
+            }
+            frame = subscription.recv() => {
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        decoder_synced = false;
+                        source.request_keyframe();
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                if !h264_ws_frame_is_supported(&frame) {
+                    continue;
+                }
+                if last_sent_sequence
+                    .map(|sequence| frame.frame_sequence <= sequence)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                if !decoder_synced && !frame.is_keyframe {
+                    source.request_keyframe();
+                    continue;
+                }
+                let is_keyframe = frame.is_keyframe;
+                let message_bytes = h264_ws_frame_message(&frame);
+                let message = Message::Binary(message_bytes);
+                if timeout(H264_WS_SEND_TIMEOUT, sender.send(message))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .is_none()
+                {
+                    break;
+                }
+                last_sent_sequence = Some(frame.frame_sequence);
+                if is_keyframe {
+                    decoder_synced = true;
+                }
+            }
+        }
+    }
+}
+
 fn handle_h264_socket_message(
     state: &AppState,
     session: &SimulatorSession,
@@ -2272,6 +2259,47 @@ fn handle_h264_socket_message(
             } else {
                 session.request_keyframe();
             }
+        }
+    }
+    true
+}
+
+fn handle_android_h264_socket_message(
+    state: &AppState,
+    source: &AndroidWebRtcSource,
+    message: &Message,
+) -> bool {
+    let text = match message {
+        Message::Text(text) => text.as_str(),
+        Message::Binary(bytes) => match std::str::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(_) => return true,
+        },
+        Message::Close(_) => return false,
+        Message::Ping(_) | Message::Pong(_) => return true,
+    };
+    let Ok(message) = serde_json::from_str::<H264SocketMessage>(text) else {
+        return true;
+    };
+    match message {
+        H264SocketMessage::ClientStats { stats } => {
+            if !stats.client_id.trim().is_empty() && !stats.kind.trim().is_empty() {
+                state.metrics.record_client_stream_stats(*stats);
+            }
+        }
+        H264SocketMessage::StreamControl {
+            force_keyframe,
+            snapshot,
+        } => {
+            if force_keyframe.unwrap_or(false) {
+                source.request_keyframe();
+            }
+            if snapshot.unwrap_or(false) {
+                source.request_refresh();
+            }
+        }
+        H264SocketMessage::StreamQuality { config: _ } => {
+            source.request_keyframe();
         }
     }
     true

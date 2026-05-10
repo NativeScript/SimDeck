@@ -33,9 +33,6 @@ const H264_WS_HEADER_BYTES = 40;
 const H264_WS_MAGIC = 0x53444831;
 const H264_WS_FLAG_KEYFRAME = 1 << 0;
 const H264_WS_FLAG_CONFIG = 1 << 1;
-const ANDROID_RAW_HEADER_BYTES = 32;
-const ANDROID_RAW_MAGIC = 0x53444146;
-const ANDROID_RAW_FPS = 30;
 const H264_WS_LOCAL_AUTO_PROFILES: StreamQualityPreset[] = [
   "low",
   "economy",
@@ -61,10 +58,9 @@ let activeWebRtcControlChannel: RTCDataChannel | null = null;
 let activeWebRtcTelemetryChannel: RTCDataChannel | null = null;
 let activeInputSocket: WebSocket | null = null;
 let activeH264StreamSocket: WebSocket | null = null;
-let activeAndroidFrameSocket: WebSocket | null = null;
 let activeStreamClient: StreamWorkerClient | null = null;
 
-export type StreamBackend = "android-raw" | "h264-ws" | "webrtc";
+export type StreamBackend = "h264-ws" | "webrtc";
 
 export function sendWebRtcControlMessage(
   encoded: string,
@@ -80,8 +76,7 @@ export function sendStreamClientStats(stats: unknown): boolean {
   const encoded = JSON.stringify({ stats, type: "clientStats" });
   return (
     sendDataChannelMessage(activeWebRtcTelemetryChannel, encoded) ||
-    sendWebSocketMessage(activeH264StreamSocket, encoded) ||
-    sendWebSocketMessage(activeAndroidFrameSocket, encoded)
+    sendWebSocketMessage(activeH264StreamSocket, encoded)
   );
 }
 
@@ -368,14 +363,6 @@ interface WebRtcAnswerPayload extends RTCSessionDescriptionInit {
 interface PendingVideoFrame {
   frame: WebCodecsVideoFrame;
   sequence: number | null;
-}
-
-interface AndroidRawFrame {
-  height: number;
-  pixels: Uint8ClampedArray<ArrayBuffer>;
-  sequence: number;
-  timestampUs: number;
-  width: number;
 }
 
 function webCodecsConstructors(): {
@@ -1125,382 +1112,6 @@ class H264WebSocketStreamClient implements StreamClientBackend {
       status: { error: message.replace(/\.$/, ""), state: "error" },
     });
   }
-}
-
-class AndroidRawFrameStreamClient implements StreamClientBackend {
-  private canvas: HTMLCanvasElement | null = null;
-  private canvasContext: CanvasRenderingContext2D | null = null;
-  private connectGeneration = 0;
-  private frameWatchdogTimeout = 0;
-  private inputSocket: WebSocket | null = null;
-  private lastFrameAt = 0;
-  private reportedVideoHeight = 0;
-  private reportedVideoWidth = 0;
-  private shouldReconnect = false;
-  private stats: StreamStats = createEmptyStreamStats();
-  private streamSocket: WebSocket | null = null;
-  private streamTarget: StreamConnectTarget | null = null;
-  private stalledFrameWatchdogCount = 0;
-  private streamingReported = false;
-
-  constructor(
-    private readonly onMessage: (message: WorkerToMainMessage) => void,
-  ) {}
-
-  attachCanvas(canvasElement: HTMLCanvasElement) {
-    this.canvas = canvasElement;
-    this.canvasContext = canvasElement.getContext("2d", {
-      alpha: false,
-      desynchronized: true,
-    });
-  }
-
-  connect(target: StreamConnectTarget) {
-    this.disconnect();
-    if (!this.canvas) {
-      return;
-    }
-    const generation = ++this.connectGeneration;
-    this.shouldReconnect = true;
-    this.streamTarget = target;
-    this.streamingReported = false;
-    this.lastFrameAt = 0;
-    this.reportedVideoHeight = 0;
-    this.reportedVideoWidth = 0;
-    this.stalledFrameWatchdogCount = 0;
-    this.stats = createEmptyStreamStats();
-    this.stats.codec = "android-raw";
-    this.onMessage({ type: "stats", stats: { ...this.stats } });
-    this.onMessage({
-      type: "status",
-      status: {
-        detail: "Opening Android raw frame stream",
-        state: "connecting",
-      },
-    });
-
-    const socket = new WebSocket(
-      webSocketApiUrl(
-        `/api/simulators/${encodeURIComponent(target.udid)}/android/frames?max_fps=${ANDROID_RAW_FPS}`,
-      ),
-    );
-    socket.binaryType = "arraybuffer";
-    this.streamSocket = socket;
-    socket.addEventListener("open", () => {
-      if (socket === this.streamSocket) {
-        socket.binaryType = "arraybuffer";
-        activeAndroidFrameSocket = socket;
-      }
-    });
-    socket.addEventListener("message", (event) => {
-      if (socket !== this.streamSocket) {
-        return;
-      }
-      if (typeof event.data === "string") {
-        this.handleTextMessage(event.data);
-        return;
-      }
-      if (hasArrayBufferMethod(event.data)) {
-        void event.data.arrayBuffer().then((buffer) => {
-          if (socket === this.streamSocket) {
-            this.handleFrameMessage(buffer);
-          }
-        });
-        return;
-      }
-      this.handleFrameMessage(event.data);
-    });
-    socket.addEventListener("close", () => {
-      if (activeAndroidFrameSocket === socket) {
-        activeAndroidFrameSocket = null;
-      }
-      if (socket === this.streamSocket && this.shouldReconnect) {
-        this.handleError("Android raw frame stream closed.");
-      }
-    });
-    socket.addEventListener("error", () => {
-      if (socket === this.streamSocket) {
-        this.handleError("Android raw frame stream failed.");
-      }
-    });
-
-    this.connectInputSocket(target, generation);
-    this.scheduleFrameWatchdog(generation);
-  }
-
-  disconnect() {
-    this.shouldReconnect = false;
-    this.connectGeneration += 1;
-    this.clearFrameWatchdog();
-    this.streamSocket?.close();
-    if (activeAndroidFrameSocket === this.streamSocket) {
-      activeAndroidFrameSocket = null;
-    }
-    this.streamSocket = null;
-    this.inputSocket?.close();
-    if (activeInputSocket === this.inputSocket) {
-      activeInputSocket = null;
-    }
-    this.inputSocket = null;
-    this.streamTarget = null;
-    this.streamingReported = false;
-    this.lastFrameAt = 0;
-    this.reportedVideoHeight = 0;
-    this.reportedVideoWidth = 0;
-    this.stalledFrameWatchdogCount = 0;
-  }
-
-  destroy() {
-    this.disconnect();
-  }
-
-  clear() {
-    if (!this.canvas) {
-      return;
-    }
-    this.ensureCanvasContext()?.clearRect(
-      0,
-      0,
-      this.canvas.width,
-      this.canvas.height,
-    );
-  }
-
-  sendControl(payload: unknown): boolean {
-    if (
-      payload &&
-      typeof payload === "object" &&
-      "type" in payload &&
-      payload.type === "streamControl"
-    ) {
-      return true;
-    }
-    return sendWebSocketMessage(this.inputSocket, JSON.stringify(payload));
-  }
-
-  private connectInputSocket(target: StreamConnectTarget, generation: number) {
-    const socket = new WebSocket(
-      webSocketApiUrl(
-        `/api/simulators/${encodeURIComponent(target.udid)}/input`,
-      ),
-    );
-    this.inputSocket = socket;
-    activeInputSocket = socket;
-    socket.addEventListener("open", () => {
-      if (generation === this.connectGeneration) {
-        activeInputSocket = socket;
-      }
-    });
-    socket.addEventListener("close", () => {
-      if (activeInputSocket === socket) {
-        activeInputSocket = null;
-      }
-    });
-    socket.addEventListener("error", () => {
-      if (generation === this.connectGeneration) {
-        console.warn("Android input WebSocket failed.");
-      }
-    });
-  }
-
-  private handleTextMessage(text: string) {
-    try {
-      const message = JSON.parse(text) as { error?: string; type?: string };
-      if (message.error) {
-        this.handleError(message.error);
-      }
-    } catch {
-      // Text frames are diagnostics; binary frames carry pixels.
-    }
-  }
-
-  private handleFrameMessage(data: unknown) {
-    const frame = parseAndroidRawFrame(data);
-    if (!frame) {
-      this.stats.h264ParseFailures += 1;
-      this.onMessage({ type: "stats", stats: { ...this.stats } });
-      return;
-    }
-    this.paintFrame(frame);
-  }
-
-  private paintFrame(frame: AndroidRawFrame) {
-    const canvas = this.canvas;
-    if (!canvas) {
-      return;
-    }
-    this.syncCanvasSize(frame.width, frame.height);
-    const startedAt = performance.now();
-    const image = new ImageData(frame.pixels, frame.width, frame.height);
-    this.ensureCanvasContext()?.putImageData(image, 0, 0);
-    const finishedAt = performance.now();
-    const previousFrameAt = this.lastFrameAt;
-    this.lastFrameAt = finishedAt;
-    this.stalledFrameWatchdogCount = 0;
-    this.reportVideoConfig(frame.width, frame.height);
-    this.stats.codec = "android-raw";
-    this.stats.decodedFrames += 1;
-    this.stats.renderedFrames += 1;
-    this.stats.receivedPackets += 1;
-    this.stats.frameSequence = frame.sequence;
-    this.stats.width = frame.width;
-    this.stats.height = frame.height;
-    this.stats.latestRenderMs = finishedAt - startedAt;
-    this.stats.maxRenderMs = Math.max(
-      this.stats.maxRenderMs,
-      this.stats.latestRenderMs,
-    );
-    this.stats.averageRenderMs =
-      this.stats.averageRenderMs <= 0
-        ? this.stats.latestRenderMs
-        : this.stats.averageRenderMs * 0.9 + this.stats.latestRenderMs * 0.1;
-    this.stats.latestFrameGapMs =
-      previousFrameAt > 0 ? finishedAt - previousFrameAt : 0;
-    this.onMessage({ type: "stats", stats: { ...this.stats } });
-    if (!this.streamingReported) {
-      this.streamingReported = true;
-      this.onMessage({
-        type: "status",
-        status: {
-          detail: "Android raw frame stream connected",
-          state: "streaming",
-        },
-      });
-    }
-  }
-
-  private ensureCanvasContext(): CanvasRenderingContext2D | null {
-    const canvas = this.canvas;
-    if (!canvas) {
-      this.canvasContext = null;
-      return null;
-    }
-    if (this.canvasContext?.canvas === canvas) {
-      return this.canvasContext;
-    }
-    this.canvasContext = canvas.getContext("2d", {
-      alpha: false,
-      desynchronized: true,
-    });
-    return this.canvasContext;
-  }
-
-  private syncCanvasSize(width: number, height: number) {
-    if (!this.canvas) {
-      return;
-    }
-    const nextWidth = Math.max(1, Math.round(width));
-    const nextHeight = Math.max(1, Math.round(height));
-    if (this.canvas.width !== nextWidth) {
-      this.canvas.width = nextWidth;
-    }
-    if (this.canvas.height !== nextHeight) {
-      this.canvas.height = nextHeight;
-    }
-  }
-
-  private reportVideoConfig(width: number, height: number) {
-    if (
-      this.reportedVideoWidth === width &&
-      this.reportedVideoHeight === height
-    ) {
-      return;
-    }
-    this.reportedVideoWidth = width;
-    this.reportedVideoHeight = height;
-    this.onMessage({ type: "video-config", size: { height, width } });
-  }
-
-  private scheduleFrameWatchdog(generation: number) {
-    this.clearFrameWatchdog();
-    this.frameWatchdogTimeout = window.setTimeout(
-      () => {
-        this.frameWatchdogTimeout = 0;
-        if (generation !== this.connectGeneration || !this.shouldReconnect) {
-          return;
-        }
-        if (this.lastFrameAt <= 0) {
-          this.handleError("Android raw frame stream did not render a frame.");
-          return;
-        }
-        const now = performance.now();
-        if (now - this.lastFrameAt > H264_WS_STALLED_FRAME_TIMEOUT_MS) {
-          this.stalledFrameWatchdogCount += 1;
-          if (this.stalledFrameWatchdogCount >= 2 && this.streamTarget) {
-            const target = this.streamTarget;
-            this.onMessage({
-              type: "status",
-              status: {
-                detail: "Reconnecting stalled Android raw frame stream",
-                state: "connecting",
-              },
-            });
-            this.connect(target);
-            return;
-          }
-        } else {
-          this.stalledFrameWatchdogCount = 0;
-        }
-        this.scheduleFrameWatchdog(generation);
-      },
-      this.lastFrameAt > 0
-        ? H264_WS_STALLED_FRAME_TIMEOUT_MS
-        : H264_WS_FIRST_FRAME_TIMEOUT_MS,
-    );
-  }
-
-  private clearFrameWatchdog() {
-    if (!this.frameWatchdogTimeout) {
-      return;
-    }
-    window.clearTimeout(this.frameWatchdogTimeout);
-    this.frameWatchdogTimeout = 0;
-  }
-
-  private handleError(message: string) {
-    this.onMessage({
-      type: "status",
-      status: { error: message.replace(/\.$/, ""), state: "error" },
-    });
-  }
-}
-
-function parseAndroidRawFrame(data: unknown): AndroidRawFrame | null {
-  const bytes = bytesFromBinaryMessage(data);
-  if (!bytes || bytes.byteLength < ANDROID_RAW_HEADER_BYTES) {
-    return null;
-  }
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (
-    view.getUint32(0, false) !== ANDROID_RAW_MAGIC ||
-    view.getUint8(4) !== 1
-  ) {
-    return null;
-  }
-  const width = view.getUint32(8, true);
-  const height = view.getUint32(12, true);
-  const sequence = view.getUint32(16, true);
-  const timestampUs =
-    view.getUint32(24, true) + view.getUint32(28, true) * 4294967296;
-  const pixelBytes = width * height * 4;
-  if (
-    width <= 0 ||
-    height <= 0 ||
-    bytes.byteLength < ANDROID_RAW_HEADER_BYTES + pixelBytes
-  ) {
-    return null;
-  }
-  return {
-    height,
-    pixels: new Uint8ClampedArray(
-      bytes.buffer as ArrayBuffer,
-      bytes.byteOffset + ANDROID_RAW_HEADER_BYTES,
-      pixelBytes,
-    ),
-    sequence,
-    timestampUs,
-    width,
-  };
 }
 
 function parseH264WebSocketFrame(data: unknown): H264WebSocketFrame | null {
@@ -3102,9 +2713,7 @@ export class StreamWorkerClient {
       return;
     }
     this.backend?.destroy();
-    if (kind === "android-raw") {
-      this.backend = new AndroidRawFrameStreamClient(this.handleBackendMessage);
-    } else if (kind === "h264-ws") {
+    if (kind === "h264-ws") {
       this.backend = new H264WebSocketStreamClient(this.handleBackendMessage);
     } else {
       this.backend = new WebRtcStreamClient(this.handleBackendMessage);
@@ -3146,9 +2755,6 @@ export class StreamWorkerClient {
 export function preferredStreamBackend(
   target?: StreamConnectTarget | null,
 ): "auto" | StreamBackend {
-  if (isAndroidStreamTarget(target)) {
-    return target?.remote ? "webrtc" : "android-raw";
-  }
   const value =
     target?.transport ??
     new URLSearchParams(window.location.search).get("stream");
@@ -3161,9 +2767,6 @@ export function preferredStreamBackend(
 export function initialStreamBackend(
   target: StreamConnectTarget,
 ): StreamBackend {
-  if (isAndroidStreamTarget(target)) {
-    return target.remote ? "webrtc" : "android-raw";
-  }
   const preferredBackend = preferredStreamBackend(target);
   if (preferredBackend === "h264-ws") {
     return canUseH264WebSocket() ? "h264-ws" : "webrtc";
@@ -3181,11 +2784,4 @@ function nextAutoFallbackBackend(
     return canUseH264WebSocket() ? "h264-ws" : null;
   }
   return null;
-}
-
-function isAndroidStreamTarget(target?: StreamConnectTarget | null): boolean {
-  return (
-    target?.platform === "android-emulator" ||
-    Boolean(target?.udid.startsWith("android:"))
-  );
 }

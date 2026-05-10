@@ -1080,7 +1080,7 @@ fn ice_transport_policy() -> RTCIceTransportPolicy {
 }
 
 #[derive(Clone)]
-struct AndroidWebRtcSource {
+pub(crate) struct AndroidWebRtcSource {
     inner: Arc<AndroidWebRtcSourceInner>,
 }
 
@@ -1098,7 +1098,7 @@ unsafe impl Send for AndroidWebRtcSourceInner {}
 unsafe impl Sync for AndroidWebRtcSourceInner {}
 
 impl AndroidWebRtcSource {
-    async fn start(
+    pub(crate) async fn start(
         bridge: android::AndroidBridge,
         metrics: Arc<crate::metrics::counters::Metrics>,
         udid: String,
@@ -1208,11 +1208,14 @@ impl AndroidWebRtcSource {
         Ok(source)
     }
 
-    fn subscribe(&self) -> broadcast::Receiver<SharedFrame> {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<SharedFrame> {
         self.inner.sender.subscribe()
     }
 
-    async fn wait_for_keyframe(&self, timeout_duration: Duration) -> Option<SharedFrame> {
+    pub(crate) async fn wait_for_keyframe(
+        &self,
+        timeout_duration: Duration,
+    ) -> Option<SharedFrame> {
         let deadline = Instant::now() + timeout_duration;
         let baseline_sequence = self
             .inner
@@ -1243,9 +1246,9 @@ impl AndroidWebRtcSource {
         }
     }
 
-    fn request_refresh(&self) {}
+    pub(crate) fn request_refresh(&self) {}
 
-    fn request_keyframe(&self) {
+    pub(crate) fn request_keyframe(&self) {
         self.inner.request_keyframe();
     }
 }

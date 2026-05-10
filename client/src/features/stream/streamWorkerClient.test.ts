@@ -7,32 +7,39 @@ import {
 } from "./streamWorkerClient";
 
 describe("streamWorkerClient", () => {
-  it("forces Android emulator streams onto the raw frame socket even when H264 is requested", () => {
+  it("uses the common H264 WebSocket preference for Android emulator streams", () => {
     const target = buildStreamTarget("android:emulator-5554", {
       platform: "android-emulator",
       transport: "h264",
     });
 
-    expect(preferredStreamBackend(target)).toBe("android-raw");
-    expect(initialStreamBackend(target)).toBe("android-raw");
+    expect(preferredStreamBackend(target)).toBe("h264-ws");
   });
 
-  it("treats Android UDID prefixes as raw frame stream targets", () => {
+  it("uses the common WebRTC preference for Android emulator streams", () => {
     const target = buildStreamTarget("android:Pixel_8", {
-      transport: "h264",
-    });
-
-    expect(preferredStreamBackend(target)).toBe("android-raw");
-    expect(initialStreamBackend(target)).toBe("android-raw");
-  });
-
-  it("keeps remote Android streams on encoded WebRTC", () => {
-    const target = buildStreamTarget("android:Pixel_8", {
-      remote: true,
-      transport: "h264",
+      transport: "webrtc",
     });
 
     expect(preferredStreamBackend(target)).toBe("webrtc");
-    expect(initialStreamBackend(target)).toBe("webrtc");
+  });
+
+  it("defaults Android auto streams to WebRTC when the browser supports it", () => {
+    const previousPeerConnection = globalThis.RTCPeerConnection;
+    (
+      globalThis as unknown as { RTCPeerConnection: unknown }
+    ).RTCPeerConnection = function RTCPeerConnection() {};
+    const target = buildStreamTarget("android:Pixel_8", {
+      transport: "auto",
+    });
+
+    try {
+      expect(preferredStreamBackend(target)).toBe("auto");
+      expect(initialStreamBackend(target)).toBe("webrtc");
+    } finally {
+      (
+        globalThis as unknown as { RTCPeerConnection: unknown }
+      ).RTCPeerConnection = previousPeerConnection;
+    }
   });
 });
