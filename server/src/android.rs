@@ -58,6 +58,7 @@ pub struct AndroidFrame {
 
 pub struct AndroidGrpcFrameStream {
     inner: tonic::Streaming<grpc::Image>,
+    target_size: Option<(u32, u32)>,
 }
 
 pub fn is_android_id(id: &str) -> bool {
@@ -516,21 +517,25 @@ impl AndroidBridge {
             display: 0,
             transport: None,
         };
-        if let Ok(serial) = self.resolve_serial(&avd_name) {
-            if let Ok((width, height)) = self.screen_size_for_serial(&serial) {
-                let mut target_width = width;
-                let mut target_height = height;
-                if let Some(max_edge) = max_edge {
-                    let max_edge = max_edge.clamp(240, 2400) as f64;
-                    let largest = width.max(height);
-                    if largest > max_edge {
-                        let scale = max_edge / largest;
-                        target_width = (width * scale).round().max(1.0);
-                        target_height = (height * scale).round().max(1.0);
-                    }
+        let target_size = self
+            .resolve_serial(&avd_name)
+            .ok()
+            .and_then(|serial| self.screen_size_for_serial(&serial).ok())
+            .map(|(width, height)| {
+                (
+                    width.round().max(1.0) as u32,
+                    height.round().max(1.0) as u32,
+                )
+            });
+        if let (Some(max_edge), Some((width, height))) = (max_edge, target_size) {
+            let max_edge = max_edge.clamp(240, 2400);
+            let largest = width.max(height);
+            if largest > max_edge {
+                if width >= height {
+                    format.width = max_edge;
+                } else {
+                    format.height = max_edge;
                 }
-                format.width = target_width.round().max(1.0) as u32;
-                format.height = target_height.round().max(1.0) as u32;
             }
         }
 
@@ -568,6 +573,7 @@ impl AndroidBridge {
             })?;
         Ok(AndroidGrpcFrameStream {
             inner: response.into_inner(),
+            target_size,
         })
     }
 
@@ -965,6 +971,8 @@ impl AndroidGrpcFrameStream {
             grpc::image_format::ImgFormat::try_from(format.format)
                 .unwrap_or(grpc::image_format::ImgFormat::Rgba8888),
         )?;
+        let (width, height, rgba) =
+            normalize_android_frame_orientation(width, height, rgba, self.target_size);
         Ok(Some(AndroidFrame {
             width,
             height,
@@ -972,6 +980,42 @@ impl AndroidGrpcFrameStream {
             rgba,
         }))
     }
+}
+
+fn normalize_android_frame_orientation(
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    target_size: Option<(u32, u32)>,
+) -> (u32, u32, Vec<u8>) {
+    let Some((target_width, target_height)) = target_size else {
+        return (width, height, rgba);
+    };
+    if width == 0
+        || height == 0
+        || target_width == 0
+        || target_height == 0
+        || (width > height) == (target_width > target_height)
+    {
+        return (width, height, rgba);
+    }
+    (height, width, rotate_rgba_clockwise(&rgba, width, height))
+}
+
+fn rotate_rgba_clockwise(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let width = width as usize;
+    let height = height as usize;
+    let mut out = vec![0; rgba.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let src = (y * width + x) * 4;
+            let dst_x = height - 1 - y;
+            let dst_y = x;
+            let dst = (dst_y * height + dst_x) * 4;
+            out[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
+        }
+    }
+    out
 }
 
 fn run_command_text<const N: usize>(program: PathBuf, args: [&str; N]) -> Result<String, AppError> {
@@ -1632,6 +1676,38 @@ mod tests {
                 rotation_quarter_turns: 0,
             })
         );
+    }
+
+    #[test]
+    fn android_frame_orientation_rotates_when_stream_aspect_is_swapped() {
+        let rgba = vec![
+            1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255, //
+            4, 0, 0, 255, 5, 0, 0, 255, 6, 0, 0, 255,
+        ];
+
+        let (width, height, rotated) =
+            normalize_android_frame_orientation(3, 2, rgba, Some((2, 3)));
+
+        assert_eq!((width, height), (2, 3));
+        assert_eq!(
+            rotated,
+            vec![
+                4, 0, 0, 255, 1, 0, 0, 255, //
+                5, 0, 0, 255, 2, 0, 0, 255, //
+                6, 0, 0, 255, 3, 0, 0, 255,
+            ]
+        );
+    }
+
+    #[test]
+    fn android_frame_orientation_keeps_matching_aspect() {
+        let rgba = vec![1, 2, 3, 4, 5, 6, 7, 8];
+
+        let (width, height, out) =
+            normalize_android_frame_orientation(1, 2, rgba.clone(), Some((1080, 2400)));
+
+        assert_eq!((width, height), (1, 2));
+        assert_eq!(out, rgba);
     }
 }
 
