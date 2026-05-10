@@ -1896,23 +1896,21 @@ export function AppShell({
           }
           const androidViewport = isAndroidSimulator(selectedSimulator);
           beginZoomAnimation();
-          if (sendControl(selectedSimulator.udid, { type: "rotateRight" })) {
-            if (androidViewport) {
+          if (androidViewport) {
+            void runAction(async () => {
+              await rotateRight(selectedSimulator.udid);
               setRotationQuarterTurns(0);
-              window.setTimeout(() => void refresh(), 300);
-            } else {
-              setRotationQuarterTurns((current) => (current + 1) % 4);
-            }
+              await refresh();
+            }, false);
+            return;
+          }
+          if (sendControl(selectedSimulator.udid, { type: "rotateRight" })) {
+            setRotationQuarterTurns((current) => (current + 1) % 4);
             return;
           }
           void runAction(async () => {
             await rotateRight(selectedSimulator.udid);
-            if (androidViewport) {
-              setRotationQuarterTurns(0);
-              await refresh();
-            } else {
-              setRotationQuarterTurns((current) => (current + 1) % 4);
-            }
+            setRotationQuarterTurns((current) => (current + 1) % 4);
           }, false);
         }}
         onStreamEncoderChange={updateStreamEncoder}

@@ -460,12 +460,35 @@ impl AndroidBridge {
 
     fn rotate_by_quarter_turns(&self, id: &str, delta: i16) -> Result<(), AppError> {
         let serial = self.serial_for_id(id)?;
+        self.invalidate_display_metrics_for_serial(&serial);
         let current = self
             .display_metrics_for_serial(&serial)
             .map(|metrics| metrics.rotation_quarter_turns)
             .unwrap_or(0);
         let next = (i16::try_from(current).unwrap_or(0) + delta).rem_euclid(4) as u16;
         let rotation = next.to_string();
+        let _ = self.run_adb([
+            "-s",
+            &serial,
+            "shell",
+            "cmd",
+            "window",
+            "set-ignore-orientation-request",
+            "-d",
+            "0",
+            "true",
+        ]);
+        let _ = self.run_adb([
+            "-s",
+            &serial,
+            "shell",
+            "cmd",
+            "window",
+            "fixed-to-user-rotation",
+            "-d",
+            "0",
+            "enabled",
+        ]);
         self.run_adb([
             "-s",
             &serial,
@@ -473,11 +496,30 @@ impl AndroidBridge {
             "cmd",
             "window",
             "user-rotation",
+            "-d",
+            "0",
             "lock",
             &rotation,
         ])?;
         self.invalidate_display_metrics_for_serial(&serial);
+        self.wait_for_display_rotation(&serial, next);
         Ok(())
+    }
+
+    fn wait_for_display_rotation(&self, serial: &str, rotation: u16) {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < deadline {
+            self.invalidate_display_metrics_for_serial(serial);
+            if self
+                .display_metrics_for_serial(serial)
+                .map(|metrics| metrics.rotation_quarter_turns == rotation)
+                .unwrap_or(false)
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        self.invalidate_display_metrics_for_serial(serial);
     }
 
     pub fn toggle_appearance(&self, id: &str) -> Result<(), AppError> {
@@ -786,7 +828,7 @@ impl AndroidBridge {
                 "displayWidth": metrics.width,
                 "displayHeight": metrics.height,
                 "frameSequence": 0,
-                "rotationQuarterTurns": 0,
+                "rotationQuarterTurns": metrics.rotation_quarter_turns,
             })
         } else {
             json!({
