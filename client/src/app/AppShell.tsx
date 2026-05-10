@@ -352,8 +352,8 @@ export function AppShell({
   const [hierarchyVisible, setHierarchyVisible] = useState(() =>
     readStoredFlag(HIERARCHY_VISIBLE_STORAGE_KEY),
   );
-  const [devToolsVisible, setDevToolsVisible] = useState(
-    () => readStoredFlag(DEVTOOLS_VISIBLE_STORAGE_KEY, false),
+  const [devToolsVisible, setDevToolsVisible] = useState(() =>
+    readStoredFlag(DEVTOOLS_VISIBLE_STORAGE_KEY, false),
   );
   const [selectedUDID, setSelectedUDID] = useState(initialSelectedUDID ?? "");
   const [search, setSearch] = useState("");
