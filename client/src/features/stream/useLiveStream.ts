@@ -299,11 +299,21 @@ export function useLiveStream({
       return;
     }
 
+    const display = simulator.privateDisplay;
+    const displayKey =
+      simulator.platform === "android-emulator" && display
+        ? [
+            Math.round(display.displayWidth),
+            Math.round(display.displayHeight),
+            display.rotationQuarterTurns ?? 0,
+          ].join("x")
+        : "";
     const targetKey = [
       simulator.udid,
       simulator.platform ?? "",
       remote ? "remote" : "local",
       streamTransport,
+      displayKey,
     ].join("|");
     if (connectedStreamTargetKeyRef.current === targetKey) {
       return;
@@ -327,6 +337,9 @@ export function useLiveStream({
     canvasElement,
     simulator?.isBooted,
     simulator?.platform,
+    simulator?.privateDisplay?.displayHeight,
+    simulator?.privateDisplay?.displayWidth,
+    simulator?.privateDisplay?.rotationQuarterTurns,
     simulator?.udid,
     paused,
     remote,
