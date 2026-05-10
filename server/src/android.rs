@@ -977,8 +977,9 @@ impl AndroidGrpcFrameStream {
             grpc::image_format::ImgFormat::try_from(format.format)
                 .unwrap_or(grpc::image_format::ImgFormat::Rgba8888),
         )?;
-        let (width, height, rgba) =
+        let (width, height, mut rgba) =
             normalize_android_frame_orientation(width, height, rgba, self.target);
+        flatten_android_frame_alpha(&mut rgba, width, height);
         Ok(Some(AndroidFrame {
             width,
             height,
@@ -1039,6 +1040,59 @@ fn rotate_rgba_180_in_place(rgba: &mut [u8], width: u32, height: u32) {
             rgba.swap(pixel * 4 + channel, opposite * 4 + channel);
         }
     }
+}
+
+fn flatten_android_frame_alpha(rgba: &mut [u8], width: u32, height: u32) {
+    if !rgba.chunks_exact(4).any(|pixel| pixel[3] != 255) {
+        return;
+    }
+
+    let width = width as usize;
+    let height = height as usize;
+    let Some(default_fill) = first_opaque_rgb(rgba) else {
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel[3] = 255;
+        }
+        return;
+    };
+
+    for y in 0..height {
+        let row_start = y * width * 4;
+        let row = &mut rgba[row_start..row_start + width * 4];
+        let mut fill = first_opaque_rgb(row).unwrap_or(default_fill);
+        for pixel in row.chunks_exact_mut(4) {
+            if pixel[3] == 255 {
+                fill = [pixel[0], pixel[1], pixel[2]];
+                continue;
+            }
+            composite_pixel_over_rgb(pixel, fill);
+        }
+    }
+}
+
+fn first_opaque_rgb(rgba: &[u8]) -> Option<[u8; 3]> {
+    rgba.chunks_exact(4)
+        .find(|pixel| pixel[3] == 255)
+        .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+}
+
+fn composite_pixel_over_rgb(pixel: &mut [u8], background: [u8; 3]) {
+    let alpha = u32::from(pixel[3]);
+    if alpha == 0 {
+        pixel[0] = background[0];
+        pixel[1] = background[1];
+        pixel[2] = background[2];
+        pixel[3] = 255;
+        return;
+    }
+
+    for channel in 0..3 {
+        pixel[channel] = ((u32::from(pixel[channel]) * alpha
+            + u32::from(background[channel]) * (255 - alpha)
+            + 127)
+            / 255) as u8;
+    }
+    pixel[3] = 255;
 }
 
 fn run_command_text<const N: usize>(program: PathBuf, args: [&str; N]) -> Result<String, AppError> {
@@ -1732,7 +1786,7 @@ mod tests {
 
     #[test]
     fn android_frame_orientation_keeps_matching_aspect() {
-        let rgba = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let rgba = vec![1, 2, 3, 255, 5, 6, 7, 255];
 
         let (width, height, out) = normalize_android_frame_orientation(
             1,
@@ -1747,6 +1801,27 @@ mod tests {
 
         assert_eq!((width, height), (1, 2));
         assert_eq!(out, rgba);
+    }
+
+    #[test]
+    fn android_frame_alpha_flattens_transparent_edges_to_nearest_row_pixel() {
+        let mut rgba = vec![0, 0, 0, 0, 10, 20, 30, 255, 40, 50, 60, 255, 0, 0, 0, 0];
+
+        flatten_android_frame_alpha(&mut rgba, 4, 1);
+
+        assert_eq!(
+            rgba,
+            vec![10, 20, 30, 255, 10, 20, 30, 255, 40, 50, 60, 255, 40, 50, 60, 255,]
+        );
+    }
+
+    #[test]
+    fn android_frame_alpha_composites_partial_alpha() {
+        let mut rgba = vec![100, 50, 0, 255, 200, 200, 200, 128];
+
+        flatten_android_frame_alpha(&mut rgba, 2, 1);
+
+        assert_eq!(rgba, vec![100, 50, 0, 255, 150, 125, 100, 255]);
     }
 
     #[test]

@@ -1608,8 +1608,23 @@
 }
 
 .device-screen.android-screen {
+  --android-screen-radius: 18px;
+  --android-stream-overscan: 2px;
+
   background: transparent;
-  border-radius: 16px;
+  border-radius: var(--android-screen-radius);
+  clip-path: inset(0 round var(--android-screen-radius));
+}
+
+.device-screen.android-screen .stream-canvas,
+.device-screen.android-screen .stream-video {
+  inset: calc(-1 * var(--android-stream-overscan));
+  width: calc(
+    100% + var(--android-stream-overscan) + var(--android-stream-overscan)
+  );
+  height: calc(
+    100% + var(--android-stream-overscan) + var(--android-stream-overscan)
+  );
 }
 
 .stream-canvas {
