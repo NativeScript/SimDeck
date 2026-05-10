@@ -24,6 +24,25 @@ describe("streamWorkerClient", () => {
     expect(preferredStreamBackend(target)).toBe("webrtc");
   });
 
+  it("treats explicit RGBA transport as a WebRTC backend", () => {
+    const previousWindow = globalThis.window;
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { location: { search: "?stream=rgba" } },
+    });
+
+    try {
+      expect(preferredStreamBackend(buildStreamTarget("android:Pixel_8"))).toBe(
+        "webrtc",
+      );
+    } finally {
+      Object.defineProperty(globalThis, "window", {
+        configurable: true,
+        value: previousWindow,
+      });
+    }
+  });
+
   it("defaults Android auto streams to WebRTC when the browser supports it", () => {
     const previousPeerConnection = globalThis.RTCPeerConnection;
     (

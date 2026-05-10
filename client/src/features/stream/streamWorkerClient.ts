@@ -2669,9 +2669,11 @@ function shouldUseRemoteH264AutoProfile(
 }
 
 function shouldUseLocalAndroidRgbaWebRtc(target: StreamConnectTarget): boolean {
+  const stream = new URLSearchParams(window.location.search).get("stream");
   return (
     !target.remote &&
     isLoopbackHost(window.location.hostname) &&
+    (stream === "rgba" || stream === "webrtc-rgba") &&
     (target.platform === "android-emulator" || target.udid.startsWith("android:"))
   );
 }
@@ -3077,7 +3079,9 @@ export function preferredStreamBackend(
   if (value === "h264" || value === "h264-ws") {
     return "h264-ws";
   }
-  return value === "webrtc" ? "webrtc" : "auto";
+  return value === "webrtc" || value === "rgba" || value === "webrtc-rgba"
+    ? "webrtc"
+    : "auto";
 }
 
 export function initialStreamBackend(
