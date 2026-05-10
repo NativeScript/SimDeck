@@ -7,7 +7,7 @@ use crate::error::AppError;
 use crate::metrics::counters::ClientStreamStats;
 use crate::native::ffi;
 use crate::transport::packet::{FramePacket, SharedFrame};
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{c_void, CStr};
@@ -21,7 +21,9 @@ use tracing::{info, warn};
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
 use webrtc::api::APIBuilder;
+use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::data_channel::data_channel_state::RTCDataChannelState;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
@@ -47,6 +49,7 @@ const ANNEX_B_START_CODE: &[u8] = &[0, 0, 0, 1];
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const WEBRTC_CONTROL_CHANNEL_LABEL: &str = "simdeck-control";
 const WEBRTC_TELEMETRY_CHANNEL_LABEL: &str = "simdeck-telemetry";
+const WEBRTC_RGBA_CHANNEL_LABEL: &str = "simdeck-rgba";
 const WEBRTC_DEFAULT_LOCAL_STREAM_FPS: u32 = 60;
 const WEBRTC_MAX_LOCAL_STREAM_FPS: u32 = 240;
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
@@ -58,6 +61,13 @@ const WEBRTC_FULL_ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(3);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 const WEBRTC_PEER_DISCONNECTED_TIMEOUT: Duration = Duration::from_secs(12);
 const ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY: usize = 128;
+const ANDROID_WEBRTC_RAW_FRAME_BROADCAST_CAPACITY: usize = 8;
+const ANDROID_WEBRTC_RGBA_CHUNK_HEADER_BYTES: usize = 48;
+const ANDROID_WEBRTC_RGBA_CHUNK_BYTES: usize = 256 * 1024;
+const ANDROID_WEBRTC_RGBA_CHUNK_MAGIC: u32 = 0x5344_5243; // "SDRC"
+const ANDROID_WEBRTC_RGBA_VERSION: u8 = 1;
+const ANDROID_WEBRTC_RGBA_FORMAT_RGBA8888: u8 = 1;
+const ANDROID_WEBRTC_RGBA_BUFFERED_FRAME_LIMIT: usize = 2;
 const ANDROID_WEBRTC_FPS: u64 = 30;
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<WebRtcMediaStreamToken>>>> =
     OnceLock::new();
@@ -111,18 +121,37 @@ pub async fn create_answer(
     state: AppState,
     udid: String,
     payload: WebRtcOfferPayload,
+    peer_is_loopback: bool,
 ) -> Result<WebRtcAnswerPayload, AppError> {
     if payload.kind != "offer" {
         return Err(AppError::bad_request(
             "WebRTC payload must include type `offer`.",
         ));
     }
+    let is_android = android::is_android_id(&udid);
+    let transport = payload
+        .transport
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if transport.is_some_and(|value| value.eq_ignore_ascii_case("rgba")) {
+        if !is_android {
+            return Err(AppError::bad_request(
+                "RGBA WebRTC transport is only supported for Android emulators.",
+            ));
+        }
+        if !peer_is_loopback {
+            return Err(AppError::bad_request(
+                "RGBA WebRTC transport is only available to loopback clients.",
+            ));
+        }
+        return create_android_rgba_answer(state, udid, payload).await;
+    }
     if payload.transport.is_some() {
         return Err(AppError::bad_request(
-            "WebRTC preview supports media tracks only.",
+            "Unsupported WebRTC transport. Supported transports are media tracks and Android loopback RGBA.",
         ));
     }
-    let is_android = android::is_android_id(&udid);
     if !is_android {
         if let Some(stream_config) = payload.stream_config.as_ref() {
             apply_stream_quality_payload(&state, stream_config)?;
@@ -136,6 +165,7 @@ pub async fn create_answer(
                 state.metrics.clone(),
                 udid.clone(),
                 android_webrtc_max_edge(),
+                true,
             )
             .await?,
         )
@@ -323,6 +353,127 @@ pub async fn create_answer(
         video: WebRtcVideoMetadata {
             width: first_frame_width,
             height: first_frame_height,
+        },
+    })
+}
+
+async fn create_android_rgba_answer(
+    state: AppState,
+    udid: String,
+    payload: WebRtcOfferPayload,
+) -> Result<WebRtcAnswerPayload, AppError> {
+    let source = AndroidWebRtcSource::start(
+        state.android.clone(),
+        state.metrics.clone(),
+        udid.clone(),
+        None,
+        false,
+    )
+    .await?;
+    info!(
+        "Android RGBA WebRTC offer for {udid}: remote_candidates={} remote_candidate_types={} ice_servers={} ice_transport_policy={}",
+        count_sdp_candidates(&payload.sdp),
+        summarize_sdp_candidate_types(&payload.sdp),
+        std::env::var("SIMDECK_WEBRTC_ICE_SERVERS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_STUN_URL.to_owned()),
+        ice_transport_policy_label()
+    );
+
+    let api = APIBuilder::new().build();
+    let peer_connection = Arc::new(
+        api.new_peer_connection(RTCConfiguration {
+            ice_servers: ice_servers(),
+            ice_transport_policy: ice_transport_policy(),
+            ..Default::default()
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("create WebRTC peer connection: {error}")))?,
+    );
+    register_diagnostics(&peer_connection, &udid);
+    let (stream_control_tx, stream_control_rx) = mpsc::unbounded_channel();
+    register_android_data_channel(
+        &peer_connection,
+        source.clone(),
+        state.clone(),
+        udid.clone(),
+        stream_control_tx,
+    );
+    let rgba_channel = peer_connection
+        .create_data_channel(
+            WEBRTC_RGBA_CHANNEL_LABEL,
+            Some(RTCDataChannelInit {
+                ordered: Some(false),
+                max_retransmits: Some(0),
+                ..Default::default()
+            }),
+        )
+        .await
+        .map_err(|error| AppError::internal(format!("create RGBA WebRTC data channel: {error}")))?;
+
+    let fast_gather =
+        has_sdp_candidate_type(&payload.sdp, "host") && ice_transport_policy_label() == "all";
+    let offer = RTCSessionDescription::offer(payload.sdp)
+        .map_err(|error| AppError::bad_request(format!("invalid WebRTC offer: {error}")))?;
+    peer_connection
+        .set_remote_description(offer)
+        .await
+        .map_err(|error| AppError::bad_request(format!("set remote WebRTC offer: {error}")))?;
+    let answer = peer_connection
+        .create_answer(None)
+        .await
+        .map_err(|error| AppError::internal(format!("create WebRTC answer: {error}")))?;
+    let mut gather_complete = peer_connection.gathering_complete_promise().await;
+    peer_connection
+        .set_local_description(answer)
+        .await
+        .map_err(|error| AppError::internal(format!("set WebRTC answer: {error}")))?;
+    let gather_timeout = if fast_gather {
+        WEBRTC_FAST_ICE_GATHER_TIMEOUT
+    } else {
+        WEBRTC_FULL_ICE_GATHER_TIMEOUT
+    };
+    let gather_result = time::timeout(gather_timeout, gather_complete.recv()).await;
+    let mut local_description = peer_connection
+        .local_description()
+        .await
+        .ok_or_else(|| AppError::internal("WebRTC local description was not set."))?;
+    if gather_result.is_err() && count_sdp_candidates(&local_description.sdp) == 0 {
+        let _ = time::timeout(WEBRTC_FULL_ICE_GATHER_TIMEOUT, gather_complete.recv()).await;
+        local_description = peer_connection
+            .local_description()
+            .await
+            .ok_or_else(|| AppError::internal("WebRTC local description was not set."))?;
+    }
+    info!(
+        "Android RGBA WebRTC answer for {udid}: local_candidates={} local_candidate_types={}",
+        count_sdp_candidates(&local_description.sdp),
+        summarize_sdp_candidate_types(&local_description.sdp)
+    );
+
+    let (cancellation_token, cancellation) =
+        register_webrtc_media_stream(&udid, payload.client_id.as_deref(), true);
+    tokio::spawn(
+        WebRtcRgbaStream {
+            state,
+            udid,
+            source,
+            peer_connection,
+            rgba_channel,
+            cancellation_token,
+            cancellation,
+            stream_control_rx,
+        }
+        .run(),
+    );
+
+    Ok(WebRtcAnswerPayload {
+        sdp: local_description.sdp,
+        kind: "answer".to_owned(),
+        video: WebRtcVideoMetadata {
+            width: 0,
+            height: 0,
         },
     })
 }
@@ -1090,6 +1241,7 @@ struct AndroidWebRtcSourceInner {
     callback_user_data: AtomicUsize,
     shutdown_tx: broadcast::Sender<()>,
     sender: broadcast::Sender<SharedFrame>,
+    raw_sender: broadcast::Sender<Arc<android::AndroidFrame>>,
     latest_keyframe: RwLock<Option<SharedFrame>>,
     metrics: Arc<crate::metrics::counters::Metrics>,
 }
@@ -1103,9 +1255,11 @@ impl AndroidWebRtcSource {
         metrics: Arc<crate::metrics::counters::Metrics>,
         udid: String,
         max_edge: Option<u32>,
+        encode_h264: bool,
     ) -> Result<Self, AppError> {
         let mut frame_stream = bridge.grpc_frame_stream(&udid, max_edge).await?;
         let (sender, _) = broadcast::channel(ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY);
+        let (raw_sender, _) = broadcast::channel(ANDROID_WEBRTC_RAW_FRAME_BROADCAST_CAPACITY);
         let (shutdown_tx, _) = broadcast::channel(1);
         let inner = Arc::new(AndroidWebRtcSourceInner {
             udid: udid.clone(),
@@ -1113,34 +1267,38 @@ impl AndroidWebRtcSource {
             callback_user_data: AtomicUsize::new(0),
             shutdown_tx,
             sender,
+            raw_sender,
             latest_keyframe: RwLock::new(None),
             metrics,
         });
-        let user_data = Weak::into_raw(Arc::downgrade(&inner)) as *mut c_void;
-        let mut error = std::ptr::null_mut();
-        let handle = unsafe {
-            ffi::xcw_native_h264_encoder_create(
-                Some(android_h264_encoder_frame_callback),
-                user_data,
-                &mut error,
-            )
-        };
-        if handle.is_null() {
-            unsafe {
-                let _ = Weak::from_raw(user_data as *const AndroidWebRtcSourceInner);
+        if encode_h264 {
+            let user_data = Weak::into_raw(Arc::downgrade(&inner)) as *mut c_void;
+            let mut error = std::ptr::null_mut();
+            let handle = unsafe {
+                ffi::xcw_native_h264_encoder_create(
+                    Some(android_h264_encoder_frame_callback),
+                    user_data,
+                    &mut error,
+                )
+            };
+            if handle.is_null() {
+                unsafe {
+                    let _ = Weak::from_raw(user_data as *const AndroidWebRtcSourceInner);
+                }
+                return Err(unsafe { take_native_error(error) }.unwrap_or_else(|| {
+                    AppError::native("Unable to create Android H.264 encoder.")
+                }));
             }
-            return Err(unsafe { take_native_error(error) }
-                .unwrap_or_else(|| AppError::native("Unable to create Android H.264 encoder.")));
+            inner
+                .encoder_handle
+                .store(handle as usize, Ordering::Release);
+            inner
+                .callback_user_data
+                .store(user_data as usize, Ordering::Release);
         }
-        inner
-            .encoder_handle
-            .store(handle as usize, Ordering::Release);
-        inner
-            .callback_user_data
-            .store(user_data as usize, Ordering::Release);
 
         let source = Self { inner };
-        let latest_frame = Arc::new(Mutex::new(None::<android::AndroidFrame>));
+        let latest_frame = Arc::new(Mutex::new(None::<Arc<android::AndroidFrame>>));
         let reader_inner = Arc::downgrade(&source.inner);
         let reader_latest_frame = latest_frame.clone();
         let mut reader_shutdown_rx = source.inner.shutdown_tx.subscribe();
@@ -1151,6 +1309,10 @@ impl AndroidWebRtcSource {
                     frame = frame_stream.next_frame() => {
                         match frame {
                             Ok(Some(frame)) => {
+                                let frame = Arc::new(frame);
+                                if let Some(inner) = reader_inner.upgrade() {
+                                    let _ = inner.raw_sender.send(frame.clone());
+                                }
                                 *reader_latest_frame.lock().unwrap() = Some(frame);
                             }
                             Ok(None) => break,
@@ -1168,48 +1330,78 @@ impl AndroidWebRtcSource {
             }
         });
 
-        let encoder_inner = Arc::downgrade(&source.inner);
-        let encoder_latest_frame = latest_frame;
-        let mut encoder_shutdown_rx = source.inner.shutdown_tx.subscribe();
-        tokio::spawn(async move {
-            let min_frame_gap = android_webrtc_frame_interval();
-            let mut ticker = time::interval(min_frame_gap);
-            ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {
-                    _ = encoder_shutdown_rx.recv() => break,
-                    _ = ticker.tick() => {
-                        let Some(inner) = encoder_inner.upgrade() else {
-                            break;
-                        };
-                        let frame = encoder_latest_frame.lock().unwrap().take();
-                        let Some(frame) = frame else {
-                            continue;
-                        };
-                        if inner.latest_keyframe.read().unwrap().is_none() {
-                            inner.request_keyframe();
-                        }
-                        let handle = inner.encoder_handle.load(Ordering::Acquire);
-                        let udid = inner.udid.clone();
-                        let encode_result = task::spawn_blocking(move || {
-                            encode_android_rgba_frame(handle, &frame)
-                        })
-                        .await
-                        .map_err(|error| AppError::internal(format!("Failed to join Android encoder task: {error}")))
-                        .and_then(|result| result);
-                        if let Err(error) = encode_result {
-                            warn!("Android VideoToolbox encode failed for {udid}: {error}");
+        if encode_h264 {
+            let encoder_inner = Arc::downgrade(&source.inner);
+            let encoder_latest_frame = latest_frame;
+            let mut encoder_shutdown_rx = source.inner.shutdown_tx.subscribe();
+            tokio::spawn(async move {
+                let min_frame_gap = android_webrtc_frame_interval();
+                let mut ticker = time::interval(min_frame_gap);
+                ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = encoder_shutdown_rx.recv() => break,
+                        _ = ticker.tick() => {
+                            let Some(inner) = encoder_inner.upgrade() else {
+                                break;
+                            };
+                            let frame = encoder_latest_frame.lock().unwrap().clone();
+                            let Some(frame) = frame else {
+                                continue;
+                            };
+                            if inner.latest_keyframe.read().unwrap().is_none() {
+                                inner.request_keyframe();
+                            }
+                            let handle = inner.encoder_handle.load(Ordering::Acquire);
+                            let udid = inner.udid.clone();
+                            let encode_result = task::spawn_blocking(move || {
+                                encode_android_rgba_frame(handle, &frame)
+                            })
+                            .await
+                            .map_err(|error| AppError::internal(format!("Failed to join Android encoder task: {error}")))
+                            .and_then(|result| result);
+                            if let Err(error) = encode_result {
+                                warn!("Android VideoToolbox encode failed for {udid}: {error}");
+                            }
                         }
                     }
                 }
-            }
-        });
-        source.request_keyframe();
+            });
+            source.request_keyframe();
+        } else {
+            let raw_inner = Arc::downgrade(&source.inner);
+            let raw_latest_frame = latest_frame;
+            let mut raw_shutdown_rx = source.inner.shutdown_tx.subscribe();
+            tokio::spawn(async move {
+                let min_frame_gap = android_webrtc_frame_interval();
+                let mut ticker = time::interval(min_frame_gap);
+                ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = raw_shutdown_rx.recv() => break,
+                        _ = ticker.tick() => {
+                            let Some(inner) = raw_inner.upgrade() else {
+                                break;
+                            };
+                            let frame = raw_latest_frame.lock().unwrap().clone();
+                            let Some(frame) = frame else {
+                                continue;
+                            };
+                            let _ = inner.raw_sender.send(frame);
+                        }
+                    }
+                }
+            });
+        }
         Ok(source)
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<SharedFrame> {
         self.inner.sender.subscribe()
+    }
+
+    fn subscribe_raw(&self) -> broadcast::Receiver<Arc<android::AndroidFrame>> {
+        self.inner.raw_sender.subscribe()
     }
 
     pub(crate) async fn wait_for_keyframe(
@@ -1350,6 +1542,47 @@ fn encode_android_rgba_frame(
     }
 }
 
+fn android_rgba_webrtc_frame_chunks(
+    sequence: u64,
+    frame: &android::AndroidFrame,
+) -> Option<Vec<Bytes>> {
+    let expected_bytes = frame.width as usize * frame.height as usize * 4;
+    if expected_bytes == 0 || frame.rgba.len() != expected_bytes {
+        return None;
+    }
+    let mut chunks = Vec::with_capacity(frame.rgba.len().div_ceil(ANDROID_WEBRTC_RGBA_CHUNK_BYTES));
+    for (chunk_index, chunk) in frame
+        .rgba
+        .chunks(ANDROID_WEBRTC_RGBA_CHUNK_BYTES)
+        .enumerate()
+    {
+        let chunk_offset = chunk_index * ANDROID_WEBRTC_RGBA_CHUNK_BYTES;
+        let mut bytes =
+            BytesMut::with_capacity(ANDROID_WEBRTC_RGBA_CHUNK_HEADER_BYTES + chunk.len());
+        bytes.put_u32(ANDROID_WEBRTC_RGBA_CHUNK_MAGIC);
+        bytes.put_u8(ANDROID_WEBRTC_RGBA_VERSION);
+        bytes.put_u8(ANDROID_WEBRTC_RGBA_FORMAT_RGBA8888);
+        bytes.put_u16(ANDROID_WEBRTC_RGBA_CHUNK_HEADER_BYTES as u16);
+        bytes.put_u64(sequence);
+        bytes.put_u64(frame.timestamp_us);
+        bytes.put_u32(frame.width);
+        bytes.put_u32(frame.height);
+        bytes.put_u32(frame.rgba.len() as u32);
+        bytes.put_u32(chunk_offset as u32);
+        bytes.put_u32(chunk.len() as u32);
+        bytes.put_u8(if chunk_offset + chunk.len() >= frame.rgba.len() {
+            1
+        } else {
+            0
+        });
+        bytes.put_u8(0);
+        bytes.put_u16(0);
+        bytes.extend_from_slice(chunk);
+        chunks.push(bytes.freeze());
+    }
+    Some(chunks)
+}
+
 unsafe fn copy_native_shared_bytes(bytes: ffi::xcw_native_shared_bytes) -> Option<Bytes> {
     if bytes.data.is_null() || bytes.length == 0 {
         if !bytes.owner.is_null() {
@@ -1483,6 +1716,135 @@ struct WebRtcMediaStream {
     cancellation_token: broadcast::Sender<()>,
     cancellation: broadcast::Receiver<()>,
     stream_control_rx: mpsc::UnboundedReceiver<WebRtcStreamCommand>,
+}
+
+struct WebRtcRgbaStream {
+    state: AppState,
+    source: AndroidWebRtcSource,
+    udid: String,
+    peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
+    rgba_channel: Arc<RTCDataChannel>,
+    cancellation_token: broadcast::Sender<()>,
+    cancellation: broadcast::Receiver<()>,
+    stream_control_rx: mpsc::UnboundedReceiver<WebRtcStreamCommand>,
+}
+
+impl WebRtcRgbaStream {
+    async fn run(self) {
+        let Self {
+            state,
+            source,
+            udid,
+            peer_connection,
+            rgba_channel,
+            cancellation_token,
+            mut cancellation,
+            mut stream_control_rx,
+        } = self;
+        let mut rx = source.subscribe_raw();
+        let mut peer_state_interval = time::interval(Duration::from_millis(250));
+        let mut peer_disconnected_since: Option<time::Instant> = None;
+        let mut sequence = 0u64;
+        let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
+        rgba_channel.on_open(Box::new({
+            let udid = udid.clone();
+            move || {
+                let udid = udid.clone();
+                Box::pin(async move {
+                    info!("Android RGBA WebRTC data channel open for {udid}");
+                })
+            }
+        }));
+
+        loop {
+            tokio::select! {
+                _ = cancellation.recv() => {
+                    warn!("Android RGBA WebRTC stream replaced for {udid}");
+                    break;
+                }
+                _ = peer_state_interval.tick() => {
+                    let peer_state = peer_connection.connection_state();
+                    if matches!(peer_state, RTCPeerConnectionState::Closed | RTCPeerConnectionState::Failed) {
+                        warn!("Android RGBA WebRTC stream closing for {udid}: peer state {peer_state}");
+                        break;
+                    }
+                    if peer_state == RTCPeerConnectionState::Disconnected {
+                        let disconnected_since =
+                            peer_disconnected_since.get_or_insert_with(time::Instant::now);
+                        if disconnected_since.elapsed() >= WEBRTC_PEER_DISCONNECTED_TIMEOUT {
+                            warn!("Android RGBA WebRTC stream closing for {udid}: peer state {peer_state}");
+                            break;
+                        }
+                    } else {
+                        peer_disconnected_since = None;
+                    }
+                }
+                command = stream_control_rx.recv() => {
+                    let Some(command) = command else {
+                        continue;
+                    };
+                    if command.force_keyframe || command.snapshot {
+                        source.request_refresh();
+                    }
+                }
+                frame = rx.recv() => {
+                    let frame = match frame {
+                        Ok(frame) => frame,
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            state
+                                .metrics
+                                .frames_dropped_server
+                                .fetch_add(skipped, Ordering::Relaxed);
+                            continue;
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            warn!("Android RGBA WebRTC stream closing for {udid}: raw frame channel closed");
+                            break;
+                        }
+                    };
+                    if rgba_channel.ready_state() != RTCDataChannelState::Open {
+                        state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    let Some(chunks) = android_rgba_webrtc_frame_chunks(sequence, &frame) else {
+                        state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    };
+                    let buffered_amount = rgba_channel.buffered_amount().await;
+                    if buffered_amount > frame.rgba.len() * ANDROID_WEBRTC_RGBA_BUFFERED_FRAME_LIMIT {
+                        state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    sequence = sequence.wrapping_add(1);
+                    let mut sent_frame = true;
+                    for chunk in chunks {
+                        let send_result = time::timeout(WEBRTC_REALTIME_WRITE_TIMEOUT, rgba_channel.send(&chunk)).await;
+                        match send_result {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(error)) => {
+                                warn!("Android RGBA WebRTC data channel send failed for {udid}: {error}");
+                                sent_frame = false;
+                                break;
+                            }
+                            Err(_) => {
+                                sent_frame = false;
+                                break;
+                            }
+                        }
+                    }
+                    if sent_frame {
+                        state.metrics.frames_sent.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+
+        warn!("Android RGBA WebRTC stream ended for {udid}");
+        clear_webrtc_media_stream(&udid, &cancellation_token);
+        let _ = peer_connection.close().await;
+    }
 }
 
 impl WebRtcMediaStream {
@@ -2074,11 +2436,14 @@ impl Drop for WebRtcMetricsGuard {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_avcc_parameter_sets, append_length_prefixed_nalus, h264_annex_b_sample,
-        h264_frame_has_idr, h264_frame_is_decoder_sync, h264_sdp_fmtp_line, is_annex_b,
-        is_h264_codec, rtcp_packet_requests_keyframe, rtp_packet_pacing, WebRtcMetricsGuard,
-        WebRtcSendTiming, ANNEX_B_START_CODE,
+        android_rgba_webrtc_frame_chunks, append_avcc_parameter_sets, append_length_prefixed_nalus,
+        h264_annex_b_sample, h264_frame_has_idr, h264_frame_is_decoder_sync, h264_sdp_fmtp_line,
+        is_annex_b, is_h264_codec, rtcp_packet_requests_keyframe, rtp_packet_pacing,
+        WebRtcMetricsGuard, WebRtcSendTiming, ANDROID_WEBRTC_RGBA_CHUNK_BYTES,
+        ANDROID_WEBRTC_RGBA_CHUNK_HEADER_BYTES, ANDROID_WEBRTC_RGBA_CHUNK_MAGIC,
+        ANDROID_WEBRTC_RGBA_FORMAT_RGBA8888, ANDROID_WEBRTC_RGBA_VERSION, ANNEX_B_START_CODE,
     };
+    use crate::android;
     use crate::metrics::counters::Metrics;
     use crate::transport::packet::FramePacket;
     use bytes::Bytes;
@@ -2537,6 +2902,71 @@ mod tests {
             ]
             .concat()
         );
+    }
+
+    #[test]
+    fn android_rgba_webrtc_frame_chunks_use_fixed_binary_header() {
+        let rgba = (0..(320 * 240 * 4))
+            .map(|value| (value % 251) as u8)
+            .collect::<Vec<_>>();
+        let frame = android::AndroidFrame {
+            width: 320,
+            height: 240,
+            timestamp_us: 123_456,
+            rgba: rgba.clone(),
+        };
+
+        let chunks = android_rgba_webrtc_frame_chunks(7, &frame).unwrap();
+
+        assert_eq!(chunks.len(), 2);
+        let first = &chunks[0];
+        assert_eq!(
+            u32::from_be_bytes(first[0..4].try_into().unwrap()),
+            ANDROID_WEBRTC_RGBA_CHUNK_MAGIC
+        );
+        assert_eq!(first[4], ANDROID_WEBRTC_RGBA_VERSION);
+        assert_eq!(first[5], ANDROID_WEBRTC_RGBA_FORMAT_RGBA8888);
+        assert_eq!(
+            u16::from_be_bytes(first[6..8].try_into().unwrap()) as usize,
+            ANDROID_WEBRTC_RGBA_CHUNK_HEADER_BYTES
+        );
+        assert_eq!(u64::from_be_bytes(first[8..16].try_into().unwrap()), 7);
+        assert_eq!(
+            u64::from_be_bytes(first[16..24].try_into().unwrap()),
+            123_456
+        );
+        assert_eq!(u32::from_be_bytes(first[24..28].try_into().unwrap()), 320);
+        assert_eq!(u32::from_be_bytes(first[28..32].try_into().unwrap()), 240);
+        assert_eq!(
+            u32::from_be_bytes(first[32..36].try_into().unwrap()) as usize,
+            rgba.len()
+        );
+        assert_eq!(u32::from_be_bytes(first[36..40].try_into().unwrap()), 0);
+        assert_eq!(
+            u32::from_be_bytes(first[40..44].try_into().unwrap()) as usize,
+            ANDROID_WEBRTC_RGBA_CHUNK_BYTES
+        );
+        assert_eq!(first[44], 0);
+
+        let second = &chunks[1];
+        assert_eq!(
+            u32::from_be_bytes(second[36..40].try_into().unwrap()) as usize,
+            ANDROID_WEBRTC_RGBA_CHUNK_BYTES
+        );
+        assert_eq!(
+            u32::from_be_bytes(second[40..44].try_into().unwrap()) as usize,
+            rgba.len() - ANDROID_WEBRTC_RGBA_CHUNK_BYTES
+        );
+        assert_eq!(second[44], 1);
+        let reassembled = chunks
+            .iter()
+            .flat_map(|chunk| {
+                chunk[ANDROID_WEBRTC_RGBA_CHUNK_HEADER_BYTES..]
+                    .iter()
+                    .copied()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reassembled, rgba);
     }
 
     trait CloneFrameForTest {

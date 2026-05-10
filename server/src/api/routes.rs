@@ -1981,10 +1981,11 @@ async fn handle_android_control_touch(
 
 async fn webrtc_offer(
     State(state): State<AppState>,
+    ConnectInfo(address): ConnectInfo<SocketAddr>,
     Path(udid): Path<String>,
     Json(payload): Json<crate::transport::webrtc::WebRtcOfferPayload>,
 ) -> Result<Json<crate::transport::webrtc::WebRtcAnswerPayload>, AppError> {
-    crate::transport::webrtc::create_answer(state, udid, payload)
+    crate::transport::webrtc::create_answer(state, udid, payload, address.ip().is_loopback())
         .await
         .map(Json)
 }
@@ -2122,6 +2123,7 @@ async fn handle_android_h264_socket(
         state.metrics.clone(),
         udid.clone(),
         initial_quality.max_edge,
+        true,
     )
     .await
     {

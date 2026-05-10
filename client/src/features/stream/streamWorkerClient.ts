@@ -18,6 +18,7 @@ import type {
 const HAVE_CURRENT_DATA = 2;
 const WEBRTC_CONTROL_CHANNEL_LABEL = "simdeck-control";
 const WEBRTC_TELEMETRY_CHANNEL_LABEL = "simdeck-telemetry";
+const WEBRTC_RGBA_CHANNEL_LABEL = "simdeck-rgba";
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 10000;
 const WEBRTC_STALLED_FRAME_TIMEOUT_MS = 3000;
 const WEBRTC_LOCAL_RECEIVER_BUFFER_SECONDS = 0.001;
@@ -33,6 +34,10 @@ const H264_WS_HEADER_BYTES = 40;
 const H264_WS_MAGIC = 0x53444831;
 const H264_WS_FLAG_KEYFRAME = 1 << 0;
 const H264_WS_FLAG_CONFIG = 1 << 1;
+const WEBRTC_RGBA_CHUNK_HEADER_BYTES = 48;
+const WEBRTC_RGBA_CHUNK_MAGIC = 0x53445243;
+const WEBRTC_RGBA_VERSION = 1;
+const WEBRTC_RGBA_FORMAT_RGBA8888 = 1;
 const H264_WS_LOCAL_AUTO_PROFILES: StreamQualityPreset[] = [
   "low",
   "economy",
@@ -297,6 +302,34 @@ interface H264WebSocketFrame {
   height: number;
   isKeyFrame: boolean;
   payload: Uint8Array;
+  sequence: number;
+  timestampUs: number;
+  width: number;
+}
+
+interface WebRtcRgbaFrame {
+  height: number;
+  payload: Uint8Array;
+  sequence: number;
+  timestampUs: number;
+  width: number;
+}
+
+interface WebRtcRgbaChunk {
+  chunkOffset: number;
+  height: number;
+  payload: Uint8Array;
+  payloadBytes: number;
+  sequence: number;
+  timestampUs: number;
+  width: number;
+}
+
+interface WebRtcRgbaAssembly {
+  buffer: Uint8Array;
+  height: number;
+  receivedBytes: number;
+  receivedRanges: Array<[number, number]>;
   sequence: number;
   timestampUs: number;
   width: number;
@@ -1150,6 +1183,53 @@ function parseH264WebSocketFrame(data: unknown): H264WebSocketFrame | null {
   };
 }
 
+function parseWebRtcRgbaChunk(data: unknown): WebRtcRgbaChunk | null {
+  const bytes = bytesFromBinaryMessage(data);
+  if (!bytes || bytes.byteLength < WEBRTC_RGBA_CHUNK_HEADER_BYTES) {
+    return null;
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (
+    view.getUint32(0, false) !== WEBRTC_RGBA_CHUNK_MAGIC ||
+    view.getUint8(4) !== WEBRTC_RGBA_VERSION ||
+    view.getUint8(5) !== WEBRTC_RGBA_FORMAT_RGBA8888
+  ) {
+    return null;
+  }
+  const headerBytes = view.getUint16(6, false);
+  if (
+    headerBytes < WEBRTC_RGBA_CHUNK_HEADER_BYTES ||
+    headerBytes > bytes.byteLength
+  ) {
+    return null;
+  }
+  const width = view.getUint32(24, false);
+  const height = view.getUint32(28, false);
+  const payloadBytes = view.getUint32(32, false);
+  const chunkOffset = view.getUint32(36, false);
+  const chunkBytes = view.getUint32(40, false);
+  const payloadEnd = headerBytes + chunkBytes;
+  if (
+    width <= 0 ||
+    height <= 0 ||
+    payloadBytes !== width * height * 4 ||
+    chunkBytes <= 0 ||
+    chunkOffset + chunkBytes > payloadBytes ||
+    payloadEnd > bytes.byteLength
+  ) {
+    return null;
+  }
+  return {
+    chunkOffset,
+    height,
+    payload: bytes.subarray(headerBytes, payloadEnd),
+    payloadBytes,
+    sequence: Number(view.getBigUint64(8, false)),
+    timestampUs: Number(view.getBigUint64(16, false)),
+    width,
+  };
+}
+
 function bytesFromBinaryMessage(data: unknown): Uint8Array | null {
   if (ArrayBuffer.isView(data)) {
     return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
@@ -1175,6 +1255,16 @@ function bytesFromBinaryMessage(data: unknown): Uint8Array | null {
     }
   }
   return null;
+}
+
+function rangeAlreadyReceived(
+  ranges: Array<[number, number]>,
+  start: number,
+  end: number,
+): boolean {
+  return ranges.some(
+    ([rangeStart, rangeEnd]) => start >= rangeStart && end <= rangeEnd,
+  );
 }
 
 function h264CodecStringFromAvcC(config: Uint8Array): string | null {
@@ -1205,6 +1295,7 @@ function hexByte(byte: number): string {
 class WebRtcStreamClient implements StreamClientBackend {
   private animationFrame = 0;
   private canvas: HTMLCanvasElement | null = null;
+  private canvasContext: CanvasRenderingContext2D | null = null;
   private connectGeneration = 0;
   private controlChannel: RTCDataChannel | null = null;
   private diagnostics = createWebRtcDiagnostics();
@@ -1224,6 +1315,10 @@ class WebRtcStreamClient implements StreamClientBackend {
   private receiverStatsInterval = 0;
   private receiverStatsSeen = false;
   private shouldReconnect = false;
+  private latestRgbaSequence = -1;
+  private rgbaAssemblies = new Map<number, WebRtcRgbaAssembly>();
+  private rgbaChannel: RTCDataChannel | null = null;
+  private rgbaMode = false;
   private streamConfigGeneration = 0;
   private streamTarget: StreamConnectTarget | null = null;
   private telemetryChannel: RTCDataChannel | null = null;
@@ -1237,6 +1332,10 @@ class WebRtcStreamClient implements StreamClientBackend {
 
   attachCanvas(canvasElement: HTMLCanvasElement) {
     this.canvas = canvasElement;
+    this.canvasContext = canvasElement.getContext("2d", {
+      alpha: false,
+      desynchronized: true,
+    });
     if (
       this.video &&
       this.video.parentElement !== canvasElement.parentElement
@@ -1249,9 +1348,12 @@ class WebRtcStreamClient implements StreamClientBackend {
   }
 
   clear() {
-    this.canvas
-      ?.getContext("2d")
-      ?.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.ensureCanvasContext()?.clearRect(
+      0,
+      0,
+      this.canvas?.width ?? 0,
+      this.canvas?.height ?? 0,
+    );
   }
 
   async collectVisualArtifactSample(
@@ -1326,16 +1428,20 @@ class WebRtcStreamClient implements StreamClientBackend {
         iceTransportPolicy: iceTransportPolicy(health),
       });
       this.peerConnection = peerConnection;
+      const useRgbaTransport = shouldUseLocalAndroidRgbaWebRtc(target);
+      this.rgbaMode = useRgbaTransport;
       this.attachDiagnostics(peerConnection, target, generation);
-      this.startReceiverStatsPolling(peerConnection, target, generation);
-      const transceiver = peerConnection.addTransceiver("video", {
-        direction: "recvonly",
-      });
-      configureReceiverCodecPreferences(transceiver);
-      configureLowLatencyReceiver(
-        transceiver.receiver,
-        receiverBufferSeconds(target),
-      );
+      if (!useRgbaTransport) {
+        this.startReceiverStatsPolling(peerConnection, target, generation);
+        const transceiver = peerConnection.addTransceiver("video", {
+          direction: "recvonly",
+        });
+        configureReceiverCodecPreferences(transceiver);
+        configureLowLatencyReceiver(
+          transceiver.receiver,
+          receiverBufferSeconds(target),
+        );
+      }
       const controlChannel = peerConnection.createDataChannel(
         WEBRTC_CONTROL_CHANNEL_LABEL,
         {
@@ -1364,7 +1470,20 @@ class WebRtcStreamClient implements StreamClientBackend {
         }
       });
 
+      peerConnection.ondatachannel = (event) => {
+        if (
+          generation !== this.connectGeneration ||
+          event.channel.label !== WEBRTC_RGBA_CHANNEL_LABEL
+        ) {
+          return;
+        }
+        this.attachRgbaDataChannel(event.channel, generation);
+      };
+
       peerConnection.ontrack = (event) => {
+        if (useRgbaTransport) {
+          return;
+        }
         if (generation !== this.connectGeneration) {
           return;
         }
@@ -1428,7 +1547,12 @@ class WebRtcStreamClient implements StreamClientBackend {
           if (this.reportedVideoWidth > 0 && this.reportedVideoHeight > 0) {
             this.onMessage({
               type: "status",
-              status: { detail: "WebRTC media connected", state: "streaming" },
+              status: {
+                detail: useRgbaTransport
+                  ? "WebRTC RGBA stream connected"
+                  : "WebRTC media connected",
+                state: "streaming",
+              },
             });
           }
           return;
@@ -1463,6 +1587,7 @@ class WebRtcStreamClient implements StreamClientBackend {
 
       await this.negotiatePeerConnection(peerConnection, target, generation, {
         detailPrefix: "local",
+        transport: useRgbaTransport ? "rgba" : undefined,
       });
       this.scheduleFrameWatchdog(target, generation);
     } catch (error) {
@@ -1505,7 +1630,11 @@ class WebRtcStreamClient implements StreamClientBackend {
     peerConnection: RTCPeerConnection,
     target: StreamConnectTarget,
     generation: number,
-    options: { detailPrefix: string; iceRestart?: boolean },
+    options: {
+      detailPrefix: string;
+      iceRestart?: boolean;
+      transport?: "rgba";
+    },
   ) {
     const offer = safariBaselineH264Offer(
       await peerConnection.createOffer({ iceRestart: options.iceRestart }),
@@ -1538,6 +1667,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     const response = await postWebRtcOfferWithAuthRetry(
       target,
       localDescription,
+      options.transport,
     );
     const answer = (await response.json()) as WebRtcAnswerPayload;
     if (generation !== this.connectGeneration) {
@@ -1591,6 +1721,11 @@ class WebRtcStreamClient implements StreamClientBackend {
       activeWebRtcTelemetryChannel = null;
     }
     this.telemetryChannel = null;
+    this.rgbaChannel?.close();
+    this.rgbaChannel = null;
+    this.rgbaAssemblies.clear();
+    this.latestRgbaSequence = -1;
+    this.rgbaMode = false;
     this.peerConnection?.close();
     this.peerConnection = null;
   }
@@ -1992,6 +2127,155 @@ class WebRtcStreamClient implements StreamClientBackend {
     }
   }
 
+  private attachRgbaDataChannel(channel: RTCDataChannel, generation: number) {
+    this.rgbaChannel?.close();
+    this.rgbaChannel = channel;
+    channel.binaryType = "arraybuffer";
+    channel.addEventListener("message", (event) => {
+      if (generation !== this.connectGeneration || channel !== this.rgbaChannel) {
+        return;
+      }
+      if (hasArrayBufferMethod(event.data)) {
+        void event.data.arrayBuffer().then((buffer) => {
+          if (generation === this.connectGeneration && channel === this.rgbaChannel) {
+            this.handleRgbaMessage(buffer);
+          }
+        });
+        return;
+      }
+      this.handleRgbaMessage(event.data);
+    });
+    channel.addEventListener("close", () => {
+      if (this.rgbaChannel === channel) {
+        this.rgbaChannel = null;
+      }
+    });
+  }
+
+  private handleRgbaMessage(data: unknown) {
+    const chunk = parseWebRtcRgbaChunk(data);
+    if (!chunk) {
+      this.stats.h264ParseFailures += 1;
+      this.onMessage({ type: "stats", stats: { ...this.stats } });
+      return;
+    }
+    this.stats.receivedPackets += 1;
+    if (chunk.sequence < this.latestRgbaSequence) {
+      this.stats.droppedFrames += 1;
+      this.onMessage({ type: "stats", stats: { ...this.stats } });
+      return;
+    }
+    const frame = this.appendRgbaChunk(chunk);
+    if (!frame) {
+      return;
+    }
+    this.stats.decodedFrames += 1;
+    this.stats.width = frame.width;
+    this.stats.height = frame.height;
+    this.stats.frameSequence = frame.sequence;
+    this.stats.codec = "webrtc-rgba";
+    this.latestRgbaSequence = frame.sequence;
+    this.paintRgbaFrame(frame);
+  }
+
+  private appendRgbaChunk(chunk: WebRtcRgbaChunk): WebRtcRgbaFrame | null {
+    let assembly = this.rgbaAssemblies.get(chunk.sequence);
+    if (
+      assembly &&
+      (assembly.width !== chunk.width ||
+        assembly.height !== chunk.height ||
+        assembly.buffer.byteLength !== chunk.payloadBytes)
+    ) {
+      this.rgbaAssemblies.delete(chunk.sequence);
+      assembly = undefined;
+    }
+    if (!assembly) {
+      assembly = {
+        buffer: new Uint8Array(chunk.payloadBytes),
+        height: chunk.height,
+        receivedBytes: 0,
+        receivedRanges: [],
+        sequence: chunk.sequence,
+        timestampUs: chunk.timestampUs,
+        width: chunk.width,
+      };
+      this.rgbaAssemblies.set(chunk.sequence, assembly);
+      this.trimRgbaAssemblies(chunk.sequence);
+    }
+    assembly.buffer.set(chunk.payload, chunk.chunkOffset);
+    const chunkEnd = chunk.chunkOffset + chunk.payload.byteLength;
+    if (!rangeAlreadyReceived(assembly.receivedRanges, chunk.chunkOffset, chunkEnd)) {
+      assembly.receivedRanges.push([chunk.chunkOffset, chunkEnd]);
+      assembly.receivedBytes += chunk.payload.byteLength;
+    }
+    if (assembly.receivedBytes < assembly.buffer.byteLength) {
+      return null;
+    }
+    this.rgbaAssemblies.delete(chunk.sequence);
+    return {
+      height: assembly.height,
+      payload: assembly.buffer,
+      sequence: assembly.sequence,
+      timestampUs: assembly.timestampUs,
+      width: assembly.width,
+    };
+  }
+
+  private trimRgbaAssemblies(latestSequence: number) {
+    while (this.rgbaAssemblies.size > 3) {
+      const firstKey = this.rgbaAssemblies.keys().next().value;
+      if (typeof firstKey !== "number") {
+        break;
+      }
+      this.rgbaAssemblies.delete(firstKey);
+    }
+    for (const sequence of this.rgbaAssemblies.keys()) {
+      if (latestSequence - sequence > 2) {
+        this.rgbaAssemblies.delete(sequence);
+      }
+    }
+  }
+
+  private paintRgbaFrame(frame: WebRtcRgbaFrame) {
+    const canvas = this.canvas;
+    const context = this.ensureCanvasContext();
+    if (!canvas || !context) {
+      return;
+    }
+    this.syncCanvasSize(frame.width, frame.height);
+    const startedAt = performance.now();
+    const rgba = new Uint8ClampedArray(
+      frame.payload.buffer as ArrayBuffer,
+      frame.payload.byteOffset,
+      frame.payload.byteLength,
+    );
+    try {
+      context.putImageData(new ImageData(rgba, frame.width, frame.height), 0, 0);
+    } catch {
+      this.stats.droppedFrames += 1;
+      this.onMessage({ type: "stats", stats: { ...this.stats } });
+      return;
+    }
+    const finishedAt = performance.now();
+    const previousFrameAt = this.lastVideoFrameAt;
+    this.lastVideoFrameAt = finishedAt;
+    this.hasRenderedFrame = true;
+    this.stats.renderedFrames += 1;
+    this.stats.latestRenderMs = finishedAt - startedAt;
+    this.stats.maxRenderMs = Math.max(
+      this.stats.maxRenderMs,
+      this.stats.latestRenderMs,
+    );
+    this.stats.averageRenderMs =
+      this.stats.averageRenderMs <= 0
+        ? this.stats.latestRenderMs
+        : this.stats.averageRenderMs * 0.9 + this.stats.latestRenderMs * 0.1;
+    this.stats.latestFrameGapMs =
+      previousFrameAt > 0 ? finishedAt - previousFrameAt : 0;
+    this.reportVideoConfig(frame.width, frame.height);
+    this.onMessage({ type: "stats", stats: { ...this.stats } });
+  }
+
   private drawVideoFrame = () => {
     this.videoFrameCallback = 0;
     if (!this.canvas || !this.video) {
@@ -2057,7 +2341,12 @@ class WebRtcStreamClient implements StreamClientBackend {
     });
     this.onMessage({
       type: "status",
-      status: { detail: "WebRTC media connected", state: "streaming" },
+      status: {
+        detail: this.rgbaMode
+          ? "WebRTC RGBA stream connected"
+          : "WebRTC media connected",
+        state: "streaming",
+      },
     });
   }
 
@@ -2171,6 +2460,22 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.videoFrameCallback = 0;
   }
 
+  private ensureCanvasContext(): CanvasRenderingContext2D | null {
+    const canvas = this.canvas;
+    if (!canvas) {
+      this.canvasContext = null;
+      return null;
+    }
+    if (this.canvasContext?.canvas === canvas) {
+      return this.canvasContext;
+    }
+    this.canvasContext = canvas.getContext("2d", {
+      alpha: false,
+      desynchronized: true,
+    });
+    return this.canvasContext;
+  }
+
   private syncCanvasSize(width: number, height: number) {
     if (!this.canvas) {
       return;
@@ -2221,8 +2526,9 @@ function streamErrorIsServerUnreachable(message: string): boolean {
 async function postWebRtcOfferWithAuthRetry(
   target: StreamConnectTarget,
   localDescription: RTCSessionDescription,
+  transport?: "rgba",
 ): Promise<Response> {
-  const response = await postWebRtcOffer(target, localDescription);
+  const response = await postWebRtcOffer(target, localDescription, transport);
   if (response.status !== 401) {
     if (!response.ok) {
       throw new Error(await response.text());
@@ -2233,7 +2539,7 @@ async function postWebRtcOfferWithAuthRetry(
     throw new Error(await response.text());
   }
   await fetchHealth();
-  const retry = await postWebRtcOffer(target, localDescription);
+  const retry = await postWebRtcOffer(target, localDescription, transport);
   if (!retry.ok) {
     throw new Error(await retry.text());
   }
@@ -2299,6 +2605,7 @@ function streamQualityQuery(config: StreamConfig | undefined): string {
 function postWebRtcOffer(
   target: StreamConnectTarget,
   localDescription: RTCSessionDescription,
+  transport?: "rgba",
 ): Promise<Response> {
   return fetch(
     apiUrl(`/api/simulators/${encodeURIComponent(target.udid)}/webrtc/offer`),
@@ -2309,6 +2616,7 @@ function postWebRtcOffer(
         streamConfig: target.streamConfig
           ? streamQualityPayload(target.streamConfig)
           : undefined,
+        transport,
         type: localDescription.type,
       }),
       headers: apiHeaders(),
@@ -2358,6 +2666,14 @@ function shouldUseRemoteH264AutoProfile(
   target: StreamConnectTarget | null,
 ): boolean {
   return Boolean(target?.remote) || !isLoopbackHost(window.location.hostname);
+}
+
+function shouldUseLocalAndroidRgbaWebRtc(target: StreamConnectTarget): boolean {
+  return (
+    !target.remote &&
+    isLoopbackHost(window.location.hostname) &&
+    (target.platform === "android-emulator" || target.udid.startsWith("android:"))
+  );
 }
 
 function configureLowLatencyReceiver(
