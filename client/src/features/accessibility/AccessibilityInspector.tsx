@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { CSSProperties, FormEvent } from "react";
 
 import { sendInspectorRequest } from "../../api/simulators";
 import type {
@@ -21,6 +21,7 @@ import {
   validFrame,
   visibleAccessibilityTreeItems,
 } from "./accessibilityTree";
+import { usePanelPresence } from "../../shared/hooks/usePanelPresence";
 
 interface AccessibilityInspectorProps {
   availableSources: AccessibilitySource[];
@@ -70,6 +71,7 @@ export function AccessibilityInspector({
   const resizeStateRef = useRef<ResizeState | null>(null);
   const panelWidthRef = useRef(panelWidth);
   const detailsHeightRef = useRef(detailsHeight);
+  const { isPresent, panelState } = usePanelPresence(visible);
 
   useEffect(() => {
     panelWidthRef.current = panelWidth;
@@ -197,7 +199,7 @@ export function AccessibilityInspector({
     });
   }, [selectedId]);
 
-  if (!visible) {
+  if (!isPresent) {
     return null;
   }
 
@@ -209,7 +211,11 @@ export function AccessibilityInspector({
   const sourceOptions = hierarchySourceOptions(availableSources, source);
 
   return (
-    <aside className="hierarchy-panel" style={{ width: `${panelWidth}px` }}>
+    <aside
+      className="hierarchy-panel"
+      data-state={panelState}
+      style={{ "--hierarchy-panel-width": `${panelWidth}px` } as CSSProperties}
+    >
       <div className="hierarchy-tools">
         <button
           aria-label="Pick element from simulator"

@@ -3,6 +3,8 @@
   --bg: #1e1e1e;
   --surface: #252526;
   --surface-hover: #2d2d2e;
+  --toolbar-bg: var(--surface);
+  --toolbar-shadow: none;
   --border: #3c3c3c;
   --border-subtle: #333333;
   --text: #cccccc;
@@ -15,7 +17,6 @@
   --error: #f14c4c;
   --error-bg: rgba(241, 76, 76, 0.1);
   --canvas-bg: #1a1a1a;
-  --canvas-dot: rgba(255, 255, 255, 0.04);
   --bezel: #111111;
   --bezel-highlight: rgba(255, 255, 255, 0.06);
   --screen-bg: #000000;
@@ -23,16 +24,17 @@
 
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f3f3f3;
+    --bg: #ffffff;
     --surface: #ffffff;
-    --surface-hover: #e8e8e8;
-    --border: #d4d4d4;
-    --border-subtle: #e0e0e0;
+    --surface-hover: #f5f5f5;
+    --toolbar-bg: #ffffff;
+    --toolbar-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
+    --border: #e3e3e3;
+    --border-subtle: #eeeeee;
     --text: #1e1e1e;
     --text-secondary: #656565;
     --text-muted: #999999;
-    --canvas-bg: #e0e0e0;
-    --canvas-dot: rgba(0, 0, 0, 0.05);
+    --canvas-bg: #ffffff;
     --bezel: #1a1a1a;
     --bezel-highlight: rgba(255, 255, 255, 0.08);
     --error: #cd3131;

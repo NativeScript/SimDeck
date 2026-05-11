@@ -357,10 +357,10 @@ export function AppShell({
   );
   const [selectedUDID, setSelectedUDID] = useState(initialSelectedUDID ?? "");
   const [search, setSearch] = useState("");
-  const [openURLValue, setOpenURLValue] = useState(
+  const openURLValueRef = useRef(
     initialUiState.openURLValue ?? "https://example.com",
   );
-  const [bundleIDValue, setBundleIDValue] = useState(
+  const bundleIDValueRef = useRef(
     initialUiState.bundleIDValue ?? "com.apple.Preferences",
   );
   const [menuOpen, setMenuOpen] = useState(false);
@@ -795,11 +795,11 @@ export function AppShell({
   useEffect(() => {
     writePersistedUiState((current) => ({
       ...current,
-      bundleIDValue,
-      openURLValue,
+      bundleIDValue: bundleIDValueRef.current,
+      openURLValue: openURLValueRef.current,
       selectedUDID,
     }));
-  }, [bundleIDValue, openURLValue, selectedUDID]);
+  }, [selectedUDID]);
 
   useEffect(() => {
     if (search && simulators.length > 0 && filteredSimulators.length === 0) {
@@ -851,9 +851,29 @@ export function AppShell({
   }, [fixedSimulatorUDID, selectedSimulator, selectedUDID]);
 
   useEffect(() => {
-    const nextViewportState = selectedSimulator
-      ? viewportStateForUDID(readPersistedUiState(), selectedSimulator.udid)
-      : DEFAULT_VIEWPORT_STATE;
+    if (!selectedSimulator) {
+      setStreamStamp(Date.now());
+      setChromeProfile(null);
+      setChromeProfileReady(false);
+      setLocalError("");
+      setAccessibilityRoots([]);
+      setAccessibilitySelectedId("");
+      setAccessibilityHoveredId(null);
+      setAccessibilityPickerActive(false);
+      setAccessibilityError("");
+      setAccessibilitySource("");
+      setAccessibilityAvailableSources([]);
+      accessibilityRequestIdRef.current += 1;
+      accessibilityLoadingRef.current = false;
+      setAccessibilityLoading(false);
+      return;
+    }
+
+    const persistedState = readPersistedUiState();
+    const nextViewportState = viewportStateForUDID(
+      persistedState,
+      selectedSimulator.udid,
+    );
     setStreamStamp(Date.now());
     setChromeProfile(null);
     setChromeProfileReady(false);
@@ -864,11 +884,8 @@ export function AppShell({
     setLocalError("");
     setAccessibilityRoots([]);
     setAccessibilitySelectedId(
-      selectedSimulator
-        ? (readPersistedUiState().accessibilitySelectedByUDID?.[
-            selectedSimulator.udid
-          ] ?? "")
-        : "",
+      persistedState.accessibilitySelectedByUDID?.[selectedSimulator.udid] ??
+        "",
     );
     setAccessibilityHoveredId(null);
     setAccessibilityPickerActive(false);
@@ -927,7 +944,9 @@ export function AppShell({
       setAccessibilityAvailableSources(availableSources);
       setAccessibilitySource(snapshot.source);
       setAccessibilityError(
-        roots.length === 0 ? (snapshot.fallbackReason ?? "") : "",
+        roots.length === 0
+          ? userFacingAccessibilityError(snapshot.fallbackReason ?? "")
+          : "",
       );
       const nextPreferredSource = nextAccessibilitySourcePreference(
         accessibilityPreferredSource,
@@ -946,7 +965,7 @@ export function AppShell({
       }
       setAccessibilityError(
         snapshotError instanceof Error
-          ? snapshotError.message
+          ? userFacingAccessibilityError(snapshotError.message)
           : "Failed to load accessibility hierarchy.",
       );
       setAccessibilityRoots([]);
@@ -1648,7 +1667,7 @@ export function AppShell({
     }
     const nextValue = window.prompt(
       `Open URL on ${selectedSimulator.name}`,
-      openURLValue,
+      openURLValueRef.current,
     );
     if (nextValue == null) {
       return;
@@ -1657,7 +1676,11 @@ export function AppShell({
     if (!trimmed) {
       return;
     }
-    setOpenURLValue(trimmed);
+    openURLValueRef.current = trimmed;
+    writePersistedUiState((current) => ({
+      ...current,
+      openURLValue: trimmed,
+    }));
     setMenuOpen(false);
     void runAction(() =>
       openSimulatorUrl(selectedSimulator.udid, { url: trimmed }),
@@ -1670,7 +1693,7 @@ export function AppShell({
     }
     const nextValue = window.prompt(
       `Launch bundle on ${selectedSimulator.name}`,
-      bundleIDValue,
+      bundleIDValueRef.current,
     );
     if (nextValue == null) {
       return;
@@ -1679,7 +1702,11 @@ export function AppShell({
     if (!trimmed) {
       return;
     }
-    setBundleIDValue(trimmed);
+    bundleIDValueRef.current = trimmed;
+    writePersistedUiState((current) => ({
+      ...current,
+      bundleIDValue: trimmed,
+    }));
     setMenuOpen(false);
     void runAction(() =>
       launchSimulatorBundle(selectedSimulator.udid, { bundleId: trimmed }),
@@ -2014,12 +2041,11 @@ export function AppShell({
         touchOverlayVisible={touchOverlayVisible}
         viewMode={viewMode}
         devtoolsPanel={
-          devToolsVisible ? (
-            <DevToolsPanel
-              onClose={() => setDevToolsVisible(false)}
-              selectedSimulator={selectedSimulator}
-            />
-          ) : null
+          <DevToolsPanel
+            onClose={() => setDevToolsVisible(false)}
+            selectedSimulator={selectedSimulator}
+            visible={devToolsVisible}
+          />
         }
         zoomDockRef={handleZoomDockRef}
         zoomAnimating={zoomAnimating}
@@ -2071,6 +2097,26 @@ function friendlyStreamError(
     return "";
   }
   return friendlyClientError(normalized);
+}
+
+function userFacingAccessibilityError(message: string): string {
+  const normalized = message.trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const lower = normalized.toLowerCase();
+  if (
+    lower.includes("no app inspector found") ||
+    lower.includes("no connected websocket inspector found") ||
+    lower.includes("no published app inspector found") ||
+    lower.includes("no in-app inspector found") ||
+    lower.includes("first probe error:")
+  ) {
+    return "";
+  }
+
+  return normalized;
 }
 
 function mergeStreamQualityResponse(

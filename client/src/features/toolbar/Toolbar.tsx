@@ -1,3 +1,13 @@
+import {
+  BoxModelIcon as DevToolsIcon,
+  CardStackIcon as AppSwitcherIcon,
+  Half2Icon as AppearanceIcon,
+  HomeIcon,
+  LayersIcon as HierarchyIcon,
+  PlayIcon,
+  ReloadIcon as RotateRightIcon,
+  StopIcon,
+} from "@radix-ui/react-icons";
 import { useEffect, useState, type RefObject } from "react";
 
 import type { SimulatorMetadata } from "../../api/types";
@@ -253,121 +263,5 @@ export function Toolbar({
         </button>
       </div>
     </header>
-  );
-}
-
-function PlayIcon() {
-  return (
-    <svg fill="currentColor" height="16" viewBox="0 0 16 16" width="16">
-      <path d="M5 3.5v9l7-4.5z" />
-    </svg>
-  );
-}
-
-function StopIcon() {
-  return (
-    <svg fill="currentColor" height="16" viewBox="0 0 16 16" width="16">
-      <path d="M4 4h8v8H4z" />
-    </svg>
-  );
-}
-
-function HomeIcon() {
-  return (
-    <svg fill="currentColor" height="16" viewBox="0 0 16 16" width="16">
-      <path d="M8 3l5 4.2V13H9.6V9.6H6.4V13H3V7.2z" />
-    </svg>
-  );
-}
-
-function AppSwitcherIcon() {
-  return (
-    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
-      <rect
-        height="8.5"
-        rx="1.6"
-        stroke="currentColor"
-        strokeWidth="1.25"
-        width="6.5"
-        x="2.25"
-        y="4.25"
-      />
-      <path
-        d="M7.25 3.25h4.1c.9 0 1.65.74 1.65 1.65v6.35"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.25"
-      />
-    </svg>
-  );
-}
-
-function AppearanceIcon() {
-  return (
-    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
-      <path
-        d="M8 2.2v11.6M8 13.8a5.8 5.8 0 0 0 0-11.6 5.8 5.8 0 0 0 0 11.6z"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.35"
-      />
-      <path d="M8 3.5a4.5 4.5 0 0 1 0 9z" fill="currentColor" />
-    </svg>
-  );
-}
-
-function RotateRightIcon() {
-  return (
-    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
-      <path
-        d="M10.8 4h1.9V2.1M12.5 4a5.4 5.4 0 1 0 .6 6"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.45"
-      />
-    </svg>
-  );
-}
-
-function HierarchyIcon() {
-  return (
-    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
-      <rect
-        height="11"
-        rx="1.6"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        width="12"
-        x="2"
-        y="2.5"
-      />
-      <path
-        d="M6.25 2.8v10.4M3.9 5h.45M3.9 7h.45M3.9 9h.45"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.35"
-      />
-    </svg>
-  );
-}
-
-function DevToolsIcon() {
-  return (
-    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
-      <path
-        d="M3.3 3.3h9.4c.6 0 1 .4 1 1v7.4c0 .6-.4 1-1 1H3.3c-.6 0-1-.4-1-1V4.3c0-.6.4-1 1-1Z"
-        stroke="currentColor"
-        strokeLinejoin="round"
-        strokeWidth="1.35"
-      />
-      <path
-        d="M5.4 6.2 3.9 8l1.5 1.8M10.6 6.2 12.1 8l-1.5 1.8M8.8 5.9 7.2 10.1"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.25"
-      />
-    </svg>
   );
 }

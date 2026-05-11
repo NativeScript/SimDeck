@@ -16,6 +16,7 @@ import type {
   SimulatorMetadata,
   WebKitTarget,
 } from "../../api/types";
+import { usePanelPresence } from "../../shared/hooks/usePanelPresence";
 
 const DEVTOOLS_TARGET_REFRESH_MS = 5000;
 const CHROME_DEVTOOLS_REQUEST_TIMEOUT_MS = 6000;
@@ -33,6 +34,7 @@ const DEVTOOLS_PANEL_WIDTH_STEP = 40;
 interface DevToolsPanelProps {
   onClose: () => void;
   selectedSimulator: SimulatorMetadata | null;
+  visible: boolean;
 }
 
 interface ResizeState {
@@ -58,6 +60,7 @@ interface DevToolsDiscovery {
 export function DevToolsPanel({
   onClose,
   selectedSimulator,
+  visible,
 }: DevToolsPanelProps) {
   const [panelWidth, setPanelWidth] = useState(readStoredPanelWidth);
   const [isResizing, setIsResizing] = useState(false);
@@ -72,6 +75,7 @@ export function DevToolsPanel({
   const requestIdRef = useRef(0);
   const resizeStateRef = useRef<ResizeState | null>(null);
   const selectedTargetIdRef = useRef("");
+  const { isPresent, panelState } = usePanelPresence(visible);
 
   const targets = discovery?.targets ?? [];
   const selectedTarget = useMemo(() => {
@@ -82,7 +86,7 @@ export function DevToolsPanel({
       targets.find((target) => target.id === selectedTargetId) ?? targets[0]
     );
   }, [selectedTargetId, targets]);
-  const frameUrl = selectedTarget?.frameUrl ?? "";
+  const frameUrl = visible ? (selectedTarget?.frameUrl ?? "") : "";
 
   useEffect(() => {
     panelWidthRef.current = panelWidth;
@@ -141,21 +145,23 @@ export function DevToolsPanel({
       }
 
       const nextTargets: DevToolsTarget[] = [];
-      const warnings: string[] = [];
-      const errors: string[] = [];
+      let warnings: string[] = [];
+      let errors: string[] = [];
       if (chromeResult.status === "fulfilled") {
         nextTargets.push(...chromeResult.value.targets.map(mapChromeTarget));
-        warnings.push(...chromeResult.value.warnings);
+        warnings = warnings.concat(chromeResult.value.warnings);
       } else {
-        errors.push(errorMessage(chromeResult.reason));
+        errors = errors.concat(errorMessage(chromeResult.reason));
       }
 
       if (webKitResult.status === "fulfilled") {
         nextTargets.push(...webKitResult.value.targets.map(mapWebKitTarget));
-        warnings.push(...webKitResult.value.warnings);
+        warnings = warnings.concat(webKitResult.value.warnings);
       } else {
-        errors.push(errorMessage(webKitResult.reason));
+        errors = errors.concat(errorMessage(webKitResult.reason));
       }
+      warnings = cleanDevToolsMessages(warnings);
+      errors = cleanDevToolsMessages(errors);
 
       const previousDiscovery = discoveryRef.current;
       if (
@@ -168,7 +174,7 @@ export function DevToolsPanel({
           warnings: mergeWarnings(
             warnings,
             errors,
-            previousDiscovery.warnings,
+            cleanDevToolsMessages(previousDiscovery.warnings),
             [
               "DevTools target discovery returned no targets; keeping the active target while debuggers reconnect.",
             ],
@@ -200,13 +206,16 @@ export function DevToolsPanel({
       if (previousDiscovery && previousDiscovery.targets.length > 0) {
         applyDiscovery({
           ...previousDiscovery,
-          warnings: mergeWarnings(previousDiscovery.warnings, [message]),
+          warnings: mergeWarnings(
+            cleanDevToolsMessages(previousDiscovery.warnings),
+            cleanDevToolsMessages([message]),
+          ),
         });
         return;
       }
       applyDiscovery(null);
       applySelectedTargetId("");
-      setError(message);
+      setError(userFacingDevToolsMessage(message));
     } finally {
       if (requestId === requestIdRef.current) {
         setIsLoading(false);
@@ -228,6 +237,9 @@ export function DevToolsPanel({
   }, [applyDiscovery, applySelectedTargetId, selectedSimulator?.udid]);
 
   useEffect(() => {
+    if (!visible) {
+      return;
+    }
     void loadTargets();
     const interval = window.setInterval(() => {
       if (!selectedTargetIdRef.current) {
@@ -235,7 +247,7 @@ export function DevToolsPanel({
       }
     }, DEVTOOLS_TARGET_REFRESH_MS);
     return () => window.clearInterval(interval);
-  }, [loadTargets]);
+  }, [loadTargets, visible]);
 
   useEffect(() => {
     setFrameLoaded(false);
@@ -369,10 +381,15 @@ export function DevToolsPanel({
     "--webkit-panel-width": `${panelWidth}px`,
   } as CSSProperties;
 
+  if (!isPresent) {
+    return null;
+  }
+
   return (
     <aside
       aria-label="DevTools"
       className={`webkit-panel devtools-panel ${isResizing ? "resizing" : ""}`}
+      data-state={panelState}
       style={panelStyle}
     >
       <div
@@ -694,6 +711,33 @@ function errorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : "Failed to load DevTools targets.";
+}
+
+function userFacingDevToolsMessage(message: string): string {
+  const normalized = message.trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const lower = normalized.toLowerCase();
+  if (
+    lower.includes("no app inspector found") ||
+    lower.includes("no connected websocket inspector found") ||
+    lower.includes("no published app inspector found") ||
+    lower.includes("no in-app inspector found") ||
+    lower.includes("first probe error:")
+  ) {
+    return "";
+  }
+
+  return normalized;
+}
+
+function cleanDevToolsMessages(messages: string[]): string[] {
+  return messages.flatMap((message) => {
+    const nextMessage = userFacingDevToolsMessage(message);
+    return nextMessage ? [nextMessage] : [];
+  });
 }
 
 function requestWithTimeout<T>(

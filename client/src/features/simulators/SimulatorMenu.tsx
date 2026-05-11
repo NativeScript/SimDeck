@@ -1,3 +1,4 @@
+import { MixerHorizontalIcon as MenuIcon } from "@radix-ui/react-icons";
 import type { RefObject } from "react";
 
 import type { SimulatorMetadata } from "../../api/types";
@@ -295,14 +296,6 @@ const H264_QUALITY_LABELS: Partial<Record<StreamQualityPreset, string>> = {
 
 function streamQualityOptionLabel(quality: StreamQualityPreset): string {
   return H264_QUALITY_LABELS[quality] ?? quality;
-}
-
-function MenuIcon() {
-  return (
-    <svg fill="currentColor" height="16" viewBox="0 0 16 16" width="16">
-      <path d="M2 3.5h12v1.5H2zm0 3.75h12v1.5H2zm0 3.75h12v1.5H2z" />
-    </svg>
-  );
 }
 
 function formatStreamConfigSummary(

@@ -27,6 +27,9 @@ export function useKeyboardInput({ enabled, onKey }: UseKeyboardInputOptions) {
       if (isEditableTarget(event.target)) {
         return;
       }
+      if (isCopyShortcut(event) && hasDocumentSelection()) {
+        return;
+      }
 
       const keyCode = keyCodeForKeyboardEvent(event);
       if (keyCode == null) {
@@ -40,4 +43,18 @@ export function useKeyboardInput({ enabled, onKey }: UseKeyboardInputOptions) {
     window.addEventListener("keydown", handleWindowKeyDown);
     return () => window.removeEventListener("keydown", handleWindowKeyDown);
   }, [enabled]);
+}
+
+function isCopyShortcut(event: KeyboardEvent): boolean {
+  return (
+    event.key.toLowerCase() === "c" &&
+    !event.altKey &&
+    !event.shiftKey &&
+    (event.metaKey || event.ctrlKey)
+  );
+}
+
+function hasDocumentSelection(): boolean {
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && selection.toString());
 }
