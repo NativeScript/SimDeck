@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: SimDeck
-  text: Local iOS Simulator control plane
-  tagline: A project-local CLI, native daemon, browser UI, and JS test API for streaming, inspecting, and driving iOS Simulators on macOS.
+  text: Simulator control panel
+  tagline: Stream simulator from your favorite IDE, with built-in tools to enhance DX for developing mobile apps
   actions:
     - theme: brand
       text: Get Started
@@ -22,37 +22,37 @@ features:
       width: 28
       height: 28
     title: Browser-first simulator
-    details: "`simdeck` starts a foreground project daemon and prints local/LAN URLs for a React UI with live WebRTC H.264 video, touch, keyboard, hardware-button, and rotation input."
+    details: "`simdeck` starts a foreground project daemon and prints local/LAN URLs for a client live WebRTC H.264 video & low-latency input."
   - icon:
       src: /icons/zap.svg
       width: 28
       height: 28
     title: Native macOS performance
-    details: "A Rust HTTP server fronts an Objective-C bridge that talks to CoreSimulator, SimulatorKit, private display APIs, and hardware or software H.264 encoders."
+    details: "A Rust HTTP server fronts an Objective-C bridge that talks to CoreSimulator, SimulatorKit, private display APIs."
   - icon:
       src: /icons/network.svg
       width: 28
       height: 28
-    title: Stable HTTP control plane
-    details: "The daemon exposes simulator lifecycle, input, accessibility, logs, chrome assets, and inspector control through a single REST API."
+    title: Streaming remote
+    details: "WebRTC/WebSocket transports allow remote streaming/tunneling the simulator stream efficiently. Share your simulator streams with coworkers, or use in CI."
   - icon:
       src: /icons/scan-search.svg
       width: 28
       height: 28
     title: First-class inspectors
-    details: "`describe` and the UI prefer NativeScript or UIKit in-app inspectors when available, then fall back to private CoreSimulator accessibility snapshots."
+    details: "`describe` and the UI prefer NativeScript, React Native, UIKit, SwiftUI in-app inspectors when available, fall back to accessibility tree."
   - icon:
       src: /icons/puzzle.svg
       width: 28
       height: 28
-    title: Built-in extensions
-    details: "A VS Code extension opens the simulator inside the editor, and `simdeck/test` gives JS/TS tests a fast API for app automation."
+    title: Built-in extension
+    details: "VS Code extension opens the simulator inside the editor, and `simdeck/test` gives JS/TS tests a fast API for app automation."
   - icon:
       src: /icons/shield-check.svg
       width: 28
       height: 28
-    title: Local-first by default
-    details: "Binds to 127.0.0.1 by default, runs without a cloud account, and can be opened to your LAN with explicit bind and advertise flags."
+    title: Remote streaming
+    details: "Local first but simulator streams can be shared using tools like Cloudflare Tunnel."
 ---
 
 <div class="vp-doc" style="max-width: 1152px; margin: 4rem auto 0; padding: 0 24px;">
@@ -62,9 +62,9 @@ features:
 SimDeck packages a full simulator workflow into one cross-tool surface:
 
 - **Stream a Simulator into a browser tab.** Run `simdeck` and open one of the printed URLs, or use `simdeck ui --open` for a reusable background daemon.
+- **Debug view hierarchy.** Integrates with NativeScript, React Native, UIKit, SwiftUI and Flutter and allows debugging views/layout.
 - **Drive Simulators from JavaScript.** `simdeck/test` can launch apps, tap, wait for accessibility state, batch steps, and capture screenshots.
 - **Embed a Simulator in your editor.** The bundled VS Code extension opens the same surface inside a panel.
-- **Run Simulators on your LAN.** Bind to `0.0.0.0`, advertise a host, and connect from any other Mac, iPad, or laptop on the network.
 - **Replace ad-hoc `simctl` scripts.** A single CLI handles `boot`, `shutdown`, app install/launch, URL opening, pasteboard, logs, screenshots, and UI input.
 
 Read [Architecture](/guide/architecture) for a deeper tour, or jump straight into [Quick Start](/guide/quick-start).
