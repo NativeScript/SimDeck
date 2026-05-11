@@ -760,13 +760,33 @@ async fn metrics(State(state): State<AppState>) -> Json<Value> {
 }
 
 async fn webkit_targets(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(udid): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<webkit::WebKitTargetDiscovery>, AppError> {
     let origin = request_origin(&headers);
-    let targets = webkit::discover_targets(&udid, origin.as_deref()).await?;
-    Ok(Json(targets))
+    let mut discovery = webkit::discover_targets(&udid, origin.as_deref()).await?;
+    if discovery.targets.is_empty() {
+        if let Some(foreground_app) = foreground_app_metadata(&state, &udid).await.ok().flatten() {
+            let foreground_name = foreground_app.app_name.as_deref().unwrap_or_default();
+            let foreground_bundle = foreground_app
+                .bundle_identifier
+                .as_deref()
+                .unwrap_or_default();
+            if foreground_name == "MobileSafari"
+                || foreground_name == "Safari"
+                || foreground_bundle == "com.apple.mobilesafari"
+            {
+                discovery.targets.push(webkit::synthetic_safari_target(
+                    &udid,
+                    origin.as_deref().unwrap_or(""),
+                    foreground_app.process_identifier,
+                ));
+                discovery.warnings.clear();
+            }
+        }
+    }
+    Ok(Json(discovery))
 }
 
 async fn webkit_target_socket(
@@ -784,6 +804,7 @@ async fn chrome_devtools_targets(
     let origin = request_origin(&headers);
     let mut warnings = Vec::new();
     let mut inspector_warnings = Vec::new();
+    let foreground_app = foreground_app_metadata(&state, &udid).await.ok().flatten();
     let simulator = match list_simulators_cached(state.clone(), false).await {
         Ok(simulators) => simulators
             .into_iter()
@@ -839,6 +860,7 @@ async fn chrome_devtools_targets(
         udid,
         targets,
         warnings,
+        foreground_app,
     }))
 }
 
@@ -3733,6 +3755,82 @@ async fn frontmost_process_identifier(state: &AppState, udid: &str) -> Result<Op
         .and_then(Value::as_i64))
 }
 
+async fn foreground_app_metadata(
+    state: &AppState,
+    udid: &str,
+) -> Result<Option<devtools::ForegroundApp>, String> {
+    let Some(process_identifier) = frontmost_process_identifier(state, udid).await? else {
+        return Ok(None);
+    };
+    let command = process_command(process_identifier).await?;
+    let app_path = app_bundle_path_from_command(&command);
+    let bundle_identifier = match app_path.as_deref() {
+        Some(path) => app_bundle_identifier(path).await.ok().flatten(),
+        None => None,
+    };
+    let app_name = app_path
+        .as_deref()
+        .and_then(|path| {
+            std::path::Path::new(path)
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| bundle_identifier.clone());
+    Ok(Some(devtools::ForegroundApp {
+        process_identifier,
+        bundle_identifier,
+        app_name,
+    }))
+}
+
+async fn process_command(pid: i64) -> Result<String, String> {
+    let output = timeout(
+        Duration::from_secs(1),
+        Command::new("ps")
+            .arg("-p")
+            .arg(pid.to_string())
+            .arg("-o")
+            .arg("command=")
+            .output(),
+    )
+    .await
+    .map_err(|_| "Timed out reading process command.".to_owned())?
+    .map_err(|error| format!("Unable to read process command: {error}"))?;
+
+    if !output.status.success() {
+        return Err(format!("Process {pid} is not running."));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn app_bundle_path_from_command(command: &str) -> Option<String> {
+    let app_marker = ".app/";
+    let end = command.find(app_marker)? + ".app".len();
+    let start = command[..end].rfind(' ').map_or(0, |index| index + 1);
+    Some(command[start..end].to_owned())
+}
+
+async fn app_bundle_identifier(app_path: &str) -> Result<Option<String>, String> {
+    let plist_path = std::path::Path::new(app_path).join("Info.plist");
+    let output = timeout(
+        Duration::from_secs(1),
+        Command::new("plutil")
+            .args(["-extract", "CFBundleIdentifier", "raw", "-o", "-"])
+            .arg(&plist_path)
+            .output(),
+    )
+    .await
+    .map_err(|_| "Timed out reading app bundle identifier.".to_owned())?
+    .map_err(|error| format!("Unable to read app bundle identifier: {error}"))?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    Ok((!value.is_empty()).then_some(value))
+}
+
 async fn run_in_app_inspector_hierarchy(
     state: &AppState,
     session: &InspectorSession,
@@ -4276,24 +4374,9 @@ impl InspectorDaemonEndpoint {
 }
 
 async fn inspector_process_belongs_to_udid(udid: &str, pid: i64) -> Result<bool, String> {
-    let output = timeout(
-        Duration::from_secs(1),
-        Command::new("ps")
-            .arg("-p")
-            .arg(pid.to_string())
-            .arg("-o")
-            .arg("command=")
-            .output(),
-    )
-    .await
-    .map_err(|_| "Timed out validating inspector process simulator.".to_owned())?
-    .map_err(|error| format!("Unable to validate inspector process simulator: {error}"))?;
-
-    if !output.status.success() {
-        return Ok(false);
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).contains(udid))
+    Ok(process_command(pid)
+        .await
+        .is_ok_and(|command| command.contains(udid)))
 }
 
 async fn discover_simulator_listener_ports(udid: &str) -> Result<Vec<u16>, String> {

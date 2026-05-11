@@ -44,6 +44,18 @@ pub struct ChromeDevToolsTargetDiscovery {
     pub udid: String,
     pub targets: Vec<ChromeDevToolsTarget>,
     pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foreground_app: Option<ForegroundApp>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForegroundApp {
+    pub process_identifier: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle_identifier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_name: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -90,6 +102,7 @@ struct CdpResponse {
 }
 
 const DEVTOOLS_HOST: &str = "127.0.0.1";
+const DEVTOOLS_DISCOVERY_HOSTS: &[&str] = &["127.0.0.1", "[::1]"];
 const DEVTOOLS_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(450);
 const DEVTOOLS_LISTENERS_TIMEOUT: Duration = Duration::from_secs(1);
 const DEVTOOLS_MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
@@ -226,10 +239,20 @@ pub async fn discover_external_devtools_targets(
             continue;
         };
 
-        let metro_entries = entries
+        let all_metro_entries = entries
             .iter()
             .filter(|entry| is_react_native_metro_target(entry))
             .collect::<Vec<_>>();
+        let preferred_metro_entries = all_metro_entries
+            .iter()
+            .copied()
+            .filter(|entry| is_preferred_react_native_metro_target(entry))
+            .collect::<Vec<_>>();
+        let metro_entries = if preferred_metro_entries.is_empty() {
+            all_metro_entries
+        } else {
+            preferred_metro_entries
+        };
         let mut matched_metro_count = 0;
         for entry in &metro_entries {
             if !metro_target_matches_simulator(entry, simulator_name, simulator_device_type_name) {
@@ -371,17 +394,21 @@ fn to_downstream_message(message: UpstreamMessage) -> Option<Message> {
 }
 
 async fn fetch_devtools_target_list(port: u16) -> Result<Value, String> {
-    match fetch_devtools_json(port, "/json/list").await {
-        Ok(value) => Ok(value),
-        Err(list_error) => match fetch_devtools_json(port, "/json").await {
-            Ok(value) => Ok(value),
-            Err(json_error) => Err(format!("{list_error}; {json_error}")),
-        },
+    let mut errors = Vec::new();
+    for host in DEVTOOLS_DISCOVERY_HOSTS {
+        match fetch_devtools_json(host, port, "/json/list").await {
+            Ok(value) => return Ok(value),
+            Err(list_error) => match fetch_devtools_json(host, port, "/json").await {
+                Ok(value) => return Ok(value),
+                Err(json_error) => errors.push(format!("{list_error}; {json_error}")),
+            },
+        }
     }
+    Err(errors.join("; "))
 }
 
-async fn fetch_devtools_json(port: u16, path: &str) -> Result<Value, String> {
-    let address = format!("{DEVTOOLS_HOST}:{port}");
+async fn fetch_devtools_json(host: &str, port: u16, path: &str) -> Result<Value, String> {
+    let address = format!("{host}:{port}");
     let mut stream = timeout(DEVTOOLS_DISCOVERY_TIMEOUT, TcpStream::connect(&address))
         .await
         .map_err(|_| format!("Timed out connecting to DevTools endpoint at {address}."))?
@@ -555,6 +582,15 @@ fn is_react_native_metro_target(entry: &Value) -> bool {
             .is_some_and(|description| description.to_ascii_lowercase().contains("react native"))
 }
 
+fn is_preferred_react_native_metro_target(entry: &Value) -> bool {
+    entry
+        .pointer("/reactNative/capabilities/prefersFuseboxFrontend")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || string_value(entry, "devtoolsFrontendUrl")
+            .is_some_and(|url| url.contains("/rn_fusebox.html"))
+}
+
 fn build_metro_target(
     udid: &str,
     http_origin: Option<&str>,
@@ -685,7 +721,19 @@ fn metro_devtools_frontend_url(port: u16, entry: &Value, web_socket_debugger_url
     if frontend.starts_with("http://") || frontend.starts_with("https://") {
         return frontend;
     }
-    format!("http://{DEVTOOLS_HOST}:{port}{frontend}")
+    let host = string_value(entry, "webSocketDebuggerUrl")
+        .and_then(|url| websocket_authority(&url))
+        .unwrap_or_else(|| format!("{DEVTOOLS_HOST}:{port}"));
+    format!("http://{host}{frontend}")
+}
+
+fn websocket_authority(value: &str) -> Option<String> {
+    value
+        .strip_prefix("ws://")
+        .or_else(|| value.strip_prefix("wss://"))
+        .and_then(|rest| rest.split('/').next())
+        .filter(|authority| !authority.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn local_metro_fusebox_frontend_url(query: Option<&str>, web_socket_debugger_url: &str) -> String {

@@ -1,3 +1,8 @@
+import {
+  Cross2Icon,
+  HomeIcon as RadixHomeIcon,
+  ReloadIcon,
+} from "@radix-ui/react-icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
@@ -13,14 +18,17 @@ import {
 } from "../../api/simulators";
 import type {
   ChromeDevToolsTarget,
+  ChromeDevToolsTargetDiscovery,
   SimulatorMetadata,
   WebKitTarget,
+  WebKitTargetDiscovery,
 } from "../../api/types";
 import { usePanelPresence } from "../../shared/hooks/usePanelPresence";
 
-const DEVTOOLS_TARGET_REFRESH_MS = 5000;
+const DEVTOOLS_TARGET_REFRESH_MS = 750;
 const CHROME_DEVTOOLS_REQUEST_TIMEOUT_MS = 6000;
-const WEBKIT_DEVTOOLS_REQUEST_TIMEOUT_MS = 2500;
+const WEBKIT_DEVTOOLS_REQUEST_TIMEOUT_MS = 7000;
+const FOREGROUND_SELECTION_SETTLE_MS = 1800;
 const DEVTOOLS_PANEL_WIDTH_STORAGE_KEY = "xcw-devtools-panel-width";
 const LEGACY_PANEL_WIDTH_STORAGE_KEYS = [
   "xcw-chrome-devtools-panel-width",
@@ -33,6 +41,7 @@ const DEVTOOLS_PANEL_WIDTH_STEP = 40;
 
 interface DevToolsPanelProps {
   onClose: () => void;
+  overviewRequestKey: number;
   selectedSimulator: SimulatorMetadata | null;
   visible: boolean;
 }
@@ -45,9 +54,13 @@ interface ResizeState {
 }
 
 interface DevToolsTarget {
+  appId?: string | null;
+  appName?: string | null;
+  bundleIdentifier?: string | null;
   frameUrl: string;
   id: string;
   meta: string;
+  processIdentifier?: number | null;
   source: string;
   title: string;
 }
@@ -57,8 +70,13 @@ interface DevToolsDiscovery {
   warnings: string[];
 }
 
+type ChromeDiscoveryResult =
+  PromiseSettledResult<ChromeDevToolsTargetDiscovery>;
+type WebKitDiscoveryResult = PromiseSettledResult<WebKitTargetDiscovery>;
+
 export function DevToolsPanel({
   onClose,
+  overviewRequestKey,
   selectedSimulator,
   visible,
 }: DevToolsPanelProps) {
@@ -67,13 +85,26 @@ export function DevToolsPanel({
   const [discovery, setDiscovery] = useState<DevToolsDiscovery | null>(null);
   const [selectedTargetId, setSelectedTargetId] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isWebKitLoading, setIsWebKitLoading] = useState(false);
   const [error, setError] = useState("");
   const [frameLoaded, setFrameLoaded] = useState(false);
+  const [overviewVisible, setOverviewVisible] = useState(false);
   const discoveryRef = useRef<DevToolsDiscovery | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const loadingTargetsRef = useRef(false);
+  const loadingWebKitTargetsRef = useRef(false);
   const panelWidthRef = useRef(panelWidth);
   const requestIdRef = useRef(0);
   const resizeStateRef = useRef<ResizeState | null>(null);
+  const selectedSimulatorUdidRef = useRef<string | null>(null);
+  const overviewPinnedRef = useRef(false);
+  const foregroundSelectionPausedUntilRef = useRef(0);
+  const foregroundKeyRef = useRef("");
+  const foregroundAppRef =
+    useRef<ChromeDevToolsTargetDiscovery["foregroundApp"]>(null);
+  const pendingForegroundAppRef =
+    useRef<ChromeDevToolsTargetDiscovery["foregroundApp"]>(null);
+  const pendingForegroundKeyRef = useRef("");
   const selectedTargetIdRef = useRef("");
   const { isPresent, panelState } = usePanelPresence(visible);
 
@@ -86,7 +117,8 @@ export function DevToolsPanel({
       targets.find((target) => target.id === selectedTargetId) ?? targets[0]
     );
   }, [selectedTargetId, targets]);
-  const frameUrl = visible ? (selectedTarget?.frameUrl ?? "") : "";
+  const frameUrl =
+    visible && !overviewVisible ? (selectedTarget?.frameUrl ?? "") : "";
 
   useEffect(() => {
     panelWidthRef.current = panelWidth;
@@ -106,14 +138,26 @@ export function DevToolsPanel({
   }, []);
 
   const loadTargets = useCallback(async () => {
+    if (loadingTargetsRef.current) {
+      return;
+    }
+
     if (!selectedSimulator) {
       applyDiscovery(null);
       applySelectedTargetId("");
       setError("");
       setIsLoading(false);
+      setIsWebKitLoading(false);
       return;
     }
 
+    loadingTargetsRef.current = true;
+    const shouldLoadWebKit =
+      selectedSimulator.isBooted && !loadingWebKitTargetsRef.current;
+    if (shouldLoadWebKit) {
+      loadingWebKitTargetsRef.current = true;
+      setIsWebKitLoading(true);
+    }
     const requestId = ++requestIdRef.current;
     setIsLoading(true);
     setError("");
@@ -124,78 +168,155 @@ export function DevToolsPanel({
         CHROME_DEVTOOLS_REQUEST_TIMEOUT_MS,
         "Timed out loading Chrome DevTools targets.",
       );
-      const webKitTargets = selectedSimulator.isBooted
+      const webKitTargets = shouldLoadWebKit
         ? requestWithTimeout(
             (signal) => fetchWebKitTargets(selectedSimulator.udid, { signal }),
             WEBKIT_DEVTOOLS_REQUEST_TIMEOUT_MS,
             "Timed out loading WebKit targets.",
           )
-        : Promise.resolve({
-            socketPath: null,
-            targets: [],
-            udid: selectedSimulator.udid,
-            warnings: [],
+        : null;
+      const chromeResultPromise = settleDiscovery(chromeTargets);
+      const webKitResultPromise = webKitTargets
+        ? settleDiscovery(webKitTargets)
+        : null;
+      const applyTargetResults = ({
+        chromeResult,
+        webKitResult,
+      }: {
+        chromeResult?: ChromeDiscoveryResult;
+        webKitResult?: WebKitDiscoveryResult;
+      }) => {
+        const isBackgroundWebKitResult = !chromeResult && Boolean(webKitResult);
+        if (
+          requestId !== requestIdRef.current &&
+          !(
+            isBackgroundWebKitResult &&
+            selectedSimulatorUdidRef.current === selectedSimulator.udid
+          )
+        ) {
+          return;
+        }
+
+        const previousDiscovery = discoveryRef.current;
+        const previousTargets = previousDiscovery?.targets ?? [];
+        const nextTargets: DevToolsTarget[] = [];
+        let currentForegroundKey = foregroundKeyRef.current;
+        let warnings: string[] = [];
+        let errors: string[] = [];
+
+        if (chromeResult) {
+          if (chromeResult.status === "fulfilled") {
+            const foregroundApp = chromeResult.value.foregroundApp ?? null;
+            foregroundAppRef.current = foregroundApp;
+            currentForegroundKey = foregroundAppKey(foregroundApp);
+            if (currentForegroundKey !== foregroundKeyRef.current) {
+              foregroundKeyRef.current = currentForegroundKey;
+              pendingForegroundKeyRef.current = currentForegroundKey;
+              pendingForegroundAppRef.current = foregroundApp;
+            }
+            nextTargets.push(
+              ...chromeResult.value.targets.map(mapChromeTarget),
+            );
+            warnings = warnings.concat(chromeResult.value.warnings);
+          } else {
+            const staleChromeTargets = previousTargets.filter(isChromeTarget);
+            if (staleChromeTargets.length > 0) {
+              nextTargets.push(...staleChromeTargets);
+            } else {
+              errors = errors.concat(errorMessage(chromeResult.reason));
+            }
+          }
+        } else {
+          nextTargets.push(...previousTargets.filter(isChromeTarget));
+        }
+
+        if (webKitResult) {
+          if (webKitResult.status === "fulfilled") {
+            nextTargets.push(
+              ...webKitResult.value.targets.map(mapWebKitTarget),
+            );
+            warnings = warnings.concat(webKitResult.value.warnings);
+          } else {
+            const staleWebKitTargets = previousTargets.filter(isWebKitTarget);
+            if (staleWebKitTargets.length > 0) {
+              nextTargets.push(...staleWebKitTargets);
+            } else {
+              errors = errors.concat(errorMessage(webKitResult.reason));
+            }
+          }
+        } else {
+          nextTargets.push(...previousTargets.filter(isWebKitTarget));
+        }
+
+        warnings = cleanDevToolsMessages(warnings);
+        errors = cleanDevToolsMessages(errors);
+
+        if (
+          nextTargets.length === 0 &&
+          previousDiscovery &&
+          previousDiscovery.targets.length > 0
+        ) {
+          applyDiscovery({
+            ...previousDiscovery,
+            warnings: mergeWarnings(
+              warnings,
+              cleanDevToolsMessages(previousDiscovery.warnings),
+            ),
           });
-      const [chromeResult, webKitResult] = await Promise.allSettled([
-        chromeTargets,
-        webKitTargets,
-      ]);
-      if (requestId !== requestIdRef.current) {
-        return;
-      }
+          return;
+        }
 
-      const nextTargets: DevToolsTarget[] = [];
-      let warnings: string[] = [];
-      let errors: string[] = [];
-      if (chromeResult.status === "fulfilled") {
-        nextTargets.push(...chromeResult.value.targets.map(mapChromeTarget));
-        warnings = warnings.concat(chromeResult.value.warnings);
-      } else {
-        errors = errors.concat(errorMessage(chromeResult.reason));
-      }
-
-      if (webKitResult.status === "fulfilled") {
-        nextTargets.push(...webKitResult.value.targets.map(mapWebKitTarget));
-        warnings = warnings.concat(webKitResult.value.warnings);
-      } else {
-        errors = errors.concat(errorMessage(webKitResult.reason));
-      }
-      warnings = cleanDevToolsMessages(warnings);
-      errors = cleanDevToolsMessages(errors);
-
-      const previousDiscovery = discoveryRef.current;
-      if (
-        nextTargets.length === 0 &&
-        previousDiscovery &&
-        previousDiscovery.targets.length > 0
-      ) {
-        applyDiscovery({
-          ...previousDiscovery,
-          warnings: mergeWarnings(
-            warnings,
-            errors,
-            cleanDevToolsMessages(previousDiscovery.warnings),
-            [
-              "DevTools target discovery returned no targets; keeping the active target while debuggers reconnect.",
-            ],
-          ),
-        });
-        return;
-      }
-
-      const nextDiscovery = {
-        targets: nextTargets,
-        warnings: mergeWarnings(warnings, errors),
+        const nextDiscovery = {
+          targets: nextTargets,
+          warnings: mergeWarnings(warnings, errors),
+        };
+        applyDiscovery(nextDiscovery);
+        const current = selectedTargetIdRef.current;
+        const pendingForegroundApp = pendingForegroundAppRef.current;
+        const pendingForegroundKey = pendingForegroundKeyRef.current;
+        const foregroundApp = foregroundAppRef.current;
+        const foregroundSelectionPaused =
+          Date.now() < foregroundSelectionPausedUntilRef.current;
+        const compatibleTarget = foregroundSelectionPaused
+          ? null
+          : pendingForegroundApp &&
+              pendingForegroundKey &&
+              pendingForegroundKey === currentForegroundKey
+            ? highlyCompatibleTargetForForeground(
+                nextTargets,
+                pendingForegroundApp,
+              )
+            : isSafariForegroundApp(foregroundApp)
+              ? highlyCompatibleTargetForForeground(nextTargets, foregroundApp)
+              : null;
+        if (compatibleTarget) {
+          pendingForegroundKeyRef.current = "";
+          pendingForegroundAppRef.current = null;
+        }
+        const currentTarget = nextTargets.find(
+          (target) => target.id === current,
+        );
+        const nextTargetId =
+          compatibleTarget?.id || currentTarget?.id || nextTargets[0]?.id || "";
+        if (compatibleTarget && !overviewPinnedRef.current) {
+          setOverviewVisible(false);
+        }
+        applySelectedTargetId(nextTargetId);
+        if (nextTargets.length === 0 && errors.length > 0) {
+          setError(errors.join(" "));
+        }
       };
-      applyDiscovery(nextDiscovery);
-      const current = selectedTargetIdRef.current;
-      const nextTargetId =
-        current && nextTargets.some((target) => target.id === current)
-          ? current
-          : (nextTargets[0]?.id ?? "");
-      applySelectedTargetId(nextTargetId);
-      if (nextTargets.length === 0 && errors.length > 0) {
-        setError(errors.join(" "));
+
+      const chromeResult = await chromeResultPromise;
+      applyTargetResults({ chromeResult });
+      if (requestId === requestIdRef.current && !webKitResultPromise) {
+        setIsLoading(false);
+      }
+      loadingTargetsRef.current = false;
+
+      if (webKitResultPromise) {
+        const webKitResult = await webKitResultPromise;
+        applyTargetResults({ webKitResult });
       }
     } catch (targetError) {
       if (requestId !== requestIdRef.current) {
@@ -220,6 +341,11 @@ export function DevToolsPanel({
       if (requestId === requestIdRef.current) {
         setIsLoading(false);
       }
+      loadingTargetsRef.current = false;
+      if (shouldLoadWebKit) {
+        loadingWebKitTargetsRef.current = false;
+        setIsWebKitLoading(false);
+      }
     }
   }, [
     applyDiscovery,
@@ -229,11 +355,20 @@ export function DevToolsPanel({
   ]);
 
   useEffect(() => {
+    selectedSimulatorUdidRef.current = selectedSimulator?.udid ?? null;
     requestIdRef.current += 1;
     applyDiscovery(null);
     applySelectedTargetId("");
+    overviewPinnedRef.current = false;
+    foregroundKeyRef.current = "";
+    foregroundAppRef.current = null;
+    pendingForegroundKeyRef.current = "";
+    pendingForegroundAppRef.current = null;
     setError("");
     setFrameLoaded(false);
+    setIsLoading(false);
+    setIsWebKitLoading(false);
+    setOverviewVisible(false);
   }, [applyDiscovery, applySelectedTargetId, selectedSimulator?.udid]);
 
   useEffect(() => {
@@ -242,9 +377,7 @@ export function DevToolsPanel({
     }
     void loadTargets();
     const interval = window.setInterval(() => {
-      if (!selectedTargetIdRef.current) {
-        void loadTargets();
-      }
+      void loadTargets();
     }, DEVTOOLS_TARGET_REFRESH_MS);
     return () => window.clearInterval(interval);
   }, [loadTargets, visible]);
@@ -252,6 +385,18 @@ export function DevToolsPanel({
   useEffect(() => {
     setFrameLoaded(false);
   }, [frameUrl]);
+
+  useEffect(() => {
+    if (overviewRequestKey <= 0) {
+      return;
+    }
+    foregroundSelectionPausedUntilRef.current =
+      Date.now() + FOREGROUND_SELECTION_SETTLE_MS;
+    pendingForegroundKeyRef.current = "";
+    pendingForegroundAppRef.current = null;
+    overviewPinnedRef.current = false;
+    setOverviewVisible(true);
+  }, [overviewRequestKey]);
 
   useEffect(() => {
     function handlePointerMove(event: PointerEvent) {
@@ -359,24 +504,34 @@ export function DevToolsPanel({
     storePanelWidth(nextWidth);
   }
 
-  function openDetachedInspector() {
-    if (!frameUrl) {
-      return;
-    }
-    window.open(frameUrl, "_blank", "noopener");
+  function openTarget(targetId: string) {
+    overviewPinnedRef.current = false;
+    pendingForegroundKeyRef.current = "";
+    pendingForegroundAppRef.current = null;
+    applySelectedTargetId(targetId);
+    setOverviewVisible(false);
   }
 
+  function showOverview() {
+    overviewPinnedRef.current = true;
+    setOverviewVisible(true);
+  }
+
+  const isDiscoveringTargets = isLoading || isWebKitLoading;
   const statusMessage =
     error ||
     (!selectedSimulator
       ? "No simulator selected."
-      : isLoading && targets.length === 0
-        ? "Loading DevTools targets..."
+      : isDiscoveringTargets && targets.length === 0
+        ? "Loading..."
         : targets.length === 0
           ? selectedSimulator.isBooted
             ? "No DevTools targets. Open Safari, enable inspectable WKWebViews, start Metro, or launch a Chrome remote debugging target."
             : "No DevTools targets. Boot the simulator for Safari/WebKit, or start Metro or Chrome remote debugging."
           : "");
+  const emptyOverviewMessage = isDiscoveringTargets
+    ? "Loading..."
+    : "No targets";
   const panelStyle = {
     "--webkit-panel-width": `${panelWidth}px`,
   } as CSSProperties;
@@ -407,11 +562,22 @@ export function DevToolsPanel({
       />
 
       <div className="webkit-targetbar">
+        <button
+          aria-label="DevTools Home"
+          className={`tbtn icon-btn ${overviewVisible ? "active" : ""}`}
+          onClick={showOverview}
+          title="DevTools Home"
+          type="button"
+        >
+          <RadixHomeIcon />
+        </button>
         <select
           aria-label="DevTools Target"
           className="webkit-target-select"
           disabled={targets.length === 0}
-          onChange={(event) => applySelectedTargetId(event.target.value)}
+          onChange={(event) => {
+            openTarget(event.target.value);
+          }}
           value={selectedTarget?.id ?? ""}
         >
           {targets.length === 0 ? (
@@ -427,22 +593,11 @@ export function DevToolsPanel({
         <button
           aria-label="Refresh DevTools Targets"
           className="tbtn icon-btn"
-          disabled={isLoading}
           onClick={() => void loadTargets()}
           title="Refresh DevTools Targets"
           type="button"
         >
-          <RefreshIcon />
-        </button>
-        <button
-          aria-label="Open DevTools In New Tab"
-          className="tbtn icon-btn"
-          disabled={!frameUrl}
-          onClick={openDetachedInspector}
-          title="Open DevTools In New Tab"
-          type="button"
-        >
-          <PopOutIcon />
+          <ReloadIcon />
         </button>
         <button
           aria-label="Close DevTools"
@@ -451,11 +606,11 @@ export function DevToolsPanel({
           title="Close DevTools"
           type="button"
         >
-          <CloseIcon />
+          <Cross2Icon />
         </button>
       </div>
 
-      {selectedTarget ? (
+      {selectedTarget && !overviewVisible ? (
         <div className="webkit-target-meta">
           <span>{selectedTarget.source}</span>
           {selectedTarget.meta ? <span>{selectedTarget.meta}</span> : null}
@@ -463,7 +618,13 @@ export function DevToolsPanel({
       ) : null}
 
       <div className="webkit-frame-wrap">
-        {frameUrl ? (
+        {overviewVisible ? (
+          <DevToolsOverview
+            emptyMessage={emptyOverviewMessage}
+            targets={targets}
+            onSelectTarget={openTarget}
+          />
+        ) : frameUrl ? (
           <>
             <iframe
               allow="clipboard-read; clipboard-write"
@@ -475,7 +636,7 @@ export function DevToolsPanel({
             />
             {!frameLoaded ? (
               <div className="webkit-status" role="status">
-                Loading DevTools...
+                Loading...
               </div>
             ) : null}
           </>
@@ -497,12 +658,58 @@ export function DevToolsPanel({
   );
 }
 
+interface DevToolsOverviewProps {
+  emptyMessage: string;
+  onSelectTarget: (targetId: string) => void;
+  targets: DevToolsTarget[];
+}
+
+function DevToolsOverview({
+  emptyMessage,
+  onSelectTarget,
+  targets,
+}: DevToolsOverviewProps) {
+  if (targets.length === 0) {
+    return (
+      <div className="devtools-overview empty">
+        <div className="webkit-status">{emptyMessage}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="devtools-overview">
+      <div className="devtools-overview-list">
+        {targets.map((target) => (
+          <button
+            className="devtools-overview-card"
+            key={target.id}
+            onClick={() => onSelectTarget(target.id)}
+            type="button"
+          >
+            <span className="devtools-overview-card-source">
+              {target.source}
+            </span>
+            <span className="devtools-overview-card-title">{target.title}</span>
+            {target.meta ? (
+              <span className="devtools-overview-card-meta">{target.meta}</span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function mapChromeTarget(target: ChromeDevToolsTarget): DevToolsTarget {
   const source = sourceLabel(target.source);
   return {
+    appName: target.appName ?? null,
+    bundleIdentifier: target.bundleIdentifier ?? null,
     frameUrl: buildChromeDevToolsFrameUrl(target),
     id: `chrome:${target.id}`,
     meta: target.bundleIdentifier ?? target.url,
+    processIdentifier: target.processIdentifier,
     source,
     title: chromeTargetLabel(target),
   };
@@ -510,12 +717,117 @@ function mapChromeTarget(target: ChromeDevToolsTarget): DevToolsTarget {
 
 function mapWebKitTarget(target: WebKitTarget): DevToolsTarget {
   return {
+    appId: target.appId,
+    appName: target.appName ?? null,
     frameUrl: buildWebKitInspectorFrameUrl(target),
     id: `webkit:${target.id}`,
     meta: target.url ?? "",
+    processIdentifier: webKitTargetProcessIdentifier(target),
     source: webKitTargetKindLabel(target),
     title: webKitTargetLabel(target),
   };
+}
+
+function highlyCompatibleTargetForForeground(
+  targets: DevToolsTarget[],
+  foregroundApp: ChromeDevToolsTargetDiscovery["foregroundApp"],
+): DevToolsTarget | null {
+  if (!foregroundApp) {
+    return null;
+  }
+  return (
+    targets
+      .map((target) => ({
+        score: foregroundCompatibilityScore(target, foregroundApp),
+        target,
+      }))
+      .filter(({ score }) => score >= 85)
+      .sort((left, right) => right.score - left.score)[0]?.target ?? null
+  );
+}
+
+function foregroundCompatibilityScore(
+  target: DevToolsTarget,
+  foregroundApp: NonNullable<ChromeDevToolsTargetDiscovery["foregroundApp"]>,
+): number {
+  let score = 0;
+  const foregroundBundle = foregroundApp.bundleIdentifier?.trim() ?? "";
+  const foregroundAppName = foregroundApp.appName?.trim() ?? "";
+  const foregroundPid = foregroundApp.processIdentifier;
+
+  if (
+    Number.isFinite(foregroundPid) &&
+    foregroundPid > 0 &&
+    target.processIdentifier === foregroundPid
+  ) {
+    score = Math.max(score, isWebKitTarget(target) ? 100 : 92);
+  }
+
+  if (foregroundBundle && target.bundleIdentifier === foregroundBundle) {
+    score = Math.max(score, target.source === "React Native Metro" ? 98 : 90);
+  }
+
+  if (
+    isSafariForeground(foregroundApp) &&
+    (target.source === "Safari" || isWebKitTarget(target))
+  ) {
+    score = Math.max(score, target.source === "Safari" ? 96 : 88);
+  }
+
+  if (
+    foregroundAppName &&
+    isWebKitTarget(target) &&
+    (target.appName === foregroundAppName ||
+      target.title.startsWith(`${foregroundAppName}:`))
+  ) {
+    score = Math.max(score, 88);
+  }
+
+  return score;
+}
+
+function foregroundAppKey(
+  foregroundApp: ChromeDevToolsTargetDiscovery["foregroundApp"],
+): string {
+  if (!foregroundApp) {
+    return "";
+  }
+  return (
+    foregroundApp.bundleIdentifier?.trim() ||
+    foregroundApp.appName?.trim() ||
+    `pid:${foregroundApp.processIdentifier}`
+  );
+}
+
+function isSafariForegroundApp(
+  foregroundApp: ChromeDevToolsTargetDiscovery["foregroundApp"],
+): foregroundApp is NonNullable<
+  ChromeDevToolsTargetDiscovery["foregroundApp"]
+> {
+  return Boolean(foregroundApp && isSafariForeground(foregroundApp));
+}
+
+function isSafariForeground(
+  foregroundApp: NonNullable<ChromeDevToolsTargetDiscovery["foregroundApp"]>,
+): boolean {
+  return (
+    foregroundApp.bundleIdentifier === "com.apple.mobilesafari" ||
+    foregroundApp.appName === "Safari" ||
+    foregroundApp.appName === "MobileSafari"
+  );
+}
+
+function isChromeTarget(target: DevToolsTarget): boolean {
+  return target.id.startsWith("chrome:");
+}
+
+function isWebKitTarget(target: DevToolsTarget): boolean {
+  return (
+    target.id.startsWith("webkit:") ||
+    target.source === "Safari" ||
+    target.source === "WebKit" ||
+    target.source === "WebKit proxy"
+  );
 }
 
 function readStoredPanelWidth(): number {
@@ -707,6 +1019,11 @@ function webKitTargetKindLabel(target: WebKitTarget): string {
   return target.appName ?? "WebKit";
 }
 
+function webKitTargetProcessIdentifier(target: WebKitTarget): number | null {
+  const match = target.appId.match(/^PID:(\d+)$/);
+  return match ? Number.parseInt(match[1], 10) : null;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
@@ -725,7 +1042,15 @@ function userFacingDevToolsMessage(message: string): string {
     lower.includes("no connected websocket inspector found") ||
     lower.includes("no published app inspector found") ||
     lower.includes("no in-app inspector found") ||
-    lower.includes("first probe error:")
+    lower.includes("first probe error:") ||
+    lower.includes("timed out loading webkit targets") ||
+    lower.includes("timed out loading chrome devtools targets") ||
+    lower.includes("devtools target discovery returned no targets") ||
+    lower.includes("webkit target discovery returned an empty listing") ||
+    lower.includes("unable to read webkit packet header") ||
+    lower.includes("unable to write webkit packet") ||
+    lower.includes("retried webkit target discovery") ||
+    lower.includes("webinspectord was settling")
   ) {
     return "";
   }
@@ -757,6 +1082,15 @@ function requestWithTimeout<T>(
     .finally(() => window.clearTimeout(timer));
 }
 
+function settleDiscovery<T>(
+  promise: Promise<T>,
+): Promise<PromiseSettledResult<T>> {
+  return promise.then(
+    (value) => ({ status: "fulfilled", value }) as PromiseFulfilledResult<T>,
+    (reason) => ({ status: "rejected", reason }) as PromiseRejectedResult,
+  );
+}
+
 function mergeWarnings(...groups: string[][]): string[] {
   const seen = new Set<string>();
   return groups.flat().filter((warning) => {
@@ -766,45 +1100,4 @@ function mergeWarnings(...groups: string[][]): string[] {
     seen.add(warning);
     return true;
   });
-}
-
-function RefreshIcon() {
-  return (
-    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
-      <path
-        d="M13 4.5V2h-2.5M3 11.5V14h2.5M12.4 6A4.7 4.7 0 0 0 4.2 4.2L3 5.4m.6 4.6a4.7 4.7 0 0 0 8.2 1.8L13 10.6"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.4"
-      />
-    </svg>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
-      <path
-        d="M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.5"
-      />
-    </svg>
-  );
-}
-
-function PopOutIcon() {
-  return (
-    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
-      <path
-        d="M6 4H3.8c-.4 0-.8.4-.8.8v7.4c0 .4.4.8.8.8h7.4c.4 0 .8-.4.8-.8V10M9 3h4v4M8 8l5-5"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.4"
-      />
-    </svg>
-  );
 }

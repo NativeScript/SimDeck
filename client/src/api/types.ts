@@ -81,6 +81,11 @@ export interface ChromeDevToolsTarget {
 }
 
 export interface ChromeDevToolsTargetDiscovery {
+  foregroundApp?: {
+    appName?: string | null;
+    bundleIdentifier?: string | null;
+    processIdentifier: number;
+  } | null;
   udid: string;
   targets: ChromeDevToolsTarget[];
   warnings: string[];

@@ -1092,6 +1092,72 @@
   background: var(--bg);
 }
 
+.devtools-overview {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.devtools-overview-list {
+  display: grid;
+  gap: 10px;
+  width: min(520px, 100%);
+}
+
+.devtools-overview-card {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-height: 82px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.devtools-overview-card:hover {
+  background: var(--surface-hover);
+}
+
+.devtools-overview-card:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.devtools-overview-card-source {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.devtools-overview-card-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.devtools-overview-card-meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .webkit-status {
   position: absolute;
   inset: 0;

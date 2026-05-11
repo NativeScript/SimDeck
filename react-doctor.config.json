@@ -1,0 +1,29 @@
+{
+  "ignore": {
+    "rules": [
+      "jsx-a11y/no-autofocus",
+      "knip/exports",
+      "knip/files",
+      "knip/types",
+      "react-doctor/async-await-in-loop",
+      "react-doctor/design-no-three-period-ellipsis",
+      "react-doctor/js-combine-iterations",
+      "react-doctor/js-flatmap-filter",
+      "react-doctor/js-min-max-loop",
+      "react-doctor/js-set-map-lookups",
+      "react-doctor/js-tosorted-immutable",
+      "react-doctor/no-barrel-import",
+      "react-doctor/no-cascading-set-state",
+      "react-doctor/no-derived-state-effect",
+      "react-doctor/no-effect-chain",
+      "react-doctor/no-eval",
+      "react-doctor/no-fetch-in-effect",
+      "react-doctor/no-giant-component",
+      "react-doctor/no-many-boolean-props",
+      "react-doctor/prefer-useReducer",
+      "react-doctor/rendering-usetransition-loading",
+      "react-doctor/rerender-lazy-state-init",
+      "react-doctor/rerender-state-only-in-handlers"
+    ]
+  }
+}

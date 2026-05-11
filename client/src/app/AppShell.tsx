@@ -355,6 +355,8 @@ export function AppShell({
   const [devToolsVisible, setDevToolsVisible] = useState(() =>
     readStoredFlag(DEVTOOLS_VISIBLE_STORAGE_KEY, false),
   );
+  const [devToolsOverviewRequestKey, setDevToolsOverviewRequestKey] =
+    useState(0);
   const [selectedUDID, setSelectedUDID] = useState(initialSelectedUDID ?? "");
   const [search, setSearch] = useState("");
   const openURLValueRef = useRef(
@@ -1748,6 +1750,17 @@ export function AppShell({
     }
   }
 
+  function prepareSimulatorInput() {
+    setMenuOpen(false);
+    setAccessibilitySelectedId("");
+    setAccessibilityHoveredId(null);
+    window.getSelection()?.removeAllRanges();
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement) {
+      activeElement.blur();
+    }
+  }
+
   async function submitPairing(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const code = pairingCode.trim();
@@ -1842,6 +1855,7 @@ export function AppShell({
           if (!selectedSimulator) {
             return;
           }
+          setDevToolsOverviewRequestKey((current) => current + 1);
           setAccessibilitySelectedId("");
           setAccessibilityHoveredId(null);
           if (!sendControl(selectedSimulator.udid, { type: "home" })) {
@@ -2007,6 +2021,7 @@ export function AppShell({
           setAccessibilityHoveredId(null);
           setAccessibilityPickerActive(false);
         }}
+        onSimulatorInteraction={prepareSimulatorInput}
         onScreenPointerCancel={pointerInput.handleScreenPointerCancel}
         onScreenPointerDown={pointerInput.handleScreenPointerDown}
         onScreenPointerMove={pointerInput.handleScreenPointerMove}
@@ -2043,6 +2058,7 @@ export function AppShell({
         devtoolsPanel={
           <DevToolsPanel
             onClose={() => setDevToolsVisible(false)}
+            overviewRequestKey={devToolsOverviewRequestKey}
             selectedSimulator={selectedSimulator}
             visible={devToolsVisible}
           />

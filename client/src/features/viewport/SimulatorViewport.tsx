@@ -42,6 +42,7 @@ interface SimulatorViewportProps {
   onPanPointerUp: () => void;
   onPickerHover: (id: string | null) => void;
   onPickerSelect: (id: string) => void;
+  onSimulatorInteraction: () => void;
   onViewportWheel: (event: React.WheelEvent<HTMLElement>) => void;
   onScreenPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
   onScreenPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
@@ -98,6 +99,7 @@ export function SimulatorViewport({
   onPanPointerUp,
   onPickerHover,
   onPickerSelect,
+  onSimulatorInteraction,
   onViewportWheel,
   onScreenPointerCancel,
   onScreenPointerDown,
@@ -190,6 +192,7 @@ export function SimulatorViewport({
                   onPanPointerUp={onPanPointerUp}
                   onPickerHover={onPickerHover}
                   onPickerSelect={onPickerSelect}
+                  onSimulatorInteraction={onSimulatorInteraction}
                   onScreenPointerCancel={onScreenPointerCancel}
                   onScreenPointerDown={onScreenPointerDown}
                   onScreenPointerMove={onScreenPointerMove}

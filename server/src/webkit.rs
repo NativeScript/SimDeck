@@ -20,7 +20,7 @@ const WEBKIT_PACKET_MAX_LEN: usize = 64 * 1024 * 1024;
 const WEBKIT_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(5000);
 const WEBKIT_DISCOVERY_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(1600);
 const WEBKIT_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_millis(400);
-const WEBKIT_DISCOVERY_CACHE_TTL: Duration = Duration::from_secs(30);
+const WEBKIT_DISCOVERY_CACHE_TTL: Duration = Duration::from_secs(120);
 const WEBKIT_SOCKET_ACTIVATION_DELAY: Duration = Duration::from_millis(200);
 const WEBKIT_IO_TIMEOUT: Duration = Duration::from_secs(4);
 
@@ -49,6 +49,28 @@ pub struct WebKitTargetDiscovery {
     pub socket_path: Option<String>,
     pub targets: Vec<WebKitTarget>,
     pub warnings: Vec<String>,
+}
+
+pub fn synthetic_safari_target(
+    udid: &str,
+    http_origin: &str,
+    process_identifier: i64,
+) -> WebKitTarget {
+    webkit_target(
+        udid,
+        http_origin,
+        WebKitPage {
+            app_id: format!("PID:{process_identifier}"),
+            page_id: 1,
+            title: Some("Safari".to_owned()),
+            url: None,
+        },
+        Some(&WebKitApplication {
+            id: format!("PID:{process_identifier}"),
+            name: Some("Safari".to_owned()),
+            is_proxy: false,
+        }),
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -100,6 +122,10 @@ pub async fn discover_targets(
             });
         }
     };
+
+    if let Some(cached) = cached_webkit_discovery(udid, Some(socket.path.clone()), Vec::new()) {
+        return Ok(cached);
+    }
 
     let deadline = Instant::now() + WEBKIT_DISCOVERY_TIMEOUT;
     let mut attempts = 0usize;
@@ -176,13 +202,6 @@ async fn discover_targets_once(
         rpc_args(&connection_id),
     )
     .await?;
-    sleep(WEBKIT_SOCKET_ACTIVATION_DELAY).await;
-    send_rpc(
-        &mut stream,
-        "_rpc_getConnectedApplications:",
-        rpc_args(&connection_id),
-    )
-    .await?;
 
     let deadline = Instant::now() + WEBKIT_DISCOVERY_ATTEMPT_TIMEOUT;
     let mut next_listing_refresh = Instant::now() + WEBKIT_DISCOVERY_REFRESH_INTERVAL;
@@ -202,12 +221,6 @@ async fn discover_targets_once(
             Err(_) if !pages.is_empty() => break,
             Err(_) if Instant::now() < deadline => {
                 if Instant::now() >= next_listing_refresh {
-                    send_rpc(
-                        &mut stream,
-                        "_rpc_getConnectedApplications:",
-                        rpc_args(&connection_id),
-                    )
-                    .await?;
                     for app_id in applications.keys() {
                         send_forward_get_listing(&mut stream, &connection_id, app_id).await?;
                     }
@@ -225,6 +238,10 @@ async fn discover_targets_once(
                 continue;
             }
         };
+        debug!(
+            selector = %message.selector,
+            "Received WebKit discovery selector"
+        );
 
         match message.selector.as_str() {
             "_rpc_reportConnectedApplicationList:" => {
@@ -340,10 +357,6 @@ fn cached_webkit_discovery(
         discovery.socket_path = socket_path;
     }
     discovery.warnings = warnings;
-    push_unique_warning(
-        &mut discovery.warnings,
-        "WebKit target discovery returned an empty listing; showing the last known targets while simulator webinspectord settles.",
-    );
     for warning in &cached.discovery.warnings {
         push_unique_warning(&mut discovery.warnings, warning);
     }
@@ -487,11 +500,11 @@ async fn discover_webinspector_socket(udid: &str) -> Result<Option<WebKitSocket>
     .map_err(|error| AppError::native(format!("Unable to run lsof: {error}")))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError::native(format!(
-            "Unable to list webinspectord sockets: {}",
-            stderr.trim()
-        )));
+        debug!(
+            "Unable to list webinspectord sockets for {udid}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        return discover_launchd_webinspector_socket(udid).await;
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -886,7 +899,10 @@ fn new_remote_inspector_id() -> String {
         .as_nanos();
     let pid = std::process::id() as u128;
     let value = now ^ (pid << 48) ^ counter as u128;
-    let hex = format!("{value:032X}");
+    let mut bytes = value.to_be_bytes();
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex = hex::encode(bytes);
     format!(
         "{}-{}-{}-{}-{}",
         &hex[0..8],

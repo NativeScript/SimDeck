@@ -35,6 +35,7 @@ interface DeviceChromeProps {
   onPanPointerUp: () => void;
   onPickerHover: (id: string | null) => void;
   onPickerSelect: (id: string) => void;
+  onSimulatorInteraction: () => void;
   onScreenPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
   onScreenPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
   onScreenPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
@@ -73,6 +74,7 @@ export function DeviceChrome({
   onPanPointerUp,
   onPickerHover,
   onPickerSelect,
+  onSimulatorInteraction,
   onScreenPointerCancel,
   onScreenPointerDown,
   onScreenPointerMove,
@@ -136,6 +138,7 @@ export function DeviceChrome({
           onScreenPointerUp={onScreenPointerUp}
           onPickerHover={onPickerHover}
           onPickerSelect={onPickerSelect}
+          onSimulatorInteraction={onSimulatorInteraction}
           rotationQuarterTurns={rotationQuarterTurns}
           simulatorName={simulatorName}
           streamBackend={streamBackend}
@@ -177,6 +180,7 @@ export function DeviceChrome({
         onScreenPointerUp={onScreenPointerUp}
         onPickerHover={onPickerHover}
         onPickerSelect={onPickerSelect}
+        onSimulatorInteraction={onSimulatorInteraction}
         rotationQuarterTurns={rotationQuarterTurns}
         simulatorName={simulatorName}
         streamBackend={streamBackend}
@@ -417,6 +421,7 @@ interface ScreenLayerProps {
   onScreenPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
   onPickerHover: (id: string | null) => void;
   onPickerSelect: (id: string) => void;
+  onSimulatorInteraction: () => void;
   rotationQuarterTurns: number;
   simulatorName: string;
   streamBackend: string;
@@ -444,6 +449,7 @@ function ScreenLayer({
   onScreenPointerUp,
   onPickerHover,
   onPickerSelect,
+  onSimulatorInteraction,
   rotationQuarterTurns,
   simulatorName,
   streamBackend,
@@ -458,7 +464,10 @@ function ScreenLayer({
     <div
       className={`device-screen ${useChromeProfile ? "chrome-screen" : ""}`}
       onPointerCancel={onScreenPointerCancel}
-      onPointerDown={onScreenPointerDown}
+      onPointerDown={(event) => {
+        onSimulatorInteraction();
+        onScreenPointerDown(event);
+      }}
       onPointerMove={onScreenPointerMove}
       onPointerUp={onScreenPointerUp}
       style={chromeScreenStyle ?? undefined}
