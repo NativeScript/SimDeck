@@ -1046,6 +1046,12 @@ export function AppShell({
   }, [isBooted]);
 
   useEffect(() => {
+    if (isAndroidViewport) {
+      setRotationQuarterTurns((current) =>
+        normalizeQuarterTurns(current) === 0 ? current : 0,
+      );
+      return;
+    }
     if (simulatorRotationQuarterTurns == null) {
       return;
     }
@@ -1057,7 +1063,7 @@ export function AppShell({
       beginZoomAnimation();
       return simulatorRotationQuarterTurns;
     });
-  }, [simulatorRotationQuarterTurns]);
+  }, [isAndroidViewport, simulatorRotationQuarterTurns]);
 
   useEffect(() => {
     setChromeLoaded(!chromeRequired);

@@ -1083,11 +1083,15 @@ fn normalize_android_frame_orientation(
     let (width, height) = if (width > height) == (target.width > target.height) {
         (width, height)
     } else {
-        rgba = rotate_rgba_clockwise(&rgba, width, height);
+        rgba = if target.rotation_quarter_turns == 3 {
+            rotate_rgba_counterclockwise(&rgba, width, height)
+        } else {
+            rotate_rgba_clockwise(&rgba, width, height)
+        };
         (height, width)
     };
 
-    if target.rotation_quarter_turns >= 2 {
+    if target.width > target.height {
         rotate_rgba_180_in_place(&mut rgba, width, height);
     }
 
@@ -1118,6 +1122,22 @@ fn rotate_rgba_180_in_place(rgba: &mut [u8], width: u32, height: u32) {
             rgba.swap(pixel * 4 + channel, opposite * 4 + channel);
         }
     }
+}
+
+fn rotate_rgba_counterclockwise(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let width = width as usize;
+    let height = height as usize;
+    let mut out = vec![0; rgba.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let src = (y * width + x) * 4;
+            let dst_x = y;
+            let dst_y = width - 1 - x;
+            let dst = (dst_y * height + dst_x) * 4;
+            out[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
+        }
+    }
+    out
 }
 
 fn flatten_android_frame_alpha(rgba: &mut [u8], width: u32, height: u32) {
@@ -1943,6 +1963,34 @@ DisplayDeviceInfo{"Built-in Screen", 1080 x 2400, roundedCorners RoundedCorners{
     }
 
     #[test]
+    fn android_frame_orientation_flips_landscape_streams() {
+        let rgba = vec![
+            1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255, //
+            4, 0, 0, 255, 5, 0, 0, 255, 6, 0, 0, 255,
+        ];
+
+        let (width, height, rotated) = normalize_android_frame_orientation(
+            3,
+            2,
+            rgba,
+            Some(AndroidFrameTarget {
+                width: 3,
+                height: 2,
+                rotation_quarter_turns: 1,
+            }),
+        );
+
+        assert_eq!((width, height), (3, 2));
+        assert_eq!(
+            rotated,
+            vec![
+                6, 0, 0, 255, 5, 0, 0, 255, 4, 0, 0, 255, //
+                3, 0, 0, 255, 2, 0, 0, 255, 1, 0, 0, 255,
+            ]
+        );
+    }
+
+    #[test]
     fn android_frame_alpha_flattens_transparent_edges_to_nearest_row_pixel() {
         let mut rgba = vec![0, 0, 0, 0, 10, 20, 30, 255, 40, 50, 60, 255, 0, 0, 0, 0];
 
@@ -1964,15 +2012,15 @@ DisplayDeviceInfo{"Built-in Screen", 1080 x 2400, roundedCorners RoundedCorners{
     }
 
     #[test]
-    fn android_frame_orientation_rotates_reverse_orientations_180() {
+    fn android_frame_orientation_rotates_counterclockwise_then_flips_reverse_landscape() {
         let rgba = vec![
             1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255, //
             4, 0, 0, 255, 5, 0, 0, 255, 6, 0, 0, 255,
         ];
 
         let (width, height, rotated) = normalize_android_frame_orientation(
-            3,
             2,
+            3,
             rgba,
             Some(AndroidFrameTarget {
                 width: 3,
@@ -1985,8 +2033,8 @@ DisplayDeviceInfo{"Built-in Screen", 1080 x 2400, roundedCorners RoundedCorners{
         assert_eq!(
             rotated,
             vec![
-                6, 0, 0, 255, 5, 0, 0, 255, 4, 0, 0, 255, //
-                3, 0, 0, 255, 2, 0, 0, 255, 1, 0, 0, 255,
+                5, 0, 0, 255, 3, 0, 0, 255, 1, 0, 0, 255, //
+                6, 0, 0, 255, 4, 0, 0, 255, 2, 0, 0, 255,
             ]
         );
     }
