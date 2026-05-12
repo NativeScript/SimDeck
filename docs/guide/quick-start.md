@@ -53,7 +53,7 @@ simdeck 9750DF52-0471-48FF-B49A-B184C4BD3A3D
 ```
 
 ::: tip First-frame delay
-On a cold boot the daemon has to launch the Simulator, attach the private display bridge, and wait for a keyframe before video flows. The first frame typically shows up within a second; subsequent reloads of the same Simulator are near-instant.
+On a cold boot the daemon has to boot the device through private CoreSimulator APIs, attach the private display bridge, and wait for a keyframe before video flows. The first frame typically shows up within a second; subsequent reloads of the same Simulator are near-instant.
 :::
 
 ## 3. Drive It

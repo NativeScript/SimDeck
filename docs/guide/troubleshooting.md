@@ -44,15 +44,16 @@ npm install -g simdeck
 
 ## Simulator never boots
 
-### `xcrun simctl` errors
+### Private CoreSimulator boot errors
 
-The native bridge falls back to `xcrun simctl boot` when private CoreSimulator APIs are unavailable. Try the same command directly to surface the underlying error:
+SimDeck boots devices through private CoreSimulator APIs so it does not launch Simulator.app. If booting fails, the CLI returns that private CoreSimulator error directly and does not fall back to `xcrun simctl boot`. Confirm Xcode selection first:
 
 ```sh
-xcrun simctl boot <udid>
+xcode-select -p
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer simdeck boot <udid>
 ```
 
-If `simctl` succeeds but SimDeck still fails, capture the server log and file an issue.
+If Xcode selection is correct but SimDeck still fails, capture the server log and file an issue. Running `xcrun simctl boot <udid>` can still be useful as a manual comparison, but it may launch Simulator.app and is not SimDeck's fallback path.
 
 ### CoreSimulator service unhealthy
 

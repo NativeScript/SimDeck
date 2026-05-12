@@ -38,7 +38,7 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
 - `cli/native/XCWNativeSession.*`
   Wraps one Objective-C private simulator session handle for the Rust registry.
 - `cli/XCWPrivateSimulatorBooter.*`
-  Uses private `CoreSimulator` APIs for direct simulator boot when available, with `simctl` as the fallback path.
+  Uses private `CoreSimulator` APIs for direct simulator boot without launching Simulator.app.
 - `cli/XCWChromeRenderer.*`
   Renders Apple’s CoreSimulator device-type PDF chrome assets into PNGs for the browser.
 - `client/src/app/App.tsx`
@@ -78,6 +78,7 @@ Private simulator behavior is implemented locally in:
 - Accessibility bridge: `cli/XCWAccessibilityBridge.*`
 
 The current repo uses the private boot path, private display bridge, and private accessibility translation bridge directly. The browser streams frames from that bridge, injects touch and keyboard events through the same native session layer, inspects accessibility through `AccessibilityPlatformTranslation`, and renders device chrome from `cli/XCWChromeRenderer.*`.
+CoreSimulator service contexts resolve the active developer directory from `DEVELOPER_DIR`, then `xcode-select -p`, then `/Applications/Xcode.app/Contents/Developer`. The display bridge prefers direct CoreSimulator screen IOSurface callbacks and activates the SimulatorKit offscreen renderable view only if direct callbacks are unavailable.
 Physical chrome button support uses DeviceKit `chrome.json` input geometry for browser hit targets. Volume, action, mute, Apple Watch digital crown, Watch side button, and Watch left-side button dispatch through `IndigoHIDMessageForHIDArbitrary` with consumer/telephony/vendor HID usage pairs from the device chrome metadata; home, lock, and app-switcher remain on the existing SimulatorKit button paths. Apple Watch Digital Crown rotation dispatches through `IndigoHIDMessageForScrollEvent` with the same digitizer target as touch input.
 WebKit inspection uses the simulator `webinspectord` Unix socket named `com.apple.webinspectord_sim.socket` and WebKit's binary-plist Remote Inspector selectors. It lists only WebKit content that the runtime exposes as inspectable. For app-owned `WKWebView` on iOS 16.4 and newer, the app must set `isInspectable = true`.
 
