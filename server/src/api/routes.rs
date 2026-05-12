@@ -2963,7 +2963,9 @@ async fn accessibility_point(
             android.accessibility_tree(&udid, None)
         })
         .await?;
-        return Ok(json(snapshot));
+        return Ok(json(accessibility_point_snapshot(
+            &snapshot, query.x, query.y,
+        )?));
     }
     let snapshot = accessibility_snapshot(state, udid, Some((query.x, query.y)), None).await?;
     Ok(json(snapshot))
@@ -3681,6 +3683,77 @@ fn normalize_screen_point_from_snapshot(
         return Err(AppError::not_found("Accessibility root frame is empty."));
     }
     Ok(((x / width).clamp(0.0, 1.0), (y / height).clamp(0.0, 1.0)))
+}
+
+fn accessibility_point_snapshot(snapshot: &Value, x: f64, y: f64) -> Result<Value, AppError> {
+    let roots = snapshot
+        .get("roots")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AppError::not_found("Accessibility snapshot does not contain roots."))?;
+    let node = roots
+        .iter()
+        .rev()
+        .find_map(|root| deepest_node_at_point(root, x, y))
+        .ok_or_else(|| AppError::not_found("No accessibility element contains the point."))?;
+    let mut node = node.clone();
+    if let Some(object) = node.as_object_mut() {
+        object.remove("children");
+    }
+
+    let mut response = Map::new();
+    for key in [
+        "source",
+        "availableSources",
+        "requestedSource",
+        "fallbackReason",
+        "inspector",
+        "includeHidden",
+    ] {
+        if let Some(value) = snapshot.get(key) {
+            response.insert(key.to_owned(), value.clone());
+        }
+    }
+    response.insert("roots".to_owned(), Value::Array(vec![node]));
+    Ok(Value::Object(response))
+}
+
+fn deepest_node_at_point(node: &Value, x: f64, y: f64) -> Option<&Value> {
+    let has_frame = node
+        .get("frame")
+        .or_else(|| node.get("frameInScreen"))
+        .is_some();
+    if has_frame && !node_frame_contains_point(node, x, y).unwrap_or(false) {
+        return None;
+    }
+    for child in node
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .rev()
+    {
+        if let Some(found) = deepest_node_at_point(child, x, y) {
+            return Some(found);
+        }
+    }
+    has_frame.then_some(node)
+}
+
+fn node_frame_contains_point(node: &Value, x: f64, y: f64) -> Result<bool, AppError> {
+    let frame = node
+        .get("frame")
+        .or_else(|| node.get("frameInScreen"))
+        .ok_or_else(|| AppError::not_found("Accessibility node does not expose a frame."))?;
+    let frame_x = number_field(frame, "x")?;
+    let frame_y = number_field(frame, "y")?;
+    let width = number_field(frame, "width")?;
+    let height = number_field(frame, "height")?;
+    Ok(width > 0.0
+        && height > 0.0
+        && x >= frame_x
+        && y >= frame_y
+        && x < frame_x + width
+        && y < frame_y + height)
 }
 
 fn number_field(value: &Value, field: &str) -> Result<f64, AppError> {
@@ -5328,10 +5401,11 @@ async fn simulator_payload(state: AppState, udid: String) -> Result<Json<Value>,
 #[cfg(test)]
 mod tests {
     use super::{
-        attach_tree_metadata, available_sources_for_snapshot, best_inspector_session,
-        compact_accessibility_snapshot, element_matches_selector, first_matching_element,
-        inspector_available_sources, inspector_metadata, inspector_session_from_published,
-        inspector_session_score, is_inspector_agent_transport_path, normalize_inspector_node,
+        accessibility_point_snapshot, attach_tree_metadata, available_sources_for_snapshot,
+        best_inspector_session, compact_accessibility_snapshot, element_matches_selector,
+        first_matching_element, inspector_available_sources, inspector_metadata,
+        inspector_session_from_published, inspector_session_score,
+        is_inspector_agent_transport_path, normalize_inspector_node,
         normalize_screen_point_from_snapshot, normalized_gesture_coordinates,
         parse_lsof_tcp_listener, resolved_stream_quality_limits, split_filter_values,
         stream_quality_profile, suppress_native_ax_translation_error, tap_point_from_snapshot,
@@ -5429,6 +5503,35 @@ mod tests {
             normalize_screen_point_from_snapshot(&accessibility_snapshot(), 500.0, -20.0).unwrap();
 
         assert_eq!(point, (1.0, 0.0));
+    }
+
+    #[test]
+    fn accessibility_point_snapshot_returns_deepest_node() {
+        let snapshot = json!({
+            "source": "android-uiautomator",
+            "availableSources": ["android-uiautomator"],
+            "roots": [{
+                "type": "FrameLayout",
+                "frame": { "x": 0.0, "y": 0.0, "width": 400.0, "height": 800.0 },
+                "children": [{
+                    "type": "ViewGroup",
+                    "AXIdentifier": "container",
+                    "frame": { "x": 0.0, "y": 100.0, "width": 400.0, "height": 300.0 },
+                    "children": [{
+                        "type": "Button",
+                        "AXIdentifier": "child-button",
+                        "frame": { "x": 120.0, "y": 140.0, "width": 80.0, "height": 60.0 },
+                        "children": []
+                    }]
+                }]
+            }]
+        });
+
+        let point = accessibility_point_snapshot(&snapshot, 150.0, 160.0).unwrap();
+
+        assert_eq!(point["source"], "android-uiautomator");
+        assert_eq!(point["roots"][0]["AXIdentifier"], "child-button");
+        assert!(point["roots"][0].get("children").is_none());
     }
 
     #[test]

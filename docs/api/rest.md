@@ -207,16 +207,10 @@ and the server responds with an SDP answer for a receive-only H.264 video track:
 }
 ```
 
-The endpoint requires the selected device stream to produce H.264-compatible
-samples. For iOS, samples come from the native simulator display session. For
-Android, the server reads raw frames from the emulator gRPC `streamScreenshot`
-API, encodes them through VideoToolbox, and writes the resulting H.264 samples
-to the same WebRTC video track.
-
-Loopback Android clients may pass `"transport": "rgba"` in the offer payload.
-That keeps the same WebRTC endpoint and control channels, but sends raw RGBA
-frames over the `simdeck-rgba` data channel instead of creating a media track.
-Non-loopback Android clients use encoded H.264.
+For iOS, samples come from the native simulator display session and are sent as
+an H.264 media track. Android loopback clients use the same endpoint and control
+channels, but receive raw RGBA frames over the `simdeck-rgba` data channel.
+Non-loopback Android clients receive VideoToolbox-encoded H.264.
 
 The browser also opens `simdeck-control` and `simdeck-telemetry` data channels.
 In addition to input messages, clients can request a keyframe or tune the

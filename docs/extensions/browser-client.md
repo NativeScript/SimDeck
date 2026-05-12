@@ -39,15 +39,15 @@ client/
     └── styles/
 ```
 
-| Folder                    | Responsibility                                                               |
-| ------------------------- | ---------------------------------------------------------------------------- |
-| `api/`                    | Typed wrappers around the SimDeck REST API and shared TypeScript types.      |
-| `features/simulators/`    | Sidebar list of simulators plus boot/shutdown affordances.                   |
-| `features/viewport/`      | Frame canvas, chrome compositing, hit testing.                               |
-| `features/stream/`        | WebRTC H.264 client for iOS and Android, receiver stats, and frame plumbing. |
-| `features/input/`         | Touch / keyboard / hardware-button affordances.                              |
-| `features/accessibility/` | Accessibility tree pane and source switcher.                                 |
-| `features/toolbar/`       | Top toolbar (rotate, home, app switcher, dark mode toggle, refresh).         |
+| Folder                    | Responsibility                                                                       |
+| ------------------------- | ------------------------------------------------------------------------------------ |
+| `api/`                    | Typed wrappers around the SimDeck REST API and shared TypeScript types.              |
+| `features/simulators/`    | Sidebar list of simulators plus boot/shutdown affordances.                           |
+| `features/viewport/`      | Frame canvas, chrome compositing, hit testing.                                       |
+| `features/stream/`        | WebRTC media/RGBA stream client, H.264 fallback, receiver stats, and frame plumbing. |
+| `features/input/`         | Touch / keyboard / hardware-button affordances.                                      |
+| `features/accessibility/` | Accessibility tree pane and source switcher.                                         |
+| `features/toolbar/`       | Top toolbar (rotate, home, app switcher, dark mode toggle, refresh).                 |
 
 ## Bootstrap flow
 
@@ -56,7 +56,7 @@ client/
 3. `AppShell` calls `GET /api/health` to learn the active encoder mode.
 4. The simulator sidebar fetches `GET /api/simulators` and renders the list.
 5. Selecting a device posts an SDP offer to `/api/simulators/<udid>/webrtc/offer`.
-6. The browser renders the H.264 video track through native WebRTC playback. Android emulator frames are sourced from emulator gRPC on the server and encoded through VideoToolbox before WebRTC delivery.
+6. The browser renders the WebRTC stream. iOS uses an H.264 media track; Android loopback clients use a raw RGBA data channel, while non-loopback Android clients use VideoToolbox-encoded H.264.
 7. Touch and key events round-trip through `POST /api/simulators/<udid>/touch` and `/key`.
 
 ## Dev workflow

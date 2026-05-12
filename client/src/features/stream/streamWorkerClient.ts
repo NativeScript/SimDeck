@@ -2684,12 +2684,20 @@ function shouldUseRemoteH264AutoProfile(
   return Boolean(target?.remote) || !isLoopbackHost(window.location.hostname);
 }
 
-function shouldUseLocalAndroidRgbaWebRtc(target: StreamConnectTarget): boolean {
+export function shouldUseLocalAndroidRgbaWebRtc(
+  target: StreamConnectTarget,
+): boolean {
   const stream = new URLSearchParams(window.location.search).get("stream");
+  if (
+    target.transport === "h264" ||
+    stream === "h264" ||
+    stream === "h264-ws"
+  ) {
+    return false;
+  }
   return (
     !target.remote &&
     isLoopbackHost(window.location.hostname) &&
-    (stream === "rgba" || stream === "webrtc-rgba") &&
     (target.platform === "android-emulator" ||
       target.udid.startsWith("android:"))
   );

@@ -35,8 +35,8 @@ view inside the editor.
 
 ## Features
 
-- Local iOS Simulator and Android emulator video over browser-native WebRTC H.264 with H.264 WebSocket fallback
-- Android emulator frames are sourced from emulator gRPC and encoded through macOS VideoToolbox
+- Local iOS Simulator video over browser-native WebRTC H.264 with H.264 WebSocket fallback
+- Android emulator frames are sourced from emulator gRPC; loopback browsers use raw RGBA over WebRTC, and non-loopback browsers use VideoToolbox-encoded H.264
 - Full simulator control & inspection using private iOS accessibility APIs and Android UIAutomator - available using `simdeck` CLI
 - Real-time screen `describe` command using accessibility view tree - available in token-efficient format for agents
 - CoreSimulator chrome asset rendering for device bezels

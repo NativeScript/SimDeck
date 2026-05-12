@@ -4,6 +4,7 @@ import {
   buildStreamTarget,
   initialStreamBackend,
   preferredStreamBackend,
+  shouldUseLocalAndroidRgbaWebRtc,
 } from "./streamWorkerClient";
 
 describe("streamWorkerClient", () => {
@@ -59,6 +60,65 @@ describe("streamWorkerClient", () => {
       (
         globalThis as unknown as { RTCPeerConnection: unknown }
       ).RTCPeerConnection = previousPeerConnection;
+    }
+  });
+
+  it("uses RGBA WebRTC transport for local loopback Android streams", () => {
+    const previousWindow = globalThis.window;
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { location: { hostname: "127.0.0.1", search: "" } },
+    });
+
+    try {
+      expect(
+        shouldUseLocalAndroidRgbaWebRtc(
+          buildStreamTarget("android:Pixel_8", {
+            platform: "android-emulator",
+            transport: "auto",
+          }),
+        ),
+      ).toBe(true);
+    } finally {
+      Object.defineProperty(globalThis, "window", {
+        configurable: true,
+        value: previousWindow,
+      });
+    }
+  });
+
+  it("keeps Android RGBA disabled for h264 or remote streams", () => {
+    const previousWindow = globalThis.window;
+    const location = { hostname: "127.0.0.1", search: "?stream=h264" };
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { location },
+    });
+
+    try {
+      expect(
+        shouldUseLocalAndroidRgbaWebRtc(
+          buildStreamTarget("android:Pixel_8", {
+            platform: "android-emulator",
+            transport: "auto",
+          }),
+        ),
+      ).toBe(false);
+      location.search = "";
+      expect(
+        shouldUseLocalAndroidRgbaWebRtc(
+          buildStreamTarget("android:Pixel_8", {
+            platform: "android-emulator",
+            remote: true,
+            transport: "auto",
+          }),
+        ),
+      ).toBe(false);
+    } finally {
+      Object.defineProperty(globalThis, "window", {
+        configurable: true,
+        value: previousWindow,
+      });
     }
   });
 });

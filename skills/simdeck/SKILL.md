@@ -59,9 +59,9 @@ Build apps with project tooling.
 
 Android devices use IDs like `android:Pixel_8_API_36`. `simdeck list` discovers
 AVDs from the Android SDK, `boot` starts `emulator -avd ... -no-window`, and
-live browser viewing uses the same WebRTC H.264 endpoint as iOS. Android frames
-come from emulator gRPC and are encoded through VideoToolbox. `simdeck stream`
-is still iOS-only.
+live browser viewing uses WebRTC. Local loopback Android viewing sends raw RGBA
+frames over a WebRTC data channel; non-loopback Android viewing uses
+VideoToolbox-encoded H.264. `simdeck stream` is still iOS-only.
 
 ## Fast Agent Inspection
 

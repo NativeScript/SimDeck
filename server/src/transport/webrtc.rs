@@ -164,7 +164,7 @@ pub async fn create_answer(
                 state.android.clone(),
                 state.metrics.clone(),
                 udid.clone(),
-                android_webrtc_max_edge(),
+                None,
                 true,
             )
             .await?,
@@ -1360,9 +1360,6 @@ impl AndroidWebRtcSource {
                         match frame {
                             Ok(Some(frame)) => {
                                 let frame = Arc::new(frame);
-                                if let Some(inner) = reader_inner.upgrade() {
-                                    let _ = inner.raw_sender.send(frame.clone());
-                                }
                                 *reader_latest_frame.lock().unwrap() = Some(frame);
                             }
                             Ok(None) => break,
@@ -1677,14 +1674,6 @@ unsafe fn take_native_error(raw: *mut i8) -> Option<AppError> {
         ffi::xcw_native_free_string(raw);
     }
     Some(AppError::native(message))
-}
-
-fn android_webrtc_max_edge() -> Option<u32> {
-    std::env::var("SIMDECK_ANDROID_WEBRTC_MAX_EDGE")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .filter(|value| *value > 0)
-        .map(|value| value.clamp(360, 4096))
 }
 
 fn android_webrtc_frame_interval() -> Duration {
