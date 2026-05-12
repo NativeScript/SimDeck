@@ -127,38 +127,48 @@ async function runCliSurface() {
     assert.ok(Number(profile.screenWidth) > 0, "missing Android screenWidth");
     assert.ok(Number(profile.screenHeight) > 0, "missing Android screenHeight");
   });
-  const tree = await measuredStep("CLI describe Android tree", () => {
-    const payload = simdeckJson([
-      "describe",
-      androidUDID,
-      "--source",
-      "android-uiautomator",
-      "--format",
-      "compact-json",
-      "--max-depth",
-      "2",
-    ]);
+  const tree = await measuredStep("CLI describe Android tree", async () => {
+    const payload = await retryAsync(
+      () =>
+        simdeckJson([
+          "describe",
+          androidUDID,
+          "--source",
+          "android-uiautomator",
+          "--format",
+          "compact-json",
+          "--max-depth",
+          "2",
+        ]),
+      "CLI describe Android tree",
+      { attempts: 8, delayMs: 2_000 },
+    );
     assertRoots(payload, "CLI describe");
     return payload;
   });
-  await measuredStep("CLI describe Android point", () => {
+  await measuredStep("CLI describe Android point", async () => {
     const point = centerOfFirstRoot(tree);
     if (!point) {
       throw new Error("Unable to derive point from Android tree root.");
     }
     assertRoots(
-      simdeckJson([
-        "describe",
-        androidUDID,
-        "--source",
-        "android-uiautomator",
-        "--format",
-        "compact-json",
-        "--point",
-        `${point.x},${point.y}`,
-        "--max-depth",
-        "1",
-      ]),
+      await retryAsync(
+        () =>
+          simdeckJson([
+            "describe",
+            androidUDID,
+            "--source",
+            "android-uiautomator",
+            "--format",
+            "compact-json",
+            "--point",
+            `${point.x},${point.y}`,
+            "--max-depth",
+            "1",
+          ]),
+        "CLI describe Android point",
+        { attempts: 4, delayMs: 1_000 },
+      ),
       "CLI point describe",
     );
   });
@@ -317,10 +327,15 @@ async function runJsSurface() {
   });
   await measuredStep("JS Android tree", async () => {
     assertRoots(
-      await session.tree(androidUDID, {
-        source: "android-uiautomator",
-        maxDepth: 2,
-      }),
+      await retryAsync(
+        () =>
+          session.tree(androidUDID, {
+            source: "android-uiautomator",
+            maxDepth: 2,
+          }),
+        "JS Android tree",
+        { attempts: 6, delayMs: 2_000 },
+      ),
       "JS tree",
     );
   });
@@ -581,6 +596,28 @@ async function measuredStep(label, run, options = {}) {
       clearTimeout(timeoutId);
     }
   }
+}
+
+async function retryAsync(run, label, options = {}) {
+  const attempts = options.attempts ?? 3;
+  const delayMs = options.delayMs ?? 1_000;
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        if (verbose) {
+          console.log(
+            `${label} attempt ${attempt}/${attempts} failed: ${error.message}`,
+          );
+        }
+        await sleep(delayMs);
+      }
+    }
+  }
+  throw lastError;
 }
 
 function printTimingSummary() {
