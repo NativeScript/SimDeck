@@ -36,7 +36,8 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task;
 use tokio::time::timeout;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, TraceLayer};
+use tracing::Level;
 
 const SIMULATOR_INVENTORY_CACHE_TTL: Duration = Duration::from_secs(5);
 const H264_WS_MAGIC: &[u8; 4] = b"SDH1";
@@ -642,7 +643,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/logs", get(simulator_logs))
         .route_layer(from_fn_with_state(state.clone(), require_api_auth))
         .with_state(state)
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::WARN))
+                .on_failure(DefaultOnFailure::new().level(Level::WARN)),
+        )
 }
 
 async fn require_api_auth(
