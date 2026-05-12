@@ -91,15 +91,25 @@ async function main() {
     `created ${simulatorUDID} (${deviceType.name}, ${runtime.version}; iphonesimulator SDK ${sdkVersion})`,
   );
 
-  await measuredStep(
-    "boot simulator",
+  session = await measuredStep(
+    "simdeck/test isolated connect",
     () =>
-      retrySync(
-        () =>
-          runText("xcrun", ["simctl", "boot", simulatorUDID], {
-            timeoutMs: 180_000,
-          }),
-        "boot simulator",
+      connect({
+        cliPath: simdeck,
+        projectRoot: root,
+        isolated: true,
+        videoCodec: "software",
+      }),
+    { phase: phaseSetup },
+  );
+  console.log(`daemon ${session.endpoint}`);
+
+  await measuredStep(
+    "JS boot simulator",
+    () =>
+      retryAsync(
+        () => session.boot(simulatorUDID),
+        "JS boot simulator",
         3,
         3_000,
       ),
@@ -122,19 +132,6 @@ async function main() {
     () => buildFixtureApp(),
     { phase: phaseSetup },
   );
-
-  session = await measuredStep(
-    "simdeck/test isolated connect",
-    () =>
-      connect({
-        cliPath: simdeck,
-        projectRoot: root,
-        isolated: true,
-        videoCodec: "software",
-      }),
-    { phase: phaseSetup },
-  );
-  console.log(`daemon ${session.endpoint}`);
 
   await measuredStep(
     "JS install fixture",

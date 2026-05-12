@@ -219,7 +219,9 @@ static BOOL XCWPrivateBootErrorMeansAlreadyBooted(NSError *error) {
         booted = ((BOOL(*)(id, SEL, id, NSError **))objc_msgSend)(
             targetDevice,
             bootWithOptionsSelector,
-            @{ @"persist": @YES },
+            // Keep the boot session owned by SimDeck's daemon instead of asking
+            // CoreSimulator for a persistent GUI-visible session.
+            @{ @"persist": @NO },
             &bootError
         );
     } else {
