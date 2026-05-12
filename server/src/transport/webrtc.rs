@@ -79,6 +79,14 @@ struct WebRtcMediaStreamToken {
     cancellation: broadcast::Sender<()>,
 }
 
+struct AndroidWebRtcControlTouch {
+    started_at: Instant,
+    start_x: f64,
+    start_y: f64,
+    latest_x: f64,
+    latest_y: f64,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebRtcOfferPayload {
@@ -772,6 +780,7 @@ async fn run_android_webrtc_control_queue(
     mut receiver: mpsc::UnboundedReceiver<ControlMessage>,
 ) {
     let mut pending = VecDeque::new();
+    let mut active_touch: Option<AndroidWebRtcControlTouch> = None;
     loop {
         let mut message = match pending.pop_front() {
             Some(message) => message,
@@ -791,8 +800,13 @@ async fn run_android_webrtc_control_queue(
             }
         }
 
-        if let Err(error) =
-            run_android_webrtc_control_message(state.clone(), udid.clone(), message).await
+        if let Err(error) = run_android_webrtc_control_message(
+            state.clone(),
+            udid.clone(),
+            message,
+            &mut active_touch,
+        )
+        .await
         {
             warn!("Android WebRTC control message failed for {udid}: {error}");
         }
@@ -803,17 +817,24 @@ async fn run_android_webrtc_control_message(
     state: AppState,
     udid: String,
     message: ControlMessage,
+    active_touch: &mut Option<AndroidWebRtcControlTouch>,
 ) -> Result<(), AppError> {
-    task::spawn_blocking(move || match message {
+    match message {
         ControlMessage::Touch { x, y, phase } => {
             if !x.is_finite() || !y.is_finite() {
                 return Err(AppError::bad_request(
                     "`x` and `y` must be finite normalized numbers.",
                 ));
             }
-            state
-                .android
-                .send_touch(&udid, x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), &phase)
+            return handle_android_webrtc_touch(
+                state,
+                udid,
+                x.clamp(0.0, 1.0),
+                y.clamp(0.0, 1.0),
+                phase,
+                active_touch,
+            )
+            .await;
         }
         ControlMessage::EdgeTouch { x, y, phase, .. } => {
             if !x.is_finite() || !y.is_finite() {
@@ -821,9 +842,15 @@ async fn run_android_webrtc_control_message(
                     "`x` and `y` must be finite normalized numbers.",
                 ));
             }
-            state
-                .android
-                .send_touch(&udid, x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), &phase)
+            return handle_android_webrtc_touch(
+                state,
+                udid,
+                x.clamp(0.0, 1.0),
+                y.clamp(0.0, 1.0),
+                phase,
+                active_touch,
+            )
+            .await;
         }
         ControlMessage::MultiTouch { x1, y1, phase, .. } => {
             if !x1.is_finite() || !y1.is_finite() {
@@ -831,10 +858,20 @@ async fn run_android_webrtc_control_message(
                     "`x1` and `y1` must be finite normalized numbers.",
                 ));
             }
-            state
-                .android
-                .send_touch(&udid, x1.clamp(0.0, 1.0), y1.clamp(0.0, 1.0), &phase)
+            return handle_android_webrtc_touch(
+                state,
+                udid,
+                x1.clamp(0.0, 1.0),
+                y1.clamp(0.0, 1.0),
+                phase,
+                active_touch,
+            )
+            .await;
         }
+        _ => {}
+    }
+
+    task::spawn_blocking(move || match message {
         ControlMessage::Key {
             key_code,
             modifiers,
@@ -863,9 +900,75 @@ async fn run_android_webrtc_control_message(
         ControlMessage::RotateLeft => state.android.rotate_left(&udid),
         ControlMessage::RotateRight => state.android.rotate_right(&udid),
         ControlMessage::ToggleAppearance => state.android.toggle_appearance(&udid),
+        ControlMessage::Touch { .. }
+        | ControlMessage::EdgeTouch { .. }
+        | ControlMessage::MultiTouch { .. } => Ok(()),
     })
     .await
     .map_err(|error| AppError::internal(format!("Failed to join Android control task: {error}")))?
+}
+
+async fn handle_android_webrtc_touch(
+    state: AppState,
+    udid: String,
+    x: f64,
+    y: f64,
+    phase: String,
+    active_touch: &mut Option<AndroidWebRtcControlTouch>,
+) -> Result<(), AppError> {
+    match phase.as_str() {
+        "began" => {
+            *active_touch = Some(AndroidWebRtcControlTouch {
+                started_at: Instant::now(),
+                start_x: x,
+                start_y: y,
+                latest_x: x,
+                latest_y: y,
+            });
+            Ok(())
+        }
+        "moved" => {
+            if let Some(touch) = active_touch.as_mut() {
+                touch.latest_x = x;
+                touch.latest_y = y;
+            }
+            Ok(())
+        }
+        "ended" => {
+            let touch = active_touch.take().unwrap_or(AndroidWebRtcControlTouch {
+                started_at: Instant::now(),
+                start_x: x,
+                start_y: y,
+                latest_x: x,
+                latest_y: y,
+            });
+            let distance = ((x - touch.start_x).powi(2) + (y - touch.start_y).powi(2)).sqrt();
+            let duration_ms = touch.started_at.elapsed().as_millis().clamp(80, 1500) as u64;
+            task::spawn_blocking(move || {
+                if distance >= 0.025 {
+                    state.android.send_swipe_adb(
+                        &udid,
+                        touch.start_x,
+                        touch.start_y,
+                        x,
+                        y,
+                        duration_ms,
+                    )
+                } else {
+                    state.android.send_tap_adb(&udid, x, y)
+                }
+            })
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("Failed to join Android touch task: {error}"))
+            })?
+        }
+        "cancelled" => {
+            *active_touch = None;
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 async fn run_webrtc_control_queue(

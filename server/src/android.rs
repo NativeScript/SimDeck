@@ -317,6 +317,23 @@ impl AndroidBridge {
         Ok(())
     }
 
+    pub fn send_tap_adb(&self, id: &str, x: f64, y: f64) -> Result<(), AppError> {
+        let serial = self.serial_for_id(id)?;
+        let (width, height) = self.screen_size_for_serial(&serial)?;
+        let px = (x.clamp(0.0, 1.0) * (width - 1.0)).round().max(0.0);
+        let py = (y.clamp(0.0, 1.0) * (height - 1.0)).round().max(0.0);
+        self.run_adb([
+            "-s",
+            &serial,
+            "shell",
+            "input",
+            "tap",
+            &px.to_string(),
+            &py.to_string(),
+        ])?;
+        Ok(())
+    }
+
     pub fn send_swipe(
         &self,
         id: &str,
@@ -332,6 +349,18 @@ impl AndroidBridge {
         {
             return Ok(());
         }
+        self.send_swipe_adb(id, start_x, start_y, end_x, end_y, duration_ms)
+    }
+
+    pub fn send_swipe_adb(
+        &self,
+        id: &str,
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        duration_ms: u64,
+    ) -> Result<(), AppError> {
         let serial = self.serial_for_id(id)?;
         let (width, height) = self.screen_size_for_serial(&serial)?;
         let coords = [start_x, start_y, end_x, end_y]

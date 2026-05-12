@@ -1922,20 +1922,14 @@ async fn handle_android_control_touch(
                 latest_x: x,
                 latest_y: y,
             });
-            run_android_action(state, move |android| {
-                android.send_touch(&udid, x, y, "began")
-            })
-            .await
+            Ok(())
         }
         "moved" => {
             if let Some(touch) = active_touch.as_mut() {
                 touch.latest_x = x;
                 touch.latest_y = y;
             }
-            run_android_action(state, move |android| {
-                android.send_touch(&udid, x, y, "moved")
-            })
-            .await
+            Ok(())
         }
         "ended" => {
             let touch = active_touch.take().unwrap_or(AndroidControlTouch {
@@ -1952,20 +1946,16 @@ async fn handle_android_control_touch(
             let duration_ms = touch.started_at.elapsed().as_millis().clamp(80, 1500) as u64;
             run_android_action(state, move |android| {
                 if distance >= 0.025 {
-                    android
-                        .send_touch(&udid, end_x, end_y, "ended")
-                        .or_else(|_| {
-                            android.send_swipe(
-                                &udid,
-                                touch.start_x,
-                                touch.start_y,
-                                end_x,
-                                end_y,
-                                duration_ms,
-                            )
-                        })
+                    android.send_swipe_adb(
+                        &udid,
+                        touch.start_x,
+                        touch.start_y,
+                        end_x,
+                        end_y,
+                        duration_ms,
+                    )
                 } else {
-                    android.send_touch(&udid, end_x, end_y, "ended")
+                    android.send_tap_adb(&udid, end_x, end_y)
                 }
             })
             .await
