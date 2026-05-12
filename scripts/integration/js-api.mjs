@@ -91,15 +91,25 @@ async function main() {
     `created ${simulatorUDID} (${deviceType.name}, ${runtime.version}; iphonesimulator SDK ${sdkVersion})`,
   );
 
-  await measuredStep(
-    "boot simulator",
+  session = await measuredStep(
+    "simdeck/test isolated connect",
     () =>
-      retrySync(
-        () =>
-          runText("xcrun", ["simctl", "boot", simulatorUDID], {
-            timeoutMs: 180_000,
-          }),
-        "boot simulator",
+      connect({
+        cliPath: simdeck,
+        projectRoot: root,
+        isolated: true,
+        videoCodec: "software",
+      }),
+    { phase: phaseSetup },
+  );
+  console.log(`daemon ${session.endpoint}`);
+
+  await measuredStep(
+    "JS boot simulator",
+    () =>
+      retryAsync(
+        () => session.boot(simulatorUDID),
+        "JS boot simulator",
         3,
         3_000,
       ),
@@ -122,19 +132,6 @@ async function main() {
     () => buildFixtureApp(),
     { phase: phaseSetup },
   );
-
-  session = await measuredStep(
-    "simdeck/test isolated connect",
-    () =>
-      connect({
-        cliPath: simdeck,
-        projectRoot: root,
-        isolated: true,
-        videoCodec: "software",
-      }),
-    { phase: phaseSetup },
-  );
-  console.log(`daemon ${session.endpoint}`);
 
   await measuredStep(
     "JS install fixture",
@@ -160,7 +157,19 @@ async function main() {
   });
   await measuredStep("JS launch fixture", async () => {
     await retryAsync(
-      () => session.launch(simulatorUDID, fixtureBundleId),
+      async () => {
+        await session.launch(simulatorUDID, fixtureBundleId);
+        await session.waitFor(
+          simulatorUDID,
+          { id: "fixture.continue" },
+          {
+            source: "native-ax",
+            maxDepth: 3,
+            timeoutMs: 15_000,
+            pollMs: 250,
+          },
+        );
+      },
       "JS launch fixture",
       3,
       5_000,
@@ -199,30 +208,30 @@ async function main() {
     await expectFixtureText("URL Opened");
   });
   await measuredStep("JS focus URL and type", async () => {
-    await session.tapElement(
-      simulatorUDID,
-      { id: "fixture.message" },
-      {
-        source: "native-ax",
-        maxDepth: 3,
-        waitTimeoutMs: 15_000,
-        durationMs: 30,
-      },
-    );
     await retryAsync(
       async () => {
+        await session.tapElement(
+          simulatorUDID,
+          { id: "fixture.message" },
+          {
+            source: "native-ax",
+            maxDepth: 3,
+            waitTimeoutMs: 15_000,
+            durationMs: 30,
+          },
+        );
         await session.openUrl(simulatorUDID, fixtureFocusUrl);
-        await expectFixtureText("Message Focused");
+        await expectFixtureText("Message Focused", { timeoutMs: 20_000 });
+        await sleep(1_000);
+        await session.batch(simulatorUDID, [
+          { action: "type", text: "agent-ready", delayMs: 20 },
+        ]);
+        await expectFixtureText("agent-ready", { timeoutMs: 20_000 });
       },
-      "JS focus URL",
+      "JS focus URL and type",
       3,
       2_000,
     );
-    await sleep(1_000);
-    await session.batch(simulatorUDID, [
-      { action: "type", text: "agent-ready", delayMs: 12 },
-    ]);
-    await expectFixtureText("agent-ready");
   });
 
   await measuredStep(

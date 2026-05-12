@@ -120,10 +120,10 @@ static const NSUInteger DFKeyboardModifierOption = 1 << 2;
 static const NSUInteger DFKeyboardModifierCommand = 1 << 3;
 static const NSUInteger DFKeyboardModifierCapsLock = 1 << 4;
 
-static NSString *DFSimulatorKitExecutablePath(void) {
+static NSString *DFActiveDeveloperDirectory(void) {
     const char *developerDir = getenv("DEVELOPER_DIR");
     if (developerDir != NULL && developerDir[0] != '\0') {
-        return [[NSString stringWithUTF8String:developerDir] stringByAppendingPathComponent:@"Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
+        return [NSString stringWithUTF8String:developerDir];
     }
 
     FILE *pipe = popen("/usr/bin/xcode-select -p 2>/dev/null", "r");
@@ -133,31 +133,26 @@ static NSString *DFSimulatorKitExecutablePath(void) {
             NSString *selected = [[NSString stringWithUTF8String:buffer] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
             pclose(pipe);
             if (selected.length > 0) {
-                return [selected stringByAppendingPathComponent:@"Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
+                return selected;
             }
         } else {
             pclose(pipe);
         }
     }
 
+    return @"/Applications/Xcode.app/Contents/Developer";
+}
+
+static NSString *DFSimulatorKitExecutablePath(void) {
+    NSString *developerDir = DFActiveDeveloperDirectory();
+    if (developerDir.length > 0) {
+        return [developerDir stringByAppendingPathComponent:@"Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
+    }
     return @"/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit";
 }
 
 static NSInteger DFXcodeMajorVersion(void) {
-    NSString *developerPath = nil;
-    const char *developerDir = getenv("DEVELOPER_DIR");
-    if (developerDir != NULL && developerDir[0] != '\0') {
-        developerPath = [NSString stringWithUTF8String:developerDir];
-    } else {
-        FILE *pipe = popen("/usr/bin/xcode-select -p 2>/dev/null", "r");
-        if (pipe != NULL) {
-            char buffer[PATH_MAX] = {0};
-            if (fgets(buffer, sizeof(buffer), pipe) != NULL) {
-                developerPath = [[NSString stringWithUTF8String:buffer] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            }
-            pclose(pipe);
-        }
-    }
+    NSString *developerPath = DFActiveDeveloperDirectory();
     if (developerPath.length == 0) {
         return 0;
     }
@@ -588,6 +583,103 @@ static NSString *DFOptionalStringFromObjectSelector(id target, const char *selec
 static NSString *DFTrimmedString(NSString *value) {
     NSString *trimmed = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     return trimmed.length > 0 ? trimmed : nil;
+}
+
+static id DFCreateCoreSimulatorServiceContext(NSError **error) {
+    Class serviceContextClass = NSClassFromString(@"SimServiceContext");
+    if (serviceContextClass == Nil) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeServiceContextFailed,
+                @"CoreSimulator did not expose SimServiceContext in this Xcode runtime."
+            );
+        }
+        return nil;
+    }
+
+    NSString *developerDir = DFActiveDeveloperDirectory();
+    NSError *serviceError = nil;
+    SEL sharedSelector = sel_registerName("sharedServiceContextForDeveloperDir:error:");
+    if ([serviceContextClass respondsToSelector:sharedSelector]) {
+        id serviceContext = ((id(*)(id, SEL, id, NSError **))objc_msgSend)(
+            serviceContextClass,
+            sharedSelector,
+            developerDir,
+            &serviceError
+        );
+        if (serviceContext != nil) {
+            return serviceContext;
+        }
+        DFLog(@"sharedServiceContextForDeveloperDir:error: failed for %@: %@", developerDir, serviceError.localizedDescription ?: @"unknown error");
+    }
+
+    serviceError = nil;
+    SEL initSelector = sel_registerName("initWithDeveloperDir:connectionType:error:");
+    id contextAlloc = ((id(*)(id, SEL))objc_msgSend)(serviceContextClass, sel_registerName("alloc"));
+    if (![contextAlloc respondsToSelector:initSelector]) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeServiceContextFailed,
+                @"CoreSimulator did not expose a supported SimServiceContext initializer."
+            );
+        }
+        return nil;
+    }
+    id serviceContext = ((id(*)(id, SEL, id, long long, NSError **))objc_msgSend)(
+        contextAlloc,
+        initSelector,
+        developerDir,
+        0LL,
+        &serviceError
+    );
+    if (serviceContext == nil && error != NULL) {
+        *error = serviceError ?: DFMakeError(
+            DFPrivateSimulatorErrorCodeServiceContextFailed,
+            [NSString stringWithFormat:@"Unable to create a CoreSimulator service context for %@.", developerDir]
+        );
+    }
+    return serviceContext;
+}
+
+static NSArray *DFFlattenCoreSimulatorDevices(id devicesPayload) {
+    if ([devicesPayload isKindOfClass:[NSArray class]]) {
+        return devicesPayload;
+    }
+    if ([devicesPayload isKindOfClass:[NSSet class]]) {
+        return [devicesPayload allObjects];
+    }
+    if ([devicesPayload isKindOfClass:[NSDictionary class]]) {
+        NSMutableArray *devices = [NSMutableArray array];
+        for (id value in [(NSDictionary *)devicesPayload allValues]) {
+            [devices addObjectsFromArray:DFFlattenCoreSimulatorDevices(value)];
+        }
+        return devices;
+    }
+    return @[];
+}
+
+static NSArray *DFCoreSimulatorDevicesForDeviceSet(id deviceSet) {
+    SEL availableSelector = sel_registerName("availableDevices");
+    if ([deviceSet respondsToSelector:availableSelector]) {
+        NSArray *availableDevices = DFFlattenCoreSimulatorDevices(((id(*)(id, SEL))objc_msgSend)(deviceSet, availableSelector));
+        if (availableDevices.count > 0) {
+            return availableDevices;
+        }
+    }
+
+    SEL devicesSelector = sel_registerName("devices");
+    if ([deviceSet respondsToSelector:devicesSelector]) {
+        return DFFlattenCoreSimulatorDevices(((id(*)(id, SEL))objc_msgSend)(deviceSet, devicesSelector));
+    }
+    return @[];
+}
+
+static NSString *DFUDIDForCoreSimulatorDevice(id device) {
+    id deviceUDID = DFSendObject(device, "UDID");
+    if ([deviceUDID respondsToSelector:sel_registerName("UUIDString")]) {
+        return DFSendObject(deviceUDID, "UUIDString");
+    }
+    return [deviceUDID description];
 }
 
 static id DFAllocInitRect(Class cls, NSRect rect) {
@@ -2565,26 +2657,8 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     dispatch_queue_set_specific(_callbackQueue, DFPrivateSimulatorCallbackQueueKey, (void *)DFPrivateSimulatorCallbackQueueKey, NULL);
     [self updateStatus:[NSString stringWithFormat:@"Starting private CoreSimulator attach for %@", udid]];
 
-    Class serviceContextClass = NSClassFromString(@"SimServiceContext");
-    if (serviceContextClass == Nil) {
-        if (error != NULL) {
-            *error = DFMakeError(
-                DFPrivateSimulatorErrorCodeServiceContextFailed,
-                @"CoreSimulator did not expose SimServiceContext in this Xcode runtime."
-            );
-        }
-        return nil;
-    }
-
     NSError *serviceError = nil;
-    id contextAlloc = ((id(*)(id, SEL))objc_msgSend)(serviceContextClass, sel_registerName("alloc"));
-    _serviceContext = ((id(*)(id, SEL, id, long long, NSError **))objc_msgSend)(
-        contextAlloc,
-        sel_registerName("initWithDeveloperDir:connectionType:error:"),
-        nil,
-        0LL,
-        &serviceError
-    );
+    _serviceContext = DFCreateCoreSimulatorServiceContext(&serviceError);
     if (_serviceContext == nil) {
         if (error != NULL) {
             *error = serviceError ?: DFMakeError(
@@ -2607,13 +2681,9 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         return nil;
     }
 
-    NSArray *devices = DFSendObject(deviceSet, "devices");
+    NSArray *devices = DFCoreSimulatorDevicesForDeviceSet(deviceSet);
     for (id candidate in devices) {
-        id deviceUDID = DFSendObject(candidate, "UDID");
-        NSString *candidateUDID = [deviceUDID respondsToSelector:sel_registerName("UUIDString")]
-            ? DFSendObject(deviceUDID, "UUIDString")
-            : [deviceUDID description];
-        if ([candidateUDID isEqualToString:udid]) {
+        if ([DFUDIDForCoreSimulatorDevice(candidate) isEqualToString:udid]) {
             _device = candidate;
             break;
         }
@@ -2894,8 +2964,17 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         _displayView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 430, 932)];
         _displayView.wantsLayer = YES;
     }
-    [self updateStatus:@"Waiting for IOSurface callback"];
-    [self activateDisplayIfNeeded];
+    [self updateStatus:@"Waiting for direct CoreSimulator IOSurface callback"];
+    NSDate *directFrameDeadline = [NSDate dateWithTimeIntervalSinceNow:1.0];
+    while (_latestPixelBuffer == nil && [directFrameDeadline timeIntervalSinceNow] > 0) {
+        DFSpinRunLoop(0.05);
+    }
+    if (_latestPixelBuffer == nil) {
+        [self updateStatus:@"Direct CoreSimulator frames unavailable; attaching SimulatorKit fallback display"];
+        [self activateDisplayIfNeeded];
+    } else {
+        DFLog(@"Using direct CoreSimulator screen callbacks without activating SimulatorKit fallback display.");
+    }
 
     DFSpinRunLoop(0.25);
     return self;

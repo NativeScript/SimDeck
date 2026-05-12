@@ -178,13 +178,6 @@ jobs:
           raise SystemExit("No available iOS simulator")
           ')"
 
-          xcrun simctl boot "$ios_udid" || true
-          if ! run_with_timeout 180 xcrun simctl bootstatus "$ios_udid" -b; then
-            echo "simctl bootstatus timed out"
-            xcrun simctl list devices "$ios_udid" || true
-            exit 1
-          fi
-
           dump_logs() {
             echo "--- simdeck.log ---"
             cat simdeck.log || true
@@ -233,6 +226,12 @@ jobs:
           : > simdeck.log
           simdeck_pid=""
           start_simdeck_server
+          ./build/simdeck --server-url http://127.0.0.1:4310 boot "$ios_udid"
+          if ! run_with_timeout 180 xcrun simctl bootstatus "$ios_udid" -b; then
+            echo "simctl bootstatus timed out"
+            xcrun simctl list devices "$ios_udid" || true
+            exit 1
+          fi
           echo "Skipping private stream prewarm; the first browser WebRTC connection will attach the stream."
 
           provider_base_url="$SIMDECK_CLOUD_URL/simulator/$PREVIEW_ID"

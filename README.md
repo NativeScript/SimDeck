@@ -162,9 +162,10 @@ simdeck chrome-profile <udid>
 simdeck logs <udid> --seconds 30 --limit 200
 ```
 
-`boot` prefers SimDeck's private CoreSimulator boot path so it can start devices
-without launching Simulator.app, then falls back to `xcrun simctl` when private
-booting is unavailable.
+`boot` uses SimDeck's private CoreSimulator boot path so it can start devices
+without launching Simulator.app. If that private path is unavailable, the
+command returns the CoreSimulator error instead of falling back to
+`xcrun simctl boot`.
 
 Android emulators appear in `simdeck list` with IDs like
 `android:SimDeck_Pixel_8_API_36`. For Android IDs, lifecycle, install, launch,

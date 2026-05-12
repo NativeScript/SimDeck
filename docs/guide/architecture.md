@@ -45,8 +45,8 @@ Anything that depends on macOS frameworks, `xcrun simctl`, or private `CoreSimul
 Inside the bridge:
 
 - **`XCWSimctl.{h,m}`** wraps `xcrun simctl` for discovery, lifecycle management, app launching, URL opening, and screenshot capture.
-- **`XCWPrivateSimulatorBooter.{h,m}`** uses private `CoreSimulator` APIs for direct simulator boot when available, with `simctl` as the fallback path.
-- **`DFPrivateSimulatorDisplayBridge.{h,m}`** owns headless private display frames plus HID-based touch and keyboard injection.
+- **`XCWPrivateSimulatorBooter.{h,m}`** uses private `CoreSimulator` APIs for direct simulator boot without launching Simulator.app.
+- **`DFPrivateSimulatorDisplayBridge.{h,m}`** owns headless private display frames plus HID-based touch and keyboard injection. It resolves the active Xcode developer directory explicitly, prefers direct CoreSimulator screen IOSurface callbacks, and activates the older SimulatorKit offscreen renderable view only when direct frame callbacks are unavailable.
 - **`XCWPrivateSimulatorSession.{h,m}`** owns one private display bridge per booted simulator plus a selectable hardware or software H.264 encoder.
 - **`XCWPrivateSimulatorChromeBridge.{h,m}`** is an experimental private `SimulatorKit` chrome bridge kept nearby as a reference.
 - **`XCWChromeRenderer.{h,m}`** renders Apple's CoreSimulator device-type PDF chrome assets into PNGs for the browser.
@@ -85,11 +85,11 @@ The client never depends on private APIs and never assumes anything not exposed 
 
 ### Simulator control
 
-Most control endpoints follow the same path: a typed Rust handler in `server/src/api/routes.rs` calls `SessionRegistry::bridge()`, which dispatches into `cli/native/XCWNativeBridge.*` over the C ABI. From there the call lands in the matching Objective-C unit — for example, `POST /api/simulators/{udid}/boot` ends up in `XCWPrivateSimulatorBooter`, which uses private `CoreSimulator` APIs for direct boot and falls back to `simctl` if that fails.
+Most control endpoints follow the same path: a typed Rust handler in `server/src/api/routes.rs` calls `SessionRegistry::bridge()`, which dispatches into `cli/native/XCWNativeBridge.*` over the C ABI. From there the call lands in the matching Objective-C unit. For example, `POST /api/simulators/{udid}/boot` ends up in `XCWPrivateSimulatorBooter`, which uses private `CoreSimulator` APIs for direct boot and returns a clear error if that private path fails.
 
 ### Live video
 
-The browser posts an SDP offer to `/api/simulators/{udid}/webrtc/offer`. The handler in `transport::webrtc` starts the selected frame source, waits for the first H.264 keyframe, returns an SDP answer, and writes H.264 samples to a WebRTC video track. For Android, that source is emulator gRPC raw pixels passed through the shared VideoToolbox encoder path.
+The browser posts an SDP offer to `/api/simulators/{udid}/webrtc/offer`. The handler in `transport::webrtc` starts the selected frame source, waits for the first H.264 keyframe, returns an SDP answer, and writes H.264 samples to a WebRTC video track. iOS frames come from the private display bridge, which first waits for direct CoreSimulator screen IOSurface callbacks and then falls back to the SimulatorKit offscreen renderable view. For Android, the source is emulator gRPC raw pixels passed through the shared VideoToolbox encoder path.
 
 ### Input
 

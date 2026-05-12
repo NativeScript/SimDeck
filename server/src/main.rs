@@ -3215,6 +3215,11 @@ fn default_screenshot_path(udid: &str) -> PathBuf {
 }
 
 fn run_stream_stdout(bridge: &NativeBridge, udid: String, frames: u64) -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .context("create stream runtime")?;
+    let _runtime_guard = runtime.enter();
     let metrics = Arc::new(Metrics::default());
     let session = simulators::session::SimulatorSession::new(bridge, udid, metrics)
         .map_err(|error| anyhow::anyhow!("{error}"))?;
@@ -3224,10 +3229,6 @@ fn run_stream_stdout(bridge: &NativeBridge, udid: String, frames: u64) -> anyhow
     session.request_keyframe();
 
     let mut receiver = session.subscribe();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .build()
-        .context("create stream runtime")?;
     let mut stdout = io::stdout().lock();
     let mut written = 0u64;
     runtime.block_on(async {

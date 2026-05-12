@@ -179,9 +179,10 @@ simdeck erase <udid>
 
 `list` returns the same simulator inventory the browser UI renders, including
 Android AVDs as IDs like `android:Pixel_8_API_36`. iOS lifecycle commands use
-the native bridge, preferring private CoreSimulator paths when available and
-falling back to `xcrun simctl`. Android lifecycle commands use the Android SDK
-`emulator` and `adb` tools.
+the native bridge. `boot` uses the private CoreSimulator path and does not fall
+back to `xcrun simctl boot`; other iOS lifecycle commands still use `xcrun
+simctl` where Apple exposes stable subcommands. Android lifecycle commands use
+the Android SDK `emulator` and `adb` tools.
 
 ## Apps And URLs
 

@@ -186,22 +186,8 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
         return YES;
     }
 
-    XCWProcessResult *result = [self.class runSimctl:@[@"boot", udid] error:error];
-    if (result == nil) {
-        return NO;
-    }
-    if (result.terminationStatus == 0) {
-        return YES;
-    }
-
-    NSString *stderrString = result.stderrString.lowercaseString;
-    if ([stderrString containsString:@"unable to boot device in current state: booted"] || [stderrString containsString:@"already booted"]) {
-        return YES;
-    }
-
     if (error != NULL) {
-        NSString *description = result.stderrString.length > 0 ? result.stderrString : privateError.localizedDescription ?: @"Unable to boot simulator.";
-        *error = [self.class errorWithDescription:description code:4];
+        *error = privateError ?: [self.class errorWithDescription:@"Private CoreSimulator boot failed. SimDeck does not fall back to `xcrun simctl boot` because that can launch Simulator.app." code:4];
     }
     return NO;
 }
