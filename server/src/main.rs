@@ -650,6 +650,14 @@ struct DaemonMetadata {
     project_root: PathBuf,
     pid: u32,
     http_url: String,
+    #[serde(default = "default_daemon_port")]
+    port: u16,
+    #[serde(default = "default_daemon_bind")]
+    bind: IpAddr,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    advertise_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    client_root: Option<PathBuf>,
     access_token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pairing_code: Option<String>,
@@ -667,6 +675,14 @@ struct DaemonMetadata {
     stream_quality_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     local_stream_fps: Option<u32>,
+}
+
+fn default_daemon_port() -> u16 {
+    4310
+}
+
+fn default_daemon_bind() -> IpAddr {
+    IpAddr::V4(Ipv4Addr::LOCALHOST)
 }
 
 #[derive(Clone, Debug)]
@@ -914,11 +930,11 @@ fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMe
         args.push("--local-stream-fps".to_owned());
         args.push(local_stream_fps.to_string());
     }
-    if let Some(advertise_host) = options.advertise_host {
+    if let Some(advertise_host) = &options.advertise_host {
         args.push("--advertise-host".to_owned());
-        args.push(advertise_host);
+        args.push(advertise_host.clone());
     }
-    if let Some(client_root) = options.client_root {
+    if let Some(client_root) = &options.client_root {
         args.push("--client-root".to_owned());
         args.push(client_root.to_string_lossy().into_owned());
     }
@@ -1003,6 +1019,10 @@ done
         project_root,
         pid: child.id(),
         http_url: format!("http://127.0.0.1:{port}"),
+        port,
+        bind: options.bind,
+        advertise_host: options.advertise_host,
+        client_root: options.client_root,
         access_token,
         pairing_code: Some(pairing_code),
         binary_path: executable,
@@ -1147,10 +1167,14 @@ fn daemon_is_healthy(metadata: &DaemonMetadata) -> bool {
 }
 
 fn daemon_matches_launch_options(metadata: &DaemonMetadata, options: &DaemonLaunchOptions) -> bool {
-    metadata
-        .video_codec
-        .as_deref()
-        .is_some_and(|codec| codec == options.video_codec.as_env_value())
+    metadata.port == options.port
+        && metadata.bind == options.bind
+        && metadata.advertise_host == options.advertise_host
+        && metadata.client_root == options.client_root
+        && metadata
+            .video_codec
+            .as_deref()
+            .is_some_and(|codec| codec == options.video_codec.as_env_value())
         && metadata.low_latency == options.low_latency
         && metadata.realtime_stream
             == (options.realtime_stream || options.stream_quality_profile.is_some())
@@ -1366,6 +1390,10 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
         project_root: project_root.clone(),
         pid: std::process::id(),
         http_url: format!("http://127.0.0.1:{port}"),
+        port,
+        bind,
+        advertise_host: Some(advertise_host.clone()),
+        client_root: None,
         access_token: access_token.clone(),
         pairing_code: Some(pairing_code.clone()),
         binary_path: executable,
@@ -1923,6 +1951,10 @@ fn main() -> anyhow::Result<()> {
                     project_root,
                     pid: supervised_daemon_metadata_pid().unwrap_or_else(std::process::id),
                     http_url: format!("http://127.0.0.1:{port}"),
+                    port,
+                    bind,
+                    advertise_host: advertise_host.clone(),
+                    client_root: client_root.clone(),
                     access_token: access_token.clone(),
                     pairing_code: pairing_code.clone(),
                     binary_path: env::current_exe().context("resolve daemon executable")?,
@@ -5519,13 +5551,61 @@ fn default_client_root() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        batch_line_to_json_step, normalize_accessibility_point_for_display,
-        server_health_watchdog_should_restart, service_post_error_is_retryable,
-        studio_daemon_restart_args, Cli, Command, DaemonCommand, StreamQualityProfileArg,
-        StudioExposeOptions, VideoCodecMode, SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD,
-        SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
+        batch_line_to_json_step, daemon_matches_launch_options,
+        normalize_accessibility_point_for_display, server_health_watchdog_should_restart,
+        service_post_error_is_retryable, studio_daemon_restart_args, Cli, Command, DaemonCommand,
+        DaemonLaunchOptions, DaemonMetadata, StreamQualityProfileArg, StudioExposeOptions,
+        VideoCodecMode, DEFAULT_LOCAL_STREAM_QUALITY_PROFILE,
+        SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD, SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
     };
     use clap::Parser;
+    use std::path::PathBuf;
+
+    fn daemon_metadata_for_test(
+        port: u16,
+        bind: &str,
+        advertise_host: Option<&str>,
+        client_root: Option<&str>,
+    ) -> DaemonMetadata {
+        DaemonMetadata {
+            project_root: PathBuf::from("/tmp/project"),
+            pid: 42,
+            http_url: format!("http://127.0.0.1:{port}"),
+            port,
+            bind: bind.parse().unwrap(),
+            advertise_host: advertise_host.map(str::to_owned),
+            client_root: client_root.map(PathBuf::from),
+            access_token: "token".to_owned(),
+            pairing_code: Some("123456".to_owned()),
+            binary_path: PathBuf::from("/tmp/simdeck-bin"),
+            started_at: 1,
+            log_path: None,
+            video_codec: Some(VideoCodecMode::Auto.as_env_value().to_owned()),
+            low_latency: false,
+            realtime_stream: true,
+            stream_quality_profile: Some(DEFAULT_LOCAL_STREAM_QUALITY_PROFILE.to_owned()),
+            local_stream_fps: None,
+        }
+    }
+
+    fn daemon_launch_options_for_test(
+        port: u16,
+        bind: &str,
+        advertise_host: Option<&str>,
+        client_root: Option<&str>,
+    ) -> DaemonLaunchOptions {
+        DaemonLaunchOptions {
+            port,
+            bind: bind.parse().unwrap(),
+            advertise_host: advertise_host.map(str::to_owned),
+            client_root: client_root.map(PathBuf::from),
+            video_codec: VideoCodecMode::Auto,
+            low_latency: false,
+            realtime_stream: false,
+            stream_quality_profile: Some(DEFAULT_LOCAL_STREAM_QUALITY_PROFILE.to_owned()),
+            local_stream_fps: None,
+        }
+    }
 
     #[test]
     fn local_daemon_start_defaults_to_auto_video_codec() {
@@ -5582,6 +5662,56 @@ mod tests {
         assert!(
             Cli::try_parse_from(["simdeck", "daemon", "start", "--video-codec", "h264"]).is_err()
         );
+    }
+
+    #[test]
+    fn daemon_launch_options_match_listener_metadata() {
+        let metadata = daemon_metadata_for_test(4310, "127.0.0.1", None, None);
+        let options = daemon_launch_options_for_test(4310, "127.0.0.1", None, None);
+
+        assert!(daemon_matches_launch_options(&metadata, &options));
+    }
+
+    #[test]
+    fn daemon_launch_options_reject_different_port() {
+        let metadata = daemon_metadata_for_test(4310, "127.0.0.1", None, None);
+        let options = daemon_launch_options_for_test(4320, "127.0.0.1", None, None);
+
+        assert!(!daemon_matches_launch_options(&metadata, &options));
+    }
+
+    #[test]
+    fn daemon_launch_options_reject_different_bind_or_client() {
+        let metadata =
+            daemon_metadata_for_test(4310, "127.0.0.1", Some("127.0.0.1"), Some("/tmp/client-a"));
+
+        assert!(!daemon_matches_launch_options(
+            &metadata,
+            &daemon_launch_options_for_test(
+                4310,
+                "0.0.0.0",
+                Some("127.0.0.1"),
+                Some("/tmp/client-a"),
+            ),
+        ));
+        assert!(!daemon_matches_launch_options(
+            &metadata,
+            &daemon_launch_options_for_test(
+                4310,
+                "127.0.0.1",
+                Some("localhost"),
+                Some("/tmp/client-a"),
+            ),
+        ));
+        assert!(!daemon_matches_launch_options(
+            &metadata,
+            &daemon_launch_options_for_test(
+                4310,
+                "127.0.0.1",
+                Some("127.0.0.1"),
+                Some("/tmp/client-b"),
+            ),
+        ));
     }
 
     #[test]
