@@ -30,19 +30,18 @@ SimDeck workflow:
 npx skills add NativeScript/SimDeck --skill simdeck -g
 ```
 
-For VS Code, install the `nativescript.simdeck-vscode` extension to open the simulator
+For VS Code, install the [`nativescript.simdeck-vscode`](https://marketplace.visualstudio.com/items?itemName=NativeScript.simdeck-vscode) extension to open the simulator
 view inside the editor.
 
 ## Features
 
-- Local iOS Simulator video over browser-native WebRTC H.264 with H.264 WebSocket fallback
+- Local iOS Simulator video over browser-native WebRTC H.264 with H.264 WebSocket fallback for streaming
 - Android emulator frames are sourced from emulator gRPC; loopback browsers use raw RGBA over WebRTC, and non-loopback browsers use VideoToolbox-encoded H.264
 - Full simulator control & inspection using private iOS accessibility APIs and Android UIAutomator - available using `simdeck` CLI
 - Real-time screen `describe` command using accessibility view tree - available in token-efficient format for agents
 - CoreSimulator chrome asset rendering for device bezels
-- NativeScript, React Native, Flutter, UIKit and SwiftUI runtime inspector plugins to view app's view hierarchy live
-- `simdeck/test` for fast JS/TS app tests that can query accessibility state and drive simulator controls.
-- SimDeck Studio for sharing Simulator streams & automatic PR deployments to on-demand simulators
+- NativeScript, React Native, Flutter, UIKit and SwiftUI runtime inspector plugins to debug app's view hierarchy live
+- `simdeck/test` for fast JS-based app tests that can query accessibility state and drive simulator controls
 
 ## Documentation
 
