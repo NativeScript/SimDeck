@@ -58,6 +58,7 @@ Returns a snapshot of every server-side counter and the rolling buffer of client
       "encoder": {
         "encoderMode": "auto",
         "activeEncoderMode": "hardware",
+        "clientForeground": true,
         "autoSoftwareFallbackActive": false,
         "hardwareAccelerated": true,
         "overloadState": "nominal",
@@ -119,7 +120,10 @@ from hardware to software encoding. When `encoderMode` is `auto`, SimDeck uses
 this signal to temporarily rebuild the active session with software H.264 if the
 hardware encoder is overloaded, then retries hardware after a cooldown. The
 `activeEncoderMode`, `autoSoftwareFallbackActive`, `autoSoftwareFallbacks`, and
-`autoHardwareRetries` fields expose that state.
+`autoHardwareRetries` fields expose that state. `clientForeground` is `false`
+when all current browser viewers for the simulator are hidden or unfocused; in
+that state the native session uses software H.264 until a viewer returns
+foreground.
 
 ### Client stream stats
 

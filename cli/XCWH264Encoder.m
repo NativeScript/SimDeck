@@ -509,6 +509,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     BOOL _scalingActive;
     XCWVideoEncoderMode _encoderMode;
     XCWVideoEncoderMode _activeEncoderMode;
+    BOOL _clientForeground;
     BOOL _lowLatencyMode;
     BOOL _realtimeStreamMode;
     CMVideoCodecType _codecType;
@@ -559,6 +560,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _needsKeyFrame = YES;
     _encoderMode = XCWVideoEncoderModeFromEnvironment();
     _activeEncoderMode = _encoderMode;
+    _clientForeground = YES;
     _lowLatencyMode = (_encoderMode == XCWVideoEncoderModeH264Software) && XCWLowLatencyModeFromEnvironment();
     _realtimeStreamMode = XCWRealtimeStreamModeFromEnvironment() || _lowLatencyMode;
     _codecType = XCWVideoCodecTypeForMode(_activeEncoderMode);
@@ -621,6 +623,17 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         self->_hardwareFrameIntervalUs = [self initialHardwareFrameIntervalUsLocked];
         self->_hardwarePacedFrameCount = 0;
         self->_autoSoftwareFallbackUntilUs = 0;
+        [self updateActiveEncoderModeForClientForegroundLockedAtTimeUs:(uint64_t)(CACurrentMediaTime() * 1000000.0)];
+    });
+}
+
+- (void)setClientForeground:(BOOL)foreground {
+    dispatch_async(_queue, ^{
+        if (self->_clientForeground == foreground) {
+            return;
+        }
+        self->_clientForeground = foreground;
+        [self updateActiveEncoderModeForClientForegroundLockedAtTimeUs:(uint64_t)(CACurrentMediaTime() * 1000000.0)];
     });
 }
 
@@ -699,6 +712,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
             @"transportCodec": XCWCodecName(self->_codecType),
             @"encoderMode": XCWVideoEncoderModeName(self->_encoderMode),
             @"activeEncoderMode": XCWVideoEncoderModeName(self->_activeEncoderMode),
+            @"clientForeground": @(self->_clientForeground),
             @"autoSoftwareFallbackActive": @(autoSoftwareFallbackActive),
             @"autoSoftwareFallbackRemainingUs": @(autoSoftwareFallbackRemainingUs),
             @"autoSoftwareFallbacks": @(self->_autoSoftwareFallbackCount),
@@ -781,6 +795,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 
 - (BOOL)isAutoSoftwareFallbackActiveLocked {
     return _encoderMode == XCWVideoEncoderModeAuto &&
+        _autoSoftwareFallbackUntilUs != 0 &&
         _activeEncoderMode == XCWVideoEncoderModeH264Software;
 }
 
@@ -793,38 +808,63 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _wasOverloaded = NO;
 }
 
-- (void)enterAutoSoftwareFallbackLockedAtTimeUs:(uint64_t)nowUs {
-    if (_encoderMode != XCWVideoEncoderModeAuto ||
-        _activeEncoderMode == XCWVideoEncoderModeH264Software) {
+- (void)switchActiveEncoderModeLocked:(XCWVideoEncoderMode)mode {
+    if (_activeEncoderMode == mode) {
         return;
     }
-    _activeEncoderMode = XCWVideoEncoderModeH264Software;
+    _activeEncoderMode = mode;
     _codecType = XCWVideoCodecTypeForMode(_activeEncoderMode);
-    _autoSoftwareFallbackUntilUs = nowUs + XCWAutoHardwareRetryIntervalUs;
-    _autoSoftwareFallbackCount += 1;
-    _softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
-    _softwareHealthyFrameCount = 0;
-    _softwarePacedFrameCount = 0;
+    if (_activeEncoderMode == XCWVideoEncoderModeH264Software) {
+        _softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
+        _softwareHealthyFrameCount = 0;
+        _softwarePacedFrameCount = 0;
+    } else {
+        _hardwareFrameIntervalUs = [self initialHardwareFrameIntervalUsLocked];
+        _hardwarePacedFrameCount = 0;
+    }
     [self invalidateCompressionSessionLocked];
     [self resetAutoFallbackLatencyStateLocked];
     _needsKeyFrame = YES;
 }
 
+- (void)updateActiveEncoderModeForClientForegroundLockedAtTimeUs:(uint64_t)nowUs {
+    if (!_clientForeground) {
+        [self switchActiveEncoderModeLocked:XCWVideoEncoderModeH264Software];
+        return;
+    }
+    if (_encoderMode == XCWVideoEncoderModeAuto &&
+        _autoSoftwareFallbackUntilUs != 0 &&
+        nowUs < _autoSoftwareFallbackUntilUs) {
+        [self switchActiveEncoderModeLocked:XCWVideoEncoderModeH264Software];
+        return;
+    }
+    if (_encoderMode == XCWVideoEncoderModeAuto && _autoSoftwareFallbackUntilUs != 0) {
+        _autoSoftwareFallbackUntilUs = 0;
+        _autoHardwareRetryCount += 1;
+    }
+    [self switchActiveEncoderModeLocked:_encoderMode];
+}
+
+- (void)enterAutoSoftwareFallbackLockedAtTimeUs:(uint64_t)nowUs {
+    if (_encoderMode != XCWVideoEncoderModeAuto ||
+        _activeEncoderMode == XCWVideoEncoderModeH264Software) {
+        return;
+    }
+    _autoSoftwareFallbackUntilUs = nowUs + XCWAutoHardwareRetryIntervalUs;
+    _autoSoftwareFallbackCount += 1;
+    [self switchActiveEncoderModeLocked:XCWVideoEncoderModeH264Software];
+}
+
 - (void)retryAutoHardwareIfNeededLockedAtTimeUs:(uint64_t)nowUs {
     if (![self isAutoSoftwareFallbackActiveLocked] ||
+        !_clientForeground ||
         _autoSoftwareFallbackUntilUs == 0 ||
         nowUs < _autoSoftwareFallbackUntilUs) {
         return;
     }
-    _activeEncoderMode = XCWVideoEncoderModeAuto;
-    _codecType = XCWVideoCodecTypeForMode(_activeEncoderMode);
     _autoSoftwareFallbackUntilUs = 0;
     _autoHardwareRetryCount += 1;
-    _hardwareFrameIntervalUs = [self initialHardwareFrameIntervalUsLocked];
-    _hardwarePacedFrameCount = 0;
-    [self invalidateCompressionSessionLocked];
-    [self resetAutoFallbackLatencyStateLocked];
-    _needsKeyFrame = YES;
+    [self switchActiveEncoderModeLocked:XCWVideoEncoderModeAuto];
 }
 
 - (uint64_t)activeFrameIntervalUsLocked {

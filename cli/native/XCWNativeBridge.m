@@ -937,6 +937,12 @@ void xcw_native_session_reconfigure_video_encoder(void *handle) {
     }
 }
 
+void xcw_native_session_set_client_foreground(void *handle, bool foreground) {
+    @autoreleasepool {
+        [XCWNativeSessionFromHandle(handle) setClientForeground:foreground];
+    }
+}
+
 char *xcw_native_session_video_encoder_stats(void *handle, char **error_message) {
     @autoreleasepool {
         return XCWJSONStringFromObject([XCWNativeSessionFromHandle(handle) videoEncoderStats] ?: @{}, error_message);

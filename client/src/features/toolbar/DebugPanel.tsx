@@ -80,6 +80,16 @@ export function DebugPanel({
   if (encoder) {
     rows.push(
       { label: "Encoder", value: encoder.encoderMode ?? "—" },
+      { label: "Active Encoder", value: encoder.activeEncoderMode ?? "—" },
+      {
+        label: "Client Foreground",
+        value:
+          typeof encoder.clientForeground === "boolean"
+            ? encoder.clientForeground
+              ? "yes"
+              : "no"
+            : "—",
+      },
       { label: "Encoder State", value: encoder.overloadState ?? "—" },
       {
         label: "Encoder Load",

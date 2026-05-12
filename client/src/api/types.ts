@@ -1,6 +1,12 @@
 export interface EncoderStats {
+  activeEncoderMode?: string;
   averageEncodeLatencyUs?: number;
   averageEncoderLoadPercent?: number;
+  autoHardwareRetries?: number;
+  autoSoftwareFallbackActive?: boolean;
+  autoSoftwareFallbackRemainingUs?: number;
+  autoSoftwareFallbacks?: number;
+  clientForeground?: boolean;
   consecutiveOverBudgetFrames?: number;
   encoderBudgetUs?: number;
   encoderLoadPercent?: number;

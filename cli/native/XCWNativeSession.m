@@ -102,6 +102,10 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
     [self.session reconfigureVideoEncoder];
 }
 
+- (void)setClientForeground:(BOOL)foreground {
+    [self.session setClientForeground:foreground];
+}
+
 - (NSDictionary *)videoEncoderStats {
     return [self.session videoEncoderStats];
 }

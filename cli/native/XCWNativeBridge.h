@@ -76,6 +76,7 @@ bool xcw_native_session_start(void * _Nonnull handle, char * _Nullable * _Nullab
 void xcw_native_session_request_refresh(void * _Nonnull handle);
 void xcw_native_session_request_keyframe(void * _Nonnull handle);
 void xcw_native_session_reconfigure_video_encoder(void * _Nonnull handle);
+void xcw_native_session_set_client_foreground(void * _Nonnull handle, bool foreground);
 char * _Nullable xcw_native_session_video_encoder_stats(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 int32_t xcw_native_session_rotation_quarter_turns(void * _Nonnull handle);
 bool xcw_native_session_send_touch(void * _Nonnull handle, double x, double y, const char * _Nonnull phase, char * _Nullable * _Nullable error_message);
