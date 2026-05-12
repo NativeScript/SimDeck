@@ -1314,6 +1314,7 @@ class WebRtcStreamClient implements StreamClientBackend {
   private reportedVideoWidth = 0;
   private receiverStatsInterval = 0;
   private receiverStatsSeen = false;
+  private streamingReported = false;
   private shouldReconnect = false;
   private latestRgbaSequence = -1;
   private rgbaAssemblies = new Map<number, WebRtcRgbaAssembly>();
@@ -1413,6 +1414,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.reportedVideoHeight = 0;
     this.reportedVideoWidth = 0;
     this.receiverStatsSeen = false;
+    this.streamingReported = false;
     this.onMessage({
       type: "status",
       status: { detail: "Creating WebRTC offer", state: "connecting" },
@@ -1544,17 +1546,7 @@ class WebRtcStreamClient implements StreamClientBackend {
           this.clearIceRestartTimeout();
           this.iceRestartInFlight = false;
           this.reconnectDelayMs = WEBRTC_RECONNECT_BASE_DELAY_MS;
-          if (this.reportedVideoWidth > 0 && this.reportedVideoHeight > 0) {
-            this.onMessage({
-              type: "status",
-              status: {
-                detail: useRgbaTransport
-                  ? "WebRTC RGBA stream connected"
-                  : "WebRTC media connected",
-                state: "streaming",
-              },
-            });
-          }
+          this.reportWebRtcStreaming();
           return;
         }
         if (peerConnection.connectionState === "disconnected") {
@@ -1818,6 +1810,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     const reconnects = this.stats.reconnects;
     this.hasRenderedFrame = false;
     this.lastVideoFrameAt = 0;
+    this.streamingReported = false;
     this.stats = createEmptyStreamStats();
     this.stats.iceRestartReason = iceRestartReason;
     this.stats.iceRestarts = iceRestarts;
@@ -2290,6 +2283,7 @@ class WebRtcStreamClient implements StreamClientBackend {
       previousFrameAt > 0 ? finishedAt - previousFrameAt : 0;
     this.reportVideoConfig(frame.width, frame.height);
     this.onMessage({ type: "stats", stats: { ...this.stats } });
+    this.reportWebRtcStreaming();
   }
 
   private drawVideoFrame = () => {
@@ -2320,6 +2314,7 @@ class WebRtcStreamClient implements StreamClientBackend {
       }
       this.lastVideoFrameAt = now;
       this.onMessage({ type: "stats", stats: { ...this.stats } });
+      this.reportWebRtcStreaming();
     }
     this.scheduleVideoFrame();
   };
@@ -2355,12 +2350,19 @@ class WebRtcStreamClient implements StreamClientBackend {
       type: "video-config",
       size: { height, width },
     });
+  }
+
+  private reportWebRtcStreaming() {
+    if (!this.hasRenderedFrame || this.streamingReported) {
+      return;
+    }
+    this.streamingReported = true;
     this.onMessage({
       type: "status",
       status: {
         detail: this.rgbaMode
-          ? "WebRTC RGBA stream connected"
-          : "WebRTC media connected",
+          ? "WebRTC RGBA first frame rendered"
+          : "WebRTC first video frame rendered",
         state: "streaming",
       },
     });

@@ -7,6 +7,7 @@ import type {
   InspectorRequestResponse,
   SimulatorLogsResponse,
   SimulatorMetadata,
+  SimulatorStateResponse,
   SimulatorsResponse,
   WebKitTargetDiscovery,
 } from "./types";
@@ -20,6 +21,16 @@ export async function listSimulators(
 
 export async function fetchChromeProfile(udid: string): Promise<ChromeProfile> {
   return apiRequest<ChromeProfile>(`/api/simulators/${udid}/chrome-profile`);
+}
+
+export async function fetchSimulatorState(
+  udid: string,
+  options: RequestInit = {},
+): Promise<SimulatorStateResponse> {
+  return apiRequest<SimulatorStateResponse>(
+    `/api/simulators/${encodeURIComponent(udid)}/state`,
+    options,
+  );
 }
 
 export async function fetchAccessibilityTree(

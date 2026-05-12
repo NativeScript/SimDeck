@@ -21,6 +21,7 @@ interface SimulatorViewportProps {
   chromeRequired: boolean;
   chromeScreenStyle: CSSProperties | null;
   chromeUrl: string;
+  browserFramePending: boolean;
   deviceFrameStyle: CSSProperties;
   devicePresentationStyle: CSSProperties;
   deviceTransform: string;
@@ -63,6 +64,7 @@ interface SimulatorViewportProps {
   streamBackend: string;
   streamCanvasRef: Ref<HTMLCanvasElement | null>;
   streamCanvasKey: string;
+  streamStatusLabel: string;
   statusOverlayLabel: string;
   touchIndicators: TouchIndicator[];
   touchOverlayVisible: boolean;
@@ -84,6 +86,7 @@ export function SimulatorViewport({
   chromeRequired,
   chromeScreenStyle,
   chromeUrl,
+  browserFramePending,
   deviceFrameStyle,
   devicePresentationStyle,
   deviceTransform,
@@ -121,6 +124,7 @@ export function SimulatorViewport({
   streamBackend,
   streamCanvasRef,
   streamCanvasKey,
+  streamStatusLabel,
   statusOverlayLabel,
   touchIndicators,
   touchOverlayVisible,
@@ -183,6 +187,7 @@ export function SimulatorViewport({
                   chromeScreenStyle={chromeScreenStyle}
                   chromeUrl={chromeUrl}
                   chromeButtonUrl={chromeButtonUrl}
+                  browserFramePending={browserFramePending}
                   hasFrame={hasFrame}
                   isBooted={selectedSimulator.isBooted}
                   isLoadingStream={showScreenLoading}
@@ -208,6 +213,7 @@ export function SimulatorViewport({
                   streamBackend={streamBackend}
                   streamCanvasRef={streamCanvasRef}
                   streamCanvasKey={streamCanvasKey}
+                  streamStatusLabel={streamStatusLabel}
                   statusOverlayLabel={statusOverlayLabel}
                   touchIndicators={touchIndicators}
                   touchOverlayVisible={touchOverlayVisible}

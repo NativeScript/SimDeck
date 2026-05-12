@@ -30,7 +30,11 @@ import {
   toggleAppearance,
   type ControlMessage,
 } from "../api/controls";
-import { fetchAccessibilityTree, fetchChromeProfile } from "../api/simulators";
+import {
+  fetchAccessibilityTree,
+  fetchChromeProfile,
+  fetchSimulatorState,
+} from "../api/simulators";
 import type {
   AccessibilityNode,
   AccessibilitySource,
@@ -38,6 +42,7 @@ import type {
   AccessibilityTreeResponse,
   ChromeProfile,
   SimulatorMetadata,
+  SimulatorStateResponse,
   TouchPhase,
 } from "../api/types";
 import { AccessibilityInspector } from "../features/accessibility/AccessibilityInspector";
@@ -430,6 +435,8 @@ export function AppShell({
   const [streamConfigApplyKey, setStreamConfigApplyKey] = useState(0);
   const [streamConfigReady, setStreamConfigReady] = useState(false);
   const [touchIndicators, setTouchIndicators] = useState<TouchIndicator[]>([]);
+  const [selectedSimulatorState, setSelectedSimulatorState] =
+    useState<SimulatorStateResponse | null>(null);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const outerCanvasRef = useRef<HTMLDivElement | null>(null);
@@ -494,7 +501,7 @@ export function AppShell({
       .includes(searchNeedle);
   });
 
-  const selectedSimulator =
+  const baseSelectedSimulator =
     (fixedSimulatorUDID
       ? (simulators.find(
           (simulator) => simulator.udid === fixedSimulatorUDID,
@@ -511,6 +518,14 @@ export function AppShell({
     filteredSimulators.find((simulator) => simulator.isBooted) ??
     filteredSimulators[0] ??
     null;
+  const selectedSimulator =
+    baseSelectedSimulator &&
+    selectedSimulatorState?.udid === baseSelectedSimulator.udid
+      ? {
+          ...baseSelectedSimulator,
+          ...selectedSimulatorState.simulator,
+        }
+      : baseSelectedSimulator;
   const selectedSimulatorTransitionKind =
     selectedSimulator != null &&
     simulatorTransition?.udid === selectedSimulator.udid
@@ -531,6 +546,59 @@ export function AppShell({
         ? "Booting..."
         : "Stopping..."
       : "";
+
+  useEffect(() => {
+    const udid = baseSelectedSimulator?.udid;
+    if (!udid) {
+      setSelectedSimulatorState(null);
+      return;
+    }
+
+    let cancelled = false;
+    let timeoutId = 0;
+    let controller: AbortController | null = null;
+
+    const loadState = () => {
+      controller?.abort();
+      controller =
+        typeof AbortController !== "undefined" ? new AbortController() : null;
+      void fetchSimulatorState(
+        udid,
+        controller ? { signal: controller.signal } : {},
+      )
+        .then((state) => {
+          if (!cancelled) {
+            setSelectedSimulatorState(state);
+          }
+        })
+        .catch((error) => {
+          if (
+            !cancelled &&
+            !(error instanceof DOMException && error.name === "AbortError")
+          ) {
+            setSelectedSimulatorState(null);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            timeoutId = window.setTimeout(
+              loadState,
+              baseSelectedSimulator?.isBooted ? 1000 : 3000,
+            );
+          }
+        });
+    };
+
+    setSelectedSimulatorState(null);
+    loadState();
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+      controller?.abort();
+    };
+  }, [baseSelectedSimulator?.isBooted, baseSelectedSimulator?.udid]);
 
   const handleStreamCanvasRef = useCallback(
     (node: HTMLCanvasElement | null) => {
@@ -1354,9 +1422,29 @@ export function AppShell({
       ? `${visibleStreamError} ${streamStatus.detail}`
       : visibleStreamError
     : "";
+  const serverFrameSequence =
+    selectedSimulatorState?.frameSequence ??
+    selectedSimulator?.privateDisplay?.frameSequence ??
+    0;
+  const browserFramePending = Boolean(
+    selectedSimulator?.isBooted &&
+    serverFrameSequence > 0 &&
+    !hasFrame &&
+    streamStatus.state !== "error" &&
+    !visibleStreamError,
+  );
+  const streamStatusLabel = streamAgentStatusLabel({
+    hasFrame,
+    simulator: selectedSimulator,
+    simulatorState: selectedSimulatorState,
+    stats,
+    streamStatusDetail: streamStatus.detail,
+    streamStatusState: streamStatus.state,
+  });
   const viewportStatusOverlayLabel =
     simulatorStatusOverlayLabel ||
     streamStatusMessage ||
+    (browserFramePending ? "Stream connected, browser frame pending" : "") ||
     (selectedSimulator ? visibleListError : "");
   const viewportHasStreamError = Boolean(
     streamStatus.state === "error" ||
@@ -2117,6 +2205,7 @@ export function AppShell({
         chromeScreenStyle={viewportScreenStyle}
         chromeUrl={chromeUrl}
         chromeButtonUrl={chromeButtonUrl}
+        browserFramePending={browserFramePending}
         debugPanel={
           debugVisible ? (
             <DebugPanel
@@ -2180,6 +2269,7 @@ export function AppShell({
         streamCanvasRef={handleStreamCanvasRef}
         streamBackend={streamBackend}
         streamCanvasKey={streamCanvasKey}
+        streamStatusLabel={streamStatusLabel}
         statusOverlayLabel={viewportStatusOverlayLabel}
         touchIndicators={touchIndicators}
         touchOverlayVisible={touchOverlayVisible}
@@ -2313,6 +2403,76 @@ function friendlyStreamError(
     return "";
   }
   return friendlyClientError(normalized);
+}
+
+function streamAgentStatusLabel({
+  hasFrame,
+  simulator,
+  simulatorState,
+  stats,
+  streamStatusDetail,
+  streamStatusState,
+}: {
+  hasFrame: boolean;
+  simulator: SimulatorMetadata | null;
+  simulatorState: SimulatorStateResponse | null;
+  stats: {
+    frameSequence: number;
+    latestFrameGapMs: number;
+    renderedFrames: number;
+  };
+  streamStatusDetail?: string;
+  streamStatusState: string;
+}): string {
+  if (!simulator) {
+    return "No simulator selected";
+  }
+
+  const display = simulator.privateDisplay;
+  const serverFrameSequence =
+    simulatorState?.frameSequence ?? display?.frameSequence ?? 0;
+  const serverFrameAgeMs =
+    simulatorState?.lastFrameAgeMs ??
+    (display?.lastFrameAt
+      ? Math.max(0, Date.now() - display.lastFrameAt)
+      : null);
+  const foreground =
+    simulatorState?.foregroundApp?.appName ??
+    simulatorState?.foregroundApp?.bundleIdentifier ??
+    "unknown foreground app";
+  const parts = [
+    simulator.isBooted ? "Booted" : "Shutdown",
+    display?.displayReady || simulatorState?.displayReady
+      ? "display ready"
+      : "display not ready",
+    `server ${display?.displayStatus ?? simulatorState?.displayStatus ?? "Unknown"}`,
+    `server frame ${serverFrameSequence}`,
+    serverFrameAgeMs == null
+      ? "server frame age unknown"
+      : `server frame ${formatMilliseconds(serverFrameAgeMs)} ago`,
+    hasFrame
+      ? stats.frameSequence > 0
+        ? `browser frame ${stats.frameSequence}`
+        : `browser rendered ${stats.renderedFrames}`
+      : "browser frame pending",
+    `browser gap ${formatMilliseconds(stats.latestFrameGapMs)}`,
+    `foreground ${foreground}`,
+    `client ${streamStatusState}`,
+  ];
+  if (streamStatusDetail) {
+    parts.push(streamStatusDetail);
+  }
+  return parts.join(" · ");
+}
+
+function formatMilliseconds(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0ms";
+  }
+  if (value < 1000) {
+    return `${Math.round(value)}ms`;
+  }
+  return `${(value / 1000).toFixed(1)}s`;
 }
 
 function userFacingAccessibilityError(message: string): string {

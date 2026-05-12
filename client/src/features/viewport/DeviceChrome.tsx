@@ -19,6 +19,7 @@ interface DeviceChromeProps {
   chromeScreenStyle: CSSProperties | null;
   chromeUrl: string;
   chromeButtonUrl: (button: string, pressed?: boolean) => string;
+  browserFramePending: boolean;
   hasFrame: boolean;
   isBooted: boolean;
   isLoadingStream: boolean;
@@ -49,6 +50,7 @@ interface DeviceChromeProps {
   streamBackend: string;
   streamCanvasRef: Ref<HTMLCanvasElement | null>;
   streamCanvasKey: string;
+  streamStatusLabel: string;
   statusOverlayLabel: string;
   touchIndicators: TouchIndicator[];
   touchOverlayVisible: boolean;
@@ -64,6 +66,7 @@ export function DeviceChrome({
   chromeScreenStyle,
   chromeUrl,
   chromeButtonUrl,
+  browserFramePending,
   hasFrame,
   isBooted,
   isLoadingStream,
@@ -89,6 +92,7 @@ export function DeviceChrome({
   streamBackend,
   streamCanvasRef,
   streamCanvasKey,
+  streamStatusLabel,
   statusOverlayLabel,
   touchIndicators,
   touchOverlayVisible,
@@ -130,6 +134,7 @@ export function DeviceChrome({
           accessibilityRoots={accessibilityRoots}
           accessibilitySelectedId={accessibilitySelectedId}
           chromeScreenStyle={chromeScreenStyle}
+          browserFramePending={browserFramePending}
           hasFrame={hasFrame}
           isBooted={isBooted}
           isLoadingStream={isLoadingStream}
@@ -147,6 +152,7 @@ export function DeviceChrome({
           streamBackend={streamBackend}
           streamCanvasRef={streamCanvasRef}
           streamCanvasKey={streamCanvasKey}
+          streamStatusLabel={streamStatusLabel}
           statusOverlayLabel={statusOverlayLabel}
           touchIndicators={touchIndicators}
           touchOverlayVisible={touchOverlayVisible}
@@ -173,6 +179,7 @@ export function DeviceChrome({
           aspectRatio: screenAspect,
           ...(chromeScreenStyle ?? {}),
         }}
+        browserFramePending={browserFramePending}
         hasFrame={hasFrame}
         isBooted={isBooted}
         isLoadingStream={isLoadingStream}
@@ -190,6 +197,7 @@ export function DeviceChrome({
         streamBackend={streamBackend}
         streamCanvasRef={streamCanvasRef}
         streamCanvasKey={streamCanvasKey}
+        streamStatusLabel={streamStatusLabel}
         statusOverlayLabel={statusOverlayLabel}
         touchIndicators={touchIndicators}
         touchOverlayVisible={touchOverlayVisible}
@@ -421,6 +429,7 @@ interface ScreenLayerProps {
   accessibilityRoots: AccessibilityNode[];
   accessibilitySelectedId: string;
   chromeScreenStyle: CSSProperties | null;
+  browserFramePending: boolean;
   hasFrame: boolean;
   isBooted: boolean;
   isLoadingStream: boolean;
@@ -438,6 +447,7 @@ interface ScreenLayerProps {
   streamBackend: string;
   streamCanvasRef: Ref<HTMLCanvasElement | null>;
   streamCanvasKey: string;
+  streamStatusLabel: string;
   statusOverlayLabel: string;
   touchIndicators: TouchIndicator[];
   touchOverlayVisible: boolean;
@@ -450,6 +460,7 @@ function ScreenLayer({
   accessibilityRoots,
   accessibilitySelectedId,
   chromeScreenStyle,
+  browserFramePending,
   hasFrame,
   isBooted,
   isLoadingStream,
@@ -467,6 +478,7 @@ function ScreenLayer({
   streamBackend,
   streamCanvasRef,
   streamCanvasKey,
+  streamStatusLabel,
   statusOverlayLabel,
   touchIndicators,
   touchOverlayVisible,
@@ -497,6 +509,14 @@ function ScreenLayer({
         key={streamCanvasKey}
         ref={streamCanvasRef}
       />
+      <div
+        aria-live="polite"
+        className="stream-status-agent"
+        data-testid="stream-status"
+        role="status"
+      >
+        {streamStatusLabel}
+      </div>
       <AccessibilityOverlay
         hoveredId={accessibilityHoveredId}
         roots={accessibilityRoots}
@@ -555,7 +575,11 @@ function ScreenLayer({
       !isStreamError &&
       !isLoadingStream &&
       !statusOverlayLabel ? (
-        <div className="screen-overlay">Waiting for first frame...</div>
+        <div className="screen-overlay">
+          {browserFramePending
+            ? "Stream connected, browser frame pending"
+            : "Waiting for first frame..."}
+        </div>
       ) : null}
       {!isBooted && !statusOverlayLabel ? (
         <div className="screen-overlay">Boot simulator to start streaming</div>

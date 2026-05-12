@@ -4,6 +4,7 @@ import {
   Half2Icon as AppearanceIcon,
   HomeIcon,
   LayersIcon as HierarchyIcon,
+  Link2Icon as OpenUrlIcon,
   PlayIcon,
   ReloadIcon as RotateRightIcon,
   StopIcon,
@@ -208,6 +209,14 @@ export function Toolbar({
                 <StopIcon />
               </button>
             ) : null}
+            <button
+              aria-label="Open URL"
+              className="tbtn icon-btn"
+              onClick={onOpenUrlPrompt}
+              title="Open URL"
+            >
+              <OpenUrlIcon />
+            </button>
             <button
               aria-label="Home"
               className="tbtn icon-btn"

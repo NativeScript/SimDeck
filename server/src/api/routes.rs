@@ -573,6 +573,7 @@ pub fn router(state: AppState) -> Router {
             get(webkit_inspector_ui_file),
         )
         .route("/api/simulators", get(list_simulators))
+        .route("/api/simulators/{udid}/state", get(simulator_state))
         .route("/api/simulators/{udid}/boot", post(boot_simulator))
         .route("/api/simulators/{udid}/shutdown", post(shutdown_simulator))
         .route("/api/simulators/{udid}/erase", post(erase_simulator))
@@ -759,6 +760,13 @@ fn active_video_codec(config: &Config) -> String {
         .ok()
         .and_then(|value| normalize_video_codec(&value).map(ToOwned::to_owned))
         .unwrap_or_else(|| config.video_codec.clone())
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_millis() as u64
 }
 
 fn normalize_video_codec(codec: &str) -> Option<&'static str> {
@@ -1361,6 +1369,70 @@ async fn list_simulators(State(state): State<AppState>) -> Result<Json<Value>, A
     let simulators = all_device_values(state.clone(), false).await?;
     Ok(json(json_value!({
         "simulators": simulators,
+    })))
+}
+
+async fn simulator_state(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let simulator = if android::is_android_id(&udid) {
+        let android_devices =
+            run_android_action(state.clone(), |android| android.list_devices()).await?;
+        state
+            .android
+            .enrich_devices(android_devices)
+            .into_iter()
+            .find(|entry| entry.get("udid").and_then(Value::as_str) == Some(udid.as_str()))
+            .ok_or_else(|| AppError::not_found(format!("Unknown Android emulator {udid}")))?
+    } else {
+        all_device_values(state.clone(), true)
+            .await?
+            .into_iter()
+            .find(|entry| entry.get("udid").and_then(Value::as_str) == Some(udid.as_str()))
+            .ok_or_else(|| AppError::not_found(format!("Unknown simulator {udid}")))?
+    };
+
+    let display = simulator.get("privateDisplay");
+    let frame_sequence = display
+        .and_then(|value| value.get("frameSequence"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let last_frame_at = display
+        .and_then(|value| value.get("lastFrameAt"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let last_frame_age_ms = if last_frame_at > 0 {
+        Some(now_ms().saturating_sub(last_frame_at))
+    } else {
+        None
+    };
+    let is_booted = simulator
+        .get("isBooted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let foreground_app = if is_booted && !android::is_android_id(&udid) {
+        foreground_app_metadata(&state, &udid).await.ok().flatten()
+    } else {
+        None
+    };
+
+    Ok(json(json_value!({
+        "udid": udid,
+        "booted": is_booted,
+        "displayReady": display
+            .and_then(|value| value.get("displayReady"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "displayStatus": display
+            .and_then(|value| value.get("displayStatus"))
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown"),
+        "frameSequence": frame_sequence,
+        "lastFrameAt": last_frame_at,
+        "lastFrameAgeMs": last_frame_age_ms,
+        "foregroundApp": foreground_app,
+        "simulator": simulator,
     })))
 }
 

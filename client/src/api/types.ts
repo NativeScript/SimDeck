@@ -22,6 +22,7 @@ export interface PrivateDisplayInfo {
   displayHeight: number;
   encoder?: EncoderStats;
   frameSequence: number;
+  lastFrameAt?: number;
   rotationQuarterTurns?: number;
 }
 
@@ -108,6 +109,24 @@ export interface HealthResponse {
 
 export interface SimulatorResponse {
   simulator: SimulatorMetadata;
+}
+
+export interface SimulatorForegroundApp {
+  appName?: string | null;
+  bundleIdentifier?: string | null;
+  processIdentifier: number;
+}
+
+export interface SimulatorStateResponse {
+  booted: boolean;
+  displayReady: boolean;
+  displayStatus: string;
+  foregroundApp?: SimulatorForegroundApp | null;
+  frameSequence: number;
+  lastFrameAgeMs?: number | null;
+  lastFrameAt: number;
+  simulator: SimulatorMetadata;
+  udid: string;
 }
 
 export interface ChromeProfile {

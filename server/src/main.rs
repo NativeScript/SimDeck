@@ -35,6 +35,8 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -901,7 +903,7 @@ fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMe
         fs::create_dir_all(parent)
             .with_context(|| format!("create daemon log directory {}", parent.display()))?;
     }
-    let port = choose_daemon_port(options.port)?;
+    let port = choose_daemon_port_for_bind(options.port, options.bind)?;
     let access_token = auth::generate_access_token();
     let pairing_code = auth::generate_pairing_code();
     let executable = env::current_exe().context("resolve simdeck executable")?;
@@ -953,13 +955,17 @@ fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMe
         .try_clone()
         .with_context(|| format!("clone daemon log {}", log_path.display()))?;
     let supervisor_script = format!(
-        r#"trap 'if [ -n "$child" ]; then kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; fi; exit 0' TERM INT
+        r#"terminating=0
+trap 'terminating=1; if [ -n "$child" ]; then kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; fi' TERM INT HUP
 while :; do
   {metadata_pid_env}=$$ "$@" &
   child=$!
   wait "$child"
   status=$?
   child=
+  if [ "$terminating" -eq 1 ]; then
+    exit 0
+  fi
   if [ "$status" -eq {recoverable_restart_exit_code} ] || [ "$status" -ge 128 ]; then
     printf '[simdeck-supervisor] daemon exited with status %s; restarting\n' "$status" >&2
     sleep 1
@@ -1013,6 +1019,10 @@ done
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_stdout))
         .stderr(Stdio::from(log_stderr));
+    #[cfg(unix)]
+    {
+        command.process_group(0);
+    }
     let child = command.spawn().context("start project SimDeck daemon")?;
 
     let metadata = DaemonMetadata {
@@ -1035,7 +1045,10 @@ done
         local_stream_fps: options.local_stream_fps,
     };
     write_daemon_metadata(&metadata)?;
-    wait_for_daemon(&metadata, Duration::from_secs(15))?;
+    if let Err(error) = wait_for_daemon(&metadata, Duration::from_secs(15)) {
+        let _ = terminate_daemon_metadata(&metadata);
+        return Err(error);
+    }
     Ok(metadata)
 }
 
@@ -1133,8 +1146,24 @@ fn remove_daemon_metadata_if_current(root: &Path, pid: u32) -> anyhow::Result<()
 
 fn daemon_status() -> anyhow::Result<()> {
     let metadata = read_daemon_metadata()?;
-    let running = metadata.as_ref().is_some_and(daemon_is_healthy);
-    println_json(&serde_json::json!({ "running": running, "daemon": metadata }))
+    let process_running = metadata
+        .as_ref()
+        .is_some_and(|metadata| process_exists(metadata.pid));
+    let healthy = metadata.as_ref().is_some_and(daemon_is_healthy);
+    let stale = metadata.is_some() && !process_running && !healthy;
+    if stale {
+        if let Some(metadata) = metadata.as_ref() {
+            let _ = fs::remove_file(daemon_metadata_path_for_root(&metadata.project_root)?);
+        }
+    }
+    println_json(&serde_json::json!({
+        "running": healthy,
+        "healthy": healthy,
+        "processRunning": process_running,
+        "stale": stale,
+        "daemon": if stale { None } else { metadata.clone() },
+        "staleDaemon": if stale { metadata } else { None },
+    }))
 }
 
 fn print_daemon_start_result(metadata: &DaemonMetadata, started: bool) -> anyhow::Result<()> {
@@ -1251,10 +1280,6 @@ fn project_root() -> anyhow::Result<PathBuf> {
             return env::current_dir().context("resolve current directory");
         }
     }
-}
-
-fn choose_daemon_port(preferred: u16) -> anyhow::Result<u16> {
-    choose_daemon_port_for_bind(preferred, IpAddr::V4(Ipv4Addr::LOCALHOST))
 }
 
 fn choose_daemon_port_for_bind(preferred: u16, bind: IpAddr) -> anyhow::Result<u16> {

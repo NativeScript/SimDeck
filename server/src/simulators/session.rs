@@ -41,6 +41,7 @@ struct SimulatorSessionInner {
     display_width: AtomicU64,
     display_height: AtomicU64,
     frame_sequence: AtomicU64,
+    last_frame_ms: AtomicU64,
     last_refresh_us: AtomicU64,
     last_keyframe_ms: AtomicU64,
     active_frame_subscribers: AtomicU64,
@@ -93,6 +94,7 @@ impl SimulatorSession {
             display_width: AtomicU64::new(0),
             display_height: AtomicU64::new(0),
             frame_sequence: AtomicU64::new(0),
+            last_frame_ms: AtomicU64::new(0),
             last_refresh_us: AtomicU64::new(0),
             last_keyframe_ms: AtomicU64::new(0),
             active_frame_subscribers: AtomicU64::new(0),
@@ -302,6 +304,7 @@ impl SimulatorSession {
             "displayWidth": self.inner.display_width.load(Ordering::Relaxed),
             "displayHeight": self.inner.display_height.load(Ordering::Relaxed),
             "frameSequence": self.inner.frame_sequence.load(Ordering::Relaxed),
+            "lastFrameAt": self.inner.last_frame_ms.load(Ordering::Relaxed),
             "rotationQuarterTurns": self.inner.native.rotation_quarter_turns(),
             "encoder": self.inner.native.video_encoder_stats(),
         })
@@ -427,6 +430,7 @@ impl SimulatorSessionInner {
             .store(packet.height as u64, Ordering::Relaxed);
         self.frame_sequence
             .store(packet.frame_sequence, Ordering::Relaxed);
+        self.last_frame_ms.store(now_ms(), Ordering::Relaxed);
         debug!(
             udid = %self.udid,
             sequence = packet.frame_sequence,
