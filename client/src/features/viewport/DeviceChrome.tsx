@@ -309,8 +309,8 @@ function ChromeButtonHitTarget({
     "--button-rest-y": "0%",
     "--button-hover-x": `${(rolloverDelta.x / Math.max(button.width, 1)) * 100}%`,
     "--button-hover-y": `${(rolloverDelta.y / Math.max(button.height, 1)) * 100}%`,
-    "--button-pressed-x": `${((-rolloverDelta.x) / Math.max(button.width, 1)) * 100}%`,
-    "--button-pressed-y": `${((-rolloverDelta.y) / Math.max(button.height, 1)) * 100}%`,
+    "--button-pressed-x": `${(-rolloverDelta.x / Math.max(button.width, 1)) * 100}%`,
+    "--button-pressed-y": `${(-rolloverDelta.y / Math.max(button.height, 1)) * 100}%`,
   } as CSSProperties &
     Record<
       | "--button-rest-x"

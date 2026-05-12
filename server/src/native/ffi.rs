@@ -124,6 +124,11 @@ unsafe extern "C" {
         usage: u32,
         error_message: *mut *mut c_char,
     ) -> bool;
+    pub fn xcw_native_rotate_crown(
+        udid: *const c_char,
+        delta: f64,
+        error_message: *mut *mut c_char,
+    ) -> bool;
     pub fn xcw_native_rotate_right(udid: *const c_char, error_message: *mut *mut c_char) -> bool;
     pub fn xcw_native_rotate_left(udid: *const c_char, error_message: *mut *mut c_char) -> bool;
     pub fn xcw_native_erase_simulator(udid: *const c_char, error_message: *mut *mut c_char)
@@ -253,6 +258,11 @@ unsafe extern "C" {
         has_usage: bool,
         usage_page: u32,
         usage: u32,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_session_rotate_crown(
+        handle: *mut c_void,
+        delta: f64,
         error_message: *mut *mut c_char,
     ) -> bool;
     pub fn xcw_native_session_open_app_switcher(

@@ -23,6 +23,7 @@ import {
   openSimulatorUrl,
   pressHome,
   pressSimulatorButton,
+  rotateDigitalCrown,
   rotateRight,
   simulatorControlSocketUrl,
   shutdownSimulator,
@@ -750,11 +751,18 @@ export function AppShell({
   const chromeHasInteractiveButtons = Boolean(
     viewportChromeProfile?.buttons?.length,
   );
+  const chromeHasCrown = Boolean(
+    viewportChromeProfile?.buttons?.some(
+      (button) =>
+        button.type?.toLowerCase() === "crown" ||
+        button.name.toLowerCase() === "digital-crown",
+    ),
+  );
   const chromeUrl = selectedSimulator
     ? buildChromeUrl(
         selectedSimulator.udid,
         streamStamp,
-        !chromeHasInteractiveButtons,
+        !chromeHasInteractiveButtons || chromeHasCrown,
       )
     : "";
   const chromeButtonUrl = useCallback(
@@ -1664,6 +1672,11 @@ export function AppShell({
       return;
     }
 
+    if (chromeHasCrown && selectedSimulator.isBooted) {
+      sendCrownRotation(deltaY);
+      return;
+    }
+
     setViewMode("manual");
     setPan((currentPan) =>
       clampPan(
@@ -1831,6 +1844,25 @@ export function AppShell({
             usagePage,
             usage,
           }),
+        false,
+      );
+    }
+  }
+
+  function sendCrownRotation(delta: number) {
+    if (!selectedSimulator || !Number.isFinite(delta) || delta === 0) {
+      return;
+    }
+    setAccessibilitySelectedId("");
+    setAccessibilityHoveredId(null);
+    if (
+      !sendControl(selectedSimulator.udid, {
+        type: "crown",
+        delta,
+      })
+    ) {
+      void runAction(
+        () => rotateDigitalCrown(selectedSimulator.udid, { delta }),
         false,
       );
     }

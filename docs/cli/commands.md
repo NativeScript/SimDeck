@@ -239,6 +239,7 @@ simdeck button <udid> lock --duration-ms 1000
 simdeck button <udid> volume-up
 simdeck button <udid> action --duration-ms 1000
 simdeck button <udid> digital-crown
+simdeck crown <udid> --delta 50
 simdeck button <udid> left-side-button
 simdeck dismiss-keyboard <udid>
 simdeck home <udid>

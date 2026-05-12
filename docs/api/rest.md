@@ -396,6 +396,20 @@ press:
 may also pass `usagePage` and `usage` from the device profile when an exact HID
 usage is available.
 
+### `POST /api/simulators/{udid}/crown`
+
+Rotates the Apple Watch Digital Crown using scroll delta semantics:
+
+```http
+POST /api/simulators/{udid}/crown
+Content-Type: application/json
+
+{ "delta": 50 }
+```
+
+The browser UI sends this automatically when scrolling over a Watch screen or
+crown chrome.
+
 ### `POST /api/simulators/{udid}/home`
 
 Presses the home button:

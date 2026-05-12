@@ -301,6 +301,9 @@ pub(crate) enum ControlMessage {
         usage_page: Option<u32>,
         usage: Option<u32>,
     },
+    Crown {
+        delta: f64,
+    },
     DismissKeyboard,
     Home,
     AppSwitcher,
@@ -326,6 +329,11 @@ struct ButtonPayload {
     #[serde(rename = "usagePage")]
     usage_page: Option<u32>,
     usage: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct CrownPayload {
+    delta: f64,
 }
 
 #[derive(Deserialize)]
@@ -448,6 +456,9 @@ enum BatchStep {
     Button {
         button: String,
         duration_ms: Option<u32>,
+    },
+    Crown {
+        delta: f64,
     },
     Launch {
         bundle_id: String,
@@ -602,6 +613,7 @@ pub fn router(state: AppState) -> Router {
             post(dismiss_keyboard),
         )
         .route("/api/simulators/{udid}/button", post(press_button))
+        .route("/api/simulators/{udid}/crown", post(rotate_crown))
         .route("/api/simulators/{udid}/home", post(press_home))
         .route(
             "/api/simulators/{udid}/app-switcher",
@@ -2482,6 +2494,7 @@ pub(crate) async fn run_control_message(
                 session.press_button(&button, duration_ms.unwrap_or(0))
             }
         }
+        ControlMessage::Crown { delta } => session.rotate_crown(delta),
         ControlMessage::DismissKeyboard => session.send_key(41, 0),
         ControlMessage::Home => session.press_home(),
         ControlMessage::AppSwitcher => session.open_app_switcher(),
@@ -2622,6 +2635,23 @@ async fn press_button(
         })
         .await?;
     }
+    Ok(json(json_value!({ "ok": true })))
+}
+
+async fn rotate_crown(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<CrownPayload>,
+) -> Result<Json<Value>, AppError> {
+    if !payload.delta.is_finite() {
+        return Err(AppError::bad_request(
+            "Request body must include finite `delta`.",
+        ));
+    }
+    run_bridge_action(state, move |bridge| {
+        bridge.rotate_crown(&udid, payload.delta)
+    })
+    .await?;
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -3428,6 +3458,10 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
             })
             .await?;
             Ok(json_value!({ "action": "button" }))
+        }
+        BatchStep::Crown { delta } => {
+            run_bridge_action(state, move |bridge| bridge.rotate_crown(&udid, delta)).await?;
+            Ok(json_value!({ "action": "crown" }))
         }
         BatchStep::Launch { bundle_id } => {
             if android::is_android_id(&udid) {

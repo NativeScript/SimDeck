@@ -44,6 +44,8 @@ NS_ASSUME_NONNULL_BEGIN
                        usagePage:(nullable NSNumber *)usagePage
                            usage:(nullable NSNumber *)usage
                            error:(NSError * _Nullable * _Nullable)error;
+- (BOOL)rotateDigitalCrownByDelta:(double)delta
+                             error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)openAppSwitcher:(NSError * _Nullable * _Nullable)error;
 - (BOOL)rotateRight:(NSError * _Nullable * _Nullable)error;
 - (BOOL)rotateLeft:(NSError * _Nullable * _Nullable)error;
