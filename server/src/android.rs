@@ -5,19 +5,20 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use tonic::metadata::MetadataValue;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::Endpoint;
 
 const ANDROID_ID_PREFIX: &str = "android:";
 const DEFAULT_GRPC_PORT_BASE: u16 = 8554;
 const ANDROID_GRPC_FRAME_MESSAGE_LIMIT: usize = 64 * 1024 * 1024;
-const ANDROID_TOUCH_IDENTIFIER: i32 = 1;
+const ANDROID_TOUCH_SWIPE_THRESHOLD: f64 = 0.025;
+const ANDROID_TOUCH_MIN_DURATION_MS: u128 = 80;
+const ANDROID_TOUCH_MAX_DURATION_MS: u128 = 1500;
 const RUNNING_EMULATOR_CACHE_TTL: Duration = Duration::from_secs(2);
 const AVD_GRPC_PORT_CACHE_TTL: Duration = Duration::from_secs(60);
 const SCREEN_SIZE_CACHE_TTL: Duration = Duration::from_secs(1);
@@ -93,6 +94,45 @@ struct AndroidFrameTarget {
     rotation_quarter_turns: u16,
 }
 
+#[derive(Debug)]
+pub struct AndroidTouchGesture {
+    started_at: Instant,
+    start_x: f64,
+    start_y: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AndroidTouchAction {
+    None,
+    Tap {
+        x: f64,
+        y: f64,
+    },
+    Swipe {
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        duration_ms: u64,
+    },
+}
+
+impl AndroidTouchAction {
+    pub fn perform(self, bridge: &AndroidBridge, id: &str) -> Result<(), AppError> {
+        match self {
+            AndroidTouchAction::None => Ok(()),
+            AndroidTouchAction::Tap { x, y } => bridge.send_tap_adb(id, x, y),
+            AndroidTouchAction::Swipe {
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                duration_ms,
+            } => bridge.send_swipe_adb(id, start_x, start_y, end_x, end_y, duration_ms),
+        }
+    }
+}
+
 pub fn is_android_id(id: &str) -> bool {
     id.starts_with(ANDROID_ID_PREFIX)
 }
@@ -106,6 +146,61 @@ pub fn avd_from_id(id: &str) -> Result<String, AppError> {
 
 pub fn id_for_avd(avd_name: &str) -> String {
     format!("{ANDROID_ID_PREFIX}{avd_name}")
+}
+
+pub fn update_touch_gesture(
+    active_touch: &mut Option<AndroidTouchGesture>,
+    x: f64,
+    y: f64,
+    phase: &str,
+) -> Result<AndroidTouchAction, AppError> {
+    if !x.is_finite() || !y.is_finite() {
+        return Err(AppError::bad_request(
+            "`x` and `y` must be finite normalized numbers.",
+        ));
+    }
+    let x = x.clamp(0.0, 1.0);
+    let y = y.clamp(0.0, 1.0);
+
+    match phase {
+        "began" => {
+            *active_touch = Some(AndroidTouchGesture {
+                started_at: Instant::now(),
+                start_x: x,
+                start_y: y,
+            });
+            Ok(AndroidTouchAction::None)
+        }
+        "moved" => Ok(AndroidTouchAction::None),
+        "ended" => {
+            let touch = active_touch.take().unwrap_or(AndroidTouchGesture {
+                started_at: Instant::now(),
+                start_x: x,
+                start_y: y,
+            });
+            let distance = ((x - touch.start_x).powi(2) + (y - touch.start_y).powi(2)).sqrt();
+            if distance < ANDROID_TOUCH_SWIPE_THRESHOLD {
+                return Ok(AndroidTouchAction::Tap { x, y });
+            }
+            Ok(AndroidTouchAction::Swipe {
+                start_x: touch.start_x,
+                start_y: touch.start_y,
+                end_x: x,
+                end_y: y,
+                duration_ms: touch
+                    .started_at
+                    .elapsed()
+                    .as_millis()
+                    .clamp(ANDROID_TOUCH_MIN_DURATION_MS, ANDROID_TOUCH_MAX_DURATION_MS)
+                    as u64,
+            })
+        }
+        "cancelled" => {
+            *active_touch = None;
+            Ok(AndroidTouchAction::None)
+        }
+        _ => Ok(AndroidTouchAction::None),
+    }
 }
 
 impl AndroidBridge {
@@ -295,29 +390,13 @@ impl AndroidBridge {
     }
 
     pub fn send_touch(&self, id: &str, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
-        if self.send_touch_grpc(id, x, y, phase).is_ok() {
-            return Ok(());
+        match phase {
+            "ended" => self.send_tap_adb(id, x, y),
+            _ => Ok(()),
         }
-        if phase != "ended" && phase != "cancelled" {
-            return Ok(());
-        }
-        let serial = self.serial_for_id(id)?;
-        let (width, height) = self.screen_size_for_serial(&serial)?;
-        let px = (x.clamp(0.0, 1.0) * (width - 1.0)).round().max(0.0);
-        let py = (y.clamp(0.0, 1.0) * (height - 1.0)).round().max(0.0);
-        self.run_adb([
-            "-s",
-            &serial,
-            "shell",
-            "input",
-            "tap",
-            &px.to_string(),
-            &py.to_string(),
-        ])?;
-        Ok(())
     }
 
-    pub fn send_tap_adb(&self, id: &str, x: f64, y: f64) -> Result<(), AppError> {
+    fn send_tap_adb(&self, id: &str, x: f64, y: f64) -> Result<(), AppError> {
         let serial = self.serial_for_id(id)?;
         let (width, height) = self.screen_size_for_serial(&serial)?;
         let px = (x.clamp(0.0, 1.0) * (width - 1.0)).round().max(0.0);
@@ -343,16 +422,10 @@ impl AndroidBridge {
         end_y: f64,
         duration_ms: u64,
     ) -> Result<(), AppError> {
-        if self
-            .send_swipe_grpc(id, start_x, start_y, end_x, end_y, duration_ms)
-            .is_ok()
-        {
-            return Ok(());
-        }
         self.send_swipe_adb(id, start_x, start_y, end_x, end_y, duration_ms)
     }
 
-    pub fn send_swipe_adb(
+    fn send_swipe_adb(
         &self,
         id: &str,
         start_x: f64,
@@ -722,122 +795,6 @@ impl AndroidBridge {
             "availableSources": ["android-uiautomator"],
             "roots": roots,
         }))
-    }
-
-    fn send_touch_grpc(&self, id: &str, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
-        self.block_on_grpc(self.send_touch_grpc_async(id, x, y, phase))
-    }
-
-    async fn send_touch_grpc_async(
-        &self,
-        id: &str,
-        x: f64,
-        y: f64,
-        phase: &str,
-    ) -> Result<(), AppError> {
-        let avd_name = avd_from_id(id)?;
-        let serial = self.resolve_serial(&avd_name)?;
-        let (width, height) = self.screen_size_for_serial(&serial)?;
-        let pressure = match phase {
-            "began" | "moved" => 1,
-            "ended" | "cancelled" => 0,
-            _ => return Ok(()),
-        };
-        let event = grpc::TouchEvent {
-            touches: vec![grpc::Touch {
-                x: normalized_to_pixel(x, width),
-                y: normalized_to_pixel(y, height),
-                identifier: ANDROID_TOUCH_IDENTIFIER,
-                pressure,
-                touch_major: 8,
-                touch_minor: 8,
-                expiration: grpc::touch::EventExpiration::NeverExpire as i32,
-                orientation: 0,
-            }],
-            display: 0,
-        };
-        self.grpc_unary_for_avd::<grpc::TouchEvent, grpc::Empty>(
-            &avd_name,
-            "/android.emulation.control.EmulatorController/sendTouch",
-            event,
-        )
-        .await?;
-        Ok(())
-    }
-
-    fn send_swipe_grpc(
-        &self,
-        id: &str,
-        start_x: f64,
-        start_y: f64,
-        end_x: f64,
-        end_y: f64,
-        duration_ms: u64,
-    ) -> Result<(), AppError> {
-        let duration_ms = duration_ms.clamp(50, 1500);
-        let steps = (duration_ms / 8).clamp(4, 120);
-        self.send_touch_grpc(id, start_x, start_y, "began")?;
-        for step in 1..steps {
-            let t = step as f64 / steps as f64;
-            self.send_touch_grpc(
-                id,
-                start_x + (end_x - start_x) * t,
-                start_y + (end_y - start_y) * t,
-                "moved",
-            )?;
-            thread::sleep(Duration::from_millis((duration_ms / steps).max(1)));
-        }
-        self.send_touch_grpc(id, end_x, end_y, "ended")
-    }
-
-    fn block_on_grpc<F, T>(&self, future: F) -> Result<T, AppError>
-    where
-        F: Future<Output = Result<T, AppError>>,
-    {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            return handle.block_on(future);
-        }
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| AppError::internal(format!("Unable to create gRPC runtime: {error}")))?
-            .block_on(future)
-    }
-
-    async fn grpc_unary_for_avd<Req, Resp>(
-        &self,
-        avd_name: &str,
-        path: &'static str,
-        request: Req,
-    ) -> Result<Resp, AppError>
-    where
-        Req: prost::Message + Default + Send + 'static,
-        Resp: prost::Message + Default + Send + 'static,
-    {
-        let port = self.grpc_port_for_avd(avd_name)?;
-        let channel = grpc_channel_for_port(port)?;
-        let mut grpc = tonic::client::Grpc::new(channel);
-        grpc.ready().await.map_err(|error| {
-            AppError::native(format!("Android emulator gRPC is not ready: {error}"))
-        })?;
-        let mut request = tonic::Request::new(request);
-        if let Some(token) = emulator_grpc_token(port) {
-            let value = MetadataValue::try_from(format!("Bearer {token}")).map_err(|error| {
-                AppError::native(format!("Invalid Android emulator gRPC token: {error}"))
-            })?;
-            request.metadata_mut().insert("authorization", value);
-        }
-        let response = grpc
-            .unary(
-                request,
-                PathAndQuery::from_static(path),
-                tonic::codec::ProstCodec::default(),
-            )
-            .await
-            .map_err(|error| {
-                AppError::native(format!("Android emulator gRPC input failed: {error}"))
-            })?;
-        Ok(response.into_inner())
     }
 
     fn device_value(&self, device: AndroidDevice) -> Value {
@@ -1269,26 +1226,6 @@ fn run_command<const N: usize>(program: PathBuf, args: [&str; N]) -> Result<Vec<
             format!(" {}", stdout.trim())
         }
     )))
-}
-
-fn grpc_channel_for_port(port: u16) -> Result<Channel, AppError> {
-    static CHANNELS: OnceLock<Mutex<HashMap<u16, Channel>>> = OnceLock::new();
-    let channels = CHANNELS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut channels = channels.lock().unwrap();
-    if let Some(channel) = channels.get(&port) {
-        return Ok(channel.clone());
-    }
-    let endpoint = Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
-        .map_err(|error| AppError::native(format!("Invalid Android gRPC endpoint: {error}")))?;
-    let channel = endpoint.connect_lazy();
-    channels.insert(port, channel.clone());
-    Ok(channel)
-}
-
-fn normalized_to_pixel(value: f64, extent: f64) -> i32 {
-    (value.clamp(0.0, 1.0) * (extent - 1.0).max(0.0))
-        .round()
-        .max(0.0) as i32
 }
 
 fn sdk_root() -> PathBuf {
@@ -1831,6 +1768,40 @@ mod tests {
     }
 
     #[test]
+    fn android_touch_gesture_resolves_tap_on_end() {
+        let mut active = None;
+
+        assert_eq!(
+            update_touch_gesture(&mut active, 0.4, 0.6, "began").unwrap(),
+            AndroidTouchAction::None
+        );
+        assert_eq!(
+            update_touch_gesture(&mut active, 0.41, 0.6, "ended").unwrap(),
+            AndroidTouchAction::Tap { x: 0.41, y: 0.6 }
+        );
+    }
+
+    #[test]
+    fn android_touch_gesture_resolves_swipe_on_end() {
+        let mut active = None;
+
+        assert_eq!(
+            update_touch_gesture(&mut active, 0.1, 0.2, "began").unwrap(),
+            AndroidTouchAction::None
+        );
+        assert_eq!(
+            update_touch_gesture(&mut active, 0.8, 0.2, "ended").unwrap(),
+            AndroidTouchAction::Swipe {
+                start_x: 0.1,
+                start_y: 0.2,
+                end_x: 0.8,
+                end_y: 0.2,
+                duration_ms: 80,
+            }
+        );
+    }
+
+    #[test]
     fn android_key_code_maps_usb_hid_keyboard_usages() {
         assert_eq!(android_key_code(4), 29);
         assert_eq!(android_key_code(29), 54);
@@ -2070,48 +2041,6 @@ DisplayDeviceInfo{"Built-in Screen", 1080 x 2400, roundedCorners RoundedCorners{
 }
 
 mod grpc {
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Empty {}
-
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Touch {
-        #[prost(int32, tag = "1")]
-        pub x: i32,
-        #[prost(int32, tag = "2")]
-        pub y: i32,
-        #[prost(int32, tag = "3")]
-        pub identifier: i32,
-        #[prost(int32, tag = "4")]
-        pub pressure: i32,
-        #[prost(int32, tag = "5")]
-        pub touch_major: i32,
-        #[prost(int32, tag = "6")]
-        pub touch_minor: i32,
-        #[prost(enumeration = "touch::EventExpiration", tag = "7")]
-        pub expiration: i32,
-        #[prost(int32, tag = "8")]
-        pub orientation: i32,
-    }
-
-    pub mod touch {
-        #[derive(
-            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-        )]
-        #[repr(i32)]
-        pub enum EventExpiration {
-            Unspecified = 0,
-            NeverExpire = 1,
-        }
-    }
-
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct TouchEvent {
-        #[prost(message, repeated, tag = "1")]
-        pub touches: Vec<Touch>,
-        #[prost(int32, tag = "2")]
-        pub display: i32,
-    }
-
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ImageTransport {
         #[prost(enumeration = "image_transport::TransportChannel", tag = "1")]

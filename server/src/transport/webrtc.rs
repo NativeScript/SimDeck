@@ -79,14 +79,6 @@ struct WebRtcMediaStreamToken {
     cancellation: broadcast::Sender<()>,
 }
 
-struct AndroidWebRtcControlTouch {
-    started_at: Instant,
-    start_x: f64,
-    start_y: f64,
-    latest_x: f64,
-    latest_y: f64,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebRtcOfferPayload {
@@ -780,7 +772,7 @@ async fn run_android_webrtc_control_queue(
     mut receiver: mpsc::UnboundedReceiver<ControlMessage>,
 ) {
     let mut pending = VecDeque::new();
-    let mut active_touch: Option<AndroidWebRtcControlTouch> = None;
+    let mut active_touch: Option<android::AndroidTouchGesture> = None;
     loop {
         let mut message = match pending.pop_front() {
             Some(message) => message,
@@ -817,7 +809,7 @@ async fn run_android_webrtc_control_message(
     state: AppState,
     udid: String,
     message: ControlMessage,
-    active_touch: &mut Option<AndroidWebRtcControlTouch>,
+    active_touch: &mut Option<android::AndroidTouchGesture>,
 ) -> Result<(), AppError> {
     match message {
         ControlMessage::Touch { x, y, phase } => {
@@ -914,61 +906,17 @@ async fn handle_android_webrtc_touch(
     x: f64,
     y: f64,
     phase: String,
-    active_touch: &mut Option<AndroidWebRtcControlTouch>,
+    active_touch: &mut Option<android::AndroidTouchGesture>,
 ) -> Result<(), AppError> {
-    match phase.as_str() {
-        "began" => {
-            *active_touch = Some(AndroidWebRtcControlTouch {
-                started_at: Instant::now(),
-                start_x: x,
-                start_y: y,
-                latest_x: x,
-                latest_y: y,
-            });
-            Ok(())
-        }
-        "moved" => {
-            if let Some(touch) = active_touch.as_mut() {
-                touch.latest_x = x;
-                touch.latest_y = y;
-            }
-            Ok(())
-        }
-        "ended" => {
-            let touch = active_touch.take().unwrap_or(AndroidWebRtcControlTouch {
-                started_at: Instant::now(),
-                start_x: x,
-                start_y: y,
-                latest_x: x,
-                latest_y: y,
-            });
-            let distance = ((x - touch.start_x).powi(2) + (y - touch.start_y).powi(2)).sqrt();
-            let duration_ms = touch.started_at.elapsed().as_millis().clamp(80, 1500) as u64;
-            task::spawn_blocking(move || {
-                if distance >= 0.025 {
-                    state.android.send_swipe_adb(
-                        &udid,
-                        touch.start_x,
-                        touch.start_y,
-                        x,
-                        y,
-                        duration_ms,
-                    )
-                } else {
-                    state.android.send_tap_adb(&udid, x, y)
-                }
-            })
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("Failed to join Android touch task: {error}"))
-            })?
-        }
-        "cancelled" => {
-            *active_touch = None;
-            Ok(())
-        }
-        _ => Ok(()),
+    let action = android::update_touch_gesture(active_touch, x, y, &phase)?;
+    if matches!(action, android::AndroidTouchAction::None) {
+        return Ok(());
     }
+    task::spawn_blocking(move || action.perform(&state.android, &udid))
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("Failed to join Android touch task: {error}"))
+        })?
 }
 
 async fn run_webrtc_control_queue(

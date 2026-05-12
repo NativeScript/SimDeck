@@ -213,23 +213,14 @@ Android, the server reads raw frames from the emulator gRPC `streamScreenshot`
 API, encodes them through VideoToolbox, and writes the resulting H.264 samples
 to the same WebRTC video track.
 
+Loopback Android clients may pass `"transport": "rgba"` in the offer payload.
+That keeps the same WebRTC endpoint and control channels, but sends raw RGBA
+frames over the `simdeck-rgba` data channel instead of creating a media track.
+Non-loopback Android clients use encoded H.264.
+
 The browser also opens `simdeck-control` and `simdeck-telemetry` data channels.
 In addition to input messages, clients can request a keyframe or tune the
 stream attached to that peer:
-
-### `GET /api/simulators/{udid}/android/frames`
-
-Android-only WebSocket stream backed by the emulator gRPC `streamScreenshot`
-API. This is retained as a raw-frame diagnostic/fallback path; the browser live
-view uses the WebRTC H.264 endpoint by default. The server sends binary raw RGBA
-frames with a small SimDeck header, already flipped into top-down row order for
-canvas rendering.
-Query parameters:
-
-| Query parameter | Default | Notes                                      |
-| --------------- | ------- | ------------------------------------------ |
-| `maxEdge`       | `960`   | Longest output edge requested from gRPC.   |
-| `maxFps`        | `30`    | Max frames per second forwarded to client. |
 
 ```json
 { "type": "streamControl", "forceKeyframe": true }

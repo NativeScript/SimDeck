@@ -20,18 +20,18 @@ Owns the public CLI shape (`simdeck`, `simdeck ui`, `daemon`, `boot`, `shutdown`
 
 Key modules:
 
-| Module                              | Responsibility                                                                                              |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `server/src/main.rs`                | CLI entrypoint, project daemon management, AppKit main-thread shim, tokio runtime bootstrap.                |
-| `server/src/api/routes.rs`          | Every `/api/*` route, including simulator control, accessibility, and inspector proxy.                      |
-| `server/src/android.rs`             | Android AVD discovery, emulator lifecycle, emulator gRPC input/video, screenshots, UIAutomator, and logcat. |
-| `server/src/transport/webrtc.rs`    | WebRTC offer/answer endpoint for H.264 browser video.                                                       |
-| `server/src/transport/packet.rs`    | Shared encoded frame type used between simulator sessions and transports.                                   |
-| `server/src/inspector.rs`           | WebSocket hub for the NativeScript runtime inspector.                                                       |
-| `server/src/simulators/registry.rs` | Per-UDID session registry with lazy attachment to the native bridge.                                        |
-| `server/src/simulators/session.rs`  | Frame broadcast channel, keyframe gating, refresh requests.                                                 |
-| `server/src/metrics/counters.rs`    | Atomic counters and per-client stream stats accepted from stream transports or `/api/client-stream-stats`.  |
-| `server/src/logs.rs`                | `os_log` log streaming and filtering.                                                                       |
+| Module                              | Responsibility                                                                                                   |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `server/src/main.rs`                | CLI entrypoint, project daemon management, AppKit main-thread shim, tokio runtime bootstrap.                     |
+| `server/src/api/routes.rs`          | Every `/api/*` route, including simulator control, accessibility, and inspector proxy.                           |
+| `server/src/android.rs`             | Android AVD discovery, emulator lifecycle, ADB input, emulator gRPC video, screenshots, UIAutomator, and logcat. |
+| `server/src/transport/webrtc.rs`    | WebRTC offer/answer endpoint for H.264 browser video.                                                            |
+| `server/src/transport/packet.rs`    | Shared encoded frame type used between simulator sessions and transports.                                        |
+| `server/src/inspector.rs`           | WebSocket hub for the NativeScript runtime inspector.                                                            |
+| `server/src/simulators/registry.rs` | Per-UDID session registry with lazy attachment to the native bridge.                                             |
+| `server/src/simulators/session.rs`  | Frame broadcast channel, keyframe gating, refresh requests.                                                      |
+| `server/src/metrics/counters.rs`    | Atomic counters and per-client stream stats accepted from stream transports or `/api/client-stream-stats`.       |
+| `server/src/logs.rs`                | `os_log` log streaming and filtering.                                                                            |
 
 The Rust server runs the tokio runtime on a worker thread while the AppKit main loop spins on the main thread. The native bridge needs the main loop to deliver display callbacks and HID events.
 

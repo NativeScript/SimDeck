@@ -1811,7 +1811,7 @@ async fn h264_socket(
 
 async fn handle_android_control_socket(state: AppState, udid: String, socket: WebSocket) {
     let (mut sender, mut receiver) = socket.split();
-    let mut active_touch: Option<AndroidControlTouch> = None;
+    let mut active_touch: Option<android::AndroidTouchGesture> = None;
     let _ = sender
         .send(Message::Text(
             json_value!({ "type": "ready", "udid": udid, "platform": "android-emulator" })
@@ -1839,19 +1839,11 @@ async fn handle_android_control_socket(state: AppState, udid: String, socket: We
     }
 }
 
-struct AndroidControlTouch {
-    started_at: Instant,
-    start_x: f64,
-    start_y: f64,
-    latest_x: f64,
-    latest_y: f64,
-}
-
 async fn run_android_control_message(
     state: AppState,
     udid: String,
     message: ControlMessage,
-    active_touch: &mut Option<AndroidControlTouch>,
+    active_touch: &mut Option<android::AndroidTouchGesture>,
 ) -> Result<(), AppError> {
     match message {
         ControlMessage::Touch { x, y, phase } => {
@@ -1904,68 +1896,13 @@ async fn handle_android_control_touch(
     x: f64,
     y: f64,
     phase: String,
-    active_touch: &mut Option<AndroidControlTouch>,
+    active_touch: &mut Option<android::AndroidTouchGesture>,
 ) -> Result<(), AppError> {
-    if !x.is_finite() || !y.is_finite() {
-        return Err(AppError::bad_request(
-            "`x` and `y` must be finite normalized numbers.",
-        ));
+    let action = android::update_touch_gesture(active_touch, x, y, &phase)?;
+    if matches!(action, android::AndroidTouchAction::None) {
+        return Ok(());
     }
-    let x = x.clamp(0.0, 1.0);
-    let y = y.clamp(0.0, 1.0);
-    match phase.as_str() {
-        "began" => {
-            *active_touch = Some(AndroidControlTouch {
-                started_at: Instant::now(),
-                start_x: x,
-                start_y: y,
-                latest_x: x,
-                latest_y: y,
-            });
-            Ok(())
-        }
-        "moved" => {
-            if let Some(touch) = active_touch.as_mut() {
-                touch.latest_x = x;
-                touch.latest_y = y;
-            }
-            Ok(())
-        }
-        "ended" => {
-            let touch = active_touch.take().unwrap_or(AndroidControlTouch {
-                started_at: Instant::now(),
-                start_x: x,
-                start_y: y,
-                latest_x: x,
-                latest_y: y,
-            });
-            let end_x = x;
-            let end_y = y;
-            let distance =
-                ((end_x - touch.start_x).powi(2) + (end_y - touch.start_y).powi(2)).sqrt();
-            let duration_ms = touch.started_at.elapsed().as_millis().clamp(80, 1500) as u64;
-            run_android_action(state, move |android| {
-                if distance >= 0.025 {
-                    android.send_swipe_adb(
-                        &udid,
-                        touch.start_x,
-                        touch.start_y,
-                        end_x,
-                        end_y,
-                        duration_ms,
-                    )
-                } else {
-                    android.send_tap_adb(&udid, end_x, end_y)
-                }
-            })
-            .await
-        }
-        "cancelled" => {
-            *active_touch = None;
-            Ok(())
-        }
-        _ => Ok(()),
-    }
+    run_android_action(state, move |android| action.perform(&android, &udid)).await
 }
 
 async fn webrtc_offer(
