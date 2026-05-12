@@ -177,12 +177,17 @@ simdeck shutdown <udid>
 simdeck erase <udid>
 ```
 
-`list` returns the same simulator inventory the browser UI renders. Lifecycle commands return JSON and use the native bridge, preferring private CoreSimulator paths when available and falling back to `xcrun simctl`.
+`list` returns the same simulator inventory the browser UI renders, including
+Android AVDs as IDs like `android:Pixel_8_API_36`. iOS lifecycle commands use
+the native bridge, preferring private CoreSimulator paths when available and
+falling back to `xcrun simctl`. Android lifecycle commands use the Android SDK
+`emulator` and `adb` tools.
 
 ## Apps And URLs
 
 ```sh
 simdeck install <udid> /path/to/App.app
+simdeck install android:<avd-name> /path/to/app.apk
 simdeck uninstall <udid> com.example.App
 simdeck launch <udid> com.example.App
 simdeck open-url <udid> https://example.com
@@ -202,6 +207,7 @@ simdeck describe <udid> --source react-native
 simdeck describe <udid> --source flutter
 simdeck describe <udid> --source uikit
 simdeck describe <udid> --source native-ax
+simdeck describe <udid> --source android-uiautomator
 simdeck describe <udid> --point 120,240
 simdeck describe <udid> --direct
 ```
@@ -269,9 +275,13 @@ simdeck chrome-profile <udid>
 
 `stream` writes Annex B H.264 samples to stdout and runs until interrupted, or
 until `--frames` samples have been written. It is intended for diagnostics and
-external tools.
+external tools, and is iOS-only. Android live viewing in the browser uses the
+WebRTC H.264 endpoint; raw frames come from emulator gRPC and are encoded
+through VideoToolbox.
 
-`logs` fetches recent simulator logs. `chrome-profile` returns the CoreSimulator chrome layout used by the browser viewport.
+`logs` fetches recent simulator logs or Android `logcat` output. `chrome-profile`
+returns the CoreSimulator chrome layout for iOS and a screen-sized profile for
+Android.
 
 ## HTTP Fast Path
 

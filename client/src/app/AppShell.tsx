@@ -105,6 +105,7 @@ import {
 const ACCESSIBILITY_REFRESH_MS = 1500;
 const REACT_NATIVE_ACCESSIBILITY_REFRESH_MS = 500;
 const FLUTTER_ACCESSIBILITY_REFRESH_MS = 1000;
+const ANDROID_METADATA_REFRESH_MS = 1000;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const FLUTTER_INSPECTOR_MAX_DEPTH = 48;
@@ -457,8 +458,12 @@ export function AppShell({
     udid: string;
   } | null>(null);
   const touchMoveFrameRef = useRef(0);
+  const refreshRef = useRef(refresh);
+  const previousAndroidDisplayKeyRef = useRef("");
+  const previousAndroidViewportSizeKeyRef = useRef("");
   const canvasSize = useElementSize(outerCanvasElement);
   const zoomDockSize = useElementSize(zoomDockElement);
+  refreshRef.current = refresh;
 
   const handleOuterCanvasRef = useCallback((node: HTMLDivElement | null) => {
     outerCanvasRef.current = node;
@@ -688,17 +693,36 @@ export function AppShell({
   const shouldRenderChrome =
     selectedSimulator != null && shouldRenderNativeChrome(selectedSimulator);
   const viewportChromeProfile = shouldRenderChrome ? chromeProfile : null;
-  const effectiveDeviceNaturalSize = useMemo(
-    () =>
+  const isAndroidViewport = isAndroidSimulator(selectedSimulator);
+  const androidDisplayKey =
+    isAndroidViewport && selectedSimulator
+      ? androidDisplayKeyForSimulator(selectedSimulator)
+      : "";
+  const effectiveDeviceNaturalSize = useMemo(() => {
+    const displaySize = simulatorDisplaySize(selectedSimulator);
+    if (isAndroidViewport) {
+      return deviceNaturalSize ?? displaySize;
+    }
+    return (
       deviceNaturalSize ??
       (!shouldRenderChrome && chromeProfile
         ? {
             width: chromeProfile.screenWidth,
             height: chromeProfile.screenHeight,
           }
-        : simulatorDisplaySize(selectedSimulator)),
-    [chromeProfile, deviceNaturalSize, selectedSimulator, shouldRenderChrome],
-  );
+        : displaySize)
+    );
+  }, [
+    chromeProfile,
+    deviceNaturalSize,
+    isAndroidViewport,
+    selectedSimulator,
+    shouldRenderChrome,
+  ]);
+  const androidViewportSizeKey =
+    isAndroidViewport && effectiveDeviceNaturalSize
+      ? `${Math.round(effectiveDeviceNaturalSize.width)}x${Math.round(effectiveDeviceNaturalSize.height)}`
+      : "";
 
   const zoomDockReservedHeight =
     zoomDockElement && typeof window !== "undefined"
@@ -745,9 +769,9 @@ export function AppShell({
         : "",
     [selectedSimulator?.udid, streamStamp],
   );
+  const chromeUsesAsset = Boolean(viewportChromeProfile && chromeUrl);
   const chromeRequired = Boolean(
-    (shouldRenderChrome && !chromeProfileReady) ||
-    (viewportChromeProfile && chromeUrl),
+    (shouldRenderChrome && !chromeProfileReady) || chromeUsesAsset,
   );
   const simulatorRotationQuarterTurns =
     normalizeSimulatorRotationQuarterTurns(selectedSimulator);
@@ -1035,6 +1059,12 @@ export function AppShell({
   }, [isBooted]);
 
   useEffect(() => {
+    if (isAndroidViewport) {
+      setRotationQuarterTurns((current) =>
+        normalizeQuarterTurns(current) === 0 ? current : 0,
+      );
+      return;
+    }
     if (simulatorRotationQuarterTurns == null) {
       return;
     }
@@ -1046,7 +1076,56 @@ export function AppShell({
       beginZoomAnimation();
       return simulatorRotationQuarterTurns;
     });
-  }, [simulatorRotationQuarterTurns]);
+  }, [isAndroidViewport, simulatorRotationQuarterTurns]);
+
+  useEffect(() => {
+    if (!isAndroidViewport || !selectedSimulator?.isBooted) {
+      return;
+    }
+
+    let cancelled = false;
+    const refreshAndroidMetadata = () => {
+      if (cancelled || document.visibilityState !== "visible") {
+        return;
+      }
+      void refreshRef.current();
+    };
+
+    const intervalId = window.setInterval(
+      refreshAndroidMetadata,
+      ANDROID_METADATA_REFRESH_MS,
+    );
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [isAndroidViewport, selectedSimulator?.isBooted, selectedSimulator?.udid]);
+
+  useEffect(() => {
+    if (!isAndroidViewport || !androidDisplayKey) {
+      previousAndroidDisplayKeyRef.current = "";
+      return;
+    }
+
+    const previousKey = previousAndroidDisplayKeyRef.current;
+    previousAndroidDisplayKeyRef.current = androidDisplayKey;
+    if (previousKey && previousKey !== androidDisplayKey) {
+      beginZoomAnimation();
+    }
+  }, [androidDisplayKey, isAndroidViewport]);
+
+  useEffect(() => {
+    if (!isAndroidViewport || !androidViewportSizeKey) {
+      previousAndroidViewportSizeKeyRef.current = "";
+      return;
+    }
+
+    const previousKey = previousAndroidViewportSizeKeyRef.current;
+    previousAndroidViewportSizeKeyRef.current = androidViewportSizeKey;
+    if (previousKey && previousKey !== androidViewportSizeKey) {
+      beginZoomAnimation();
+    }
+  }, [androidViewportSizeKey, isAndroidViewport]);
 
   useEffect(() => {
     setChromeLoaded(!chromeRequired);
@@ -1079,7 +1158,12 @@ export function AppShell({
     return () => {
       cancelled = true;
     };
-  }, [selectedSimulator?.udid]);
+  }, [
+    selectedSimulator?.privateDisplay?.displayHeight,
+    selectedSimulator?.privateDisplay?.displayWidth,
+    selectedSimulator?.privateDisplay?.rotationQuarterTurns,
+    selectedSimulator?.udid,
+  ]);
 
   useEffect(() => {
     if (!menuOpen) {
@@ -1311,13 +1395,15 @@ export function AppShell({
       : null;
   const screenOnlyStyle =
     !viewportChromeProfile && chromeProfile && chromeProfile.screenWidth > 0
-      ? ({
-          borderRadius: `${Math.min(
-            chromeProfile.cornerRadius *
-              (DEVICE_SCREEN_WIDTH / chromeProfile.screenWidth),
-            DEVICE_SCREEN_WIDTH / 2,
-          )}px`,
-        } satisfies CSSProperties)
+      ? isAndroidViewport
+        ? androidScreenRadiusStyle(chromeProfile, effectiveDeviceNaturalSize)
+        : ({
+            borderRadius: `${Math.min(
+              chromeProfile.cornerRadius *
+                (DEVICE_SCREEN_WIDTH / chromeProfile.screenWidth),
+              DEVICE_SCREEN_WIDTH / 2,
+            )}px`,
+          } satisfies CSSProperties)
       : null;
   const viewportScreenStyle = chromeScreenStyle ?? screenOnlyStyle;
   const shellStyle = viewportChromeProfile
@@ -1881,7 +1967,17 @@ export function AppShell({
           if (!selectedSimulator) {
             return;
           }
+          const androidViewport = isAndroidSimulator(selectedSimulator);
           beginZoomAnimation();
+          if (androidViewport) {
+            void runAction(async () => {
+              await rotateRight(selectedSimulator.udid);
+              setRotationQuarterTurns(0);
+              beginZoomAnimation();
+              await refresh();
+            }, false);
+            return;
+          }
           if (sendControl(selectedSimulator.udid, { type: "rotateRight" })) {
             setRotationQuarterTurns((current) => (current + 1) % 4);
             return;
@@ -2046,6 +2142,7 @@ export function AppShell({
         outerCanvasRef={handleOuterCanvasRef}
         rotationQuarterTurns={rotationQuarterTurns}
         screenAspect={screenAspect}
+        screenClassName={isAndroidViewport ? "android-screen" : undefined}
         selectedSimulator={selectedSimulator}
         shellStyle={shellStyle}
         streamCanvasRef={handleStreamCanvasRef}
@@ -2068,6 +2165,77 @@ export function AppShell({
       />
     </div>
   );
+}
+
+function androidScreenRadiusStyle(
+  chromeProfile: ChromeProfile,
+  displaySize: Size | null,
+): CSSProperties | null {
+  const screenWidth =
+    displaySize && displaySize.width > 0
+      ? displaySize.width
+      : chromeProfile.screenWidth;
+  if (screenWidth <= 0) {
+    return null;
+  }
+
+  const scale = DEVICE_SCREEN_WIDTH / screenWidth;
+  const maxRadius = DEVICE_SCREEN_WIDTH / 2;
+  const radii = chromeProfile.cornerRadii;
+  const topLeft = scaledScreenRadius(
+    radii?.topLeft ?? chromeProfile.cornerRadius,
+    scale,
+    maxRadius,
+  );
+  const topRight = scaledScreenRadius(
+    radii?.topRight ?? chromeProfile.cornerRadius,
+    scale,
+    maxRadius,
+  );
+  const bottomRight = scaledScreenRadius(
+    radii?.bottomRight ?? chromeProfile.cornerRadius,
+    scale,
+    maxRadius,
+  );
+  const bottomLeft = scaledScreenRadius(
+    radii?.bottomLeft ?? chromeProfile.cornerRadius,
+    scale,
+    maxRadius,
+  );
+
+  if (topLeft <= 0 && topRight <= 0 && bottomRight <= 0 && bottomLeft <= 0) {
+    return null;
+  }
+
+  const borderRadius = `${topLeft}px ${topRight}px ${bottomRight}px ${bottomLeft}px`;
+  return {
+    borderRadius,
+    borderTopLeftRadius: `${topLeft}px`,
+    borderTopRightRadius: `${topRight}px`,
+    borderBottomRightRadius: `${bottomRight}px`,
+    borderBottomLeftRadius: `${bottomLeft}px`,
+    clipPath: `inset(0 round ${borderRadius})`,
+  };
+}
+
+function scaledScreenRadius(radius: number, scale: number, maxRadius: number) {
+  if (!Number.isFinite(radius) || radius <= 0) {
+    return 0;
+  }
+  return Math.min(radius * scale, maxRadius);
+}
+
+function androidDisplayKeyForSimulator(simulator: SimulatorMetadata): string {
+  const display = simulator.privateDisplay;
+  if (!display) {
+    return simulator.udid;
+  }
+  return [
+    simulator.udid,
+    Math.round(display.displayWidth),
+    Math.round(display.displayHeight),
+    display.rotationQuarterTurns ?? 0,
+  ].join("|");
 }
 
 function readDeviceQueryParam(): string | undefined {
@@ -2215,6 +2383,14 @@ function normalizeMaxEdge(
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.round(value)
     : fallback;
+}
+
+function isAndroidSimulator(simulator: SimulatorMetadata | null): boolean {
+  return Boolean(
+    simulator?.platform === "android-emulator" ||
+    simulator?.deviceTypeIdentifier === "android-emulator" ||
+    simulator?.udid.startsWith("android:"),
+  );
 }
 
 function streamConfigsEqual(left: StreamConfig, right: StreamConfig): boolean {

@@ -761,6 +761,28 @@ async function ensureFixtureForeground(label, options = {}) {
     if (launchError === null) {
       throw verifyError;
     }
+    logStep(`${label}: opening fixture URL after launch timeout`);
+  }
+
+  try {
+    await retrySimdeckJson(
+      cliArgs(["open-url", simulatorUDID, fixtureUrl]),
+      `${label} fixture URL fallback`,
+      {
+        attempts: 2,
+        delayMs: 2_000,
+        timeoutMs: 180_000,
+      },
+    );
+    return await verifyUi(label, {
+      expectFixture: true,
+      attempts: options.fallbackVerifyAttempts ?? 12,
+      delayMs: options.fallbackVerifyDelayMs ?? 1_500,
+    });
+  } catch (urlError) {
+    logStep(
+      `${label}: fixture URL fallback failed: ${summarizeError(urlError)}`,
+    );
     logStep(`${label}: tapping fixture icon after launch timeout`);
   }
 

@@ -102,7 +102,8 @@ When
 
 ### `GET /api/simulators`
 
-Returns every simulator known to the native bridge, enriched with any session state SimDeck has attached:
+Returns every iOS Simulator known to the native bridge plus every Android AVD
+found in the Android SDK, enriched with any session state SimDeck has attached:
 
 ```json
 {
@@ -113,6 +114,7 @@ Returns every simulator known to the native bridge, enriched with any session st
       "runtimeName": "iOS 18.0",
       "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-15-Pro",
       "isBooted": true,
+      "platform": "ios-simulator",
       "privateDisplay": {
         "displayReady": true,
         "displayStatus": "running",
@@ -126,13 +128,32 @@ Returns every simulator known to the native bridge, enriched with any session st
 }
 ```
 
-`privateDisplay` is `null` until a stream attaches.
+Android emulators use IDs prefixed with `android:` and include Android metadata:
+
+```json
+{
+  "udid": "android:SimDeck_Pixel_8_API_36",
+  "name": "SimDeck_Pixel_8_API_36",
+  "platform": "android-emulator",
+  "runtimeName": "Android",
+  "deviceTypeName": "Android Emulator",
+  "isBooted": true,
+  "android": {
+    "avdName": "SimDeck_Pixel_8_API_36",
+    "serial": "emulator-5554",
+    "grpcPort": 8554
+  }
+}
+```
+
+For iOS, `privateDisplay` is `null` until a stream attaches. For Android,
+SimDeck fills display size from `adb shell wm size` when the emulator is booted.
 
 ## Simulator lifecycle
 
 ### `POST /api/simulators/{udid}/boot`
 
-Boots the simulator and returns the refreshed simulator metadata:
+Boots the simulator or Android emulator and returns the refreshed device metadata:
 
 ```json
 { "simulator": { ... } }
@@ -140,11 +161,12 @@ Boots the simulator and returns the refreshed simulator metadata:
 
 ### `POST /api/simulators/{udid}/shutdown`
 
-Tears down the live session (if any) and shuts the simulator down.
+Tears down the live session (if any) and shuts the simulator or emulator down.
 
 ### `POST /api/simulators/{udid}/toggle-appearance`
 
-Toggles between light and dark appearance via `simctl ui appearance`.
+Toggles between light and dark appearance via `simctl ui appearance` on iOS or
+`cmd uimode night` on Android.
 
 ```json
 { "ok": true }
@@ -152,7 +174,10 @@ Toggles between light and dark appearance via `simctl ui appearance`.
 
 ### `POST /api/simulators/{udid}/refresh`
 
-Forces the encoder to emit a fresh keyframe. Useful after a discontinuity or when the client decoder drifts.
+Forces the iOS encoder to emit a fresh frame. For Android IDs, this route is a
+no-op that returns `{ "ok": true, "stream": "screenshot" }`; Android WebRTC
+keyframe requests are handled through the WebRTC control channel and RTCP
+feedback.
 
 ```json
 { "ok": true }
@@ -182,8 +207,10 @@ and the server responds with an SDP answer for a receive-only H.264 video track:
 }
 ```
 
-The endpoint requires the active simulator stream to produce H.264-compatible
-samples. The bundled browser client always uses this endpoint.
+For iOS, samples come from the native simulator display session and are sent as
+an H.264 media track. Android loopback clients use the same endpoint and control
+channels, but receive raw RGBA frames over the `simdeck-rgba` data channel.
+Non-loopback Android clients receive VideoToolbox-encoded H.264.
 
 The browser also opens `simdeck-control` and `simdeck-telemetry` data channels.
 In addition to input messages, clients can request a keyframe or tune the
@@ -273,6 +300,13 @@ Content-Type: application/json
 ```json
 { "ok": true }
 ```
+
+### `GET /api/simulators/{udid}/screenshot.png`
+
+Returns a PNG screenshot for the selected device. iOS screenshots come from the
+native simulator bridge; Android screenshots come from `adb exec-out screencap
+-p`. The browser client uses this endpoint for still-image diagnostics and
+fallbacks.
 
 ## Input
 
@@ -446,6 +480,7 @@ Returns the current accessibility tree. The server merges framework inspectors, 
 | `swiftui` / `swift-ui`       | Force the published SwiftUI logical tree if the Swift agent root publisher is installed in the app.    |
 | `uikit` / `in-app-inspector` | Force the raw UIKit hierarchy from the in-app inspector agent (NativeScript or Swift).                 |
 | `native-ax` / `ax`           | Always use the native accessibility snapshot.                                                          |
+| `android-uiautomator`        | Force the Android emulator UIAutomator hierarchy.                                                      |
 
 | Parameter       | Default | Description                                                                                     |
 | --------------- | ------- | ----------------------------------------------------------------------------------------------- |

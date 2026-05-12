@@ -28,11 +28,17 @@ export interface PrivateDisplayInfo {
 export interface SimulatorMetadata {
   udid: string;
   name: string;
+  platform?: "ios-simulator" | "android-emulator" | string;
   runtimeName?: string;
   runtimeIdentifier?: string;
   deviceTypeName?: string;
   deviceTypeIdentifier?: string;
   isBooted: boolean;
+  android?: {
+    avdName?: string;
+    grpcPort?: number;
+    serial?: string;
+  };
   privateDisplay?: PrivateDisplayInfo;
 }
 
@@ -112,6 +118,13 @@ export interface ChromeProfile {
   screenWidth: number;
   screenHeight: number;
   cornerRadius: number;
+  cornerRadii?: {
+    topLeft?: number;
+    topRight?: number;
+    bottomRight?: number;
+    bottomLeft?: number;
+  };
+  chromeStyle?: "asset" | string;
   hasScreenMask?: boolean;
   buttons?: ChromeButtonProfile[];
 }
@@ -158,15 +171,23 @@ export interface AccessibilityNode {
   AXUniqueId?: string | null;
   AXValue?: string | null;
   alpha?: number | null;
+  androidClass?: string | null;
+  androidPackage?: string | null;
+  androidResourceId?: string | null;
   backgroundColor?: Record<string, unknown> | null;
   bounds?: AccessibilityFrame | null;
+  checkable?: boolean | null;
+  checked?: boolean | null;
   className?: string | null;
+  clickable?: boolean | null;
   children?: AccessibilityNode[];
   control?: Record<string, unknown> | null;
   content_required?: boolean | null;
   custom_actions?: string[] | null;
   debugDescription?: string | null;
   enabled?: boolean | null;
+  focusable?: boolean | null;
+  focused?: boolean | null;
   frame?: AccessibilityFrame | null;
   frameInScreen?: AccessibilityFrame | null;
   flutter?: Record<string, unknown> | null;
@@ -176,8 +197,10 @@ export interface AccessibilityNode {
   isHidden?: boolean | null;
   isOpaque?: boolean | null;
   isUserInteractionEnabled?: boolean | null;
+  longClickable?: boolean | null;
   moduleName?: string | null;
   nativeScript?: Record<string, unknown> | null;
+  password?: boolean | null;
   pid?: number | null;
   placeholder?: string | null;
   reactNative?: Record<string, unknown> | null;
@@ -185,6 +208,8 @@ export interface AccessibilityNode {
   role_description?: string | null;
   scroll?: Record<string, unknown> | null;
   semantics?: Record<string, unknown> | null;
+  scrollable?: boolean | null;
+  selected?: boolean | null;
   source?:
     | "native-ax"
     | "in-app-inspector"
@@ -211,6 +236,7 @@ export interface AccessibilityNode {
 }
 
 export type AccessibilitySource =
+  | "android-uiautomator"
   | "native-ax"
   | "in-app-inspector"
   | "nativescript"

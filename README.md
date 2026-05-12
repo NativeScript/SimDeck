@@ -5,7 +5,7 @@
 
   <p align="center">
     SimDeck is a developer tool built for streamlining mobile app development for coding agents.
-    Drive Simulator from the CLI using agents, browser, and automated tests on macOS.
+    Drive iOS Simulators and Android emulators from the CLI using agents, browser, and automated tests on macOS.
   </p>
 </p>
 
@@ -35,8 +35,9 @@ view inside the editor.
 
 ## Features
 
-- Local simulator video stream over browser-native WebRTC H.264 with H.264 WebSocket fallback
-- Full simulator control & inspection using private accessibility APIs - available using `simdeck` CLI
+- Local iOS Simulator video over browser-native WebRTC H.264 with H.264 WebSocket fallback
+- Android emulator frames are sourced from emulator gRPC; loopback browsers use raw RGBA over WebRTC, and non-loopback browsers use VideoToolbox-encoded H.264
+- Full simulator control & inspection using private iOS accessibility APIs and Android UIAutomator - available using `simdeck` CLI
 - Real-time screen `describe` command using accessibility view tree - available in token-efficient format for agents
 - CoreSimulator chrome asset rendering for device bezels
 - NativeScript, React Native, Flutter, UIKit and SwiftUI runtime inspector plugins to view app's view hierarchy live
@@ -120,6 +121,7 @@ simdeck boot <udid>
 simdeck shutdown <udid>
 simdeck erase <udid>
 simdeck install <udid> /path/to/App.app
+simdeck install android:<avd-name> /path/to/app.apk
 simdeck uninstall <udid> com.example.App
 simdeck open-url <udid> https://example.com
 simdeck launch <udid> com.apple.Preferences
@@ -160,6 +162,14 @@ simdeck logs <udid> --seconds 30 --limit 200
 `boot` prefers SimDeck's private CoreSimulator boot path so it can start devices
 without launching Simulator.app, then falls back to `xcrun simctl` when private
 booting is unavailable.
+
+Android emulators appear in `simdeck list` with IDs like
+`android:SimDeck_Pixel_8_API_36`. For Android IDs, lifecycle, install, launch,
+URL, screenshot, logs, UIAutomator `describe`, tap, swipe, text, key, home, app
+switcher, rotation, pasteboard, and browser live view route through the Android
+SDK tools (`emulator` and `adb`) plus the emulator gRPC screenshot stream for
+live video. `simdeck stream` remains iOS-only because it writes the iOS H.264
+transport stream.
 
 `stream` writes an Annex B H.264 elementary stream to stdout for diagnostics or
 external tools such as `ffplay`.

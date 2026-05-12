@@ -37,6 +37,7 @@ const ACCESSIBILITY_SOURCE_ORDER: AccessibilitySource[] = [
   "flutter",
   "swiftui",
   "in-app-inspector",
+  "android-uiautomator",
   "native-ax",
 ];
 
@@ -162,6 +163,7 @@ export function isAccessibilitySource(
     value === "flutter" ||
     value === "swiftui" ||
     value === "in-app-inspector" ||
+    value === "android-uiautomator" ||
     value === "native-ax"
   );
 }

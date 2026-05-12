@@ -1,3 +1,4 @@
+mod android;
 mod api;
 mod auth;
 mod config;
@@ -635,6 +636,7 @@ enum DescribeUiSource {
     Flutter,
     Uikit,
     NativeAx,
+    AndroidUiautomator,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -815,14 +817,27 @@ fn studio_stream_quality_profile(
         })
 }
 
-fn command_service_url(explicit: Option<String>) -> anyhow::Result<String> {
+fn command_service_url(explicit: Option<&str>) -> anyhow::Result<String> {
     if let Some(url) = explicit
+        .map(ToOwned::to_owned)
         .or_else(|| env::var("SIMDECK_SERVER_URL").ok())
         .filter(|value| !value.trim().is_empty())
     {
         return Ok(url);
     }
     Ok(ensure_project_daemon(DaemonLaunchOptions::default())?.http_url)
+}
+
+fn command_service_url_for_udid(
+    udid: &str,
+    explicit: &Option<String>,
+    service_url: &Option<String>,
+) -> anyhow::Result<Option<String>> {
+    if android::is_android_id(udid) {
+        Ok(Some(command_service_url(explicit.as_deref())?))
+    } else {
+        Ok(service_url.clone())
+    }
 }
 
 impl Default for DaemonLaunchOptions {
@@ -2031,7 +2046,7 @@ fn main() -> anyhow::Result<()> {
             CoreSimulatorCommand::Restart => core_simulator::restart(),
         },
         Command::List => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             let simulators = service_get_json(&service_url, "/api/simulators")?
                 .get("simulators")
                 .cloned()
@@ -2043,7 +2058,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Boot { udid } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(&service_url, &udid, "boot", &Value::Null)?;
             println!(
                 "{}",
@@ -2054,7 +2069,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Shutdown { udid } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(&service_url, &udid, "shutdown", &Value::Null)?;
             println!(
                 "{}",
@@ -2065,7 +2080,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::OpenUrl { udid, url } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_open_url(&service_url, &udid, &url)?;
             println!(
                 "{}",
@@ -2076,7 +2091,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Launch { udid, bundle_id } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_launch(&service_url, &udid, &bundle_id)?;
             println!(
                 "{}",
@@ -2087,7 +2102,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::ToggleAppearance { udid } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(&service_url, &udid, "toggle-appearance", &Value::Null)?;
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "toggle-appearance" }),
@@ -2095,13 +2110,13 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Erase { udid } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(&service_url, &udid, "erase", &Value::Null)?;
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "erase" }))?;
             Ok(())
         }
         Command::Install { udid, app_path } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(
                 &service_url,
                 &udid,
@@ -2114,7 +2129,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Uninstall { udid, bundle_id } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(
                 &service_url,
                 &udid,
@@ -2128,7 +2143,7 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Pasteboard { command } => match command {
             PasteboardCommand::Get { udid } => {
-                let service_url = command_service_url(explicit_server_url.clone())?;
+                let service_url = command_service_url(explicit_server_url.as_deref())?;
                 let text = service_get_json(
                     &service_url,
                     &format!("/api/simulators/{}/pasteboard", url_path_component(&udid)),
@@ -2146,7 +2161,7 @@ fn main() -> anyhow::Result<()> {
                 stdin,
                 file,
             } => {
-                let service_url = command_service_url(explicit_server_url.clone())?;
+                let service_url = command_service_url(explicit_server_url.as_deref())?;
                 let text = read_text_input(text, stdin, file)?;
                 service_post_ok(
                     &service_url,
@@ -2165,7 +2180,7 @@ fn main() -> anyhow::Result<()> {
             seconds,
             limit,
         } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             let filters = native::bridge::LogFilters::new(Vec::new(), Vec::new(), String::new());
             let _ = filters;
             let entries = service_get_json(
@@ -2186,7 +2201,7 @@ fn main() -> anyhow::Result<()> {
             output,
             stdout,
         } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             let png = service_get_bytes(
                 &service_url,
                 &format!(
@@ -2221,7 +2236,7 @@ fn main() -> anyhow::Result<()> {
             include_hidden,
             direct,
         } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             let snapshot = describe_ui_snapshot(
                 &bridge,
                 &udid,
@@ -2245,7 +2260,13 @@ fn main() -> anyhow::Result<()> {
             up,
             delay_ms,
         } => {
-            if let Some(server_url) = service_url.as_deref().filter(|_| normalized) {
+            let android_device = android::is_android_id(&udid);
+            if android_device && !normalized {
+                anyhow::bail!("Android touch coordinates require --normalized.");
+            }
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            if let Some(server_url) = command_server_url.as_deref().filter(|_| normalized) {
                 if down || up {
                     let mut events = Vec::new();
                     if down {
@@ -2300,8 +2321,10 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let (Some(server_url), Some(x), Some(y), true, None, None, None, None) = (
-                service_url.as_deref(),
+                command_server_url.as_deref(),
                 x,
                 y,
                 normalized,
@@ -2313,7 +2336,7 @@ fn main() -> anyhow::Result<()> {
                 sleep_ms(pre_delay_ms);
                 service_tap(server_url, &udid, x, y, duration_ms)?;
                 sleep_ms(post_delay_ms);
-            } else if let Some(server_url) = service_url.as_deref() {
+            } else if let Some(server_url) = command_server_url.as_deref() {
                 sleep_ms(pre_delay_ms);
                 service_tap_element(
                     server_url,
@@ -2375,18 +2398,41 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
-            if let Some(server_url) = service_url.as_deref().filter(|_| normalized) {
+            let android_device = android::is_android_id(&udid);
+            if android_device && !normalized {
+                anyhow::bail!("Android swipe coordinates require --normalized.");
+            }
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            if let Some(server_url) = command_server_url.as_deref().filter(|_| normalized) {
                 sleep_ms(pre_delay_ms);
-                service_swipe(
-                    server_url,
-                    &udid,
-                    start_x,
-                    start_y,
-                    end_x,
-                    end_y,
-                    duration_ms,
-                    steps,
-                )?;
+                if android_device {
+                    service_batch(
+                        server_url,
+                        &udid,
+                        vec![serde_json::json!({
+                            "action": "swipe",
+                            "startX": start_x,
+                            "startY": start_y,
+                            "endX": end_x,
+                            "endY": end_y,
+                            "durationMs": duration_ms,
+                            "steps": steps,
+                        })],
+                        false,
+                    )?;
+                } else {
+                    service_swipe(
+                        server_url,
+                        &udid,
+                        start_x,
+                        start_y,
+                        end_x,
+                        end_y,
+                        duration_ms,
+                        steps,
+                    )?;
+                }
                 sleep_ms(post_delay_ms);
             } else {
                 let (start_x, start_y) =
@@ -2421,7 +2467,33 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
-            if let Some(server_url) = service_url.as_deref().filter(|_| normalized) {
+            let android_device = android::is_android_id(&udid);
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            if android_device {
+                let server_url = command_server_url
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("Android command requires SimDeck daemon."))?;
+                sleep_ms(pre_delay_ms);
+                service_batch(
+                    server_url,
+                    &udid,
+                    vec![serde_json::json!({
+                        "action": "gesture",
+                        "preset": preset,
+                        "durationMs": duration_ms,
+                        "delta": delta,
+                        "steps": 4,
+                    })],
+                    false,
+                )?;
+                sleep_ms(post_delay_ms);
+                println_json(
+                    &serde_json::json!({ "ok": true, "udid": udid, "action": "gesture", "preset": preset }),
+                )?;
+                return Ok(());
+            }
+            if let Some(server_url) = command_server_url.as_deref().filter(|_| normalized) {
                 let gesture = gesture_coordinates(
                     &bridge,
                     &udid,
@@ -2484,6 +2556,9 @@ fn main() -> anyhow::Result<()> {
             duration_ms,
             steps,
         } => {
+            if android::is_android_id(&udid) {
+                anyhow::bail!("Android pinch gestures are not supported by the ADB input bridge.");
+            }
             let frames = pinch_frames(
                 &bridge,
                 &udid,
@@ -2509,6 +2584,9 @@ fn main() -> anyhow::Result<()> {
             duration_ms,
             steps,
         } => {
+            if android::is_android_id(&udid) {
+                anyhow::bail!("Android rotate gestures are not supported by the ADB input bridge.");
+            }
             let frames = rotate_gesture_frames(
                 &bridge,
                 &udid,
@@ -2537,7 +2615,9 @@ fn main() -> anyhow::Result<()> {
         } => {
             let key_code = parse_hid_key(&key)?;
             sleep_ms(pre_delay_ms);
-            if let Some(server_url) = service_url.as_deref().filter(|_| duration_ms == 0) {
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            if let Some(server_url) = command_server_url.as_deref().filter(|_| duration_ms == 0) {
                 service_key(server_url, &udid, key_code, modifiers)?;
             } else if duration_ms > 0 && modifiers == 0 {
                 let input = bridge.create_input_session(&udid)?;
@@ -2557,7 +2637,9 @@ fn main() -> anyhow::Result<()> {
             delay_ms,
         } => {
             let keys = parse_key_list(&keycodes)?;
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_key_sequence(server_url, &udid, &keys, delay_ms)?;
             } else {
                 let input = bridge.create_input_session(&udid)?;
@@ -2580,7 +2662,9 @@ fn main() -> anyhow::Result<()> {
         } => {
             let modifier_mask = parse_modifier_mask(&modifiers)?;
             let key_code = parse_hid_key(&key)?;
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_key(server_url, &udid, key_code, modifier_mask)?;
             } else {
                 bridge.send_key(&udid, key_code, modifier_mask)?;
@@ -2596,7 +2680,21 @@ fn main() -> anyhow::Result<()> {
             delay_ms,
         } => {
             let text = read_text_input(text, stdin, file)?;
-            type_text(&bridge, &udid, &text, delay_ms)?;
+            if android::is_android_id(&udid) {
+                let server_url = command_service_url(explicit_server_url.as_deref())?;
+                service_batch(
+                    &server_url,
+                    &udid,
+                    vec![serde_json::json!({
+                        "action": "type",
+                        "text": text,
+                        "delayMs": delay_ms,
+                    })],
+                    false,
+                )?;
+            } else {
+                type_text(&bridge, &udid, &text, delay_ms)?;
+            }
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "type" }))?;
             Ok(())
         }
@@ -2605,7 +2703,9 @@ fn main() -> anyhow::Result<()> {
             button,
             duration_ms,
         } => {
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_button(server_url, &udid, &button, duration_ms)?;
             } else {
                 bridge.press_button(&udid, &button, duration_ms)?;
@@ -2622,7 +2722,9 @@ fn main() -> anyhow::Result<()> {
             stdin,
             continue_on_error,
         } => {
-            let report = if let Some(server_url) = service_url.as_deref() {
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            let report = if let Some(server_url) = command_server_url.as_deref() {
                 let step_lines = read_batch_steps(steps, file, stdin)?;
                 service_batch(
                     server_url,
@@ -2637,7 +2739,9 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::DismissKeyboard { udid } => {
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "dismiss-keyboard", &Value::Null)?;
             } else {
                 bridge.send_key(&udid, 41, 0)?;
@@ -2651,7 +2755,9 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Home { udid } => {
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "home", &Value::Null)?;
             } else {
                 bridge.press_home(&udid)?;
@@ -2660,7 +2766,9 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::AppSwitcher { udid } => {
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "app-switcher", &Value::Null)?;
             } else {
                 bridge.open_app_switcher(&udid)?;
@@ -2671,7 +2779,9 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::RotateLeft { udid } => {
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "rotate-left", &Value::Null)?;
             } else {
                 bridge.rotate_left(&udid)?;
@@ -2682,7 +2792,9 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::RotateRight { udid } => {
-            if let Some(server_url) = service_url.as_deref() {
+            let command_server_url =
+                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+            if let Some(server_url) = command_server_url.as_deref() {
                 service_post_ok(server_url, &udid, "rotate-right", &Value::Null)?;
             } else {
                 bridge.rotate_right(&udid)?;
@@ -2693,7 +2805,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::ChromeProfile { udid } => {
-            let service_url = command_service_url(explicit_server_url.clone())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
             let profile = service_get_json(
                 &service_url,
                 &format!(
@@ -3128,12 +3240,32 @@ fn describe_ui_snapshot(
     direct: bool,
     server_url: &str,
 ) -> anyhow::Result<Value> {
-    if point.is_none() && !direct {
-        match fetch_service_accessibility_tree(udid, source, max_depth, include_hidden, server_url)
-        {
-            Ok(snapshot) => return Ok(snapshot),
-            Err(error) if source != DescribeUiSource::Auto => return Err(error),
-            Err(_) => {}
+    if !direct {
+        if let Some((x, y)) = point {
+            if matches!(
+                source,
+                DescribeUiSource::Auto
+                    | DescribeUiSource::NativeAx
+                    | DescribeUiSource::AndroidUiautomator
+            ) {
+                match fetch_service_accessibility_point(udid, x, y, server_url) {
+                    Ok(snapshot) => return Ok(snapshot),
+                    Err(error) if source != DescribeUiSource::Auto => return Err(error),
+                    Err(_) => {}
+                }
+            }
+        } else {
+            match fetch_service_accessibility_tree(
+                udid,
+                source,
+                max_depth,
+                include_hidden,
+                server_url,
+            ) {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(error) if source != DescribeUiSource::Auto => return Err(error),
+                Err(_) => {}
+            }
         }
     }
 
@@ -3165,6 +3297,19 @@ fn fetch_service_accessibility_tree(
         "/api/simulators/{}/accessibility-tree?{}",
         url_path_component(udid),
         query.join("&")
+    );
+    http_get_json(server_url, &path)
+}
+
+fn fetch_service_accessibility_point(
+    udid: &str,
+    x: f64,
+    y: f64,
+    server_url: &str,
+) -> anyhow::Result<Value> {
+    let path = format!(
+        "/api/simulators/{}/accessibility-point?x={x}&y={y}",
+        url_path_component(udid)
     );
     http_get_json(server_url, &path)
 }
@@ -3559,6 +3704,7 @@ impl DescribeUiSource {
             Self::Flutter => "flutter",
             Self::Uikit => "uikit",
             Self::NativeAx => "native-ax",
+            Self::AndroidUiautomator => "android-uiautomator",
         }
     }
 }
@@ -5179,6 +5325,7 @@ async fn serve(
         inspectors,
         metrics,
         simulator_inventory: Default::default(),
+        android: Default::default(),
     };
 
     let http_router = app_router(

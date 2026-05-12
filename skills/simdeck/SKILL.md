@@ -5,7 +5,7 @@ description: Use for simulator lifecycle, app install/launch, live viewing, UI i
 
 # SimDeck Agent Guide
 
-SimDeck automates iOS Simulators. Use the CLI for automation and the browser UI for live human visibility. Works with UIKit, SwiftUI, React Native, Expo, and NativeScript apps.
+SimDeck automates iOS Simulators and Android emulators. Use the CLI for automation and the browser UI for live human visibility. iOS works with UIKit, SwiftUI, React Native, Expo, and NativeScript apps; Android works through ADB, emulator lifecycle, screenshots, logs, and UIAutomator hierarchy dumps.
 
 SimDeck uses one warm daemon per project. Check it with `simdeck daemon status`; start it or open the browser UI when needed:
 
@@ -47,6 +47,7 @@ simdeck shutdown <UDID>
 simdeck erase <UDID>
 simdeck core-simulator restart
 simdeck install <UDID> /path/to/App.app
+simdeck install android:<AVD_NAME> /path/to/app.apk
 simdeck launch <UDID> com.example.App
 simdeck uninstall <UDID> com.example.App
 simdeck open-url <UDID> myapp://route
@@ -55,6 +56,12 @@ simdeck toggle-appearance <UDID>
 ```
 
 Build apps with project tooling.
+
+Android devices use IDs like `android:Pixel_8_API_36`. `simdeck list` discovers
+AVDs from the Android SDK, `boot` starts `emulator -avd ... -no-window`, and
+live browser viewing uses WebRTC. Local loopback Android viewing sends raw RGBA
+frames over a WebRTC data channel; non-loopback Android viewing uses
+VideoToolbox-encoded H.264. `simdeck stream` is still iOS-only.
 
 ## Fast Agent Inspection
 
@@ -71,10 +78,13 @@ simdeck describe <UDID> --source react-native
 simdeck describe <UDID> --source flutter
 simdeck describe <UDID> --source uikit
 simdeck describe <UDID> --source native-ax
+simdeck describe <UDID> --source android-uiautomator
 simdeck describe <UDID> --direct
 ```
 
-Use `--source auto` with the project daemon. Use `--direct` or `--source native-ax` for the private CoreSimulator accessibility bridge. NativeScript, React Native, and Flutter inspector runtimes can add richer hierarchy data.
+Use `--source auto` with the project daemon. Use `--direct` or `--source native-ax` for the private CoreSimulator accessibility bridge. Use `--source android-uiautomator` for Android emulator UIAutomator hierarchies. NativeScript, React Native, and Flutter inspector runtimes can add richer hierarchy data.
+For Android IDs, `describe` uses `uiautomator dump`; use `--format agent` or
+`--format compact-json` the same way as iOS.
 
 Prefer selectors, coordinates only when needed. Selector taps go through the daemon and wait for the element server-side.
 

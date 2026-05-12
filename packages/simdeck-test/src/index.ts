@@ -22,7 +22,8 @@ export type QueryOptions = {
     | "react-native"
     | "flutter"
     | "uikit"
-    | "native-ax";
+    | "native-ax"
+    | "android-uiautomator";
   maxDepth?: number;
   includeHidden?: boolean;
 };
@@ -40,11 +41,40 @@ export type TapOptions = QueryOptions & {
   pollMs?: number;
 };
 
+export type SwipeOptions = {
+  durationMs?: number;
+  steps?: number;
+};
+
+export type GestureOptions = SwipeOptions & {
+  delta?: number;
+};
+
+export type TypeTextOptions = {
+  delayMs?: number;
+};
+
+export type KeySequenceOptions = {
+  delayMs?: number;
+};
+
+export type LogsOptions = {
+  backfill?: boolean;
+  seconds?: number;
+  limit?: number;
+  levels?: string[];
+  processes?: string[];
+  q?: string;
+};
+
 export type SimDeckSession = {
   endpoint: string;
   pid: number;
   projectRoot: string;
   list(): Promise<unknown>;
+  boot(udid: string): Promise<unknown>;
+  shutdown(udid: string): Promise<unknown>;
+  erase(udid: string): Promise<unknown>;
   install(udid: string, appPath: string): Promise<void>;
   uninstall(udid: string, bundleId: string): Promise<void>;
   launch(udid: string, bundleId: string): Promise<void>;
@@ -56,11 +86,41 @@ export type SimDeckSession = {
     options?: TapOptions,
   ): Promise<void>;
   touch(udid: string, x: number, y: number, phase: string): Promise<void>;
+  swipe(
+    udid: string,
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    options?: SwipeOptions,
+  ): Promise<unknown>;
+  gesture(
+    udid: string,
+    preset: string,
+    options?: GestureOptions,
+  ): Promise<unknown>;
+  typeText(
+    udid: string,
+    text: string,
+    options?: TypeTextOptions,
+  ): Promise<unknown>;
   key(udid: string, keyCode: number, modifiers?: number): Promise<void>;
+  keySequence(
+    udid: string,
+    keyCodes: number[],
+    options?: KeySequenceOptions,
+  ): Promise<void>;
   button(udid: string, button: string, durationMs?: number): Promise<void>;
+  home(udid: string): Promise<void>;
+  dismissKeyboard(udid: string): Promise<void>;
+  appSwitcher(udid: string): Promise<void>;
+  rotateLeft(udid: string): Promise<void>;
+  rotateRight(udid: string): Promise<void>;
+  toggleAppearance(udid: string): Promise<void>;
   pasteboardSet(udid: string, text: string): Promise<void>;
   pasteboardGet(udid: string): Promise<string>;
   chromeProfile(udid: string): Promise<unknown>;
+  logs(udid: string, options?: LogsOptions): Promise<unknown[]>;
   tree(udid: string, options?: QueryOptions): Promise<unknown>;
   query(
     udid: string,
@@ -114,6 +174,27 @@ export async function connect(
     pid: result.pid,
     projectRoot: result.projectRoot,
     list: () => requestJson(endpoint, "GET", "/api/simulators"),
+    boot: (udid) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/boot`,
+        null,
+      ),
+    shutdown: (udid) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/shutdown`,
+        null,
+      ),
+    erase: (udid) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/erase`,
+        null,
+      ),
     install: (udid, appPath) =>
       requestOk(
         endpoint,
@@ -163,11 +244,68 @@ export async function connect(
         y,
         phase,
       }),
+    swipe: (udid, startX, startY, endX, endY, swipeOptions = {}) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/batch`,
+        {
+          steps: [
+            {
+              action: "swipe",
+              startX,
+              startY,
+              endX,
+              endY,
+              ...swipeOptions,
+            },
+          ],
+        },
+      ),
+    gesture: (udid, preset, gestureOptions = {}) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/batch`,
+        {
+          steps: [
+            {
+              action: "gesture",
+              preset,
+              ...gestureOptions,
+            },
+          ],
+        },
+      ),
+    typeText: (udid, text, typeOptions = {}) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/batch`,
+        {
+          steps: [
+            {
+              action: "type",
+              text,
+              ...typeOptions,
+            },
+          ],
+        },
+      ),
     key: (udid, keyCode, modifiers = 0) =>
       requestOk(endpoint, `/api/simulators/${encodeURIComponent(udid)}/key`, {
         keyCode,
         modifiers,
       }),
+    keySequence: (udid, keyCodes, keySequenceOptions = {}) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/key-sequence`,
+        {
+          keyCodes,
+          ...keySequenceOptions,
+        },
+      ),
     button: (udid, button, durationMs = 0) =>
       requestOk(
         endpoint,
@@ -176,6 +314,42 @@ export async function connect(
           button,
           durationMs,
         },
+      ),
+    home: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/home`,
+        null,
+      ),
+    dismissKeyboard: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/dismiss-keyboard`,
+        null,
+      ),
+    appSwitcher: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/app-switcher`,
+        null,
+      ),
+    rotateLeft: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/rotate-left`,
+        null,
+      ),
+    rotateRight: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/rotate-right`,
+        null,
+      ),
+    toggleAppearance: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/toggle-appearance`,
+        null,
       ),
     pasteboardSet: (udid, text) =>
       requestOk(
@@ -199,6 +373,14 @@ export async function connect(
         "GET",
         `/api/simulators/${encodeURIComponent(udid)}/chrome-profile`,
       ),
+    logs: async (udid, logsOptions) => {
+      const result = await requestJson<{ entries?: unknown[] }>(
+        endpoint,
+        "GET",
+        `/api/simulators/${encodeURIComponent(udid)}/logs?${logsQuery(logsOptions)}`,
+      );
+      return result.entries ?? [];
+    },
     tree: (udid, treeOptions) =>
       requestJson(
         endpoint,
@@ -500,6 +682,20 @@ function treeQuery(options: QueryOptions = {}): string {
   if (options.maxDepth !== undefined)
     params.set("maxDepth", String(options.maxDepth));
   if (options.includeHidden) params.set("includeHidden", "true");
+  return params.toString();
+}
+
+function logsQuery(options: LogsOptions = {}): string {
+  const params = new URLSearchParams();
+  if (options.backfill !== undefined)
+    params.set("backfill", String(options.backfill));
+  if (options.seconds !== undefined)
+    params.set("seconds", String(options.seconds));
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  if (options.levels?.length) params.set("levels", options.levels.join(","));
+  if (options.processes?.length)
+    params.set("processes", options.processes.join(","));
+  if (options.q) params.set("q", options.q);
   return params.toString();
 }
 

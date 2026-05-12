@@ -2,6 +2,7 @@ import type { Size } from "../viewport/types";
 
 export interface StreamConnectTarget {
   clientId?: string;
+  platform?: string;
   remote?: boolean;
   streamConfig?: StreamConfig;
   transport?: StreamTransport;

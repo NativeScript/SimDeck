@@ -299,10 +299,21 @@ export function useLiveStream({
       return;
     }
 
+    const display = simulator.privateDisplay;
+    const displayKey =
+      simulator.platform === "android-emulator" && display
+        ? [
+            Math.round(display.displayWidth),
+            Math.round(display.displayHeight),
+            display.rotationQuarterTurns ?? 0,
+          ].join("x")
+        : "";
     const targetKey = [
       simulator.udid,
+      simulator.platform ?? "",
       remote ? "remote" : "local",
       streamTransport,
+      displayKey,
     ].join("|");
     if (connectedStreamTargetKeyRef.current === targetKey) {
       return;
@@ -316,6 +327,7 @@ export function useLiveStream({
     workerClient.connect(
       buildStreamTarget(simulator.udid, {
         clientId: clientTelemetryIdRef.current,
+        platform: simulator.platform,
         remote,
         streamConfig,
         transport: streamTransport,
@@ -324,6 +336,10 @@ export function useLiveStream({
   }, [
     canvasElement,
     simulator?.isBooted,
+    simulator?.platform,
+    simulator?.privateDisplay?.displayHeight,
+    simulator?.privateDisplay?.displayWidth,
+    simulator?.privateDisplay?.rotationQuarterTurns,
     simulator?.udid,
     paused,
     remote,

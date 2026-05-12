@@ -18,6 +18,27 @@ export async function connect(options = {}) {
     pid: result.pid,
     projectRoot: result.projectRoot,
     list: () => requestJson(endpoint, "GET", "/api/simulators"),
+    boot: (udid) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/boot`,
+        null,
+      ),
+    shutdown: (udid) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/shutdown`,
+        null,
+      ),
+    erase: (udid) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/erase`,
+        null,
+      ),
     install: (udid, appPath) =>
       requestOk(
         endpoint,
@@ -67,11 +88,68 @@ export async function connect(options = {}) {
         y,
         phase,
       }),
+    swipe: (udid, startX, startY, endX, endY, swipeOptions = {}) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/batch`,
+        {
+          steps: [
+            {
+              action: "swipe",
+              startX,
+              startY,
+              endX,
+              endY,
+              ...swipeOptions,
+            },
+          ],
+        },
+      ),
+    gesture: (udid, preset, gestureOptions = {}) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/batch`,
+        {
+          steps: [
+            {
+              action: "gesture",
+              preset,
+              ...gestureOptions,
+            },
+          ],
+        },
+      ),
+    typeText: (udid, text, typeOptions = {}) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/batch`,
+        {
+          steps: [
+            {
+              action: "type",
+              text,
+              ...typeOptions,
+            },
+          ],
+        },
+      ),
     key: (udid, keyCode, modifiers = 0) =>
       requestOk(endpoint, `/api/simulators/${encodeURIComponent(udid)}/key`, {
         keyCode,
         modifiers,
       }),
+    keySequence: (udid, keyCodes, keySequenceOptions = {}) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/key-sequence`,
+        {
+          keyCodes,
+          ...keySequenceOptions,
+        },
+      ),
     button: (udid, button, durationMs = 0) =>
       requestOk(
         endpoint,
@@ -80,6 +158,42 @@ export async function connect(options = {}) {
           button,
           durationMs,
         },
+      ),
+    home: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/home`,
+        null,
+      ),
+    dismissKeyboard: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/dismiss-keyboard`,
+        null,
+      ),
+    appSwitcher: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/app-switcher`,
+        null,
+      ),
+    rotateLeft: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/rotate-left`,
+        null,
+      ),
+    rotateRight: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/rotate-right`,
+        null,
+      ),
+    toggleAppearance: (udid) =>
+      requestOk(
+        endpoint,
+        `/api/simulators/${encodeURIComponent(udid)}/toggle-appearance`,
+        null,
       ),
     pasteboardSet: (udid, text) =>
       requestOk(
@@ -103,6 +217,14 @@ export async function connect(options = {}) {
         "GET",
         `/api/simulators/${encodeURIComponent(udid)}/chrome-profile`,
       ),
+    logs: async (udid, logsOptions) => {
+      const result = await requestJson(
+        endpoint,
+        "GET",
+        `/api/simulators/${encodeURIComponent(udid)}/logs?${logsQuery(logsOptions)}`,
+      );
+      return result.entries ?? [];
+    },
     tree: (udid, treeOptions) =>
       requestJson(
         endpoint,
@@ -364,6 +486,19 @@ function treeQuery(options = {}) {
   if (options.maxDepth !== undefined)
     params.set("maxDepth", String(options.maxDepth));
   if (options.includeHidden) params.set("includeHidden", "true");
+  return params.toString();
+}
+function logsQuery(options = {}) {
+  const params = new URLSearchParams();
+  if (options.backfill !== undefined)
+    params.set("backfill", String(options.backfill));
+  if (options.seconds !== undefined)
+    params.set("seconds", String(options.seconds));
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  if (options.levels?.length) params.set("levels", options.levels.join(","));
+  if (options.processes?.length)
+    params.set("processes", options.processes.join(","));
+  if (options.q) params.set("q", options.q);
   return params.toString();
 }
 function selectorPayload(selector) {

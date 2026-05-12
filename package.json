@@ -70,6 +70,8 @@
     "test:integration:fixture": "node scripts/integration/prebuild-fixture.mjs",
     "test:integration:js-api": "node scripts/integration/js-api.mjs",
     "test:integration:js-api:verbose": "SIMDECK_INTEGRATION_SHOW_SIMULATOR=1 node scripts/integration/js-api.mjs",
+    "test:integration:android": "node scripts/integration/android.mjs",
+    "test:integration:android:verbose": "SIMDECK_INTEGRATION_VERBOSE=1 node scripts/integration/android.mjs",
     "test:stream:reliability": "node scripts/check-stream-reliability.mjs",
     "test:e2e:webrtc": "node scripts/e2e-webrtc-reliability.mjs",
     "test:e2e:webrtc:headed": "SIMDECK_E2E_HEADFUL=1 node scripts/e2e-webrtc-reliability.mjs",

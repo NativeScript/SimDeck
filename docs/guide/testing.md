@@ -28,27 +28,39 @@ try {
 
 The current session object exposes:
 
-| Method         | Purpose                                                           |
-| -------------- | ----------------------------------------------------------------- |
-| `list()`       | Fetch simulator inventory from `GET /api/simulators`.             |
-| `launch()`     | Launch an installed bundle ID.                                    |
-| `openUrl()`    | Open a URL or deep link.                                          |
-| `tap()`        | Tap normalized screen coordinates.                                |
-| `key()`        | Send one HID key code.                                            |
-| `button()`     | Press a hardware button.                                          |
-| `tree()`       | Fetch an accessibility hierarchy.                                 |
-| `query()`      | Return compact matches for a selector.                            |
-| `waitFor()`    | Poll until a selector appears.                                    |
-| `assert()`     | Assert a selector is present.                                     |
-| `batch()`      | Run multiple REST actions through `/api/simulators/{udid}/batch`. |
-| `screenshot()` | Return a PNG buffer.                                              |
-| `close()`      | Stop the daemon if this session started it.                       |
+| Method                                 | Purpose                                                           |
+| -------------------------------------- | ----------------------------------------------------------------- |
+| `list()`                               | Fetch simulator inventory from `GET /api/simulators`.             |
+| `boot()`, `shutdown()`, `erase()`      | Manage simulator or Android emulator lifecycle.                   |
+| `install()`, `uninstall()`             | Install or remove an app.                                         |
+| `launch()`                             | Launch an installed bundle ID or Android package.                 |
+| `openUrl()`                            | Open a URL or deep link.                                          |
+| `tap()`, `tapElement()`                | Tap normalized coordinates or a matching accessibility element.   |
+| `touch()`, `swipe()`, `gesture()`      | Send normalized pointer gestures.                                 |
+| `typeText()`, `key()`, `keySequence()` | Send text or HID keyboard input.                                  |
+| `button()`                             | Press a hardware button.                                          |
+| `home()`, `dismissKeyboard()`          | Trigger common system controls.                                   |
+| `appSwitcher()`                        | Open the app switcher.                                            |
+| `rotateLeft()`, `rotateRight()`        | Rotate the simulator display.                                     |
+| `toggleAppearance()`                   | Toggle light/dark appearance.                                     |
+| `pasteboardSet()`, `pasteboardGet()`   | Read or write pasteboard text.                                    |
+| `chromeProfile()`                      | Fetch screen/chrome geometry.                                     |
+| `logs()`                               | Fetch recent simulator or Android log entries.                    |
+| `tree()`                               | Fetch an accessibility hierarchy.                                 |
+| `query()`                              | Return compact matches for a selector.                            |
+| `waitFor()`                            | Poll until a selector appears.                                    |
+| `assert()`                             | Assert a selector is present.                                     |
+| `batch()`                              | Run multiple REST actions through `/api/simulators/{udid}/batch`. |
+| `screenshot()`                         | Return a PNG buffer.                                              |
+| `close()`                              | Stop the daemon if this session started it.                       |
 
 Selectors can match `id`, `label`, `value`, or `type`. Query options accept `source`, `maxDepth`, and `includeHidden`.
 
 ## Repository Integration Suite
 
-The repo includes a macOS-only integration runner that creates a temporary simulator, builds and installs a small UIKit fixture app, then sweeps the CLI and REST control surface.
+The repo includes simulator-backed integration runners. The iOS runner is
+macOS-only; it creates a temporary simulator, builds and installs a small UIKit
+fixture app, then sweeps the CLI and REST control surface.
 
 ```sh
 npm run build:cli
@@ -84,6 +96,31 @@ By default, the integration runner selects the newest available iOS runtime that
 does not exceed the active `iphonesimulator` SDK version, falling back to the
 same major version when needed. This keeps CI off newer installed runtimes that
 do not match the selected Xcode toolchain.
+
+Android coverage is opt-in because it requires a locally installed Android SDK
+and at least one existing AVD. It runs on macOS or Linux. On Linux, SimDeck
+builds the daemon with a native iOS stub and leaves the Android bridge active.
+The runner starts an isolated SimDeck daemon and sweeps the Android CLI and
+`simdeck/test` surface for lifecycle, tree, screenshot, pasteboard behavior,
+app launch, URL opening, touch/swipe/gesture, keyboard, system buttons,
+rotation, appearance, logs, and batch controls:
+
+```sh
+npm run build:cli
+npm run build:simdeck-test
+npm run test:integration:android
+```
+
+Set `SIMDECK_INTEGRATION_ANDROID_AVD=<avd-name>` to pick a specific AVD. The
+runner expects that emulator to already be booted, which is how the Linux CI job
+uses `reactivecircus/android-emulator-runner`. If no AVD is configured, or a
+local AVD exists but is not running, the Android runner prints a skip message
+and exits successfully. Set `SIMDECK_INTEGRATION_REQUIRE_RUNNING_ANDROID=1` to
+turn that skip into a failure. Set `SIMDECK_INTEGRATION_BOOT_ANDROID=1` to let
+SimDeck cold-boot a local AVD before the suite. Set
+`SIMDECK_INTEGRATION_KEEP_ANDROID=1` to leave an emulator booted when the runner
+started it. Set `SIMDECK_INTEGRATION_STEP_TIMEOUT_MS` to override the per-step
+timeout.
 
 ## Stress and Leak Checks
 

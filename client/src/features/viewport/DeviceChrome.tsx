@@ -43,6 +43,7 @@ interface DeviceChromeProps {
   onStartPanning: (event: React.PointerEvent<HTMLElement>) => void;
   rotationQuarterTurns: number;
   screenAspect: string;
+  screenClassName?: string;
   shellStyle: CSSProperties | null;
   simulatorName: string;
   streamBackend: string;
@@ -82,6 +83,7 @@ export function DeviceChrome({
   onStartPanning,
   rotationQuarterTurns,
   screenAspect,
+  screenClassName,
   shellStyle,
   simulatorName,
   streamBackend,
@@ -141,6 +143,7 @@ export function DeviceChrome({
           onSimulatorInteraction={onSimulatorInteraction}
           rotationQuarterTurns={rotationQuarterTurns}
           simulatorName={simulatorName}
+          screenClassName={screenClassName}
           streamBackend={streamBackend}
           streamCanvasRef={streamCanvasRef}
           streamCanvasKey={streamCanvasKey}
@@ -183,6 +186,7 @@ export function DeviceChrome({
         onSimulatorInteraction={onSimulatorInteraction}
         rotationQuarterTurns={rotationQuarterTurns}
         simulatorName={simulatorName}
+        screenClassName={screenClassName}
         streamBackend={streamBackend}
         streamCanvasRef={streamCanvasRef}
         streamCanvasKey={streamCanvasKey}
@@ -423,6 +427,7 @@ interface ScreenLayerProps {
   onPickerSelect: (id: string) => void;
   onSimulatorInteraction: () => void;
   rotationQuarterTurns: number;
+  screenClassName?: string;
   simulatorName: string;
   streamBackend: string;
   streamCanvasRef: Ref<HTMLCanvasElement | null>;
@@ -451,6 +456,7 @@ function ScreenLayer({
   onPickerSelect,
   onSimulatorInteraction,
   rotationQuarterTurns,
+  screenClassName,
   simulatorName,
   streamBackend,
   streamCanvasRef,
@@ -462,7 +468,13 @@ function ScreenLayer({
 }: ScreenLayerProps) {
   return (
     <div
-      className={`device-screen ${useChromeProfile ? "chrome-screen" : ""}`}
+      className={[
+        "device-screen",
+        useChromeProfile ? "chrome-screen" : "",
+        screenClassName ?? "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       onPointerCancel={onScreenPointerCancel}
       onPointerDown={(event) => {
         onSimulatorInteraction();

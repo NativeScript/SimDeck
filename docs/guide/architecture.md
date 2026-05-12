@@ -4,13 +4,13 @@ SimDeck is intentionally split into a small number of clearly-scoped layers. Eve
 
 ## High-level layout
 
-SimDeck has three layers stacked between the browser and the iOS Simulator:
+SimDeck has three layers stacked between the browser and the target device:
 
-1. **Browser / VS Code** runs the React client from `client/`. It speaks HTTP for control and WebRTC for live video, served by the Rust server.
+1. **Browser / VS Code** runs the React client from `client/`. It speaks HTTP for control and WebRTC H.264 for live video, served by the Rust server.
 2. **The Rust server** (`server/`, built on `axum` + `tokio`) owns the CLI entrypoint, project daemon lifecycle, REST routes (`api/`), the stream transports (`transport/`), the inspector WebSocket hub (`inspector.rs`), the per-UDID session registry (`simulators/`), metrics, and log streaming.
-3. **The Objective-C bridge** (`cli/`) is reached through a narrow C ABI in `cli/native/XCWNativeBridge.*`. It wraps `xcrun simctl`, the private `CoreSimulator` direct-boot path, the per-session hardware/software H.264 encoder, the headless display bridge that produces frames and accepts HID input, and the device-chrome renderer.
+3. **Native device bridges** own platform-specific work. The Objective-C bridge (`cli/`) is reached through a narrow C ABI in `cli/native/XCWNativeBridge.*` for iOS. The Rust Android bridge (`server/src/android.rs`) shells out to the Android SDK for AVD discovery, emulator lifecycle, ADB input, screenshots, UIAutomator, and logcat.
 
-Underneath all of that is the iOS Simulator itself — `CoreSimulator` for lifecycle, `SimulatorKit` for chrome assets.
+Underneath all of that are the iOS Simulator (`CoreSimulator` and `SimulatorKit`) and the Android emulator (`emulator` and `adb`).
 
 ## Layer responsibilities
 
@@ -20,17 +20,18 @@ Owns the public CLI shape (`simdeck`, `simdeck ui`, `daemon`, `boot`, `shutdown`
 
 Key modules:
 
-| Module                              | Responsibility                                                                                             |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `server/src/main.rs`                | CLI entrypoint, project daemon management, AppKit main-thread shim, tokio runtime bootstrap.               |
-| `server/src/api/routes.rs`          | Every `/api/*` route, including simulator control, accessibility, and inspector proxy.                     |
-| `server/src/transport/webrtc.rs`    | WebRTC offer/answer endpoint for H.264 browser video.                                                      |
-| `server/src/transport/packet.rs`    | Shared encoded frame type used between simulator sessions and transports.                                  |
-| `server/src/inspector.rs`           | WebSocket hub for the NativeScript runtime inspector.                                                      |
-| `server/src/simulators/registry.rs` | Per-UDID session registry with lazy attachment to the native bridge.                                       |
-| `server/src/simulators/session.rs`  | Frame broadcast channel, keyframe gating, refresh requests.                                                |
-| `server/src/metrics/counters.rs`    | Atomic counters and per-client stream stats accepted from stream transports or `/api/client-stream-stats`. |
-| `server/src/logs.rs`                | `os_log` log streaming and filtering.                                                                      |
+| Module                              | Responsibility                                                                                                   |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `server/src/main.rs`                | CLI entrypoint, project daemon management, AppKit main-thread shim, tokio runtime bootstrap.                     |
+| `server/src/api/routes.rs`          | Every `/api/*` route, including simulator control, accessibility, and inspector proxy.                           |
+| `server/src/android.rs`             | Android AVD discovery, emulator lifecycle, ADB input, emulator gRPC video, screenshots, UIAutomator, and logcat. |
+| `server/src/transport/webrtc.rs`    | WebRTC offer/answer endpoint for H.264 browser video.                                                            |
+| `server/src/transport/packet.rs`    | Shared encoded frame type used between simulator sessions and transports.                                        |
+| `server/src/inspector.rs`           | WebSocket hub for the NativeScript runtime inspector.                                                            |
+| `server/src/simulators/registry.rs` | Per-UDID session registry with lazy attachment to the native bridge.                                             |
+| `server/src/simulators/session.rs`  | Frame broadcast channel, keyframe gating, refresh requests.                                                      |
+| `server/src/metrics/counters.rs`    | Atomic counters and per-client stream stats accepted from stream transports or `/api/client-stream-stats`.       |
+| `server/src/logs.rs`                | `os_log` log streaming and filtering.                                                                            |
 
 The Rust server runs the tokio runtime on a worker thread while the AppKit main loop spins on the main thread. The native bridge needs the main loop to deliver display callbacks and HID events.
 
@@ -53,13 +54,16 @@ Inside the bridge:
 
 ### `client/` — React browser UI
 
-The React app served at `/` is a thin shell that calls the REST API and consumes live video over WebRTC H.264.
+The React app served at `/` is a thin shell that calls the REST API. It consumes
+live device video over WebRTC H.264. iOS frames come from the native simulator
+display bridge; Android frames come from emulator gRPC `streamScreenshot` and
+are encoded through VideoToolbox on the server.
 
 Layout under `client/src/`:
 
 - `app/AppShell.tsx` — top-level shell.
 - `api/` — typed wrappers around `/api/*` (`client.ts`, `controls.ts`, `simulators.ts`, `types.ts`).
-- `features/stream/` — WebRTC client, receiver stats, and video frame plumbing.
+- `features/stream/` — WebRTC client, receiver stats, and frame plumbing.
 - `features/viewport/` — frame canvas, hit testing, chrome compositing.
 - `features/input/` — touch/keyboard/hardware button affordances.
 - `features/accessibility/` — accessibility tree pane and source switcher.
@@ -85,7 +89,7 @@ Most control endpoints follow the same path: a typed Rust handler in `server/src
 
 ### Live video
 
-The browser posts an SDP offer to `/api/simulators/{udid}/webrtc/offer`. The handler in `transport::webrtc` ensures the per-UDID `SimulatorSession` is started, waits up to ~3 s for the first H.264 keyframe, returns an SDP answer, and writes the simulator frame source to a WebRTC video track.
+The browser posts an SDP offer to `/api/simulators/{udid}/webrtc/offer`. The handler in `transport::webrtc` starts the selected frame source, waits for the first H.264 keyframe, returns an SDP answer, and writes H.264 samples to a WebRTC video track. For Android, that source is emulator gRPC raw pixels passed through the shared VideoToolbox encoder path.
 
 ### Input
 

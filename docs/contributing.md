@@ -145,9 +145,15 @@ Set `SIMDECK_INTEGRATION_TRACE_HTTP=1` if you also need raw HTTP request logs.
 Set `SIMDECK_INTEGRATION_KEEP_SIMULATOR=1` with the verbose command if you want
 the temporary simulator left around for inspection after the suite exits.
 
-GitHub Actions runs this suite on macOS after the normal build/test pipeline.
-The integration suite does not require the live video display bridge; REST input
-routes use the non-display native input path, and the video stream is covered by
+GitHub Actions runs the iOS suite on macOS after the normal build/test pipeline.
+It also runs the Android integration suite on an Ubuntu runner with a real
+Android emulator. Linux builds use a native iOS stub so the Android bridge,
+daemon, CLI, and `simdeck/test` API can be exercised without macOS frameworks.
+The Android CI job preboots the AVD with `android-emulator-runner` before
+starting SimDeck; local Android integration runs skip cleanly unless an emulator
+is already booted or `SIMDECK_INTEGRATION_BOOT_ANDROID=1` is set.
+The integration suites do not require the live video display bridge; REST input
+routes use the non-display input path, and the video stream is covered by
 lower-level protocol tests.
 
 ## Full CI pipeline
@@ -164,8 +170,10 @@ This is the normal local CI script:
 4. `npm run package:vscode-extension` — VS Code `.vsix`.
 
 GitHub Actions runs `npm run ci`, then `npm run test:integration:cli` for the
-temp-simulator CLI and REST control sweep. A clean `npm run ci` and integration
-run are required for any PR that changes simulator control behavior.
+temp-simulator CLI and REST control sweep, plus
+`npm run test:integration:android` on Ubuntu for Android emulator coverage. A
+clean `npm run ci` and integration run are required for any PR that changes
+simulator control behavior.
 
 ## Documentation
 

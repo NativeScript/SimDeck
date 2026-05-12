@@ -13,7 +13,8 @@ export type QueryOptions = {
     | "react-native"
     | "flutter"
     | "uikit"
-    | "native-ax";
+    | "native-ax"
+    | "android-uiautomator";
   maxDepth?: number;
   includeHidden?: boolean;
 };
@@ -28,11 +29,35 @@ export type TapOptions = QueryOptions & {
   waitTimeoutMs?: number;
   pollMs?: number;
 };
+export type SwipeOptions = {
+  durationMs?: number;
+  steps?: number;
+};
+export type GestureOptions = SwipeOptions & {
+  delta?: number;
+};
+export type TypeTextOptions = {
+  delayMs?: number;
+};
+export type KeySequenceOptions = {
+  delayMs?: number;
+};
+export type LogsOptions = {
+  backfill?: boolean;
+  seconds?: number;
+  limit?: number;
+  levels?: string[];
+  processes?: string[];
+  q?: string;
+};
 export type SimDeckSession = {
   endpoint: string;
   pid: number;
   projectRoot: string;
   list(): Promise<unknown>;
+  boot(udid: string): Promise<unknown>;
+  shutdown(udid: string): Promise<unknown>;
+  erase(udid: string): Promise<unknown>;
   install(udid: string, appPath: string): Promise<void>;
   uninstall(udid: string, bundleId: string): Promise<void>;
   launch(udid: string, bundleId: string): Promise<void>;
@@ -44,11 +69,41 @@ export type SimDeckSession = {
     options?: TapOptions,
   ): Promise<void>;
   touch(udid: string, x: number, y: number, phase: string): Promise<void>;
+  swipe(
+    udid: string,
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    options?: SwipeOptions,
+  ): Promise<unknown>;
+  gesture(
+    udid: string,
+    preset: string,
+    options?: GestureOptions,
+  ): Promise<unknown>;
+  typeText(
+    udid: string,
+    text: string,
+    options?: TypeTextOptions,
+  ): Promise<unknown>;
   key(udid: string, keyCode: number, modifiers?: number): Promise<void>;
+  keySequence(
+    udid: string,
+    keyCodes: number[],
+    options?: KeySequenceOptions,
+  ): Promise<void>;
   button(udid: string, button: string, durationMs?: number): Promise<void>;
+  home(udid: string): Promise<void>;
+  dismissKeyboard(udid: string): Promise<void>;
+  appSwitcher(udid: string): Promise<void>;
+  rotateLeft(udid: string): Promise<void>;
+  rotateRight(udid: string): Promise<void>;
+  toggleAppearance(udid: string): Promise<void>;
   pasteboardSet(udid: string, text: string): Promise<void>;
   pasteboardGet(udid: string): Promise<string>;
   chromeProfile(udid: string): Promise<unknown>;
+  logs(udid: string, options?: LogsOptions): Promise<unknown[]>;
   tree(udid: string, options?: QueryOptions): Promise<unknown>;
   query(
     udid: string,

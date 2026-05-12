@@ -667,6 +667,12 @@
   color: color-mix(in srgb, #d7ba7d 82%, var(--text));
 }
 
+.hierarchy-source-pill.source-android-uiautomator {
+  border-color: color-mix(in srgb, #7fd97f 55%, var(--border));
+  background: color-mix(in srgb, #7fd97f 13%, transparent);
+  color: color-mix(in srgb, #7fd97f 82%, var(--text));
+}
+
 .hierarchy-source-pill.active {
   gap: 5px;
   padding-inline: 7px 8px;
@@ -1599,6 +1605,10 @@
   width: auto;
   border-radius: 0;
   box-shadow: 0 0 0 1px var(--screen-bg);
+}
+
+.device-screen.android-screen {
+  background: transparent;
 }
 
 .stream-canvas {

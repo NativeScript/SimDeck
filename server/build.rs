@@ -5,6 +5,18 @@ fn main() {
         .parent()
         .unwrap()
         .to_path_buf();
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os != "macos" {
+        let stub = root.join("server/native_stubs.c");
+        println!("cargo:rerun-if-changed={}", stub.display());
+        cc::Build::new()
+            .file(&stub)
+            .flag("-Wall")
+            .flag("-Wextra")
+            .compile("xcw_native_bridge");
+        return;
+    }
+
     let cli = root.join("cli");
     let native = cli.join("native");
 
