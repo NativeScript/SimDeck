@@ -68,24 +68,6 @@ simdeck "iPhone 17 Pro Max"
 The served loopback browser UI receives the generated API access token automatically.
 LAN clients should pair with the printed code before receiving the API cookie.
 
-SimDeck Studio providers run the daemon on loopback and use
-`scripts/studio-provider-bridge.mjs` for outbound control-plane communication
-with Studio. Studio hosts the browser UI and proxies SimDeck REST requests over
-that bridge while WebRTC media negotiates directly between the browser and
-runner through ICE. If WebRTC fails before rendering a frame, the browser can
-fall back to H.264 over WebSocket while keeping input on a separate WebSocket
-channel.
-
-Expose a local simulator through SimDeck Studio with one command:
-
-```sh
-simdeck studio expose "iPhone 17 Pro"
-```
-
-The command starts or reuses the local daemon, creates an ephemeral Studio
-session, prints a unique `https://simdeck.djdev.me/simulator/...` URL, and keeps
-the outbound bridge alive until you press Ctrl-C.
-
 CLI commands automatically use the same warm daemon:
 
 ```sh
