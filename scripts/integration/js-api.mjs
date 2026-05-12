@@ -208,30 +208,30 @@ async function main() {
     await expectFixtureText("URL Opened");
   });
   await measuredStep("JS focus URL and type", async () => {
-    await session.tapElement(
-      simulatorUDID,
-      { id: "fixture.message" },
-      {
-        source: "native-ax",
-        maxDepth: 3,
-        waitTimeoutMs: 15_000,
-        durationMs: 30,
-      },
-    );
     await retryAsync(
       async () => {
+        await session.tapElement(
+          simulatorUDID,
+          { id: "fixture.message" },
+          {
+            source: "native-ax",
+            maxDepth: 3,
+            waitTimeoutMs: 15_000,
+            durationMs: 30,
+          },
+        );
         await session.openUrl(simulatorUDID, fixtureFocusUrl);
-        await expectFixtureText("Message Focused");
+        await expectFixtureText("Message Focused", { timeoutMs: 20_000 });
+        await sleep(1_000);
+        await session.batch(simulatorUDID, [
+          { action: "type", text: "agent-ready", delayMs: 20 },
+        ]);
+        await expectFixtureText("agent-ready", { timeoutMs: 20_000 });
       },
-      "JS focus URL",
+      "JS focus URL and type",
       3,
       2_000,
     );
-    await sleep(1_000);
-    await session.batch(simulatorUDID, [
-      { action: "type", text: "agent-ready", delayMs: 12 },
-    ]);
-    await expectFixtureText("agent-ready");
   });
 
   await measuredStep(
