@@ -376,7 +376,10 @@ export function useLiveStream({
     window.addEventListener("pageshow", sendCurrentForegroundState);
     window.addEventListener("pagehide", sendBackgroundState);
     return () => {
-      document.removeEventListener("visibilitychange", sendCurrentForegroundState);
+      document.removeEventListener(
+        "visibilitychange",
+        sendCurrentForegroundState,
+      );
       window.removeEventListener("focus", sendCurrentForegroundState);
       window.removeEventListener("blur", sendCurrentForegroundState);
       window.removeEventListener("pageshow", sendCurrentForegroundState);
