@@ -56,7 +56,9 @@ Returns a snapshot of every server-side counter and the rolling buffer of client
     {
       "udid": "9D7E5BB7-...",
       "encoder": {
-        "encoderMode": "hardware",
+        "encoderMode": "auto",
+        "activeEncoderMode": "hardware",
+        "autoSoftwareFallbackActive": false,
         "hardwareAccelerated": true,
         "overloadState": "nominal",
         "averageEncoderLoadPercent": 42.1,
@@ -113,7 +115,11 @@ is derived from native VideoToolbox submit-to-output latency:
 
 This is an inferred pressure signal rather than a private macOS hardware queue
 counter. It is useful for deciding when to lower stream resolution/FPS or switch
-from hardware to software encoding.
+from hardware to software encoding. When `encoderMode` is `auto`, SimDeck uses
+this signal to temporarily rebuild the active session with software H.264 if the
+hardware encoder is overloaded, then retries hardware after a cooldown. The
+`activeEncoderMode`, `autoSoftwareFallbackActive`, `autoSoftwareFallbacks`, and
+`autoHardwareRetries` fields expose that state.
 
 ### Client stream stats
 
