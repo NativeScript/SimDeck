@@ -340,6 +340,11 @@ void xcw_native_session_reconfigure_video_encoder(void *handle) {
   (void)handle;
 }
 
+void xcw_native_session_set_client_foreground(void *handle, bool foreground) {
+  (void)handle;
+  (void)foreground;
+}
+
 char *xcw_native_session_video_encoder_stats(void *handle,
                                              char **error_message) {
   (void)handle;

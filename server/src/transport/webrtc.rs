@@ -642,9 +642,12 @@ fn attach_control_data_channel(
                         }
                     }
                     WebRtcDataChannelMessage::StreamControl {
+                        client_id,
                         force_keyframe,
+                        foreground,
                         snapshot,
                     } => {
+                        apply_stream_client_foreground(&state, &session, &client_id, foreground);
                         let command = WebRtcStreamCommand {
                             force_keyframe: force_keyframe.unwrap_or(false),
                             snapshot: snapshot.unwrap_or(false),
@@ -676,6 +679,31 @@ fn attach_control_data_channel(
             }
         })
     }));
+}
+
+fn apply_stream_client_foreground(
+    state: &AppState,
+    session: &crate::simulators::session::SimulatorSession,
+    client_id: &Option<String>,
+    foreground: Option<bool>,
+) {
+    let Some(foreground) = foreground else {
+        return;
+    };
+    let Some(client_id) = client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let (any_foreground, changed) =
+        state
+            .stream_clients
+            .record(session.udid(), client_id, foreground);
+    if changed {
+        session.set_client_foreground(any_foreground);
+    }
 }
 
 fn register_android_data_channel(
@@ -732,7 +760,9 @@ fn attach_android_data_channel(
                         }
                     }
                     WebRtcDataChannelMessage::StreamControl {
+                        client_id: _,
                         force_keyframe,
+                        foreground: _,
                         snapshot,
                     } => {
                         let command = WebRtcStreamCommand {
@@ -974,8 +1004,11 @@ enum WebRtcDataChannelMessage {
         stats: Box<ClientStreamStats>,
     },
     StreamControl {
+        #[serde(rename = "clientId")]
+        client_id: Option<String>,
         #[serde(rename = "forceKeyframe")]
         force_keyframe: Option<bool>,
+        foreground: Option<bool>,
         snapshot: Option<bool>,
     },
     StreamQuality {
