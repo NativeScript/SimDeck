@@ -27,7 +27,7 @@ use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Map;
 use serde_json::{json as json_value, Value};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
@@ -50,6 +50,7 @@ const H264_WS_FLAG_KEYFRAME: u8 = 1 << 0;
 const H264_WS_FLAG_CONFIG: u8 = 1 << 1;
 const H264_WS_SEND_TIMEOUT: Duration = Duration::from_secs(2);
 const H264_WS_KEYFRAME_WAIT_TIMEOUT: Duration = Duration::from_secs(3);
+const STREAM_CLIENT_FOREGROUND_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -58,8 +59,58 @@ pub struct AppState {
     pub logs: LogRegistry,
     pub inspectors: InspectorHub,
     pub metrics: Arc<Metrics>,
+    pub stream_clients: StreamClientForegroundRegistry,
     pub simulator_inventory: SimulatorInventoryCache,
     pub android: AndroidBridge,
+}
+
+#[derive(Clone, Default)]
+pub struct StreamClientForegroundRegistry {
+    inner: Arc<StdMutex<HashMap<(String, String), StreamClientForegroundState>>>,
+}
+
+#[derive(Clone, Copy)]
+struct StreamClientForegroundState {
+    foreground: bool,
+    updated_at: Instant,
+}
+
+impl StreamClientForegroundRegistry {
+    pub fn record(&self, udid: &str, client_id: &str, foreground: bool) -> (bool, bool) {
+        let now = Instant::now();
+        let mut clients = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clients.retain(|_, state| {
+            now.duration_since(state.updated_at) <= STREAM_CLIENT_FOREGROUND_TTL
+        });
+        let previous = any_foreground_client_for_udid(&clients, udid);
+        clients.insert(
+            (udid.to_owned(), client_id.to_owned()),
+            StreamClientForegroundState {
+                foreground,
+                updated_at: now,
+            },
+        );
+        let next = any_foreground_client_for_udid(&clients, udid).unwrap_or(true);
+        (next, previous != Some(next))
+    }
+}
+
+fn any_foreground_client_for_udid(
+    clients: &HashMap<(String, String), StreamClientForegroundState>,
+    udid: &str,
+) -> Option<bool> {
+    let mut saw_client = false;
+    let mut saw_foreground = false;
+    for ((client_udid, _), state) in clients {
+        if client_udid == udid {
+            saw_client = true;
+            saw_foreground |= state.foreground;
+        }
+    }
+    saw_client.then_some(saw_foreground)
 }
 
 #[derive(Clone, Default)]
@@ -2261,9 +2312,12 @@ fn handle_h264_socket_message(
             }
         }
         H264SocketMessage::StreamControl {
+            client_id,
             force_keyframe,
+            foreground,
             snapshot,
         } => {
+            apply_stream_client_foreground(state, session, &client_id, foreground);
             if force_keyframe.unwrap_or(false) {
                 session.request_keyframe();
             }
@@ -2280,6 +2334,31 @@ fn handle_h264_socket_message(
         }
     }
     true
+}
+
+fn apply_stream_client_foreground(
+    state: &AppState,
+    session: &SimulatorSession,
+    client_id: &Option<String>,
+    foreground: Option<bool>,
+) {
+    let Some(foreground) = foreground else {
+        return;
+    };
+    let Some(client_id) = client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let (any_foreground, changed) =
+        state
+            .stream_clients
+            .record(session.udid(), client_id, foreground);
+    if changed {
+        session.set_client_foreground(any_foreground);
+    }
 }
 
 fn handle_android_h264_socket_message(
@@ -2306,7 +2385,9 @@ fn handle_android_h264_socket_message(
             }
         }
         H264SocketMessage::StreamControl {
+            client_id: _,
             force_keyframe,
+            foreground: _,
             snapshot,
         } => {
             if force_keyframe.unwrap_or(false) {
@@ -2330,8 +2411,11 @@ enum H264SocketMessage {
         stats: Box<ClientStreamStats>,
     },
     StreamControl {
+        #[serde(rename = "clientId")]
+        client_id: Option<String>,
         #[serde(rename = "forceKeyframe")]
         force_keyframe: Option<bool>,
+        foreground: Option<bool>,
         snapshot: Option<bool>,
     },
     StreamQuality {

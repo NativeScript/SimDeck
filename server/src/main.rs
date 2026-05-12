@@ -5420,6 +5420,7 @@ async fn serve(
         logs,
         inspectors,
         metrics,
+        stream_clients: Default::default(),
         simulator_inventory: Default::default(),
         android: Default::default(),
     };

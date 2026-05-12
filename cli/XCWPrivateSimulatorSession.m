@@ -177,6 +177,14 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
     [self refreshCurrentFrame];
 }
 
+- (void)setClientForeground:(BOOL)foreground {
+    [_videoEncoder setClientForeground:foreground];
+    if (foreground) {
+        [_videoEncoder requestKeyFrame];
+        [self refreshCurrentFrame];
+    }
+}
+
 - (NSDictionary *)videoEncoderStats {
     return [_videoEncoder statsRepresentation];
 }

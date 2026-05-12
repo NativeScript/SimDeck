@@ -773,6 +773,12 @@ impl NativeSession {
         }
     }
 
+    pub fn set_client_foreground(&self, foreground: bool) {
+        unsafe {
+            ffi::xcw_native_session_set_client_foreground(self.handle, foreground);
+        }
+    }
+
     pub fn video_encoder_stats(&self) -> serde_json::Value {
         unsafe {
             let mut error = ptr::null_mut();

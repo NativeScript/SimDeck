@@ -6,11 +6,11 @@ SimDeck streams the iOS Simulator over WebRTC using browser-native H.264 video p
 
 The server can encode the simulator display in three modes, picked at startup with `--video-codec`:
 
-| Value              | Encoder                              | When to use it                                                       |
-| ------------------ | ------------------------------------ | -------------------------------------------------------------------- |
-| `auto` _(default)_ | VideoToolbox chooses the encoder     | Normal local and remote preview. Does not require hardware encoding. |
-| `hardware`         | Required hardware H.264              | Use only when the hardware encoder is known to be available.         |
-| `software`         | Software-only H.264 via VideoToolbox | Use when hardware encode stalls, is unavailable, or must be avoided. |
+| Value              | Encoder                              | When to use it                                                                              |
+| ------------------ | ------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `auto` _(default)_ | VideoToolbox chooses the encoder     | Normal local and remote preview. Falls back to software when hardware encode is overloaded. |
+| `hardware`         | Required hardware H.264              | Use only when the hardware encoder is known to be available.                                |
+| `software`         | Software-only H.264 via VideoToolbox | Use when hardware encode stalls, is unavailable, or must be avoided.                        |
 
 Restart the daemon to change encoder mode:
 
@@ -32,6 +32,13 @@ It is CLI-only because it is meant for less capable machines where freshness
 matters more than maximum smoothness.
 
 The requested encoder mode is reported to clients in the JSON `videoCodec` field on `GET /api/health`.
+In `auto`, active simulator encoder metrics also report `activeEncoderMode`.
+When the hardware encoder is overloaded, `auto` rebuilds the active compression
+session as software H.264, then periodically retries hardware and stays there
+when the measured encode latency returns to budget.
+If all current browser viewers for a simulator are backgrounded or unfocused,
+the active session also switches to software H.264 until at least one viewer is
+foreground again.
 The browser UI exposes stream controls for encoder, FPS, transport, and resolution. H264 resolution choices are `full` (4096 px at 60 fps), `balanced` (1280 px at 60 fps), `economy` (1080 px at 30 fps), `low` (720 px at 30 fps), and `tiny` (540 px at 30 fps). Local H264 WebSocket sessions default to full resolution at 60 fps. Remote browser sessions default to software H.264, 30 fps, and adaptive quality.
 
 ## Remote WebRTC ICE
@@ -119,7 +126,8 @@ The WebRTC path favors freshness: stale frames are dropped and the sender reques
 
 A few practical guidelines:
 
-- **Start on the default for local preview.** Browser realtime mode uses VideoToolbox H.264 with full resolution at 60 fps. Pass `--video-codec software` only when the shared hardware encoder is unavailable or performs worse on that host.
+- **Start on the default for local preview.** Browser realtime mode uses VideoToolbox H.264 with full resolution at 60 fps. Auto mode moves active sessions to software when hardware H.264 is overloaded, then retries hardware after a cooldown.
+- **Backgrounded web clients use software.** The browser sends page visibility/focus over the stream control channel. If every active viewer for a simulator is hidden or unfocused, the native session uses software H.264 until a viewer returns foreground.
 - **Use `--local-stream-fps` above 60 only for local high-refresh testing.** The local quality stream defaults to 60 fps; higher targets pace both capture refresh and hardware encode submission so the stream does not build delay by pushing unbounded frames.
 - **Switch to `software` when the hardware encoder stalls or is unavailable.** The encoder scales the longest edge to 1600 pixels, can climb toward 60 fps, and backs off dynamically under encode latency.
 - **Studio providers default to software H.264 plus `--stream-quality smooth`.** `smooth` is an internal/provider profile, not a browser picker item. It uses a 1170-pixel longest edge, allows up to 60 fps, raises the bitrate budget to reduce compression artifacts, and lets multiple provider sessions share CPU cores without depending on one hardware encoder.
@@ -161,7 +169,12 @@ active simulator session. `strained` means encode latency is approaching the
 active frame budget; `overloaded` means smoothed latency is over budget or
 multiple frames in a row exceeded the budget. For hardware H.264 this usually
 means the shared VideoToolbox encoder is saturated; lower resolution/FPS or
-switch to software H.264.
+switch to software H.264. In `auto`, `activeEncoderMode`,
+`autoSoftwareFallbackActive`, `autoSoftwareFallbacks`, and
+`autoHardwareRetries` show whether the active session is temporarily using
+software H.264 while the hardware path cools down. `clientForeground` shows
+whether any current browser viewer is visible and focused; when it is `false`,
+the active encoder is software regardless of the requested mode.
 
 Clients can also push their decoder/renderer stats back to the server. Browser
 clients normally send these over the WebRTC telemetry data channel or the H264

@@ -238,6 +238,13 @@ impl SimulatorSession {
         self.inner.native.reconfigure_video_encoder();
     }
 
+    pub fn set_client_foreground(&self, foreground: bool) {
+        self.inner.native.set_client_foreground(foreground);
+        if foreground {
+            self.request_keyframe();
+        }
+    }
+
     pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
         self.inner.native.send_touch(x, y, phase)
     }

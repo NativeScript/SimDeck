@@ -220,6 +220,14 @@ stream attached to that peer:
 { "type": "streamControl", "forceKeyframe": true }
 ```
 
+Clients can also report page focus/visibility through stream control. When all
+current viewers for a simulator report `foreground: false`, the native session
+uses software H.264 until a viewer returns foreground:
+
+```json
+{ "type": "streamControl", "clientId": "browser", "foreground": false }
+```
+
 ```json
 { "type": "streamQuality", "config": { "profile": "low", "fps": 30 } }
 ```
@@ -256,6 +264,10 @@ socket:
 
 ```json
 { "type": "streamControl", "forceKeyframe": true }
+```
+
+```json
+{ "type": "streamControl", "clientId": "browser", "foreground": false }
 ```
 
 ```json

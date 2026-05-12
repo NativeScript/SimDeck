@@ -86,7 +86,9 @@ export function sendStreamClientStats(stats: unknown): boolean {
 }
 
 export function sendWebRtcStreamControl(options: {
+  clientId?: string;
   forceKeyframe?: boolean;
+  foreground?: boolean;
   snapshot?: boolean;
 }): boolean {
   return sendDataChannelMessage(
@@ -3020,7 +3022,12 @@ export class StreamWorkerClient {
     return (await this.backend?.collectVisualArtifactSample?.(udid)) ?? null;
   }
 
-  sendStreamControl(options: { forceKeyframe?: boolean; snapshot?: boolean }) {
+  sendStreamControl(options: {
+    clientId?: string;
+    forceKeyframe?: boolean;
+    foreground?: boolean;
+    snapshot?: boolean;
+  }) {
     return Boolean(
       this.backend?.sendControl?.({ ...options, type: "streamControl" }),
     );

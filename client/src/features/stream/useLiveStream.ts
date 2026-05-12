@@ -99,6 +99,10 @@ function currentClientBundle(): string {
   );
 }
 
+function isDocumentForeground(): boolean {
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
 export function useLiveStream({
   canvasElement,
   paused = false,
@@ -347,6 +351,43 @@ export function useLiveStream({
   ]);
 
   useEffect(() => {
+    if (!simulator?.udid || paused) {
+      return;
+    }
+
+    const sendForegroundState = (foreground = isDocumentForeground()) => {
+      workerClientRef.current?.sendStreamControl({
+        clientId: clientTelemetryIdRef.current,
+        foreground,
+      });
+    };
+
+    const sendCurrentForegroundState = () => {
+      sendForegroundState();
+    };
+    const sendBackgroundState = () => {
+      sendForegroundState(false);
+    };
+
+    sendCurrentForegroundState();
+    document.addEventListener("visibilitychange", sendCurrentForegroundState);
+    window.addEventListener("focus", sendCurrentForegroundState);
+    window.addEventListener("blur", sendCurrentForegroundState);
+    window.addEventListener("pageshow", sendCurrentForegroundState);
+    window.addEventListener("pagehide", sendBackgroundState);
+    return () => {
+      document.removeEventListener(
+        "visibilitychange",
+        sendCurrentForegroundState,
+      );
+      window.removeEventListener("focus", sendCurrentForegroundState);
+      window.removeEventListener("blur", sendCurrentForegroundState);
+      window.removeEventListener("pageshow", sendCurrentForegroundState);
+      window.removeEventListener("pagehide", sendBackgroundState);
+    };
+  }, [paused, simulator?.udid, streamTransport]);
+
+  useEffect(() => {
     if (
       streamConfigApplyKey <= 0 ||
       paused ||
@@ -410,6 +451,10 @@ export function useLiveStream({
         visualSampleCount: latestVisualArtifactSampleCountRef.current,
         visibilityState: document.visibilityState,
       };
+      workerClientRef.current?.sendStreamControl({
+        clientId: clientTelemetryIdRef.current,
+        foreground: isDocumentForeground(),
+      });
       if (
         sendStreamClientStats(payload) ||
         remote ||

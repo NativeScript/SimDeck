@@ -15,6 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)requestRefresh;
 - (void)requestKeyFrame;
 - (void)reconfigureVideoEncoder;
+- (void)setClientForeground:(BOOL)foreground;
 - (NSDictionary *)videoEncoderStats;
 - (NSInteger)rotationQuarterTurns;
 - (BOOL)sendTouchAtX:(double)x
