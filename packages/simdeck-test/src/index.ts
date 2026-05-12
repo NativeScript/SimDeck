@@ -58,11 +58,23 @@ export type KeySequenceOptions = {
   delayMs?: number;
 };
 
+export type LogsOptions = {
+  backfill?: boolean;
+  seconds?: number;
+  limit?: number;
+  levels?: string[];
+  processes?: string[];
+  q?: string;
+};
+
 export type SimDeckSession = {
   endpoint: string;
   pid: number;
   projectRoot: string;
   list(): Promise<unknown>;
+  boot(udid: string): Promise<unknown>;
+  shutdown(udid: string): Promise<unknown>;
+  erase(udid: string): Promise<unknown>;
   install(udid: string, appPath: string): Promise<void>;
   uninstall(udid: string, bundleId: string): Promise<void>;
   launch(udid: string, bundleId: string): Promise<void>;
@@ -108,6 +120,7 @@ export type SimDeckSession = {
   pasteboardSet(udid: string, text: string): Promise<void>;
   pasteboardGet(udid: string): Promise<string>;
   chromeProfile(udid: string): Promise<unknown>;
+  logs(udid: string, options?: LogsOptions): Promise<unknown[]>;
   tree(udid: string, options?: QueryOptions): Promise<unknown>;
   query(
     udid: string,
@@ -161,6 +174,27 @@ export async function connect(
     pid: result.pid,
     projectRoot: result.projectRoot,
     list: () => requestJson(endpoint, "GET", "/api/simulators"),
+    boot: (udid) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/boot`,
+        null,
+      ),
+    shutdown: (udid) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/shutdown`,
+        null,
+      ),
+    erase: (udid) =>
+      requestJson(
+        endpoint,
+        "POST",
+        `/api/simulators/${encodeURIComponent(udid)}/erase`,
+        null,
+      ),
     install: (udid, appPath) =>
       requestOk(
         endpoint,
@@ -339,6 +373,14 @@ export async function connect(
         "GET",
         `/api/simulators/${encodeURIComponent(udid)}/chrome-profile`,
       ),
+    logs: async (udid, logsOptions) => {
+      const result = await requestJson<{ entries?: unknown[] }>(
+        endpoint,
+        "GET",
+        `/api/simulators/${encodeURIComponent(udid)}/logs?${logsQuery(logsOptions)}`,
+      );
+      return result.entries ?? [];
+    },
     tree: (udid, treeOptions) =>
       requestJson(
         endpoint,
@@ -640,6 +682,20 @@ function treeQuery(options: QueryOptions = {}): string {
   if (options.maxDepth !== undefined)
     params.set("maxDepth", String(options.maxDepth));
   if (options.includeHidden) params.set("includeHidden", "true");
+  return params.toString();
+}
+
+function logsQuery(options: LogsOptions = {}): string {
+  const params = new URLSearchParams();
+  if (options.backfill !== undefined)
+    params.set("backfill", String(options.backfill));
+  if (options.seconds !== undefined)
+    params.set("seconds", String(options.seconds));
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  if (options.levels?.length) params.set("levels", options.levels.join(","));
+  if (options.processes?.length)
+    params.set("processes", options.processes.join(","));
+  if (options.q) params.set("q", options.q);
   return params.toString();
 }
 

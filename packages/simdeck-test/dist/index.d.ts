@@ -42,11 +42,22 @@ export type TypeTextOptions = {
 export type KeySequenceOptions = {
   delayMs?: number;
 };
+export type LogsOptions = {
+  backfill?: boolean;
+  seconds?: number;
+  limit?: number;
+  levels?: string[];
+  processes?: string[];
+  q?: string;
+};
 export type SimDeckSession = {
   endpoint: string;
   pid: number;
   projectRoot: string;
   list(): Promise<unknown>;
+  boot(udid: string): Promise<unknown>;
+  shutdown(udid: string): Promise<unknown>;
+  erase(udid: string): Promise<unknown>;
   install(udid: string, appPath: string): Promise<void>;
   uninstall(udid: string, bundleId: string): Promise<void>;
   launch(udid: string, bundleId: string): Promise<void>;
@@ -92,6 +103,7 @@ export type SimDeckSession = {
   pasteboardSet(udid: string, text: string): Promise<void>;
   pasteboardGet(udid: string): Promise<string>;
   chromeProfile(udid: string): Promise<unknown>;
+  logs(udid: string, options?: LogsOptions): Promise<unknown[]>;
   tree(udid: string, options?: QueryOptions): Promise<unknown>;
   query(
     udid: string,

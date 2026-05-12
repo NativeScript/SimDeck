@@ -207,6 +207,7 @@ simdeck describe <udid> --source react-native
 simdeck describe <udid> --source flutter
 simdeck describe <udid> --source uikit
 simdeck describe <udid> --source native-ax
+simdeck describe <udid> --source android-uiautomator
 simdeck describe <udid> --point 120,240
 simdeck describe <udid> --direct
 ```

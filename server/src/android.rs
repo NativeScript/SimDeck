@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -19,6 +20,7 @@ const ANDROID_GRPC_FRAME_MESSAGE_LIMIT: usize = 64 * 1024 * 1024;
 const ANDROID_TOUCH_SWIPE_THRESHOLD: f64 = 0.025;
 const ANDROID_TOUCH_MIN_DURATION_MS: u128 = 80;
 const ANDROID_TOUCH_MAX_DURATION_MS: u128 = 1500;
+const ANDROID_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const RUNNING_EMULATOR_CACHE_TTL: Duration = Duration::from_secs(2);
 const AVD_GRPC_PORT_CACHE_TTL: Duration = Duration::from_secs(60);
 const SCREEN_SIZE_CACHE_TTL: Duration = Duration::from_secs(1);
@@ -240,10 +242,10 @@ impl AndroidBridge {
             .collect()
     }
 
-    pub fn boot(&self, id: &str) -> Result<(), AppError> {
+    pub fn boot(&self, id: &str) -> Result<bool, AppError> {
         let avd_name = avd_from_id(id)?;
         if self.resolve_serial(&avd_name).is_ok() {
-            return Ok(());
+            return Ok(false);
         }
         let grpc_port = self.grpc_port_for_avd(&avd_name)?;
         Command::new(self.emulator_path())
@@ -266,7 +268,7 @@ impl AndroidBridge {
                     "Unable to start Android emulator `{avd_name}`: {error}"
                 ))
             })?;
-        Ok(())
+        Ok(true)
     }
 
     pub fn shutdown(&self, id: &str) -> Result<(), AppError> {
@@ -368,25 +370,31 @@ impl AndroidBridge {
             "-s",
             &serial,
             "shell",
-            "monkey",
-            "-p",
-            package,
+            "am",
+            "start",
+            "-a",
+            "android.intent.action.MAIN",
             "-c",
             "android.intent.category.LAUNCHER",
-            "1",
+            "-p",
+            package,
         ])?;
         Ok(())
     }
 
     pub fn set_pasteboard_text(&self, id: &str, text: &str) -> Result<(), AppError> {
         let serial = self.serial_for_id(id)?;
-        self.run_adb_shell(&serial, &format!("cmd clipboard set {}", shell_quote(text)))?;
+        let output =
+            self.run_adb_shell(&serial, &format!("cmd clipboard set {}", shell_quote(text)))?;
+        ensure_android_clipboard_available(&output)?;
         Ok(())
     }
 
     pub fn pasteboard_text(&self, id: &str) -> Result<String, AppError> {
         let serial = self.serial_for_id(id)?;
-        self.run_adb_shell(&serial, "cmd clipboard get")
+        let output = self.run_adb_shell(&serial, "cmd clipboard get")?;
+        ensure_android_clipboard_available(&output)?;
+        Ok(output.trim_end_matches(['\r', '\n']).to_owned())
     }
 
     pub fn send_touch(&self, id: &str, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
@@ -880,18 +888,32 @@ impl AndroidBridge {
             if state != "device" || !serial.starts_with("emulator-") {
                 continue;
             }
-            if let Ok(name_output) = self.run_adb(["-s", serial, "emu", "avd", "name"]) {
-                if let Some(name) = name_output
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty() && *line != "OK")
-                {
-                    result.insert(name.to_owned(), serial.to_owned());
-                }
+            if let Some(name) = self.avd_name_for_serial(serial) {
+                result.insert(name, serial.to_owned());
             }
         }
         *cache.lock().unwrap() = Some((Instant::now(), result.clone()));
         Ok(result)
+    }
+
+    fn avd_name_for_serial(&self, serial: &str) -> Option<String> {
+        for property in ["ro.boot.qemu.avd_name", "ro.kernel.qemu.avd_name"] {
+            if let Ok(output) = self.run_adb(["-s", serial, "shell", "getprop", property]) {
+                let name = output.trim();
+                if !name.is_empty() {
+                    return Some(name.to_owned());
+                }
+            }
+        }
+        self.run_adb(["-s", serial, "emu", "avd", "name"])
+            .ok()
+            .and_then(|output| {
+                output
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty() && *line != "OK")
+                    .map(ToOwned::to_owned)
+            })
     }
 
     fn grpc_port_for_avd(&self, avd_name: &str) -> Result<u16, AppError> {
@@ -1199,33 +1221,126 @@ fn run_command<const N: usize>(program: PathBuf, args: [&str; N]) -> Result<Vec<
             program.display()
         )));
     }
-    let output = Command::new(&program)
+    let mut child = Command::new(&program)
         .args(args)
         .env("ANDROID_HOME", sdk_root())
         .env("ANDROID_SDK_ROOT", sdk_root())
         .env("JAVA_HOME", java_home())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| {
             AppError::native(format!("Unable to run {}: {error}", program.display()))
         })?;
-    if output.status.success() {
-        return Ok(output.stdout);
+    let stdout = child.stdout.take().ok_or_else(|| {
+        AppError::native(format!(
+            "Unable to capture stdout from {}.",
+            program.display()
+        ))
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        AppError::native(format!(
+            "Unable to capture stderr from {}.",
+            program.display()
+        ))
+    })?;
+    let stdout_reader = thread::spawn(move || read_command_stream(stdout));
+    let stderr_reader = thread::spawn(move || read_command_stream(stderr));
+    let deadline = Instant::now() + ANDROID_COMMAND_TIMEOUT;
+    let status = loop {
+        match child.try_wait().map_err(|error| {
+            AppError::native(format!("Unable to wait for {}: {error}", program.display()))
+        })? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait().map_err(|error| {
+                    AppError::native(format!(
+                        "Unable to wait for timed-out {}: {error}",
+                        program.display()
+                    ))
+                })?;
+                let stdout = join_command_reader(stdout_reader, &program, "stdout")?;
+                let stderr = join_command_reader(stderr_reader, &program, "stderr")?;
+                let stderr_detail = command_stream_summary(&stderr)
+                    .map(|summary| format!(": {summary}"))
+                    .unwrap_or_default();
+                return Err(AppError::native(format!(
+                    "{} timed out after {}s{} (stdout {} bytes, stderr {} bytes)",
+                    command_name(&program),
+                    ANDROID_COMMAND_TIMEOUT.as_secs(),
+                    stderr_detail,
+                    stdout.len(),
+                    stderr.len()
+                )));
+            }
+            None => thread::sleep(Duration::from_millis(25)),
+        }
+    };
+    let stdout = join_command_reader(stdout_reader, &program, "stdout")?;
+    let stderr = join_command_reader(stderr_reader, &program, "stderr")?;
+    if status.success() {
+        let stderr_text = String::from_utf8_lossy(&stderr);
+        if stderr_text.contains("No shell command implementation") {
+            return Err(AppError::native(stderr_text.trim().to_owned()));
+        }
+        return Ok(stdout);
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = command_stream_summary(&stderr).unwrap_or_default();
+    let stdout = command_stream_summary(&stdout);
     Err(AppError::native(format!(
         "{} failed: {}{}",
-        program
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("Android command"),
-        stderr.trim(),
-        if stdout.trim().is_empty() {
-            String::new()
-        } else {
-            format!(" {}", stdout.trim())
-        }
+        command_name(&program),
+        stderr,
+        stdout.map(|value| format!(" {value}")).unwrap_or_default()
     )))
+}
+
+fn read_command_stream(mut stream: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut buffer = Vec::new();
+    stream.read_to_end(&mut buffer)?;
+    Ok(buffer)
+}
+
+fn join_command_reader(
+    reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    program: &Path,
+    stream_name: &str,
+) -> Result<Vec<u8>, AppError> {
+    reader
+        .join()
+        .map_err(|_| {
+            AppError::native(format!(
+                "Unable to read {stream_name} from {}.",
+                program.display()
+            ))
+        })?
+        .map_err(|error| {
+            AppError::native(format!(
+                "Unable to read {stream_name} from {}: {error}",
+                program.display()
+            ))
+        })
+}
+
+fn command_name(program: &Path) -> &str {
+    program
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Android command")
+}
+
+fn command_stream_summary(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut summary = trimmed.chars().take(2000).collect::<String>();
+    if trimmed.chars().nth(2000).is_some() {
+        summary.push_str("...");
+    }
+    Some(summary)
 }
 
 fn sdk_root() -> PathBuf {
@@ -1731,6 +1846,15 @@ fn android_log_level(line: &str) -> &'static str {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn ensure_android_clipboard_available(output: &str) -> Result<(), AppError> {
+    if output.contains("No shell command implementation") {
+        return Err(AppError::native(
+            "Android clipboard shell service is not implemented on this emulator image.",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

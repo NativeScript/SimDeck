@@ -1,4 +1,4 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -8,11 +8,11 @@ OUTPUT_BIN="$BUILD_DIR/simdeck-bin"
 MANIFEST_PATH="$ROOT_DIR/server/Cargo.toml"
 SERVER_TARGET_DIR="$ROOT_DIR/server/target"
 
-# SimDeck depends on AArch64 inline asm in cli/*.m and Apple Silicon-only
-# private CoreSimulator behavior, so the binary is arm64-only by design.
+# SimDeck's full iOS bridge is macOS-only. Non-macOS builds compile a native
+# stub so Android-only integration tests can run on Linux CI.
 # Optionally pin the build to an explicit Rust target triple via
 # SIMDECK_BUILD_TARGET (the release workflow uses aarch64-apple-darwin); when
-# unset we use the host triple so local dev on Apple Silicon stays fast.
+# unset we use the host triple so local dev stays fast.
 
 mkdir -p "$BUILD_DIR"
 
@@ -43,7 +43,7 @@ echo "Built $OUTPUT_BIN"
 file "$OUTPUT_BIN"
 
 cat > "$OUTPUT" <<EOF
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"

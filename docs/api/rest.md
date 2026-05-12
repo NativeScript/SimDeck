@@ -480,6 +480,7 @@ Returns the current accessibility tree. The server merges framework inspectors, 
 | `swiftui` / `swift-ui`       | Force the published SwiftUI logical tree if the Swift agent root publisher is installed in the app.    |
 | `uikit` / `in-app-inspector` | Force the raw UIKit hierarchy from the in-app inspector agent (NativeScript or Swift).                 |
 | `native-ax` / `ax`           | Always use the native accessibility snapshot.                                                          |
+| `android-uiautomator`        | Force the Android emulator UIAutomator hierarchy.                                                      |
 
 | Parameter       | Default | Description                                                                                     |
 | --------------- | ------- | ----------------------------------------------------------------------------------------------- |

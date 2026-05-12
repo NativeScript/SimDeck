@@ -636,6 +636,7 @@ enum DescribeUiSource {
     Flutter,
     Uikit,
     NativeAx,
+    AndroidUiautomator,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3239,12 +3240,32 @@ fn describe_ui_snapshot(
     direct: bool,
     server_url: &str,
 ) -> anyhow::Result<Value> {
-    if point.is_none() && !direct {
-        match fetch_service_accessibility_tree(udid, source, max_depth, include_hidden, server_url)
-        {
-            Ok(snapshot) => return Ok(snapshot),
-            Err(error) if source != DescribeUiSource::Auto => return Err(error),
-            Err(_) => {}
+    if !direct {
+        if let Some((x, y)) = point {
+            if matches!(
+                source,
+                DescribeUiSource::Auto
+                    | DescribeUiSource::NativeAx
+                    | DescribeUiSource::AndroidUiautomator
+            ) {
+                match fetch_service_accessibility_point(udid, x, y, server_url) {
+                    Ok(snapshot) => return Ok(snapshot),
+                    Err(error) if source != DescribeUiSource::Auto => return Err(error),
+                    Err(_) => {}
+                }
+            }
+        } else {
+            match fetch_service_accessibility_tree(
+                udid,
+                source,
+                max_depth,
+                include_hidden,
+                server_url,
+            ) {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(error) if source != DescribeUiSource::Auto => return Err(error),
+                Err(_) => {}
+            }
         }
     }
 
@@ -3276,6 +3297,19 @@ fn fetch_service_accessibility_tree(
         "/api/simulators/{}/accessibility-tree?{}",
         url_path_component(udid),
         query.join("&")
+    );
+    http_get_json(server_url, &path)
+}
+
+fn fetch_service_accessibility_point(
+    udid: &str,
+    x: f64,
+    y: f64,
+    server_url: &str,
+) -> anyhow::Result<Value> {
+    let path = format!(
+        "/api/simulators/{}/accessibility-point?x={x}&y={y}",
+        url_path_component(udid)
     );
     http_get_json(server_url, &path)
 }
@@ -3670,6 +3704,7 @@ impl DescribeUiSource {
             Self::Flutter => "flutter",
             Self::Uikit => "uikit",
             Self::NativeAx => "native-ax",
+            Self::AndroidUiautomator => "android-uiautomator",
         }
     }
 }

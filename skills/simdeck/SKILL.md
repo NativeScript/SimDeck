@@ -78,10 +78,11 @@ simdeck describe <UDID> --source react-native
 simdeck describe <UDID> --source flutter
 simdeck describe <UDID> --source uikit
 simdeck describe <UDID> --source native-ax
+simdeck describe <UDID> --source android-uiautomator
 simdeck describe <UDID> --direct
 ```
 
-Use `--source auto` with the project daemon. Use `--direct` or `--source native-ax` for the private CoreSimulator accessibility bridge. NativeScript, React Native, and Flutter inspector runtimes can add richer hierarchy data.
+Use `--source auto` with the project daemon. Use `--direct` or `--source native-ax` for the private CoreSimulator accessibility bridge. Use `--source android-uiautomator` for Android emulator UIAutomator hierarchies. NativeScript, React Native, and Flutter inspector runtimes can add richer hierarchy data.
 For Android IDs, `describe` uses `uiautomator dump`; use `--format agent` or
 `--format compact-json` the same way as iOS.
 

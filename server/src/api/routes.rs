@@ -42,6 +42,7 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, TraceLayer};
 use tracing::Level;
 
 const SIMULATOR_INVENTORY_CACHE_TTL: Duration = Duration::from_secs(5);
+const SIMULATOR_INVENTORY_TIMEOUT: Duration = Duration::from_secs(8);
 const H264_WS_MAGIC: &[u8; 4] = b"SDH1";
 const H264_WS_HEADER_LEN: usize = 40;
 const H264_WS_FLAG_KEYFRAME: u8 = 1 << 0;
@@ -1358,10 +1359,11 @@ async fn boot_simulator(
         let action_udid = udid.clone();
         run_android_action(state.clone(), move |android| {
             android.boot(&action_udid)?;
-            android.wait_until_booted(&action_udid, Duration::from_secs(120))
+            android.wait_until_booted(&action_udid, Duration::from_secs(240))?;
+            Ok(())
         })
         .await?;
-        return simulator_payload(state, udid).await;
+        return android_simulator_payload(state, udid).await;
     }
     forget_lifecycle_session(&state, &udid);
     let action_udid = udid.clone();
@@ -1379,7 +1381,7 @@ async fn shutdown_simulator(
     if android::is_android_id(&udid) {
         let action_udid = udid.clone();
         run_android_action(state.clone(), move |android| android.shutdown(&action_udid)).await?;
-        return simulator_payload(state, udid).await;
+        return android_simulator_payload(state, udid).await;
     }
     forget_lifecycle_session(&state, &udid);
     let action_udid = udid.clone();
@@ -5362,19 +5364,59 @@ async fn list_simulators_cached(
     state: AppState,
     force_refresh: bool,
 ) -> Result<Vec<crate::native::bridge::Simulator>, AppError> {
-    let mut guard = state.simulator_inventory.inner.lock().await;
-    if !force_refresh {
-        if let (Some(simulators), Some(updated_at)) = (&guard.simulators, guard.updated_at) {
-            if updated_at.elapsed() <= SIMULATOR_INVENTORY_CACHE_TTL {
-                return Ok(simulators.clone());
+    {
+        let guard = state.simulator_inventory.inner.lock().await;
+        if !force_refresh {
+            if let (Some(simulators), Some(updated_at)) = (&guard.simulators, guard.updated_at) {
+                if updated_at.elapsed() <= SIMULATOR_INVENTORY_CACHE_TTL {
+                    return Ok(simulators.clone());
+                }
             }
         }
     }
 
-    let simulators = run_bridge_action(state.clone(), |bridge| bridge.list_simulators()).await?;
+    let simulators = match timeout(
+        SIMULATOR_INVENTORY_TIMEOUT,
+        run_bridge_action(state.clone(), |bridge| bridge.list_simulators()),
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            tracing::warn!("Timed out listing iOS simulators; returning cached inventory.");
+            let guard = state.simulator_inventory.inner.lock().await;
+            return Ok(guard.simulators.clone().unwrap_or_default());
+        }
+    };
+
+    let mut guard = state.simulator_inventory.inner.lock().await;
     guard.simulators = Some(simulators.clone());
     guard.updated_at = Some(Instant::now());
     Ok(simulators)
+}
+
+async fn android_simulator_payload(state: AppState, udid: String) -> Result<Json<Value>, AppError> {
+    let android_devices =
+        run_android_action(state.clone(), |android| android.list_devices()).await?;
+    let simulator = state
+        .android
+        .enrich_devices(android_devices)
+        .into_iter()
+        .find(|entry| entry.get("udid").and_then(Value::as_str) == Some(udid.as_str()))
+        .ok_or_else(|| AppError::not_found(format!("Unknown Android emulator {udid}")))?;
+    Ok(json(json_value!({ "simulator": simulator })))
+}
+
+async fn simulator_payload(state: AppState, udid: String) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        return android_simulator_payload(state, udid).await;
+    }
+    let enriched = all_device_values(state.clone(), true).await?;
+    let simulator = enriched
+        .into_iter()
+        .find(|entry| entry.get("udid").and_then(Value::as_str) == Some(udid.as_str()))
+        .ok_or_else(|| AppError::not_found(format!("Unknown simulator {udid}")))?;
+    Ok(json(json_value!({ "simulator": simulator })))
 }
 
 async fn accessibility_snapshot(
@@ -5387,15 +5429,6 @@ async fn accessibility_snapshot(
         bridge.accessibility_snapshot_with_max_depth(&udid, point, max_depth)
     })
     .await
-}
-
-async fn simulator_payload(state: AppState, udid: String) -> Result<Json<Value>, AppError> {
-    let enriched = all_device_values(state.clone(), true).await?;
-    let simulator = enriched
-        .into_iter()
-        .find(|entry| entry.get("udid").and_then(Value::as_str) == Some(udid.as_str()))
-        .ok_or_else(|| AppError::not_found(format!("Unknown simulator {udid}")))?;
-    Ok(json(json_value!({ "simulator": simulator })))
 }
 
 #[cfg(test)]
