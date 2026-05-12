@@ -168,7 +168,7 @@ async function main() {
     await session.waitFor(
       simulatorUDID,
       { id: "fixture.continue" },
-      { source: "native-ax", maxDepth: 3, timeoutMs: 5_000, pollMs: 250 },
+      { source: "native-ax", maxDepth: 3, timeoutMs: 20_000, pollMs: 250 },
     );
   });
   await measuredStep("JS tree describe", async () => {

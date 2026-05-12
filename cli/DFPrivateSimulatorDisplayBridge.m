@@ -38,6 +38,7 @@ typedef IndigoHIDMessage *(*DFIndigoHIDMessageForKeyboardArbitraryFn)(int keyCod
 typedef IndigoHIDMessage *(*DFIndigoHIDMessageForKeyboardNSEventFn)(NSEvent *event);
 typedef IndigoHIDMessage *(*DFIndigoHIDMessageForButtonFn)(uint32_t buttonCode, uint32_t operation, uint32_t target);
 typedef IndigoHIDMessage *(*DFIndigoHIDMessageForHIDArbitraryFn)(uint32_t target, uint32_t page, uint32_t usage, uint32_t operation);
+typedef IndigoHIDMessage *(*DFIndigoHIDMessageForScrollEventFn)(uint32_t target, double deltaX, double deltaY, double momentumPhase);
 typedef IndigoHIDMessage *(*DFIndigoHIDServiceMessageFn)(void);
 
 #pragma pack(push, 4)
@@ -1425,6 +1426,29 @@ static IndigoHIDMessage *DFCreateArbitraryHIDMessage(uint32_t target, uint32_t p
         *error = DFMakeError(
             DFPrivateSimulatorErrorCodeTouchDispatchFailed,
             [NSString stringWithFormat:@"SimulatorKit could not construct arbitrary HID for page 0x%x usage 0x%x.", page, usage]
+        );
+    }
+
+    return message;
+}
+
+static IndigoHIDMessage *DFCreateScrollHIDMessage(uint32_t target, double deltaX, double deltaY, NSError **error) {
+    DFIndigoHIDMessageForScrollEventFn scrollMessage = (DFIndigoHIDMessageForScrollEventFn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForScrollEvent");
+    if (scrollMessage == NULL) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit did not expose IndigoHIDMessageForScrollEvent."
+            );
+        }
+        return NULL;
+    }
+
+    IndigoHIDMessage *message = scrollMessage(target, deltaX, deltaY, 0);
+    if (message == NULL && error != NULL) {
+        *error = DFMakeError(
+            DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+            [NSString stringWithFormat:@"SimulatorKit could not construct scroll HID for delta %.3f.", deltaY]
         );
     }
 
@@ -3415,6 +3439,9 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             @"volume-down": @[ @(DFConsumerControlUsagePage), @234 ],
             @"action": @[ @(0x0b), @45 ],
             @"mute": @[ @(0x0b), @46 ],
+            @"digital-crown": @[ @(DFConsumerControlUsagePage), @64 ],
+            @"side-button": @[ @(DFConsumerControlUsagePage), @149 ],
+            @"left-side-button": @[ @(0xff01), @512 ],
         };
     });
 
@@ -3488,6 +3515,57 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         *error = dispatchError ?: DFMakeError(
             DFPrivateSimulatorErrorCodeTouchDispatchFailed,
             [NSString stringWithFormat:@"SimulatorKit rejected hardware button `%@` %@.", buttonName ?: @"", pressed ? @"down" : @"up"]
+        );
+    }
+
+    return success;
+}
+
+- (BOOL)rotateDigitalCrownByDelta:(double)delta
+                             error:(NSError * _Nullable __autoreleasing *)error {
+    if (!isfinite(delta)) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"Digital Crown delta must be finite."
+            );
+        }
+        return NO;
+    }
+
+    __block BOOL success = NO;
+    __block NSError *dispatchError = nil;
+
+    dispatch_block_t work = ^{
+        if (self->_hidClient == nil) {
+            dispatchError = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit did not provide a headless HID client for Digital Crown rotation."
+            );
+            return;
+        }
+
+        NSError *messageError = nil;
+        IndigoHIDMessage *message = DFCreateScrollHIDMessage(DFIndigoTouchTarget, 0, delta, &messageError);
+        if (message == NULL || !DFSendHIDMessage(self->_hidClient, message, YES, &messageError)) {
+            dispatchError = messageError;
+            return;
+        }
+
+        DFLog(@"Sending Digital Crown rotation delta=%.3f", delta);
+        success = YES;
+    };
+
+    if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {
+        work();
+    } else {
+        dispatch_sync(_callbackQueue, work);
+    }
+
+    if (!success && error != NULL) {
+        *error = dispatchError ?: DFMakeError(
+            DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+            @"SimulatorKit rejected Digital Crown rotation."
         );
     }
 

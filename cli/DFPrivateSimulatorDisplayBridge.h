@@ -85,6 +85,8 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
                        usagePage:(nullable NSNumber *)usagePage
                            usage:(nullable NSNumber *)usage
                            error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendHardwareButton(named:pressed:usagePage:usage:));
+- (BOOL)rotateDigitalCrownByDelta:(double)delta
+                             error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(rotateDigitalCrown(delta:));
 
 - (BOOL)rotateRight:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(rotateRight());
 - (BOOL)rotateLeft:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(rotateLeft());

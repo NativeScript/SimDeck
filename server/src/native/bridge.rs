@@ -473,6 +473,20 @@ impl NativeBridge {
         }
     }
 
+    pub fn rotate_crown(&self, udid: &str, delta: f64) -> Result<(), AppError> {
+        if !delta.is_finite() {
+            return Err(AppError::bad_request("Digital Crown delta must be finite."));
+        }
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_rotate_crown(udid.as_ptr(), delta, &mut error),
+                error,
+            )
+        }
+    }
+
     pub fn rotate_right(&self, udid: &str) -> Result<(), AppError> {
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
         unsafe {
@@ -894,6 +908,19 @@ impl NativeSession {
                     usage.unwrap_or(0),
                     &mut error,
                 ),
+                error,
+            )
+        }
+    }
+
+    pub fn rotate_crown(&self, delta: f64) -> Result<(), AppError> {
+        if !delta.is_finite() {
+            return Err(AppError::bad_request("Digital Crown delta must be finite."));
+        }
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_rotate_crown(self.handle, delta, &mut error),
                 error,
             )
         }

@@ -201,11 +201,13 @@ export function DeviceChrome({
 
 const CHROME_BUTTON_WIRE_NAMES: Record<string, string> = {
   action: "action",
+  "digital-crown": "digital-crown",
   home: "home",
+  "left-side-button": "left-side-button",
   lock: "power",
   mute: "mute",
   power: "power",
-  "side-button": "power",
+  "side-button": "side-button",
   "volume-down": "volume-down",
   "volume-up": "volume-up",
 };
@@ -303,16 +305,20 @@ function ChromeButtonHitTarget({
     left: `${(button.x / totalWidth) * 100}%`,
     top: `${(button.y / totalHeight) * 100}%`,
     width: `${(button.width / totalWidth) * 100}%`,
-    "--button-rest-x": `${(rolloverDelta.x / Math.max(button.width, 1)) * 100}%`,
-    "--button-rest-y": `${(rolloverDelta.y / Math.max(button.height, 1)) * 100}%`,
-    "--button-hover-x": `${((rolloverDelta.x * 2) / Math.max(button.width, 1)) * 100}%`,
-    "--button-hover-y": `${((rolloverDelta.y * 2) / Math.max(button.height, 1)) * 100}%`,
+    "--button-rest-x": "0%",
+    "--button-rest-y": "0%",
+    "--button-hover-x": `${(rolloverDelta.x / Math.max(button.width, 1)) * 100}%`,
+    "--button-hover-y": `${(rolloverDelta.y / Math.max(button.height, 1)) * 100}%`,
+    "--button-pressed-x": `${(-rolloverDelta.x / Math.max(button.width, 1)) * 100}%`,
+    "--button-pressed-y": `${(-rolloverDelta.y / Math.max(button.height, 1)) * 100}%`,
   } as CSSProperties &
     Record<
       | "--button-rest-x"
       | "--button-rest-y"
       | "--button-hover-x"
-      | "--button-hover-y",
+      | "--button-hover-y"
+      | "--button-pressed-x"
+      | "--button-pressed-y",
       string
     >;
 

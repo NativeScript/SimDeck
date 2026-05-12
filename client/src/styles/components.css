@@ -142,7 +142,7 @@
   padding: 6px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  background: var(--zoom-toolbar-bg);
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
   backdrop-filter: blur(10px);
 }
@@ -1575,7 +1575,11 @@
 
 .device-chrome-button:active,
 .device-chrome-button.is-pressed {
-  transform: translate3d(var(--button-rest-x, 0), var(--button-rest-y, 0), 0);
+  transform: translate3d(
+    var(--button-pressed-x, var(--button-rest-x, 0)),
+    var(--button-pressed-y, var(--button-rest-y, 0)),
+    0
+  );
 }
 
 .pan-enabled .device-bezel,

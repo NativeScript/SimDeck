@@ -171,6 +171,11 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
                                            error:error];
 }
 
+- (BOOL)rotateDigitalCrownByDelta:(double)delta
+                             error:(NSError * _Nullable __autoreleasing *)error {
+    return [self.session rotateDigitalCrownByDelta:delta error:error];
+}
+
 - (BOOL)openAppSwitcher:(NSError * _Nullable __autoreleasing *)error {
     return [self.session openAppSwitcher:error];
 }

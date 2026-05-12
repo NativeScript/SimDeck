@@ -382,8 +382,8 @@ Content-Type: application/json
 
 Supported button names match the CLI and chrome controls: `home`, `lock`,
 `power`, `side-button`, `volume-up`, `volume-down`, `action`, `mute`,
-`app-switcher`, `siri`, and `apple-pay`. `durationMs` defaults to `0` and is
-used for press-and-hold interactions.
+`digital-crown`, `left-side-button`, `app-switcher`, `siri`, and `apple-pay`.
+`durationMs` defaults to `0` and is used for press-and-hold interactions.
 
 For live chrome interactions, send explicit button edges instead of a completed
 press:
@@ -395,6 +395,20 @@ press:
 `phase` accepts `down`, `up`, `began`, `ended`, and `cancelled`. Chrome controls
 may also pass `usagePage` and `usage` from the device profile when an exact HID
 usage is available.
+
+### `POST /api/simulators/{udid}/crown`
+
+Rotates the Apple Watch Digital Crown using scroll delta semantics:
+
+```http
+POST /api/simulators/{udid}/crown
+Content-Type: application/json
+
+{ "delta": 50 }
+```
+
+The browser UI sends this automatically when scrolling over a Watch screen or
+crown chrome.
 
 ### `POST /api/simulators/{udid}/home`
 

@@ -78,7 +78,7 @@ Private simulator behavior is implemented locally in:
 - Accessibility bridge: `cli/XCWAccessibilityBridge.*`
 
 The current repo uses the private boot path, private display bridge, and private accessibility translation bridge directly. The browser streams frames from that bridge, injects touch and keyboard events through the same native session layer, inspects accessibility through `AccessibilityPlatformTranslation`, and renders device chrome from `cli/XCWChromeRenderer.*`.
-Physical chrome button support uses DeviceKit `chrome.json` input geometry for browser hit targets. Volume, action, and mute buttons dispatch through `IndigoHIDMessageForHIDArbitrary` with consumer/telephony HID usage pairs from the device chrome metadata; home, lock, and app-switcher remain on the existing SimulatorKit button paths.
+Physical chrome button support uses DeviceKit `chrome.json` input geometry for browser hit targets. Volume, action, mute, Apple Watch digital crown, Watch side button, and Watch left-side button dispatch through `IndigoHIDMessageForHIDArbitrary` with consumer/telephony/vendor HID usage pairs from the device chrome metadata; home, lock, and app-switcher remain on the existing SimulatorKit button paths. Apple Watch Digital Crown rotation dispatches through `IndigoHIDMessageForScrollEvent` with the same digitizer target as touch input.
 WebKit inspection uses the simulator `webinspectord` Unix socket named `com.apple.webinspectord_sim.socket` and WebKit's binary-plist Remote Inspector selectors. It lists only WebKit content that the runtime exposes as inspectable. For app-owned `WKWebView` on iOS 16.4 and newer, the app must set `isInspectable = true`.
 
 ## Build and Run

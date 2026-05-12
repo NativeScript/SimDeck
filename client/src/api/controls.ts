@@ -2,6 +2,7 @@ import { accessTokenFromLocation, apiRequest } from "./client";
 import { apiUrl } from "./config";
 import type {
   ButtonPayload,
+  CrownPayload,
   EdgeTouchPayload,
   KeyPayload,
   LaunchPayload,
@@ -18,6 +19,7 @@ export type ControlMessage =
   | ({ type: "multiTouch" } & MultiTouchPayload)
   | ({ type: "key" } & KeyPayload)
   | ({ type: "button" } & ButtonPayload)
+  | ({ type: "crown" } & CrownPayload)
   | { type: "dismissKeyboard" }
   | { type: "home" }
   | { type: "appSwitcher" }
@@ -30,6 +32,7 @@ async function postSimulatorAction(
   action: string,
   payload?:
     | ButtonPayload
+    | CrownPayload
     | KeyPayload
     | LaunchPayload
     | OpenUrlPayload
@@ -97,6 +100,10 @@ export function pressHome(udid: string) {
 
 export function pressSimulatorButton(udid: string, payload: ButtonPayload) {
   return postSimulatorAction(udid, "button", payload);
+}
+
+export function rotateDigitalCrown(udid: string, payload: CrownPayload) {
+  return postSimulatorAction(udid, "crown", payload);
 }
 
 export function openAppSwitcher(udid: string) {

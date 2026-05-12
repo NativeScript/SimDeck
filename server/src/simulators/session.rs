@@ -279,6 +279,10 @@ impl SimulatorSession {
             .send_button(button, pressed, usage_page, usage)
     }
 
+    pub fn rotate_crown(&self, delta: f64) -> Result<(), AppError> {
+        self.inner.native.rotate_crown(delta)
+    }
+
     pub fn open_app_switcher(&self) -> Result<(), AppError> {
         self.inner.native.open_app_switcher()
     }

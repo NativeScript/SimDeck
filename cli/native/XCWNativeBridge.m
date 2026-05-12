@@ -761,6 +761,22 @@ bool xcw_native_send_button(const char *udid, const char *button_name, bool pres
     }
 }
 
+bool xcw_native_rotate_crown(const char *udid, double delta, char **error_message) {
+    @autoreleasepool {
+        DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
+        if (bridge == nil) {
+            return false;
+        }
+        NSError *error = nil;
+        BOOL ok = [bridge rotateDigitalCrownByDelta:delta error:&error];
+        [bridge disconnect];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
 bool xcw_native_rotate_right(const char *udid, char **error_message) {
     @autoreleasepool {
         DFPrivateSimulatorDisplayBridge *bridge = XCWInputBridgeForUDID(udid, error_message);
@@ -1025,6 +1041,17 @@ bool xcw_native_session_send_button(void *handle, const char *button_name, bool 
                                                                     usagePage:has_usage ? @(usage_page) : nil
                                                                         usage:has_usage ? @(usage) : nil
                                                                         error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_session_rotate_crown(void *handle, double delta, char **error_message) {
+    @autoreleasepool {
+        NSError *error = nil;
+        BOOL ok = [XCWNativeSessionFromHandle(handle) rotateDigitalCrownByDelta:delta error:&error];
         if (!ok) {
             XCWSetErrorMessage(error_message, error);
         }

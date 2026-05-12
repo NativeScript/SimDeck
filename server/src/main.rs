@@ -355,6 +355,11 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         duration_ms: u32,
     },
+    Crown {
+        udid: String,
+        #[arg(long, default_value_t = 50.0)]
+        delta: f64,
+    },
     Batch {
         udid: String,
         #[arg(long = "step")]
@@ -1305,6 +1310,7 @@ fn is_known_command(value: &str) -> bool {
             | "key-combo"
             | "type"
             | "button"
+            | "crown"
             | "batch"
             | "dismiss-keyboard"
             | "home"
@@ -2715,6 +2721,17 @@ fn main() -> anyhow::Result<()> {
             )?;
             Ok(())
         }
+        Command::Crown { udid, delta } => {
+            if let Some(server_url) = service_url.as_deref() {
+                service_crown(server_url, &udid, delta)?;
+            } else {
+                bridge.rotate_crown(&udid, delta)?;
+            }
+            println_json(
+                &serde_json::json!({ "ok": true, "udid": udid, "action": "crown", "delta": delta }),
+            )?;
+            Ok(())
+        }
         Command::Batch {
             udid,
             steps,
@@ -3468,6 +3485,15 @@ fn service_button(
         udid,
         "button",
         &serde_json::json!({ "button": button, "durationMs": duration_ms }),
+    )
+}
+
+fn service_crown(server_url: &str, udid: &str, delta: f64) -> anyhow::Result<()> {
+    service_post_ok(
+        server_url,
+        udid,
+        "crown",
+        &serde_json::json!({ "delta": delta }),
     )
 }
 
@@ -4593,6 +4619,10 @@ fn batch_line_to_json_step(line: &str) -> anyhow::Result<Value> {
             "button": tokens.get(1).map(String::as_str).unwrap_or(""),
             "durationMs": args.value("duration-ms").and_then(|value| value.parse::<u32>().ok()).unwrap_or(0),
         }),
+        "crown" => serde_json::json!({
+            "action": "crown",
+            "delta": args.value("delta").and_then(|value| value.parse::<f64>().ok()).unwrap_or(50.0),
+        }),
         "home" => serde_json::json!({ "action": "home" }),
         "dismiss-keyboard" => serde_json::json!({ "action": "dismissKeyboard" }),
         "app-switcher" => serde_json::json!({ "action": "appSwitcher" }),
@@ -4844,6 +4874,14 @@ fn run_batch_step(
                 .ok_or_else(|| crate::error::AppError::bad_request("button requires a name."))?;
             bridge.press_button(udid, button, 0)?;
             Ok("button")
+        }
+        "crown" => {
+            let delta = tokens
+                .get(1)
+                .and_then(|value| value.parse::<f64>().ok())
+                .unwrap_or(50.0);
+            bridge.rotate_crown(udid, delta)?;
+            Ok("crown")
         }
         "key" => {
             let key = tokens.get(1).ok_or_else(|| {

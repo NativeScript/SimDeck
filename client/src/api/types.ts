@@ -314,6 +314,10 @@ export interface ButtonPayload {
   usage?: number;
 }
 
+export interface CrownPayload {
+  delta: number;
+}
+
 export interface LaunchPayload {
   bundleId: string;
 }

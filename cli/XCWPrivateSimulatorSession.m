@@ -361,6 +361,11 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
                                              error:error];
 }
 
+- (BOOL)rotateDigitalCrownByDelta:(double)delta
+                             error:(NSError * _Nullable __autoreleasing *)error {
+    return [_displayBridge rotateDigitalCrownByDelta:delta error:error];
+}
+
 - (BOOL)openAppSwitcher:(NSError * _Nullable __autoreleasing *)error {
     return [_displayBridge openAppSwitcher:error];
 }
