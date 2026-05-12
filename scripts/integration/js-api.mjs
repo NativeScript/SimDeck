@@ -157,7 +157,19 @@ async function main() {
   });
   await measuredStep("JS launch fixture", async () => {
     await retryAsync(
-      () => session.launch(simulatorUDID, fixtureBundleId),
+      async () => {
+        await session.launch(simulatorUDID, fixtureBundleId);
+        await session.waitFor(
+          simulatorUDID,
+          { id: "fixture.continue" },
+          {
+            source: "native-ax",
+            maxDepth: 3,
+            timeoutMs: 15_000,
+            pollMs: 250,
+          },
+        );
+      },
       "JS launch fixture",
       3,
       5_000,
