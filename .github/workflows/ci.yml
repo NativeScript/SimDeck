@@ -16,7 +16,9 @@ env:
 jobs:
   rust:
     name: Rust lint and unit tests
-    runs-on: macos-latest
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
 
     steps:
       - uses: actions/checkout@v4
@@ -114,7 +116,9 @@ jobs:
 
   build-artifacts:
     name: Build integration artifacts
-    runs-on: macos-latest
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
 
     steps:
       - uses: actions/checkout@v4
@@ -169,7 +173,9 @@ jobs:
 
   integration-cli:
     name: CLI simulator integration
-    runs-on: macos-latest
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     needs:
       - rust
       - client
@@ -199,7 +205,9 @@ jobs:
 
   integration-js-api:
     name: JS API simulator integration
-    runs-on: macos-latest
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     needs:
       - rust
       - client

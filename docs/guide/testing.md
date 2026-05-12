@@ -72,11 +72,18 @@ Useful environment variables:
 | `SIMDECK_INTEGRATION_SHOW_SIMULATOR=1`  | Open Simulator.app during the run.                    |
 | `SIMDECK_INTEGRATION_KEEP_SIMULATOR=1`  | Leave the temporary simulator after exit.             |
 | `SIMDECK_INTEGRATION_SIMCTL_TIMEOUT_MS` | Override the cold CoreSimulator command timeout.      |
+| `SIMDECK_INTEGRATION_IOS_RUNTIME`       | Force a runtime by version, name, or identifier.      |
+| `SIMDECK_INTEGRATION_DEVICE_TYPE`       | Force an iPhone device type by name or identifier.    |
 
 The integration suite is separate from `npm run test` because it boots and drives a real iOS simulator.
 The UIKit fixture app is cached under `.cache/simdeck/fixture` using a hash
 of its generated source, plist, simulator SDK, Clang version, and host
 architecture.
+
+By default, the integration runner selects the newest available iOS runtime that
+does not exceed the active `iphonesimulator` SDK version, falling back to the
+same major version when needed. This keeps CI off newer installed runtimes that
+do not match the selected Xcode toolchain.
 
 ## Stress and Leak Checks
 

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { connect } from "simdeck/test";
 import { buildCachedFixtureApp } from "./fixture.mjs";
+import { selectIntegrationSimulator } from "./simulator-selection.mjs";
 
 const root = path.resolve(new URL("../..", import.meta.url).pathname);
 const simdeck = path.join(root, "build", "simdeck");
@@ -68,8 +69,11 @@ async function main() {
     );
   }
 
-  const runtime = latestAvailableIosRuntime();
-  const deviceType = preferredIphoneDeviceType(runtime);
+  const { runtime, deviceType, sdkVersion } = selectIntegrationSimulator({
+    runJson,
+    runText,
+    timeoutMs: coreSimulatorCommandTimeoutMs,
+  });
   const simulatorName = `SimDeck JS API Integration ${Date.now()}`;
   simulatorUDID = await measuredStep(
     "simctl create simulator",
@@ -84,7 +88,7 @@ async function main() {
     { phase: phaseSetup },
   );
   console.log(
-    `created ${simulatorUDID} (${deviceType.name}, ${runtime.version})`,
+    `created ${simulatorUDID} (${deviceType.name}, ${runtime.version}; iphonesimulator SDK ${sdkVersion})`,
   );
 
   await measuredStep(
@@ -324,83 +328,6 @@ async function expectElementContains(selector, text, options = {}) {
   throw new Error(
     `Timed out waiting for fixture text ${JSON.stringify(text)}: ${last}`,
   );
-}
-
-function latestAvailableIosRuntime() {
-  const payload = runJson("xcrun", ["simctl", "list", "runtimes", "-j"], {
-    timeoutMs: coreSimulatorCommandTimeoutMs,
-  });
-  const runtimes = payload.runtimes
-    .filter(
-      (runtime) => runtime.isAvailable && runtime.identifier?.includes("iOS"),
-    )
-    .sort(compareRuntimeVersions);
-  const runtime = runtimes.at(-1);
-  if (!runtime) {
-    throw new Error("No available iOS simulator runtime found.");
-  }
-  return runtime;
-}
-
-function preferredIphoneDeviceType(runtime) {
-  const runtimeSupported = Array.isArray(runtime.supportedDeviceTypes)
-    ? runtime.supportedDeviceTypes
-    : [];
-  const allDeviceTypes = runJson(
-    "xcrun",
-    ["simctl", "list", "devicetypes", "-j"],
-    { timeoutMs: coreSimulatorCommandTimeoutMs },
-  ).devicetypes;
-  const supported =
-    runtimeSupported.length > 0
-      ? runtimeSupported
-      : allDeviceTypes.filter(
-          (device) =>
-            device.productFamily === "iPhone" ||
-            device.identifier?.includes("iPhone"),
-        );
-  const iphones = supported.filter(
-    (device) =>
-      device.productFamily === "iPhone" ||
-      device.identifier?.includes("iPhone"),
-  );
-  for (const name of [
-    "iPhone 17",
-    "iPhone 16",
-    "iPhone 15",
-    "iPhone 14",
-    "iPhone 13",
-  ]) {
-    const match = iphones.find((device) => device.name === name);
-    if (match) {
-      return match;
-    }
-  }
-  const fallback = iphones[0];
-  if (!fallback) {
-    throw new Error(
-      `Runtime ${runtime.identifier} does not support an iPhone device.`,
-    );
-  }
-  return fallback;
-}
-
-function compareRuntimeVersions(left, right) {
-  const leftParts = String(left.version ?? "0")
-    .split(".")
-    .map(Number);
-  const rightParts = String(right.version ?? "0")
-    .split(".")
-    .map(Number);
-  for (
-    let index = 0;
-    index < Math.max(leftParts.length, rightParts.length);
-    index += 1
-  ) {
-    const delta = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
-    if (delta !== 0) return delta;
-  }
-  return String(left.identifier).localeCompare(String(right.identifier));
 }
 
 function buildFixtureApp() {
