@@ -79,7 +79,7 @@ sudo xcode-select -s /Applications/Xcode.app
 
 The encoder did not produce a keyframe within 3 seconds. The most common causes:
 
-- **VideoToolbox is busy.** macOS screen recording can starve the hardware H.264 encoder. Switch to software H.264:
+- **VideoToolbox is busy.** macOS screen recording can starve the hardware H.264 encoder. Auto mode detects sustained hardware encode overload and temporarily falls back to software H.264. For a fully software-only run, start with:
 
   ```sh
   simdeck daemon stop
