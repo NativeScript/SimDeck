@@ -105,6 +105,7 @@ import {
 const ACCESSIBILITY_REFRESH_MS = 1500;
 const REACT_NATIVE_ACCESSIBILITY_REFRESH_MS = 500;
 const FLUTTER_ACCESSIBILITY_REFRESH_MS = 1000;
+const ANDROID_METADATA_REFRESH_MS = 1000;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const FLUTTER_INSPECTOR_MAX_DEPTH = 48;
@@ -457,8 +458,12 @@ export function AppShell({
     udid: string;
   } | null>(null);
   const touchMoveFrameRef = useRef(0);
+  const refreshRef = useRef(refresh);
+  const previousAndroidDisplayKeyRef = useRef("");
+  const previousAndroidViewportSizeKeyRef = useRef("");
   const canvasSize = useElementSize(outerCanvasElement);
   const zoomDockSize = useElementSize(zoomDockElement);
+  refreshRef.current = refresh;
 
   const handleOuterCanvasRef = useCallback((node: HTMLDivElement | null) => {
     outerCanvasRef.current = node;
@@ -689,10 +694,14 @@ export function AppShell({
     selectedSimulator != null && shouldRenderNativeChrome(selectedSimulator);
   const viewportChromeProfile = shouldRenderChrome ? chromeProfile : null;
   const isAndroidViewport = isAndroidSimulator(selectedSimulator);
+  const androidDisplayKey =
+    isAndroidViewport && selectedSimulator
+      ? androidDisplayKeyForSimulator(selectedSimulator)
+      : "";
   const effectiveDeviceNaturalSize = useMemo(() => {
     const displaySize = simulatorDisplaySize(selectedSimulator);
-    if (isAndroidViewport && displaySize) {
-      return displaySize;
+    if (isAndroidViewport) {
+      return deviceNaturalSize ?? displaySize;
     }
     return (
       deviceNaturalSize ??
@@ -710,6 +719,10 @@ export function AppShell({
     selectedSimulator,
     shouldRenderChrome,
   ]);
+  const androidViewportSizeKey =
+    isAndroidViewport && effectiveDeviceNaturalSize
+      ? `${Math.round(effectiveDeviceNaturalSize.width)}x${Math.round(effectiveDeviceNaturalSize.height)}`
+      : "";
 
   const zoomDockReservedHeight =
     zoomDockElement && typeof window !== "undefined"
@@ -1066,6 +1079,55 @@ export function AppShell({
   }, [isAndroidViewport, simulatorRotationQuarterTurns]);
 
   useEffect(() => {
+    if (!isAndroidViewport || !selectedSimulator?.isBooted) {
+      return;
+    }
+
+    let cancelled = false;
+    const refreshAndroidMetadata = () => {
+      if (cancelled || document.visibilityState !== "visible") {
+        return;
+      }
+      void refreshRef.current();
+    };
+
+    const intervalId = window.setInterval(
+      refreshAndroidMetadata,
+      ANDROID_METADATA_REFRESH_MS,
+    );
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [isAndroidViewport, selectedSimulator?.isBooted, selectedSimulator?.udid]);
+
+  useEffect(() => {
+    if (!isAndroidViewport || !androidDisplayKey) {
+      previousAndroidDisplayKeyRef.current = "";
+      return;
+    }
+
+    const previousKey = previousAndroidDisplayKeyRef.current;
+    previousAndroidDisplayKeyRef.current = androidDisplayKey;
+    if (previousKey && previousKey !== androidDisplayKey) {
+      beginZoomAnimation();
+    }
+  }, [androidDisplayKey, isAndroidViewport]);
+
+  useEffect(() => {
+    if (!isAndroidViewport || !androidViewportSizeKey) {
+      previousAndroidViewportSizeKeyRef.current = "";
+      return;
+    }
+
+    const previousKey = previousAndroidViewportSizeKeyRef.current;
+    previousAndroidViewportSizeKeyRef.current = androidViewportSizeKey;
+    if (previousKey && previousKey !== androidViewportSizeKey) {
+      beginZoomAnimation();
+    }
+  }, [androidViewportSizeKey, isAndroidViewport]);
+
+  useEffect(() => {
     setChromeLoaded(!chromeRequired);
   }, [chromeRequired, chromeUrl]);
 
@@ -1096,7 +1158,12 @@ export function AppShell({
     return () => {
       cancelled = true;
     };
-  }, [selectedSimulator?.udid]);
+  }, [
+    selectedSimulator?.privateDisplay?.displayHeight,
+    selectedSimulator?.privateDisplay?.displayWidth,
+    selectedSimulator?.privateDisplay?.rotationQuarterTurns,
+    selectedSimulator?.udid,
+  ]);
 
   useEffect(() => {
     if (!menuOpen) {
@@ -1329,7 +1396,7 @@ export function AppShell({
   const screenOnlyStyle =
     !viewportChromeProfile && chromeProfile && chromeProfile.screenWidth > 0
       ? isAndroidViewport
-        ? androidScreenRadiusStyle(chromeProfile)
+        ? androidScreenRadiusStyle(chromeProfile, effectiveDeviceNaturalSize)
         : ({
             borderRadius: `${Math.min(
               chromeProfile.cornerRadius *
@@ -1906,6 +1973,7 @@ export function AppShell({
             void runAction(async () => {
               await rotateRight(selectedSimulator.udid);
               setRotationQuarterTurns(0);
+              beginZoomAnimation();
               await refresh();
             }, false);
             return;
@@ -2101,12 +2169,17 @@ export function AppShell({
 
 function androidScreenRadiusStyle(
   chromeProfile: ChromeProfile,
+  displaySize: Size | null,
 ): CSSProperties | null {
-  if (chromeProfile.screenWidth <= 0) {
+  const screenWidth =
+    displaySize && displaySize.width > 0
+      ? displaySize.width
+      : chromeProfile.screenWidth;
+  if (screenWidth <= 0) {
     return null;
   }
 
-  const scale = DEVICE_SCREEN_WIDTH / chromeProfile.screenWidth;
+  const scale = DEVICE_SCREEN_WIDTH / screenWidth;
   const maxRadius = DEVICE_SCREEN_WIDTH / 2;
   const radii = chromeProfile.cornerRadii;
   const topLeft = scaledScreenRadius(
@@ -2150,6 +2223,19 @@ function scaledScreenRadius(radius: number, scale: number, maxRadius: number) {
     return 0;
   }
   return Math.min(radius * scale, maxRadius);
+}
+
+function androidDisplayKeyForSimulator(simulator: SimulatorMetadata): string {
+  const display = simulator.privateDisplay;
+  if (!display) {
+    return simulator.udid;
+  }
+  return [
+    simulator.udid,
+    Math.round(display.displayWidth),
+    Math.round(display.displayHeight),
+    display.rotationQuarterTurns ?? 0,
+  ].join("|");
 }
 
 function readDeviceQueryParam(): string | undefined {
