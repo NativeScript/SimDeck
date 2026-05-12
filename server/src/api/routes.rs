@@ -43,6 +43,7 @@ use tracing::Level;
 
 const SIMULATOR_INVENTORY_CACHE_TTL: Duration = Duration::from_secs(5);
 const SIMULATOR_INVENTORY_TIMEOUT: Duration = Duration::from_secs(8);
+const SIMULATOR_INVENTORY_FORCE_REFRESH_TIMEOUT: Duration = Duration::from_secs(90);
 const H264_WS_MAGIC: &[u8; 4] = b"SDH1";
 const H264_WS_HEADER_LEN: usize = 40;
 const H264_WS_FLAG_KEYFRAME: u8 = 1 << 0;
@@ -5412,15 +5413,25 @@ async fn list_simulators_cached(
         }
     }
 
+    let inventory_timeout = if force_refresh {
+        SIMULATOR_INVENTORY_FORCE_REFRESH_TIMEOUT
+    } else {
+        SIMULATOR_INVENTORY_TIMEOUT
+    };
+
     let simulators = match timeout(
-        SIMULATOR_INVENTORY_TIMEOUT,
+        inventory_timeout,
         run_bridge_action(state.clone(), |bridge| bridge.list_simulators()),
     )
     .await
     {
         Ok(result) => result?,
         Err(_) => {
-            tracing::warn!("Timed out listing iOS simulators; returning cached inventory.");
+            tracing::warn!(
+                timeout_seconds = inventory_timeout.as_secs(),
+                force_refresh,
+                "Timed out listing iOS simulators; returning cached inventory."
+            );
             let guard = state.simulator_inventory.inner.lock().await;
             return Ok(guard.simulators.clone().unwrap_or_default());
         }

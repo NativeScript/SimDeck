@@ -21,6 +21,8 @@ const ANDROID_TOUCH_SWIPE_THRESHOLD: f64 = 0.025;
 const ANDROID_TOUCH_MIN_DURATION_MS: u128 = 80;
 const ANDROID_TOUCH_MAX_DURATION_MS: u128 = 1500;
 const ANDROID_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const ANDROID_UIAUTOMATOR_DUMP_ATTEMPTS: usize = 10;
+const ANDROID_UIAUTOMATOR_DUMP_RETRY_DELAY: Duration = Duration::from_millis(250);
 const RUNNING_EMULATOR_CACHE_TTL: Duration = Duration::from_secs(2);
 const AVD_GRPC_PORT_CACHE_TTL: Duration = Duration::from_secs(60);
 const SCREEN_SIZE_CACHE_TTL: Duration = Duration::from_secs(1);
@@ -775,21 +777,42 @@ impl AndroidBridge {
         max_depth: Option<usize>,
     ) -> Result<Value, AppError> {
         let serial = self.serial_for_id(id)?;
+        let max_depth = max_depth.unwrap_or(80).min(80);
+        let mut last_error = None;
+        for attempt in 1..=ANDROID_UIAUTOMATOR_DUMP_ATTEMPTS {
+            match self.android_accessibility_tree_for_serial(&serial, max_depth) {
+                Ok(tree) => return Ok(tree),
+                Err(error) => last_error = Some(error),
+            }
+            if attempt < ANDROID_UIAUTOMATOR_DUMP_ATTEMPTS {
+                thread::sleep(ANDROID_UIAUTOMATOR_DUMP_RETRY_DELAY);
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            AppError::native("Unable to capture Android UIAutomator hierarchy.")
+        }))
+    }
+
+    fn android_accessibility_tree_for_serial(
+        &self,
+        serial: &str,
+        max_depth: usize,
+    ) -> Result<Value, AppError> {
         let raw = self.run_adb_shell(
-            &serial,
+            serial,
             "uiautomator dump /sdcard/simdeck_ui.xml >/dev/null && cat /sdcard/simdeck_ui.xml",
         )?;
         let xml = extract_xml(&raw);
         let document = roxmltree::Document::parse(xml).map_err(|error| {
             AppError::native(format!("Unable to parse UIAutomator XML: {error}"))
         })?;
-        let mut roots = Vec::new();
         let root = document.root_element();
-        let max_depth = max_depth.unwrap_or(80).min(80);
+        let (width, height) = self.screen_size_for_serial(serial)?;
+        let mut roots = Vec::new();
         for child in root.children().filter(|node| node.has_tag_name("node")) {
             roots.push(android_node_value(child, 0, max_depth));
         }
-        let (width, height) = self.screen_size_for_serial(&serial)?;
         if roots.is_empty() {
             roots.push(json!({
                 "type": "screen",
