@@ -149,6 +149,8 @@ simdeck type <udid> --file message.txt
 simdeck button <udid> lock --duration-ms 1000
 simdeck button <udid> volume-up
 simdeck button <udid> action --duration-ms 1000
+simdeck button <udid> digital-crown
+simdeck button <udid> left-side-button
 simdeck batch <udid> --step "tap --label Continue" --step "type 'hello'" --step "wait-for --label hello"
 simdeck dismiss-keyboard <udid>
 simdeck home <udid>

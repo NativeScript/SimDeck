@@ -3415,6 +3415,9 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             @"volume-down": @[ @(DFConsumerControlUsagePage), @234 ],
             @"action": @[ @(0x0b), @45 ],
             @"mute": @[ @(0x0b), @46 ],
+            @"digital-crown": @[ @(DFConsumerControlUsagePage), @64 ],
+            @"side-button": @[ @(DFConsumerControlUsagePage), @149 ],
+            @"left-side-button": @[ @(0xff01), @512 ],
         };
     });
 

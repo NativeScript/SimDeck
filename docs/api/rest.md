@@ -382,8 +382,8 @@ Content-Type: application/json
 
 Supported button names match the CLI and chrome controls: `home`, `lock`,
 `power`, `side-button`, `volume-up`, `volume-down`, `action`, `mute`,
-`app-switcher`, `siri`, and `apple-pay`. `durationMs` defaults to `0` and is
-used for press-and-hold interactions.
+`digital-crown`, `left-side-button`, `app-switcher`, `siri`, and `apple-pay`.
+`durationMs` defaults to `0` and is used for press-and-hold interactions.
 
 For live chrome interactions, send explicit button edges instead of a completed
 press:

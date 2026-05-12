@@ -1575,7 +1575,11 @@
 
 .device-chrome-button:active,
 .device-chrome-button.is-pressed {
-  transform: translate3d(var(--button-rest-x, 0), var(--button-rest-y, 0), 0);
+  transform: translate3d(
+    var(--button-pressed-x, var(--button-rest-x, 0)),
+    var(--button-pressed-y, var(--button-rest-y, 0)),
+    0
+  );
 }
 
 .pan-enabled .device-bezel,

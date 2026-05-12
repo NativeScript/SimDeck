@@ -12,6 +12,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
 + (nullable NSDictionary *)inputNamed:(NSString *)buttonName
                          chromeInfo:(NSDictionary *)chromeInfo
                               error:(NSError * _Nullable __autoreleasing *)error;
++ (NSEdgeInsets)devicePaddingForChromeInfo:(NSDictionary *)chromeInfo;
 @end
 
 @implementation XCWChromeRenderer
@@ -665,6 +666,14 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
 
 + (CGRect)fullFrameForChromeInfo:(NSDictionary *)chromeInfo
                        chromeSize:(CGSize)chromeSize {
+    NSEdgeInsets padding = [self devicePaddingForChromeInfo:chromeInfo];
+    if (padding.top != 0.0 || padding.left != 0.0 || padding.bottom != 0.0 || padding.right != 0.0) {
+        return CGRectMake(-padding.left,
+                          -padding.top,
+                          chromeSize.width + padding.left + padding.right,
+                          chromeSize.height + padding.top + padding.bottom);
+    }
+
     CGRect bounds = CGRectMake(0.0, 0.0, chromeSize.width, chromeSize.height);
     NSDictionary *json = chromeInfo[@"json"];
     NSString *chromePath = chromeInfo[@"chromePath"];
@@ -712,53 +721,83 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
                       inSize:(CGSize)size
                   offsetName:(NSString *)offsetName {
     NSDictionary *offsets = [input[@"offsets"] isKindOfClass:[NSDictionary class]] ? input[@"offsets"] : @{};
-    NSDictionary *requestedOffset = [offsets[offsetName] isKindOfClass:[NSDictionary class]] ? offsets[offsetName] : nil;
     NSDictionary *normalOffset = [offsets[@"normal"] isKindOfClass:[NSDictionary class]] ? offsets[@"normal"] : nil;
     NSDictionary *rolloverOffset = [offsets[@"rollover"] isKindOfClass:[NSDictionary class]] ? offsets[@"rollover"] : nil;
-    NSDictionary *offset = requestedOffset ?: rolloverOffset ?: normalOffset ?: @{};
-    CGFloat offsetX = [self numberValue:offset[@"x"]];
-    CGFloat offsetY = [self numberValue:offset[@"y"]];
+    NSDictionary *requestedOffset = [offsets[offsetName] isKindOfClass:[NSDictionary class]] ? offsets[offsetName] : nil;
+    NSDictionary *primaryOffset = normalOffset ?: rolloverOffset ?: requestedOffset ?: @{};
+    NSDictionary *secondaryOffset = rolloverOffset ?: normalOffset ?: requestedOffset ?: @{};
+    CGFloat normalX = [self numberValue:primaryOffset[@"x"]];
+    CGFloat normalY = [self numberValue:primaryOffset[@"y"]];
+    CGFloat rolloverX = [self numberValue:secondaryOffset[@"x"]];
+    CGFloat rolloverY = [self numberValue:secondaryOffset[@"y"]];
+    CGFloat restX = normalX;
+    CGFloat restY = normalY;
     NSString *anchor = [input[@"anchor"] isKindOfClass:[NSString class]] ? input[@"anchor"] : @"";
     NSString *align = [input[@"align"] isKindOfClass:[NSString class]] ? input[@"align"] : @"";
 
-    CGFloat x = offsetX - (assetSize.width / 2.0);
-    CGFloat y = offsetY;
+    if ([offsetName isEqualToString:@"rollover"]) {
+        restX = rolloverX;
+        restY = rolloverY;
+    } else if ([anchor isEqualToString:@"left"]) {
+        restX = rolloverX;
+        restY = rolloverY;
+    } else if ([anchor isEqualToString:@"right"] ||
+               [anchor isEqualToString:@"top"] ||
+               [anchor isEqualToString:@"bottom"]) {
+        restX = (2.0 * normalX) - rolloverX;
+        restY = (2.0 * normalY) - rolloverY;
+    }
+
+    CGFloat x = restX - (assetSize.width / 2.0);
+    CGFloat y = restY;
     if ([anchor isEqualToString:@"left"]) {
-        x = offsetX - (assetSize.width / 2.0);
+        x = restX - (assetSize.width / 2.0);
     } else if ([anchor isEqualToString:@"right"]) {
-        x = size.width + offsetX - (assetSize.width / 2.0);
+        x = size.width + restX;
+        y = restY;
     } else if ([anchor isEqualToString:@"top"]) {
-        y = offsetY;
+        if ([align isEqualToString:@"trailing"]) {
+            x = size.width + restX - assetSize.width;
+        } else {
+            x = restX;
+        }
+        y = restY - assetSize.height;
     } else if ([anchor isEqualToString:@"bottom"]) {
-        y = size.height + offsetY;
+        if ([align isEqualToString:@"trailing"]) {
+            x = size.width + restX - assetSize.width;
+        } else {
+            x = restX;
+        }
+        y = size.height + restY;
     }
 
     if ([anchor isEqualToString:@"left"] || [anchor isEqualToString:@"right"]) {
         if ([align isEqualToString:@"center"]) {
-            y = (size.height - assetSize.height) / 2.0 + offsetY;
+            y = (size.height - assetSize.height) / 2.0 + restY;
         } else if ([align isEqualToString:@"trailing"]) {
-            y = size.height - assetSize.height + offsetY;
+            y = size.height - assetSize.height + restY;
         }
     } else if ([anchor isEqualToString:@"top"] || [anchor isEqualToString:@"bottom"]) {
-        CGFloat baseX = 0.0;
         if ([align isEqualToString:@"center"]) {
-            baseX = size.width / 2.0;
-        } else if ([align isEqualToString:@"trailing"]) {
-            baseX = size.width;
-        }
-        x = baseX + offsetX - (assetSize.width / 2.0);
-        if ([align isEqualToString:@"center"]) {
-            x = (size.width / 2.0) + offsetX - (assetSize.width / 2.0);
-        } else if ([align isEqualToString:@"trailing"]) {
-            x = size.width + offsetX - (assetSize.width / 2.0);
+            x = (size.width / 2.0) + restX - (assetSize.width / 2.0);
         }
     } else if ([align isEqualToString:@"center"]) {
-        x = (size.width - assetSize.width) / 2.0 + offsetX;
+        x = (size.width - assetSize.width) / 2.0 + restX;
     } else if ([align isEqualToString:@"trailing"]) {
-        x = size.width - assetSize.width + offsetX;
+        x = size.width - assetSize.width + restX;
     }
 
     return CGRectMake(x, y, assetSize.width, assetSize.height);
+}
+
++ (NSEdgeInsets)devicePaddingForChromeInfo:(NSDictionary *)chromeInfo {
+    NSDictionary *json = chromeInfo[@"json"];
+    NSDictionary *images = [json[@"images"] isKindOfClass:[NSDictionary class]] ? json[@"images"] : @{};
+    NSDictionary *padding = [images[@"devicePadding"] isKindOfClass:[NSDictionary class]] ? images[@"devicePadding"] : @{};
+    return NSEdgeInsetsMake([self numberValue:padding[@"top"]],
+                            [self numberValue:padding[@"left"]],
+                            [self numberValue:padding[@"bottom"]],
+                            [self numberValue:padding[@"right"]]);
 }
 
 + (NSArray<NSDictionary<NSString *, id> *> *)buttonProfilesForChromeInfo:(NSDictionary *)chromeInfo
