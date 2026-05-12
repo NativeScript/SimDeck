@@ -891,6 +891,9 @@ async fn run_android_webrtc_control_message(
         ControlMessage::AppSwitcher => state.android.open_app_switcher(&udid),
         ControlMessage::RotateLeft => state.android.rotate_left(&udid),
         ControlMessage::RotateRight => state.android.rotate_right(&udid),
+        ControlMessage::Crown { .. } => Err(AppError::bad_request(
+            "Digital Crown rotation is only available for Apple Watch simulators.",
+        )),
         ControlMessage::ToggleAppearance => state.android.toggle_appearance(&udid),
         ControlMessage::Touch { .. }
         | ControlMessage::EdgeTouch { .. }

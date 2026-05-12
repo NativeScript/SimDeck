@@ -212,6 +212,13 @@ bool xcw_native_send_button(const char *udid, const char *button_name,
   return xcw_unsupported(error_message);
 }
 
+bool xcw_native_rotate_crown(const char *udid, double delta,
+                             char **error_message) {
+  (void)udid;
+  (void)delta;
+  return xcw_unsupported(error_message);
+}
+
 bool xcw_native_rotate_right(const char *udid, char **error_message) {
   (void)udid;
   return xcw_unsupported(error_message);
@@ -418,6 +425,13 @@ bool xcw_native_session_send_button(void *handle, const char *button_name,
   (void)has_usage;
   (void)usage_page;
   (void)usage;
+  return xcw_unsupported(error_message);
+}
+
+bool xcw_native_session_rotate_crown(void *handle, double delta,
+                                     char **error_message) {
+  (void)handle;
+  (void)delta;
   return xcw_unsupported(error_message);
 }
 
