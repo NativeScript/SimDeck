@@ -44,6 +44,8 @@ static const double XCWEncoderLatencyEWMAAlpha = 0.2;
 static const double XCWEncoderStrainedLoadPercent = 85.0;
 static const double XCWEncoderOverloadedLoadPercent = 105.0;
 static const NSUInteger XCWEncoderConsecutiveOverBudgetFrameThreshold = 3;
+static const double XCWHardwareFallbackLoadPercent = 500.0;
+static const NSUInteger XCWHardwareFallbackConsecutiveOverBudgetFrameThreshold = 60;
 static const uint64_t XCWAutoHardwareRetryIntervalUs = 10000000;
 static void *XCWH264EncoderQueueSpecificKey = &XCWH264EncoderQueueSpecificKey;
 
@@ -198,8 +200,9 @@ static NSString *XCWVideoEncoderModeName(XCWVideoEncoderMode mode) {
 static NSString *XCWVideoEncoderIDForMode(XCWVideoEncoderMode mode) {
     switch (mode) {
         case XCWVideoEncoderModeAuto:
-        case XCWVideoEncoderModeH264Hardware:
             return nil;
+        case XCWVideoEncoderModeH264Hardware:
+            return @"com.apple.videotoolbox.videoencoder.ave.avc";
         case XCWVideoEncoderModeH264Software:
             return @"org.videolan.x264";
         default:
@@ -573,6 +576,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 - (void)handleCompressionOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                               submittedAtUs:(uint64_t)submittedAtUs;
 - (uint64_t)activeFrameIntervalUsLocked;
+- (uint64_t)encoderLatencyBudgetUsLocked;
 - (uint64_t)pacingDelayBeforeNextFrameAtTimeUs:(uint64_t)nowUs;
 - (void)recordFrameSubmissionLockedAtTimeUs:(uint64_t)nowUs software:(BOOL)software;
 - (void)scheduleDrainAfterDelayUs:(uint64_t)delayUs;
@@ -786,7 +790,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 
     __block NSDictionary *stats = nil;
     dispatch_sync(_queue, ^{
-        uint64_t encoderBudgetUs = [self activeFrameIntervalUsLocked];
+        uint64_t encoderBudgetUs = [self encoderLatencyBudgetUsLocked];
         double latestLoadPercent = encoderBudgetUs > 0
             ? ((double)self->_latestEncodeLatencyUs * 100.0) / (double)encoderBudgetUs
             : 0.0;
@@ -1020,6 +1024,17 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     return (uint64_t)llround(1000000.0 / (double)expectedFrameRate);
 }
 
+- (uint64_t)encoderLatencyBudgetUsLocked {
+    uint64_t frameIntervalUs = [self activeFrameIntervalUsLocked];
+    if (frameIntervalUs == 0 || _activeEncoderMode == XCWVideoEncoderModeH264Software) {
+        return frameIntervalUs;
+    }
+    if (_realtimeStreamMode) {
+        return frameIntervalUs * (MAX((NSUInteger)1, [self maximumInFlightFrameCountLocked]) + 1);
+    }
+    return frameIntervalUs;
+}
+
 - (uint64_t)pacingDelayBeforeNextFrameAtTimeUs:(uint64_t)nowUs {
     if (_needsKeyFrame) {
         return 0;
@@ -1229,6 +1244,11 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 
     if (![self ensureCompressionSessionWithWidth:targetWidth height:targetHeight]) {
         CVPixelBufferRelease(encodePixelBuffer);
+        if (_activeEncoderMode == XCWVideoEncoderModeAuto) {
+            _encodeFailureCount += 1;
+            [self enterAutoSoftwareFallbackLockedAtTimeUs:nowUs];
+            return [self encodePixelBufferLocked:pixelBuffer];
+        }
         return NO;
     }
 
@@ -1251,6 +1271,10 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     if (status != noErr) {
         _needsKeyFrame = YES;
         _encodeFailureCount += 1;
+        if (_activeEncoderMode == XCWVideoEncoderModeAuto) {
+            [self enterAutoSoftwareFallbackLockedAtTimeUs:nowUs];
+            return [self encodePixelBufferLocked:pixelBuffer];
+        }
         return NO;
     }
 
@@ -1279,7 +1303,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     if (encoderID.length > 0) {
         encoderSpecification[(__bridge NSString *)kVTVideoEncoderSpecification_EncoderID] = encoderID;
     }
-    if (_activeEncoderMode != XCWVideoEncoderModeH264Software && (_lowLatencyMode || _realtimeStreamMode)) {
+    if (_activeEncoderMode != XCWVideoEncoderModeH264Software && _lowLatencyMode) {
         if (@available(macOS 11.3, *)) {
             encoderSpecification[(__bridge NSString *)kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = @YES;
         }
@@ -1685,7 +1709,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _averageEncodeLatencyUs = _averageEncodeLatencyUs <= 0.0
         ? (double)_latestEncodeLatencyUs
         : (_averageEncodeLatencyUs * (1.0 - XCWEncoderLatencyEWMAAlpha)) + ((double)_latestEncodeLatencyUs * XCWEncoderLatencyEWMAAlpha);
-    uint64_t encoderBudgetUs = [self activeFrameIntervalUsLocked];
+    uint64_t encoderBudgetUs = [self encoderLatencyBudgetUsLocked];
     double averageLoadPercent = encoderBudgetUs > 0
         ? (_averageEncodeLatencyUs * 100.0) / (double)encoderBudgetUs
         : 0.0;
@@ -1940,7 +1964,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         _averageEncodeLatencyUs = _averageEncodeLatencyUs <= 0.0
             ? (double)_latestEncodeLatencyUs
             : (_averageEncodeLatencyUs * (1.0 - XCWEncoderLatencyEWMAAlpha)) + ((double)_latestEncodeLatencyUs * XCWEncoderLatencyEWMAAlpha);
-        uint64_t encoderBudgetUs = [self activeFrameIntervalUsLocked];
+        uint64_t encoderBudgetUs = [self encoderLatencyBudgetUsLocked];
         double averageLoadPercent = encoderBudgetUs > 0
             ? (_averageEncodeLatencyUs * 100.0) / (double)encoderBudgetUs
             : 0.0;
@@ -1964,7 +1988,9 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
             _overloadEventCount += 1;
         }
         _wasOverloaded = overloaded;
-        shouldEnterAutoSoftwareFallback = overloaded &&
+        BOOL hardwareFallbackOverloaded = averageLoadPercent >= XCWHardwareFallbackLoadPercent ||
+            _consecutiveOverBudgetFrameCount >= XCWHardwareFallbackConsecutiveOverBudgetFrameThreshold;
+        shouldEnterAutoSoftwareFallback = hardwareFallbackOverloaded &&
             _encoderMode == XCWVideoEncoderModeAuto &&
             _activeEncoderMode != XCWVideoEncoderModeH264Software &&
             _hardwareAccelerated;
