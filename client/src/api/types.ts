@@ -293,6 +293,87 @@ export interface SimulatorLogsResponse {
   entries: SimulatorLogEntry[];
 }
 
+export interface PerformanceProcess {
+  pid: number;
+  parentPid: number;
+  process: string;
+  role: string;
+  state: string;
+  appName?: string | null;
+  bundleIdentifier?: string | null;
+  command: string;
+  isForeground: boolean;
+}
+
+export interface PerformanceHangStatus {
+  state: string;
+  staleMs?: number | null;
+  reason: string;
+}
+
+export interface PerformanceSample {
+  pid: number;
+  timestampMs: number;
+  cpuPercent: number;
+  memoryResidentBytes?: number | null;
+  memoryFootprintBytes?: number | null;
+  memoryPeakFootprintBytes?: number | null;
+  diskReadBytes?: number | null;
+  diskWriteBytes?: number | null;
+  diskReadBytesPerSecond?: number | null;
+  diskWriteBytesPerSecond?: number | null;
+  networkReceivedBytes?: number | null;
+  networkSentBytes?: number | null;
+  networkReceivedBytesPerSecond?: number | null;
+  networkSentBytesPerSecond?: number | null;
+  networkConnectionCount?: number | null;
+  networkEstablishedConnectionCount?: number | null;
+  networkEndpoints: string[];
+  hang: PerformanceHangStatus;
+}
+
+export interface PerformanceEvent {
+  category: string;
+  level: string;
+  message: string;
+  pid: number | null;
+  process: string;
+  subsystem: string;
+  timestamp: string;
+}
+
+export interface SimulatorPerformanceResponse {
+  udid: string;
+  sampledAt: number;
+  selectedPid?: number | null;
+  foregroundProcess?: SimulatorForegroundApp | null;
+  processes: PerformanceProcess[];
+  current?: PerformanceSample | null;
+  history: PerformanceSample[];
+  events: PerformanceEvent[];
+  warnings: string[];
+}
+
+export interface SimulatorProcessListResponse {
+  udid: string;
+  foregroundProcess?: SimulatorForegroundApp | null;
+  processes: PerformanceProcess[];
+}
+
+export interface StackSampleReport {
+  pid: number;
+  seconds: number;
+  sampledAt: number;
+  report: string;
+  stderr: string;
+  truncated: boolean;
+}
+
+export interface StackSampleResponse {
+  udid: string;
+  sample: StackSampleReport;
+}
+
 export interface InspectorRequestResponse<T = unknown> {
   inspector?: Record<string, unknown>;
   result: T;

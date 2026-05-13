@@ -8,6 +8,9 @@ use crate::inspector::{InspectorHub, PublishedInspector};
 use crate::logs::LogRegistry;
 use crate::metrics::counters::{ClientStreamStats, Metrics};
 use crate::native::bridge::{LogFilters, NativeBridge};
+use crate::performance::{
+    sample_stack, DisplaySignal, ForegroundProcess, PerformanceQuery, PerformanceRegistry,
+};
 use crate::simulators::registry::SessionRegistry;
 use crate::simulators::session::SimulatorSession;
 use crate::static_files;
@@ -59,6 +62,7 @@ pub struct AppState {
     pub logs: LogRegistry,
     pub inspectors: InspectorHub,
     pub metrics: Arc<Metrics>,
+    pub performance: PerformanceRegistry,
     pub stream_clients: StreamClientForegroundRegistry,
     pub simulator_inventory: SimulatorInventoryCache,
     pub android: AndroidBridge,
@@ -556,6 +560,19 @@ struct LogsQuery {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PerformanceRequestQuery {
+    pid: Option<i32>,
+    window_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StackSampleRequestQuery {
+    seconds: Option<u64>,
+}
+
+#[derive(Deserialize)]
 struct InspectorRequestPayload {
     method: String,
     params: Option<Value>,
@@ -625,6 +642,19 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/simulators", get(list_simulators))
         .route("/api/simulators/{udid}/state", get(simulator_state))
+        .route("/api/simulators/{udid}/processes", get(simulator_processes))
+        .route(
+            "/api/simulators/{udid}/performance",
+            get(simulator_performance),
+        )
+        .route(
+            "/api/simulators/{udid}/processes/{pid}/performance",
+            get(simulator_process_performance),
+        )
+        .route(
+            "/api/simulators/{udid}/processes/{pid}/sample",
+            post(sample_process_stack),
+        )
         .route("/api/simulators/{udid}/boot", post(boot_simulator))
         .route("/api/simulators/{udid}/shutdown", post(shutdown_simulator))
         .route("/api/simulators/{udid}/erase", post(erase_simulator))
@@ -1485,6 +1515,211 @@ async fn simulator_state(
         "foregroundApp": foreground_app,
         "simulator": simulator,
     })))
+}
+
+async fn simulator_processes(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Performance gauges are only supported for iOS simulators.",
+        ));
+    }
+    let foreground = performance_foreground_process(&state, &udid).await;
+    let processes = state
+        .performance
+        .list_processes(&udid, foreground.clone())
+        .await?;
+    Ok(json(json_value!({
+        "udid": udid,
+        "foregroundProcess": foreground,
+        "processes": processes,
+    })))
+}
+
+async fn simulator_performance(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Query(query): Query<PerformanceRequestQuery>,
+) -> Result<Json<Value>, AppError> {
+    simulator_performance_payload(state, udid, query.pid, query.window_ms).await
+}
+
+async fn simulator_process_performance(
+    State(state): State<AppState>,
+    Path((udid, pid)): Path<(String, i32)>,
+    Query(query): Query<PerformanceRequestQuery>,
+) -> Result<Json<Value>, AppError> {
+    simulator_performance_payload(state, udid, Some(pid), query.window_ms).await
+}
+
+async fn simulator_performance_payload(
+    state: AppState,
+    udid: String,
+    pid: Option<i32>,
+    window_ms: Option<u64>,
+) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Performance gauges are only supported for iOS simulators.",
+        ));
+    }
+    let foreground = performance_foreground_process(&state, &udid).await;
+    let display_signal = simulator_display_signal(state.clone(), &udid).await;
+    let snapshot = state
+        .performance
+        .snapshot(
+            &udid,
+            PerformanceQuery {
+                pid,
+                history_window_ms: window_ms.unwrap_or(120_000).clamp(10_000, 10 * 60 * 1000),
+            },
+            foreground,
+            display_signal,
+        )
+        .await?;
+    let events = performance_log_events(&state, &udid, &snapshot).await;
+    let mut value = serde_json::to_value(snapshot).map_err(|error| {
+        AppError::internal(format!("Unable to encode performance data: {error}"))
+    })?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("events".to_owned(), Value::Array(events));
+    }
+    Ok(json(value))
+}
+
+async fn sample_process_stack(
+    State(state): State<AppState>,
+    Path((udid, pid)): Path<(String, i32)>,
+    Query(query): Query<StackSampleRequestQuery>,
+) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Performance sampling is only supported for iOS simulators.",
+        ));
+    }
+    let foreground = performance_foreground_process(&state, &udid).await;
+    let processes = state.performance.list_processes(&udid, foreground).await?;
+    if !processes.iter().any(|process| process.pid == pid) {
+        return Err(AppError::bad_request(format!(
+            "Process {pid} does not belong to simulator {udid}."
+        )));
+    }
+    let report = sample_stack(pid, query.seconds.unwrap_or(3)).await?;
+    Ok(json(json_value!({
+        "udid": udid,
+        "sample": report,
+    })))
+}
+
+async fn performance_foreground_process(state: &AppState, udid: &str) -> Option<ForegroundProcess> {
+    foreground_app_metadata(state, udid)
+        .await
+        .ok()
+        .flatten()
+        .map(|foreground| ForegroundProcess {
+            process_identifier: foreground.process_identifier,
+            bundle_identifier: foreground.bundle_identifier,
+            app_name: foreground.app_name,
+        })
+}
+
+async fn simulator_display_signal(state: AppState, udid: &str) -> DisplaySignal {
+    all_device_values(state, false)
+        .await
+        .ok()
+        .and_then(|simulators| {
+            simulators
+                .into_iter()
+                .find(|entry| entry.get("udid").and_then(Value::as_str) == Some(udid))
+        })
+        .and_then(|simulator| {
+            let display = simulator.get("privateDisplay")?;
+            Some(DisplaySignal {
+                frame_sequence: display
+                    .get("frameSequence")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                last_frame_at_ms: display
+                    .get("lastFrameAt")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            })
+        })
+        .unwrap_or_default()
+}
+
+async fn performance_log_events(
+    state: &AppState,
+    udid: &str,
+    snapshot: &crate::performance::SimulatorPerformanceSnapshot,
+) -> Vec<Value> {
+    let Some(current) = snapshot.current.as_ref() else {
+        return Vec::new();
+    };
+    let process_name = snapshot
+        .processes
+        .iter()
+        .find(|process| process.pid == current.pid)
+        .map(|process| process.process.as_str())
+        .unwrap_or("");
+    let filters = LogFilters::new(Vec::new(), Vec::new(), String::new());
+    if state.logs.ensure_started(udid).await.is_err() {
+        return Vec::new();
+    }
+    state
+        .logs
+        .snapshot(udid, &filters, 800)
+        .await
+        .into_iter()
+        .rev()
+        .filter(|entry| performance_log_entry_matches(entry, current.pid, process_name))
+        .take(12)
+        .map(|entry| {
+            json_value!({
+                "timestamp": entry.timestamp,
+                "level": entry.level,
+                "process": entry.process,
+                "pid": entry.pid,
+                "subsystem": entry.subsystem,
+                "category": entry.category,
+                "message": entry.message,
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+fn performance_log_entry_matches(
+    entry: &crate::native::bridge::LogEntry,
+    pid: i32,
+    process_name: &str,
+) -> bool {
+    let pid_matches = entry.pid.as_i64() == Some(pid as i64);
+    let process_matches = !process_name.is_empty() && entry.process == process_name;
+    if !pid_matches && !process_matches {
+        return false;
+    }
+    let haystack = format!(
+        "{} {} {} {}",
+        entry.level, entry.subsystem, entry.category, entry.message
+    )
+    .to_lowercase();
+    [
+        "abort",
+        "crash",
+        "exception",
+        "exited",
+        "jetsam",
+        "killed",
+        "signal",
+        "terminat",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle))
 }
 
 async fn boot_simulator(
