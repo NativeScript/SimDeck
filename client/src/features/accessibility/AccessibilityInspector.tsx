@@ -26,6 +26,7 @@ import { usePanelPresence } from "../../shared/hooks/usePanelPresence";
 
 interface AccessibilityInspectorProps {
   availableSources: AccessibilitySource[];
+  disconnected: boolean;
   error: string;
   isLoading: boolean;
   onHover: (id: string | null) => void;
@@ -44,6 +45,7 @@ type InspectorTab = "console" | "inspector" | "performance";
 
 export function AccessibilityInspector({
   availableSources,
+  disconnected,
   error,
   isLoading,
   onHover,
@@ -210,6 +212,7 @@ export function AccessibilityInspector({
     ? findAccessibilityItem(tree, selectedId)
     : null;
   const sourceOptions = hierarchySourceOptions(availableSources, source);
+  const effectivelyDisconnected = disconnected || error === "Not connected";
 
   return (
     <aside
@@ -256,7 +259,11 @@ export function AccessibilityInspector({
           <PerformanceIcon />
         </button>
       </div>
-      {activeTab === "console" ? (
+      {effectivelyDisconnected ? (
+        <div className="hierarchy-tree">
+          <div className="hierarchy-empty">Not connected</div>
+        </div>
+      ) : activeTab === "console" ? (
         <ConsolePanel
           accessibilityRoots={roots}
           selectedSimulator={selectedSimulator}

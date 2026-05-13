@@ -929,7 +929,6 @@ async fn chrome_devtools_targets(
 ) -> Result<Json<devtools::ChromeDevToolsTargetDiscovery>, AppError> {
     let origin = request_origin(&headers);
     let mut warnings = Vec::new();
-    let mut inspector_warnings = Vec::new();
     let foreground_app = foreground_app_metadata(&state, &udid).await.ok().flatten();
     let simulator = match list_simulators_cached(state.clone(), false).await {
         Ok(simulators) => simulators
@@ -942,32 +941,6 @@ async fn chrome_devtools_targets(
             None
         }
     };
-    let mut sessions = match inspector_sessions_for_udid(&state, &udid).await {
-        Ok(sessions) => sessions,
-        Err(error) => {
-            inspector_warnings.push(error);
-            Vec::new()
-        }
-    };
-    if sessions.is_empty() {
-        match inspector_session_for_state(&state, &udid).await {
-            Ok(session) => sessions.push(session),
-            Err(error) => inspector_warnings.push(error),
-        }
-    }
-    let mut targets: Vec<devtools::ChromeDevToolsTarget> = sessions
-        .iter()
-        .map(|session| {
-            let source = chrome_devtools_source_for_session(session);
-            devtools::build_target(
-                &udid,
-                origin.as_deref(),
-                &session.info,
-                session.process_identifier,
-                source,
-            )
-        })
-        .collect();
     let (mut external_targets, external_warnings) = devtools::discover_external_devtools_targets(
         &udid,
         origin.as_deref(),
@@ -977,10 +950,8 @@ async fn chrome_devtools_targets(
             .map(|simulator| simulator.device_type_name.as_str()),
     )
     .await;
+    let mut targets = Vec::new();
     targets.append(&mut external_targets);
-    if targets.is_empty() {
-        warnings.extend(inspector_warnings);
-    }
     warnings.extend(external_warnings);
     Ok(Json(devtools::ChromeDevToolsTargetDiscovery {
         udid,
@@ -4705,64 +4676,6 @@ fn inspector_session_from_published(inspector: PublishedInspector) -> InspectorS
         info: inspector.info,
         process_identifier: inspector.process_identifier,
     }
-}
-
-async fn inspector_sessions_for_udid(
-    state: &AppState,
-    udid: &str,
-) -> Result<Vec<InspectorSession>, String> {
-    let mut probed_inspectors = Vec::new();
-    let mut candidates = Vec::new();
-    for inspector in state.inspectors.connected().await {
-        if inspector_process_belongs_to_udid(udid, inspector.process_identifier).await? {
-            candidates.push(InspectorSession {
-                transport: InspectorSessionTransport::Connected,
-                available_sources: inspector_available_sources(&inspector.info),
-                info: inspector.info,
-                process_identifier: inspector.process_identifier,
-            });
-            continue;
-        }
-
-        probed_inspectors.push(format!("process {}", inspector.process_identifier));
-    }
-
-    for inspector in state.inspectors.published_inspectors().await {
-        if !inspector_process_belongs_to_udid(udid, inspector.process_identifier).await? {
-            probed_inspectors.push(format!("registry process {}", inspector.process_identifier));
-            continue;
-        }
-        if candidates.iter().any(|session: &InspectorSession| {
-            session.process_identifier == inspector.process_identifier
-        }) {
-            continue;
-        }
-        let session = inspector_session_from_published(inspector);
-        if query_inspector_session(state, &session, "Runtime.ping", Value::Null)
-            .await
-            .is_err()
-        {
-            probed_inspectors.push(format!(
-                "unreachable registry process {}",
-                session.process_identifier
-            ));
-            continue;
-        }
-        candidates.push(session);
-    }
-
-    if candidates.is_empty() {
-        if probed_inspectors.is_empty() {
-            return Err(format!("No app inspector found for simulator {udid}."));
-        }
-        return Err(format!(
-            "No app inspector matched simulator {udid}. Found inspectors for {}.",
-            probed_inspectors.join(", ")
-        ));
-    }
-
-    candidates.sort_by_key(inspector_session_score);
-    Ok(candidates)
 }
 
 async fn inspector_session(

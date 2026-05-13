@@ -23,6 +23,7 @@ const WEBKIT_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_millis(400);
 const WEBKIT_DISCOVERY_CACHE_TTL: Duration = Duration::from_secs(120);
 const WEBKIT_SOCKET_ACTIVATION_DELAY: Duration = Duration::from_millis(200);
 const WEBKIT_IO_TIMEOUT: Duration = Duration::from_secs(4);
+const WEBKIT_SOCKET_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 static WEBKIT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static WEBKIT_DISCOVERY_CACHE: OnceLock<Mutex<HashMap<String, CachedWebKitDiscovery>>> =
@@ -408,6 +409,22 @@ async fn attach_websocket_inner(
     )
     .await?;
     sleep(WEBKIT_SOCKET_ACTIVATION_DELAY).await;
+    send_forward_indicate_webview(
+        &mut inspector_writer,
+        &connection_id,
+        &app_id,
+        page_id,
+        true,
+    )
+    .await?;
+    send_forward_indicate_webview(
+        &mut inspector_writer,
+        &connection_id,
+        &app_id,
+        page_id,
+        false,
+    )
+    .await?;
     send_forward_socket_setup(
         &mut inspector_writer,
         &connection_id,
@@ -490,9 +507,9 @@ async fn attach_websocket_inner(
 
 async fn discover_webinspector_socket(udid: &str) -> Result<Option<WebKitSocket>, AppError> {
     let output = timeout(
-        Duration::from_secs(2),
+        WEBKIT_SOCKET_DISCOVERY_TIMEOUT,
         Command::new("/usr/sbin/lsof")
-            .args(["-nP", "-c", "webinspectord", "-F", "pn"])
+            .args(["-nP", "-U", "-F", "pn"])
             .output(),
     )
     .await
@@ -509,7 +526,8 @@ async fn discover_webinspector_socket(udid: &str) -> Result<Option<WebKitSocket>
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut processes: HashMap<String, LsofProcess> = HashMap::new();
-    let udid_marker = format!("/Devices/{udid}/");
+    let device_marker = format!("/Devices/{udid}/");
+    let launchd_marker = format!("CoreSimulator.SimDevice.{udid}/");
     let mut current_pid: Option<String> = None;
     for line in stdout.lines() {
         if let Some(pid) = line.strip_prefix('p') {
@@ -524,7 +542,7 @@ async fn discover_webinspector_socket(udid: &str) -> Result<Option<WebKitSocket>
             continue;
         };
         let process = processes.entry(pid.clone()).or_default();
-        if name.contains(&udid_marker) {
+        if name.contains(&device_marker) || name.contains(&launchd_marker) {
             process.belongs_to_udid = true;
         }
         if name.ends_with(WEBINSPECTORD_SOCKET_NAME) {
@@ -552,7 +570,7 @@ async fn discover_launchd_webinspector_socket(
     udid: &str,
 ) -> Result<Option<WebKitSocket>, AppError> {
     let output = match timeout(
-        Duration::from_secs(2),
+        WEBKIT_SOCKET_DISCOVERY_TIMEOUT,
         Command::new("xcrun")
             .args([
                 "simctl",
@@ -619,6 +637,26 @@ async fn send_forward_get_listing<W: AsyncWrite + Unpin>(
         Value::String(app_id.to_owned()),
     );
     send_rpc(writer, "_rpc_forwardGetListing:", args).await
+}
+
+async fn send_forward_indicate_webview<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    connection_id: &str,
+    app_id: &str,
+    page_id: u64,
+    enabled: bool,
+) -> Result<(), AppError> {
+    let mut args = rpc_args(connection_id);
+    args.insert(
+        "WIRApplicationIdentifierKey".to_owned(),
+        Value::String(app_id.to_owned()),
+    );
+    args.insert(
+        "WIRPageIdentifierKey".to_owned(),
+        Value::Integer(page_id.into()),
+    );
+    args.insert("WIRIndicateEnabledKey".to_owned(), Value::Boolean(enabled));
+    send_rpc(writer, "_rpc_forwardIndicateWebView:", args).await
 }
 
 async fn send_forward_socket_setup<W: AsyncWrite + Unpin>(
@@ -951,12 +989,14 @@ pub fn webkit_inspector_ui_root() -> Option<PathBuf> {
 
 pub fn inject_frontend_host(main_html: &str) -> String {
     let localized_strings = r#"<script src="en.lproj/localizedStrings.js"></script>"#;
+    let localized_string_fixups =
+        r#"<script>localizedStrings["Refresh layers"] ||= "Refresh layers";</script>"#;
     let compatibility_style = format!("<style>{}</style>", browser_frontend_compatibility_css());
     let shim = format!("<script>{}</script>", browser_frontend_host_script());
     main_html.replacen(
         "<script src=\"Main.js\"></script>",
         &format!(
-            "{localized_strings}\n    {compatibility_style}\n    {shim}\n    <script src=\"Main.js\"></script>"
+            "{localized_strings}\n    {localized_string_fixups}\n    {compatibility_style}\n    {shim}\n    <script src=\"Main.js\"></script>"
         ),
         1,
     )
@@ -1044,6 +1084,29 @@ fn browser_frontend_host_script() -> &'static str {
             dispatchBackendMessage(message);
     }
 
+    function installCSSCompatibilityFallbacks() {
+        const cssManager = window.WI?.cssManager;
+        if (!cssManager || cssManager.propertyNameCompletions || !window.WI?.CSSPropertyNameCompletions)
+            return;
+
+        const propertyMap = window.WI.CSSKeywordCompletions?._propertyKeywordMap || {};
+        const propertyNames = new Set(Object.keys(propertyMap));
+        for (const name of [
+            "background",
+            "color",
+            "display",
+            "font-family",
+            "height",
+            "margin",
+            "width",
+        ])
+            propertyNames.add(name);
+
+        cssManager._propertyNameCompletions = new WI.CSSPropertyNameCompletions(
+            Array.from(propertyNames, (name) => ({ name }))
+        );
+    }
+
     function copyText(text) {
         if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(text).catch(() => {});
@@ -1064,6 +1127,15 @@ fn browser_frontend_host_script() -> &'static str {
     let reconnectTimer = 0;
     let socket = null;
 
+    function notifySocketState(state) {
+        if (window.parent === window)
+            return;
+        window.parent.postMessage({
+            type: "simdeck:webkit-inspector:socket",
+            state,
+        }, "*");
+    }
+
     function clearReconnectTimer() {
         if (!reconnectTimer)
             return;
@@ -1072,8 +1144,13 @@ fn browser_frontend_host_script() -> &'static str {
     }
 
     function scheduleReconnect() {
-        if (reconnectTimer || !websocketUrl())
+        if (reconnectTimer)
             return;
+        if (!websocketUrl()) {
+            notifySocketState("disconnected");
+            return;
+        }
+        notifySocketState("reconnecting");
         const delay = reconnectDelay;
         reconnectDelay = Math.min(Math.ceil(reconnectDelay * 1.5), 3000);
         reconnectTimer = setTimeout(() => {
@@ -1095,6 +1172,7 @@ fn browser_frontend_host_script() -> &'static str {
         if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING))
             return;
         clearReconnectTimer();
+        notifySocketState("connecting");
         const nextSocket = new WebSocket(url);
         socket = nextSocket;
         nextSocket.addEventListener("message", (event) => dispatchBackendMessage(event.data));
@@ -1102,6 +1180,7 @@ fn browser_frontend_host_script() -> &'static str {
             if (socket !== nextSocket)
                 return;
             reconnectDelay = 500;
+            notifySocketState("connected");
             while (pendingMessages.length)
                 nextSocket.send(pendingMessages.shift());
         });
@@ -1111,7 +1190,53 @@ fn browser_frontend_host_script() -> &'static str {
             socket = null;
             scheduleReconnect();
         });
-        nextSocket.addEventListener("error", (event) => console.error("SimDeck WebKit Inspector socket error", event));
+        nextSocket.addEventListener("error", (event) => {
+            if (socket === nextSocket)
+                notifySocketState("failed");
+            console.error("SimDeck WebKit Inspector socket error", event);
+        });
+    }
+
+    const unsupportedOptionalTargetCommands = new Set([
+        "Page.setShowRulers",
+    ]);
+
+    function maybeHandleUnsupportedFrontendCommand(message) {
+        let payload;
+        try {
+            payload = JSON.parse(message);
+        } catch {
+            return false;
+        }
+
+        if (unsupportedOptionalTargetCommands.has(payload.method)) {
+            dispatchBackendMessage(JSON.stringify({ id: payload.id, result: {} }));
+            return true;
+        }
+
+        if (payload.method !== "Target.sendMessageToTarget" || !payload.params)
+            return false;
+        const targetId = payload.params.targetId;
+        if (!targetId || typeof payload.params.message !== "string")
+            return false;
+
+        let targetPayload;
+        try {
+            targetPayload = JSON.parse(payload.params.message);
+        } catch {
+            return false;
+        }
+        if (!unsupportedOptionalTargetCommands.has(targetPayload.method))
+            return false;
+
+        dispatchBackendMessage(JSON.stringify({
+            method: "Target.dispatchMessageFromTarget",
+            params: {
+                targetId,
+                message: JSON.stringify({ id: targetPayload.id, result: {} }),
+            },
+        }));
+        return true;
     }
 
     window.InspectorFrontendHost = {
@@ -1134,13 +1259,14 @@ fn browser_frontend_host_script() -> &'static str {
         platformVersionName: "",
         supportsDiagnosticLogging: false,
         supportsWebExtensions: false,
-        localizedStringsURL: "en.lproj/localizedStrings.js",
+        localizedStringsURL: null,
         connect() {
             connectSocket();
         },
         loaded() {
             if (window.WI && typeof WI.updateVisibilityState === "function")
                 WI.updateVisibilityState(true);
+            installCSSCompatibilityFallbacks();
             flushBackendQueue();
         },
         closeWindow() {},
@@ -1187,6 +1313,8 @@ fn browser_frontend_host_script() -> &'static str {
             event.target?.dispatchEvent(new MouseEvent("contextmenu", event));
         },
         sendMessageToBackend(message) {
+            if (maybeHandleUnsupportedFrontendCommand(message))
+                return;
             if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(message);
             } else {
@@ -1266,6 +1394,23 @@ mod tests {
         let main_index = injected.find(r#"<script src="Main.js"></script>"#).unwrap();
         assert!(strings_index < shim_index);
         assert!(shim_index < main_index);
+        assert!(injected.contains("simdeck:webkit-inspector:socket"));
+        assert!(injected.contains("notifySocketState(\"reconnecting\")"));
+        assert!(injected.contains("Page.setShowRulers"));
+        assert!(injected.contains("maybeHandleUnsupportedFrontendCommand(message)"));
+    }
+
+    #[test]
+    fn webkit_attach_uses_page_activation_before_socket_setup() {
+        let source = include_str!("webkit.rs");
+        let indicate_index = source
+            .find("send_forward_indicate_webview(")
+            .expect("attach should indicate the WebView before socket setup");
+        let setup_index = source
+            .find("send_forward_socket_setup(")
+            .expect("attach should still set up the forwarding socket");
+        assert!(indicate_index < setup_index);
+        assert!(source.contains("_rpc_forwardIndicateWebView:"));
     }
 
     #[test]
@@ -1282,6 +1427,16 @@ mod tests {
                 "/private/var/tmp/com.apple.launchd.test/other.socket"
             ),
             None
+        );
+    }
+
+    #[test]
+    fn simulator_launchd_socket_marker_matches_udid() {
+        let udid = "2B3B4CA8-6F57-44D8-8AAE-1394456282B7";
+        let launchd_marker = format!("CoreSimulator.SimDevice.{udid}/");
+        assert!(
+            "/private/var/tmp/com.apple.CoreSimulator.SimDevice.2B3B4CA8-6F57-44D8-8AAE-1394456282B7/syslogsock"
+                .contains(&launchd_marker)
         );
     }
 }

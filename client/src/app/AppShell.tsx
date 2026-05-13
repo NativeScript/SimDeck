@@ -367,6 +367,7 @@ export function AppShell({
     refresh,
     simulators,
   } = useSimulatorList({ remote: remoteStream });
+  const providerDisconnected = isProviderDisconnected(listError);
   const [debugVisible, setDebugVisible] = useState(() =>
     readStoredFlag(DEBUG_VISIBLE_STORAGE_KEY),
   );
@@ -1019,6 +1020,17 @@ export function AppShell({
       return;
     }
 
+    if (providerDisconnected) {
+      setAccessibilityRoots([]);
+      setAccessibilitySelectedId("");
+      setAccessibilityHoveredId(null);
+      setAccessibilityAvailableSources([]);
+      setAccessibilitySource("");
+      setAccessibilityError("Not connected");
+      setAccessibilityLoading(false);
+      return;
+    }
+
     if (!selectedSimulator?.isBooted) {
       setAccessibilityRoots([]);
       setAccessibilitySelectedId("");
@@ -1034,7 +1046,9 @@ export function AppShell({
     accessibilityRequestIdRef.current = requestId;
     accessibilityLoadingRef.current = true;
     setAccessibilityLoading(true);
-    setAccessibilityError("");
+    setAccessibilityError((current) =>
+      current === "Not connected" ? current : "",
+    );
 
     try {
       const snapshot = await fetchAccessibilityTree(
@@ -1098,7 +1112,7 @@ export function AppShell({
         setAccessibilityLoading(false);
       }
     }
-  }, [accessibilityPreferredSource, selectedSimulator]);
+  }, [accessibilityPreferredSource, providerDisconnected, selectedSimulator]);
 
   const changeAccessibilitySource = useCallback(
     (source: AccessibilitySource) => {
@@ -2191,6 +2205,7 @@ export function AppShell({
         accessibilityPanel={
           <AccessibilityInspector
             availableSources={accessibilityAvailableSources}
+            disconnected={providerDisconnected}
             error={accessibilityError}
             isLoading={accessibilityLoading}
             onHover={setAccessibilityHoveredId}
@@ -2291,6 +2306,7 @@ export function AppShell({
         viewMode={viewMode}
         devtoolsPanel={
           <DevToolsPanel
+            disconnected={providerDisconnected}
             onClose={() => setDevToolsVisible(false)}
             overviewRequestKey={devToolsOverviewRequestKey}
             selectedSimulator={selectedSimulator}
@@ -2497,6 +2513,9 @@ function userFacingAccessibilityError(message: string): string {
   }
 
   const lower = normalized.toLowerCase();
+  if (isProviderDisconnected(normalized)) {
+    return "Not connected";
+  }
   if (
     lower.includes("no app inspector found") ||
     lower.includes("no connected websocket inspector found") ||
@@ -2508,6 +2527,20 @@ function userFacingAccessibilityError(message: string): string {
   }
 
   return normalized;
+}
+
+function isProviderDisconnected(message: string): boolean {
+  const lower = message.trim().toLowerCase();
+  if (!lower || lower === AUTH_REQUIRED_MESSAGE.toLowerCase()) {
+    return false;
+  }
+  return (
+    lower.includes("failed to fetch") ||
+    lower.includes("load failed") ||
+    lower.includes("networkerror") ||
+    lower.includes("network error") ||
+    lower.includes("timed out waiting for provider")
+  );
 }
 
 function mergeStreamQualityResponse(

@@ -38,8 +38,10 @@ const DEVTOOLS_PANEL_DEFAULT_WIDTH = 720;
 const DEVTOOLS_PANEL_MIN_WIDTH = 420;
 const DEVTOOLS_PANEL_MIN_VIEWPORT_WIDTH = 340;
 const DEVTOOLS_PANEL_WIDTH_STEP = 40;
+const NOT_CONNECTED_MESSAGE = "Not connected";
 
 interface DevToolsPanelProps {
+  disconnected: boolean;
   onClose: () => void;
   overviewRequestKey: number;
   selectedSimulator: SimulatorMetadata | null;
@@ -73,8 +75,16 @@ interface DevToolsDiscovery {
 type ChromeDiscoveryResult =
   PromiseSettledResult<ChromeDevToolsTargetDiscovery>;
 type WebKitDiscoveryResult = PromiseSettledResult<WebKitTargetDiscovery>;
+type WebKitSocketState =
+  | ""
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "disconnected"
+  | "failed";
 
 export function DevToolsPanel({
+  disconnected,
   onClose,
   overviewRequestKey,
   selectedSimulator,
@@ -89,6 +99,8 @@ export function DevToolsPanel({
   const [error, setError] = useState("");
   const [frameLoaded, setFrameLoaded] = useState(false);
   const [overviewVisible, setOverviewVisible] = useState(false);
+  const [webKitSocketState, setWebKitSocketState] =
+    useState<WebKitSocketState>("");
   const discoveryRef = useRef<DevToolsDiscovery | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const loadingTargetsRef = useRef(false);
@@ -142,6 +154,15 @@ export function DevToolsPanel({
       return;
     }
 
+    if (disconnected) {
+      applyDiscovery(null);
+      applySelectedTargetId("");
+      setError("");
+      setIsLoading(false);
+      setIsWebKitLoading(false);
+      return;
+    }
+
     if (!selectedSimulator) {
       applyDiscovery(null);
       applySelectedTargetId("");
@@ -160,7 +181,7 @@ export function DevToolsPanel({
     }
     const requestId = ++requestIdRef.current;
     setIsLoading(true);
-    setError("");
+    setError((current) => (current === NOT_CONNECTED_MESSAGE ? current : ""));
     try {
       const chromeTargets = requestWithTimeout(
         (signal) =>
@@ -350,6 +371,7 @@ export function DevToolsPanel({
   }, [
     applyDiscovery,
     applySelectedTargetId,
+    disconnected,
     selectedSimulator?.isBooted,
     selectedSimulator?.udid,
   ]);
@@ -369,7 +391,23 @@ export function DevToolsPanel({
     setIsLoading(false);
     setIsWebKitLoading(false);
     setOverviewVisible(false);
+    setWebKitSocketState("");
   }, [applyDiscovery, applySelectedTargetId, selectedSimulator?.udid]);
+
+  useEffect(() => {
+    if (!disconnected) {
+      return;
+    }
+    requestIdRef.current += 1;
+    applyDiscovery(null);
+    applySelectedTargetId("");
+    setError("");
+    setFrameLoaded(false);
+    setIsLoading(false);
+    setIsWebKitLoading(false);
+    setOverviewVisible(false);
+    setWebKitSocketState("");
+  }, [applyDiscovery, applySelectedTargetId, disconnected]);
 
   useEffect(() => {
     if (!visible) {
@@ -384,7 +422,37 @@ export function DevToolsPanel({
 
   useEffect(() => {
     setFrameLoaded(false);
+    setWebKitSocketState("");
   }, [frameUrl]);
+
+  useEffect(() => {
+    function handleWebKitSocketState(event: MessageEvent) {
+      if (frameRef.current?.contentWindow !== event.source) {
+        return;
+      }
+      const data = event.data;
+      if (
+        !data ||
+        typeof data !== "object" ||
+        data.type !== "simdeck:webkit-inspector:socket"
+      ) {
+        return;
+      }
+      const state = data.state;
+      if (
+        state === "connecting" ||
+        state === "connected" ||
+        state === "reconnecting" ||
+        state === "disconnected" ||
+        state === "failed"
+      ) {
+        setWebKitSocketState(state);
+      }
+    }
+
+    window.addEventListener("message", handleWebKitSocketState);
+    return () => window.removeEventListener("message", handleWebKitSocketState);
+  }, []);
 
   useEffect(() => {
     if (overviewRequestKey <= 0) {
@@ -518,20 +586,34 @@ export function DevToolsPanel({
   }
 
   const isDiscoveringTargets = isLoading || isWebKitLoading;
-  const statusMessage =
-    error ||
-    (!selectedSimulator
-      ? "No simulator selected."
-      : isDiscoveringTargets && targets.length === 0
-        ? "Loading..."
-        : targets.length === 0
-          ? selectedSimulator.isBooted
-            ? "No DevTools targets. Open Safari, enable inspectable WKWebViews, start Metro, or launch a Chrome remote debugging target."
-            : "No DevTools targets. Boot the simulator for Safari/WebKit, or start Metro or Chrome remote debugging."
-          : "");
-  const emptyOverviewMessage = isDiscoveringTargets
-    ? "Loading..."
-    : "No targets";
+  const effectivelyDisconnected =
+    disconnected || error === NOT_CONNECTED_MESSAGE;
+  const chromeDevToolsBlocked = Boolean(
+    selectedTarget && isChromeTarget(selectedTarget) && isSafariBrowser(),
+  );
+  const webKitConnectionMessage =
+    selectedTarget && isWebKitTarget(selectedTarget)
+      ? webKitSocketStatusMessage(webKitSocketState)
+      : "";
+  const statusMessage = effectivelyDisconnected
+    ? NOT_CONNECTED_MESSAGE
+    : chromeDevToolsBlocked
+      ? "Chrome DevTools don't work in Safari"
+      : error ||
+        (!selectedSimulator
+          ? "No simulator selected."
+          : isDiscoveringTargets && targets.length === 0
+            ? "Loading..."
+            : targets.length === 0
+              ? selectedSimulator.isBooted
+                ? "No DevTools targets. Open Safari, enable inspectable WKWebViews, start Metro, or launch a Chrome remote debugging target."
+                : "No DevTools targets. Boot the simulator for Safari/WebKit, or start Metro or Chrome remote debugging."
+              : "");
+  const emptyOverviewMessage = effectivelyDisconnected
+    ? NOT_CONNECTED_MESSAGE
+    : isDiscoveringTargets
+      ? "Loading..."
+      : "No targets";
   const panelStyle = {
     "--webkit-panel-width": `${panelWidth}px`,
   } as CSSProperties;
@@ -618,7 +700,11 @@ export function DevToolsPanel({
       ) : null}
 
       <div className="webkit-frame-wrap">
-        {overviewVisible ? (
+        {effectivelyDisconnected || chromeDevToolsBlocked ? (
+          <div className={`webkit-status ${error ? "error" : ""}`}>
+            {statusMessage}
+          </div>
+        ) : overviewVisible ? (
           <DevToolsOverview
             emptyMessage={emptyOverviewMessage}
             targets={targets}
@@ -637,6 +723,10 @@ export function DevToolsPanel({
             {!frameLoaded ? (
               <div className="webkit-status" role="status">
                 Loading...
+              </div>
+            ) : webKitConnectionMessage ? (
+              <div className="webkit-status" role="status">
+                {webKitConnectionMessage}
               </div>
             ) : null}
           </>
@@ -828,6 +918,31 @@ function isWebKitTarget(target: DevToolsTarget): boolean {
     target.source === "WebKit" ||
     target.source === "WebKit proxy"
   );
+}
+
+function isSafariBrowser(): boolean {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+  const userAgent = navigator.userAgent;
+  return (
+    /safari/i.test(userAgent) &&
+    !/chrome|chromium|crios|fxios|edg/i.test(userAgent)
+  );
+}
+
+function webKitSocketStatusMessage(state: WebKitSocketState): string {
+  switch (state) {
+    case "connecting":
+      return "Connecting...";
+    case "reconnecting":
+    case "failed":
+      return "Reconnecting...";
+    case "disconnected":
+      return "Not connected";
+    default:
+      return "";
+  }
 }
 
 function readStoredPanelWidth(): number {
@@ -1037,6 +1152,9 @@ function userFacingDevToolsMessage(message: string): string {
   }
 
   const lower = normalized.toLowerCase();
+  if (isProviderDisconnectedMessage(normalized)) {
+    return NOT_CONNECTED_MESSAGE;
+  }
   if (
     lower.includes("no app inspector found") ||
     lower.includes("no connected websocket inspector found") ||
@@ -1056,6 +1174,18 @@ function userFacingDevToolsMessage(message: string): string {
   }
 
   return normalized;
+}
+
+function isProviderDisconnectedMessage(message: string): boolean {
+  const lower = message.trim().toLowerCase();
+  return (
+    lower.includes("failed to fetch") ||
+    lower.includes("load failed") ||
+    lower.includes("networkerror") ||
+    lower.includes("network error") ||
+    lower.includes("timed out loading chrome devtools targets") ||
+    lower.includes("timed out loading webkit targets")
+  );
 }
 
 function cleanDevToolsMessages(messages: string[]): string[] {
