@@ -164,7 +164,6 @@ function AccessibilityDomNode({
       data-simdeck-accessibility-source={node.source || undefined}
       role={role}
       style={frameStyle(node.frame, rootFrame)}
-      title={label}
     />
   );
 }
