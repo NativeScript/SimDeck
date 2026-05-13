@@ -13,7 +13,7 @@ const HISTORY_MAX_SAMPLES: usize = 720;
 const PROCESS_LIST_TIMEOUT: Duration = Duration::from_secs(2);
 const PROCESS_SAMPLE_TIMEOUT: Duration = Duration::from_secs(2);
 const NETWORK_SAMPLE_TIMEOUT: Duration = Duration::from_millis(650);
-const NETWORK_TOTALS_TIMEOUT: Duration = Duration::from_millis(1_800);
+const NETWORK_TOTALS_TIMEOUT: Duration = Duration::from_secs(6);
 const STACK_SAMPLE_MAX_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Default)]
@@ -646,8 +646,9 @@ fn app_bundle_path_from_command(command: &str) -> Option<String> {
     } else {
         ".appex/"
     };
+    let command = command.trim();
     let end = command.find(marker)? + marker.trim_end_matches('/').len();
-    let start = command[..end].rfind(' ').map_or(0, |index| index + 1);
+    let start = command[..end].find('/').unwrap_or(0);
     Some(command[start..end].trim_matches('"').to_owned())
 }
 
@@ -1068,6 +1069,19 @@ mod tests {
         assert_eq!(
             app_bundle_path_from_command("/tmp/Fixture.app/Fixture --args"),
             Some("/tmp/Fixture.app".to_owned())
+        );
+    }
+
+    #[test]
+    fn app_bundle_path_from_command_keeps_spaces_in_bundle_path() {
+        assert_eq!(
+            app_bundle_path_from_command(
+                "/Library/Developer/CoreSimulator/Volumes/iOS 26.4.simruntime/Contents/Resources/RuntimeRoot/Applications/MobileSafari.app/MobileSafari"
+            ),
+            Some(
+                "/Library/Developer/CoreSimulator/Volumes/iOS 26.4.simruntime/Contents/Resources/RuntimeRoot/Applications/MobileSafari.app"
+                    .to_owned()
+            )
         );
     }
 

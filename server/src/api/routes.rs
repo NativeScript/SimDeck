@@ -1614,15 +1614,15 @@ async fn sample_process_stack(
 }
 
 async fn performance_foreground_process(state: &AppState, udid: &str) -> Option<ForegroundProcess> {
-    foreground_app_metadata(state, udid)
-        .await
-        .ok()
-        .flatten()
-        .map(|foreground| ForegroundProcess {
-            process_identifier: foreground.process_identifier,
-            bundle_identifier: foreground.bundle_identifier,
-            app_name: foreground.app_name,
-        })
+    let foreground = match foreground_app_metadata(state, udid).await {
+        Ok(Some(foreground)) => Some(foreground),
+        _ => foreground_app_from_launchctl(udid).await.ok().flatten(),
+    };
+    foreground.map(|foreground| ForegroundProcess {
+        process_identifier: foreground.process_identifier,
+        bundle_identifier: foreground.bundle_identifier,
+        app_name: foreground.app_name,
+    })
 }
 
 async fn simulator_display_signal(state: AppState, udid: &str) -> DisplaySignal {
@@ -4908,6 +4908,164 @@ async fn foreground_app_metadata(
     }))
 }
 
+#[derive(Clone, Debug)]
+struct UIKitApplicationService {
+    pid: i64,
+    service_name: String,
+}
+
+#[derive(Clone, Debug)]
+struct UIKitApplicationServiceDetails {
+    active_count: u64,
+    app_name: Option<String>,
+    bundle_identifier: Option<String>,
+    process_identifier: i64,
+    spawn_role: String,
+}
+
+async fn foreground_app_from_launchctl(
+    udid: &str,
+) -> Result<Option<devtools::ForegroundApp>, String> {
+    let services = simulator_ui_application_services(udid).await?;
+    let mut best: Option<UIKitApplicationServiceDetails> = None;
+    for service in services {
+        let Some(details) = ui_application_service_details(udid, &service).await? else {
+            continue;
+        };
+        let details_score = ui_application_foreground_score(&details);
+        let best_score = best
+            .as_ref()
+            .map(ui_application_foreground_score)
+            .unwrap_or((0, 0));
+        if details_score > best_score {
+            best = Some(details);
+        }
+    }
+
+    Ok(best.map(|details| devtools::ForegroundApp {
+        process_identifier: details.process_identifier,
+        bundle_identifier: details.bundle_identifier,
+        app_name: details.app_name,
+    }))
+}
+
+async fn simulator_ui_application_services(
+    udid: &str,
+) -> Result<Vec<UIKitApplicationService>, String> {
+    let output = timeout(
+        Duration::from_secs(2),
+        Command::new("xcrun")
+            .args(["simctl", "spawn", udid, "launchctl", "print", "user/501"])
+            .output(),
+    )
+    .await
+    .map_err(|_| "Timed out listing simulator UIKit applications.".to_owned())?
+    .map_err(|error| format!("Unable to list simulator UIKit applications: {error}"))?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(parse_ui_application_service_line)
+        .collect())
+}
+
+fn parse_ui_application_service_line(line: &str) -> Option<UIKitApplicationService> {
+    let trimmed = line.trim();
+    if !trimmed.contains("UIKitApplication:") {
+        return None;
+    }
+    let mut parts = trimmed.split_whitespace();
+    let pid = parts.next()?.parse::<i64>().ok()?;
+    let separator = parts.next()?;
+    let service_name = parts.next()?.to_owned();
+    if separator != "-" || pid <= 0 || !service_name.starts_with("UIKitApplication:") {
+        return None;
+    }
+    Some(UIKitApplicationService { pid, service_name })
+}
+
+async fn ui_application_service_details(
+    udid: &str,
+    service: &UIKitApplicationService,
+) -> Result<Option<UIKitApplicationServiceDetails>, String> {
+    let output = timeout(
+        Duration::from_secs(1),
+        Command::new("xcrun")
+            .args([
+                "simctl",
+                "spawn",
+                udid,
+                "launchctl",
+                "print",
+                &format!("user/501/{}", service.service_name),
+            ])
+            .output(),
+    )
+    .await
+    .map_err(|_| "Timed out reading simulator UIKit application state.".to_owned())?
+    .map_err(|error| format!("Unable to read simulator UIKit application state: {error}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let active_count = launchctl_numeric_value(&text, "active count").unwrap_or(0);
+    let process_identifier = launchctl_numeric_value(&text, "pid")
+        .map(|pid| pid as i64)
+        .unwrap_or(service.pid);
+    if process_identifier <= 0
+        || !launchctl_value(&text, "state").is_some_and(|value| value == "running")
+    {
+        return Ok(None);
+    }
+    let spawn_role = launchctl_value(&text, "spawn role").unwrap_or_default();
+    let program = launchctl_value(&text, "program");
+    let bundle_identifier = launchctl_value(&text, "bundle id");
+    let app_name = program
+        .as_deref()
+        .and_then(app_bundle_path_from_command)
+        .and_then(|path| {
+            std::path::Path::new(&path)
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| bundle_identifier.clone());
+
+    Ok(Some(UIKitApplicationServiceDetails {
+        active_count,
+        app_name,
+        bundle_identifier,
+        process_identifier,
+        spawn_role,
+    }))
+}
+
+fn ui_application_foreground_score(details: &UIKitApplicationServiceDetails) -> (u8, u64) {
+    let role_score = if details.spawn_role.contains("ui focal") {
+        2
+    } else if details.spawn_role.contains("ui") {
+        1
+    } else {
+        0
+    };
+    (role_score, details.active_count)
+}
+
+fn launchctl_value(output: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key} = ");
+    output.lines().find_map(|line| {
+        let value = line.trim().strip_prefix(&prefix)?.trim();
+        (!value.is_empty()).then_some(value.to_owned())
+    })
+}
+
+fn launchctl_numeric_value(output: &str, key: &str) -> Option<u64> {
+    launchctl_value(output, key)?.parse::<u64>().ok()
+}
+
 async fn process_command(pid: i64) -> Result<String, String> {
     let output = timeout(
         Duration::from_secs(1),
@@ -4929,9 +5087,10 @@ async fn process_command(pid: i64) -> Result<String, String> {
 }
 
 fn app_bundle_path_from_command(command: &str) -> Option<String> {
+    let command = command.trim();
     let app_marker = ".app/";
     let end = command.find(app_marker)? + ".app".len();
-    let start = command[..end].rfind(' ').map_or(0, |index| index + 1);
+    let start = command[..end].find('/').unwrap_or(0);
     Some(command[start..end].to_owned())
 }
 
@@ -5879,11 +6038,13 @@ mod tests {
         inspector_session_from_published, inspector_session_score,
         is_inspector_agent_transport_path, normalize_inspector_node,
         normalize_screen_point_from_snapshot, normalized_gesture_coordinates,
-        parse_lsof_tcp_listener, resolved_stream_quality_limits, split_filter_values,
-        stream_quality_profile, suppress_native_ax_translation_error, tap_point_from_snapshot,
-        trim_tree_depth, AccessibilityHierarchySource, ElementSelectorPayload, InspectorSession,
-        InspectorSessionTransport, StreamQualityLimits, StreamQualityPayload, SOURCE_FLUTTER,
-        SOURCE_NATIVE_AX, SOURCE_NATIVE_SCRIPT, SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
+        parse_lsof_tcp_listener, parse_ui_application_service_line, resolved_stream_quality_limits,
+        split_filter_values, stream_quality_profile, suppress_native_ax_translation_error,
+        tap_point_from_snapshot, trim_tree_depth, ui_application_foreground_score,
+        AccessibilityHierarchySource, ElementSelectorPayload, InspectorSession,
+        InspectorSessionTransport, StreamQualityLimits, StreamQualityPayload,
+        UIKitApplicationServiceDetails, SOURCE_FLUTTER, SOURCE_NATIVE_AX, SOURCE_NATIVE_SCRIPT,
+        SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
     };
     use crate::inspector::PublishedInspector;
     use crate::transport::packet::FramePacket;
@@ -6187,6 +6348,40 @@ mod tests {
                 "Fixture 123 dj 12u IPv4 0x1 0t0 TCP 127.0.0.1:47370 (ESTABLISHED)"
             ),
             None
+        );
+    }
+
+    #[test]
+    fn parse_ui_application_service_line_extracts_pid_and_service() {
+        let service = parse_ui_application_service_line(
+            "   41210      - \tUIKitApplication:com.apple.mobilesafari[2777][rb-legacy]",
+        )
+        .unwrap();
+        assert_eq!(service.pid, 41210);
+        assert_eq!(
+            service.service_name,
+            "UIKitApplication:com.apple.mobilesafari[2777][rb-legacy]"
+        );
+    }
+
+    #[test]
+    fn ui_application_foreground_score_prefers_focal_then_active_count() {
+        let focal = UIKitApplicationServiceDetails {
+            active_count: 1,
+            app_name: None,
+            bundle_identifier: None,
+            process_identifier: 1,
+            spawn_role: "ui focal (1)".to_owned(),
+        };
+        let background = UIKitApplicationServiceDetails {
+            active_count: 10,
+            app_name: None,
+            bundle_identifier: None,
+            process_identifier: 2,
+            spawn_role: "non-ui (3)".to_owned(),
+        };
+        assert!(
+            ui_application_foreground_score(&focal) > ui_application_foreground_score(&background)
         );
     }
 

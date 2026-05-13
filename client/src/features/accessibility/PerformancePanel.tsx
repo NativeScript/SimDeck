@@ -27,6 +27,7 @@ export function PerformancePanel({
 }: PerformancePanelProps) {
   const udid = selectedSimulator?.udid ?? "";
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
+  const [followForeground, setFollowForeground] = useState(true);
   const [performance, setPerformance] =
     useState<SimulatorPerformanceResponse | null>(null);
   const [error, setError] = useState("");
@@ -35,6 +36,7 @@ export function PerformancePanel({
 
   useEffect(() => {
     setSelectedPid(null);
+    setFollowForeground(true);
     setPerformance(null);
     setSample(null);
     setError("");
@@ -50,7 +52,7 @@ export function PerformancePanel({
     async function refresh() {
       try {
         const next = await fetchSimulatorPerformance(udid, {
-          pid: selectedPid,
+          pid: followForeground ? null : selectedPid,
           windowMs: PERFORMANCE_WINDOW_MS,
         });
         if (cancelled) {
@@ -58,7 +60,15 @@ export function PerformancePanel({
         }
         setPerformance(next);
         setError("");
-        if (selectedPid == null && next.selectedPid != null) {
+        if (followForeground) {
+          setSelectedPid(next.selectedPid ?? null);
+        } else if (
+          selectedPid != null &&
+          !next.processes.some((process) => process.pid === selectedPid)
+        ) {
+          setFollowForeground(true);
+          setSelectedPid(next.selectedPid ?? null);
+        } else if (selectedPid == null && next.selectedPid != null) {
           setSelectedPid(next.selectedPid);
         }
       } catch (refreshError) {
@@ -79,7 +89,7 @@ export function PerformancePanel({
         window.clearTimeout(timer);
       }
     };
-  }, [selectedPid, selectedSimulator?.isBooted, udid, visible]);
+  }, [followForeground, selectedPid, selectedSimulator?.isBooted, udid, visible]);
 
   const current = performance?.current ?? null;
   const selectedProcess = useMemo(
@@ -124,6 +134,7 @@ export function PerformancePanel({
               key={process.pid}
               onSelect={() => {
                 setSelectedPid(process.pid);
+                setFollowForeground(process.isForeground);
                 setSample(null);
               }}
               process={process}
@@ -427,7 +438,7 @@ function formatBytes(value: number | null | undefined): string {
     next /= 1024;
     unit += 1;
   }
-  return `${unit === 0 ? next : Math.round(next * 10) / 10} ${units[unit]}`;
+  return `${unit === 0 ? Math.round(next) : Math.round(next * 10) / 10} ${units[unit]}`;
 }
 
 function formatRate(value: number | null | undefined): string {
