@@ -5,7 +5,9 @@
 #import <os/lock.h>
 #import <QuartzCore/QuartzCore.h>
 #import <VideoToolbox/VideoToolbox.h>
+#import <x264.h>
 #include <stdlib.h>
+#include <string.h>
 
 static const int32_t XCWMaximumEncodedDimension = 4096;
 static const int32_t XCWMaximumRealtimeHardwareEncodedDimension = 1440;
@@ -37,12 +39,13 @@ static const uint64_t XCWLowLatencySoftwareMaximumFrameIntervalUs = 133333;
 static const uint64_t XCWLowLatencySoftwareFrameIntervalStepUs = 11111;
 static const NSUInteger XCWLowLatencySoftwareHealthyFrameWindow = 8;
 static const NSUInteger XCWMaximumRealtimeInFlightFrames = 3;
-static const int32_t XCWRealtimeKeyFrameIntervalSeconds = 5;
+static const int32_t XCWRealtimeKeyFrameIntervalSeconds = 60;
 static const double XCWEncoderLatencyEWMAAlpha = 0.2;
 static const double XCWEncoderStrainedLoadPercent = 85.0;
 static const double XCWEncoderOverloadedLoadPercent = 105.0;
 static const NSUInteger XCWEncoderConsecutiveOverBudgetFrameThreshold = 3;
 static const uint64_t XCWAutoHardwareRetryIntervalUs = 10000000;
+static void *XCWH264EncoderQueueSpecificKey = &XCWH264EncoderQueueSpecificKey;
 
 typedef NS_ENUM(NSUInteger, XCWVideoEncoderMode) {
     XCWVideoEncoderModeAuto,
@@ -198,7 +201,7 @@ static NSString *XCWVideoEncoderIDForMode(XCWVideoEncoderMode mode) {
         case XCWVideoEncoderModeH264Hardware:
             return nil;
         case XCWVideoEncoderModeH264Software:
-            return @"com.apple.videotoolbox.videoencoder.h264";
+            return @"org.videolan.x264";
         default:
             return nil;
     }
@@ -230,6 +233,65 @@ static NSString *XCWCodecStringFromSPS(NSData *spsData) {
         return @"avc1.640028";
     }
     return [NSString stringWithFormat:@"avc1.%02x%02x%02x", bytes[1], bytes[2], bytes[3]];
+}
+
+static NSData *XCWFirstAnnexBNALUOfType(NSData *sampleData, uint8_t nalType) {
+    const uint8_t *bytes = sampleData.bytes;
+    NSUInteger length = sampleData.length;
+    NSUInteger offset = 0;
+    while (offset + 4 < length) {
+        NSUInteger startCodeLength = 0;
+        if (offset + 4 <= length &&
+            bytes[offset] == 0 &&
+            bytes[offset + 1] == 0 &&
+            bytes[offset + 2] == 0 &&
+            bytes[offset + 3] == 1) {
+            startCodeLength = 4;
+        } else if (offset + 3 <= length &&
+                   bytes[offset] == 0 &&
+                   bytes[offset + 1] == 0 &&
+                   bytes[offset + 2] == 1) {
+            startCodeLength = 3;
+        }
+        if (startCodeLength == 0) {
+            offset += 1;
+            continue;
+        }
+
+        NSUInteger nalStart = offset + startCodeLength;
+        if (nalStart >= length) {
+            break;
+        }
+        NSUInteger nalEnd = nalStart;
+        BOOL foundNextStartCode = NO;
+        while (nalEnd + 3 < length) {
+            if ((nalEnd + 4 <= length &&
+                 bytes[nalEnd] == 0 &&
+                 bytes[nalEnd + 1] == 0 &&
+                 bytes[nalEnd + 2] == 0 &&
+                 bytes[nalEnd + 3] == 1) ||
+                (bytes[nalEnd] == 0 &&
+                 bytes[nalEnd + 1] == 0 &&
+                 bytes[nalEnd + 2] == 1)) {
+                foundNextStartCode = YES;
+                break;
+            }
+            nalEnd += 1;
+        }
+        if (!foundNextStartCode) {
+            nalEnd = length;
+        }
+        if ((bytes[nalStart] & 0x1f) == nalType && nalEnd > nalStart) {
+            return [NSData dataWithBytes:bytes + nalStart length:nalEnd - nalStart];
+        }
+        offset = nalEnd;
+    }
+    return nil;
+}
+
+static NSString *XCWCodecStringFromAnnexBSample(NSData *sampleData) {
+    NSData *spsData = XCWFirstAnnexBNALUOfType(sampleData, 7);
+    return spsData.length >= 4 ? XCWCodecStringFromSPS(spsData) : @"avc1.42e01f";
 }
 
 static NSData *XCWAVCDecoderConfigurationRecord(NSData *spsData, NSData *ppsData, int nalLengthHeader) {
@@ -463,6 +525,19 @@ static BOOL XCWPixelFormatSupportsSoftwareScaling(OSType pixelFormat) {
     }
 }
 
+static void XCWCopyPlaneRows(uint8_t *destination,
+                             size_t destinationStride,
+                             const uint8_t *source,
+                             size_t sourceStride,
+                             size_t rowBytes,
+                             size_t rows) {
+    for (size_t row = 0; row < rows; row++) {
+        memcpy(destination + (row * destinationStride),
+               source + (row * sourceStride),
+               rowBytes);
+    }
+}
+
 static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
                                          void *sourceFrameRefCon,
                                          OSStatus status,
@@ -484,9 +559,23 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 - (nullable CVPixelBufferRef)copyPixelBufferFromScalingPoolWithWidth:(int32_t)targetWidth
                                                               height:(int32_t)targetHeight
                                                          pixelFormat:(OSType)pixelFormat;
+- (BOOL)encodePixelBufferWithX264Locked:(CVPixelBufferRef)pixelBuffer
+                             targetWidth:(int32_t)targetWidth
+                            targetHeight:(int32_t)targetHeight
+                                  timeUs:(uint64_t)nowUs
+                      relativeTimestampUs:(uint64_t)relativeTimestampUs
+                           forceKeyFrame:(BOOL)forceKeyFrame;
+- (BOOL)ensureX264EncoderWithWidth:(int32_t)width height:(int32_t)height;
+- (BOOL)copyPixelBufferIntoX264PictureLocked:(CVPixelBufferRef)pixelBuffer;
+- (BOOL)ensureX264ColorConversionLocked;
+- (void)recordEncodeLatencyLockedWithSubmittedAtUs:(uint64_t)submittedAtUs measuredAtUs:(uint64_t)measuredAtUs;
+- (void)invalidateX264EncoderLocked;
 - (void)handleCompressionOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                               submittedAtUs:(uint64_t)submittedAtUs;
 - (uint64_t)activeFrameIntervalUsLocked;
+- (uint64_t)pacingDelayBeforeNextFrameAtTimeUs:(uint64_t)nowUs;
+- (void)recordFrameSubmissionLockedAtTimeUs:(uint64_t)nowUs software:(BOOL)software;
+- (void)scheduleDrainAfterDelayUs:(uint64_t)delayUs;
 
 @end
 
@@ -496,6 +585,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     os_unfair_lock _pendingLock;
     CVPixelBufferRef _pendingPixelBuffer;
     BOOL _drainScheduled;
+    BOOL _drainingPendingFrames;
     BOOL _needsKeyFrame;
     NSUInteger _inFlightFrameCount;
     int32_t _width;
@@ -531,10 +621,12 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     BOOL _wasOverloaded;
     uint64_t _softwareFrameIntervalUs;
     uint64_t _lastSoftwareSubmissionUs;
+    uint64_t _nextSoftwareSubmissionDueUs;
     NSUInteger _softwarePacedFrameCount;
     NSUInteger _softwareHealthyFrameCount;
     uint64_t _hardwareFrameIntervalUs;
     uint64_t _lastHardwareSubmissionUs;
+    uint64_t _nextHardwareSubmissionDueUs;
     NSUInteger _hardwarePacedFrameCount;
     uint64_t _autoSoftwareFallbackUntilUs;
     NSUInteger _autoSoftwareFallbackCount;
@@ -544,6 +636,15 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     NSInteger _lastPrepareStatus;
     NSInteger _lastScaleStatus;
     NSInteger _lastEncodeStatus;
+    x264_t *_x264Encoder;
+    x264_picture_t _x264Picture;
+    BOOL _x264PictureAllocated;
+    vImage_ARGBToYpCbCr _x264ColorConversion;
+    BOOL _x264ColorConversionReady;
+    int32_t _x264Width;
+    int32_t _x264Height;
+    uint64_t _x264FrameIndex;
+    NSString *_x264Codec;
 }
 
 - (instancetype)initWithOutputHandler:(XCWH264EncoderOutputHandler)outputHandler {
@@ -556,6 +657,10 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     dispatch_queue_attr_t queueAttributes =
         dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
     _queue = dispatch_queue_create("com.simdeck.h264-encoder", queueAttributes);
+    dispatch_queue_set_specific(_queue,
+                                XCWH264EncoderQueueSpecificKey,
+                                XCWH264EncoderQueueSpecificKey,
+                                NULL);
     _pendingLock = OS_UNFAIR_LOCK_INIT;
     _needsKeyFrame = YES;
     _encoderMode = XCWVideoEncoderModeFromEnvironment();
@@ -620,8 +725,10 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         self->_softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
         self->_softwarePacedFrameCount = 0;
         self->_softwareHealthyFrameCount = 0;
+        self->_nextSoftwareSubmissionDueUs = 0;
         self->_hardwareFrameIntervalUs = [self initialHardwareFrameIntervalUsLocked];
         self->_hardwarePacedFrameCount = 0;
+        self->_nextHardwareSubmissionDueUs = 0;
         self->_autoSoftwareFallbackUntilUs = 0;
         [self updateActiveEncoderModeForClientForegroundLockedAtTimeUs:(uint64_t)(CACurrentMediaTime() * 1000000.0)];
     });
@@ -637,12 +744,44 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     });
 }
 
+- (void)resetStatistics {
+    os_unfair_lock_lock(&_pendingLock);
+    _inputFrameCount = 0;
+    _pendingReplacementCount = 0;
+    os_unfair_lock_unlock(&_pendingLock);
+
+    dispatch_sync(_queue, ^{
+        self->_submittedFrameCount = 0;
+        self->_encodeFailureCount = 0;
+        self->_outputFrameCount = 0;
+        self->_keyFrameOutputCount = 0;
+        self->_maxInFlightFrameCount = self->_inFlightFrameCount;
+        self->_latestEncodeLatencyUs = 0;
+        self->_averageEncodeLatencyUs = 0;
+        self->_peakEncodeLatencyUs = 0;
+        self->_overBudgetFrameCount = 0;
+        self->_consecutiveOverBudgetFrameCount = 0;
+        self->_consecutiveStrainedFrameCount = 0;
+        self->_overloadEventCount = 0;
+        self->_wasOverloaded = NO;
+        self->_softwarePacedFrameCount = 0;
+        self->_softwareHealthyFrameCount = 0;
+        self->_hardwarePacedFrameCount = 0;
+        self->_nextSoftwareSubmissionDueUs = 0;
+        self->_nextHardwareSubmissionDueUs = 0;
+    });
+}
+
 - (NSDictionary *)statsRepresentation {
     __block NSUInteger inputFrameCount = 0;
     __block NSUInteger pendingReplacementCount = 0;
+    __block BOOL pendingFrame = NO;
+    __block BOOL drainScheduled = NO;
     os_unfair_lock_lock(&_pendingLock);
     inputFrameCount = _inputFrameCount;
     pendingReplacementCount = _pendingReplacementCount;
+    pendingFrame = _pendingPixelBuffer != NULL;
+    drainScheduled = _drainScheduled;
     os_unfair_lock_unlock(&_pendingLock);
 
     __block NSDictionary *stats = nil;
@@ -688,6 +827,8 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
             @"outputFrames": @(self->_outputFrameCount),
             @"keyFrameOutputs": @(self->_keyFrameOutputCount),
             @"inFlightFrames": @(self->_inFlightFrameCount),
+            @"pendingFrame": @(pendingFrame),
+            @"drainScheduled": @(drainScheduled),
             @"maxInFlightFrames": @(self->_maxInFlightFrameCount),
             @"latestEncodeLatencyUs": @(self->_latestEncodeLatencyUs),
             @"averageEncodeLatencyUs": @(self->_averageEncodeLatencyUs),
@@ -710,6 +851,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
             @"hardwareTargetFps": @(self->_hardwareFrameIntervalUs > 0 ? (1000000.0 / (double)self->_hardwareFrameIntervalUs) : 0.0),
             @"hardwarePacedFrames": @(self->_hardwarePacedFrameCount),
             @"transportCodec": XCWCodecName(self->_codecType),
+            @"codecString": self->_x264Codec ?: NSNull.null,
             @"encoderMode": XCWVideoEncoderModeName(self->_encoderMode),
             @"activeEncoderMode": XCWVideoEncoderModeName(self->_activeEncoderMode),
             @"clientForeground": @(self->_clientForeground),
@@ -878,6 +1020,77 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     return (uint64_t)llround(1000000.0 / (double)expectedFrameRate);
 }
 
+- (uint64_t)pacingDelayBeforeNextFrameAtTimeUs:(uint64_t)nowUs {
+    if (_needsKeyFrame) {
+        return 0;
+    }
+
+    uint64_t nextDueUs = 0;
+    BOOL software = NO;
+    if (_activeEncoderMode == XCWVideoEncoderModeH264Software) {
+        if (_softwareFrameIntervalUs == 0) {
+            _softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
+        }
+        nextDueUs = _nextSoftwareSubmissionDueUs;
+        software = YES;
+    } else if (_activeEncoderMode == XCWVideoEncoderModeAuto || _activeEncoderMode == XCWVideoEncoderModeH264Hardware) {
+        if (_hardwareFrameIntervalUs == 0) {
+            _hardwareFrameIntervalUs = [self initialHardwareFrameIntervalUsLocked];
+        }
+        nextDueUs = _nextHardwareSubmissionDueUs;
+    }
+    if (nextDueUs == 0 || nowUs >= nextDueUs) {
+        return 0;
+    }
+
+    if (software) {
+        _softwarePacedFrameCount += 1;
+    } else {
+        _hardwarePacedFrameCount += 1;
+    }
+    return nextDueUs - nowUs;
+}
+
+- (void)recordFrameSubmissionLockedAtTimeUs:(uint64_t)nowUs software:(BOOL)software {
+    uint64_t intervalUs = 0;
+    uint64_t nextDueUs = 0;
+    if (software) {
+        if (_softwareFrameIntervalUs == 0) {
+            _softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
+        }
+        intervalUs = _softwareFrameIntervalUs;
+        nextDueUs = _nextSoftwareSubmissionDueUs;
+        _lastSoftwareSubmissionUs = nowUs;
+    } else {
+        if (_hardwareFrameIntervalUs == 0) {
+            _hardwareFrameIntervalUs = [self initialHardwareFrameIntervalUsLocked];
+        }
+        intervalUs = _hardwareFrameIntervalUs;
+        nextDueUs = _nextHardwareSubmissionDueUs;
+        _lastHardwareSubmissionUs = nowUs;
+    }
+
+    if (intervalUs == 0 || nextDueUs == 0) {
+        nextDueUs = nowUs + intervalUs;
+    } else if (nowUs >= nextDueUs) {
+        uint64_t skippedIntervals = ((nowUs - nextDueUs) / intervalUs) + 1;
+        nextDueUs += skippedIntervals * intervalUs;
+    }
+
+    if (software) {
+        _nextSoftwareSubmissionDueUs = nextDueUs;
+    } else {
+        _nextHardwareSubmissionDueUs = nextDueUs;
+    }
+}
+
+- (void)scheduleDrainAfterDelayUs:(uint64_t)delayUs {
+    uint64_t clampedDelayUs = MAX(delayUs, 1000);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(clampedDelayUs * 1000ull)), _queue, ^{
+        [self drainPendingFramesLocked];
+    });
+}
+
 - (int32_t)expectedFrameRateLocked {
     if (_activeEncoderMode == XCWVideoEncoderModeH264Software) {
         if (_lowLatencyMode) {
@@ -889,45 +1102,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         return XCWRealtimeTargetFrameRate();
     }
     return XCWLocalStreamTargetFrameRate();
-}
-
-- (BOOL)shouldPaceHardwareFrameAtTimeUs:(uint64_t)nowUs {
-    if ((_activeEncoderMode != XCWVideoEncoderModeAuto && _activeEncoderMode != XCWVideoEncoderModeH264Hardware) || _needsKeyFrame) {
-        return NO;
-    }
-    if (_realtimeStreamMode) {
-        return NO;
-    }
-    if (_hardwareFrameIntervalUs == 0) {
-        _hardwareFrameIntervalUs = [self initialHardwareFrameIntervalUsLocked];
-    }
-    if (_lastHardwareSubmissionUs == 0) {
-        return NO;
-    }
-    uint64_t elapsedUs = nowUs >= _lastHardwareSubmissionUs ? nowUs - _lastHardwareSubmissionUs : 0;
-    if (elapsedUs >= _hardwareFrameIntervalUs) {
-        return NO;
-    }
-    _hardwarePacedFrameCount += 1;
-    return YES;
-}
-
-- (BOOL)shouldPaceSoftwareFrameAtTimeUs:(uint64_t)nowUs {
-    if (_activeEncoderMode != XCWVideoEncoderModeH264Software || _needsKeyFrame) {
-        return NO;
-    }
-    if (_softwareFrameIntervalUs == 0) {
-        _softwareFrameIntervalUs = [self initialSoftwareFrameIntervalUsLocked];
-    }
-    if (_lastSoftwareSubmissionUs == 0) {
-        return NO;
-    }
-    uint64_t elapsedUs = nowUs >= _lastSoftwareSubmissionUs ? nowUs - _lastSoftwareSubmissionUs : 0;
-    if (elapsedUs >= _softwareFrameIntervalUs) {
-        return NO;
-    }
-    _softwarePacedFrameCount += 1;
-    return YES;
 }
 
 - (void)adaptSoftwarePacingForLatencyUs:(uint64_t)latencyUs {
@@ -970,9 +1144,30 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 }
 
 - (void)drainPendingFramesLocked {
+    BOOL wasDraining = _drainingPendingFrames;
+    _drainingPendingFrames = YES;
     while (YES) {
         if (_inFlightFrameCount >= [self maximumInFlightFrameCountLocked]) {
             _drainScheduled = NO;
+            _drainingPendingFrames = wasDraining;
+            return;
+        }
+
+        os_unfair_lock_lock(&_pendingLock);
+        BOOL hasPendingFrame = _pendingPixelBuffer != NULL;
+        if (!hasPendingFrame) {
+            _drainScheduled = NO;
+            os_unfair_lock_unlock(&_pendingLock);
+            _drainingPendingFrames = wasDraining;
+            return;
+        }
+        os_unfair_lock_unlock(&_pendingLock);
+
+        uint64_t nowUs = (uint64_t)(CACurrentMediaTime() * 1000000.0);
+        uint64_t pacingDelayUs = [self pacingDelayBeforeNextFrameAtTimeUs:nowUs];
+        if (pacingDelayUs > 0) {
+            [self scheduleDrainAfterDelayUs:pacingDelayUs];
+            _drainingPendingFrames = wasDraining;
             return;
         }
 
@@ -980,11 +1175,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         os_unfair_lock_lock(&_pendingLock);
         pixelBuffer = _pendingPixelBuffer;
         _pendingPixelBuffer = NULL;
-        if (pixelBuffer == NULL) {
-            _drainScheduled = NO;
-            os_unfair_lock_unlock(&_pendingLock);
-            return;
-        }
         os_unfair_lock_unlock(&_pendingLock);
 
         [self encodePixelBufferLocked:pixelBuffer];
@@ -1010,14 +1200,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     }
     _scalingActive = sourceWidth != targetWidth || sourceHeight != targetHeight;
 
-    if ([self shouldPaceSoftwareFrameAtTimeUs:nowUs] || [self shouldPaceHardwareFrameAtTimeUs:nowUs]) {
-        return YES;
-    }
-
-    if (![self ensureCompressionSessionWithWidth:targetWidth height:targetHeight]) {
-        return NO;
-    }
-
     CVPixelBufferRef encodePixelBuffer = [self copyScaledPixelBufferIfNeeded:pixelBuffer
                                                                  targetWidth:targetWidth
                                                                 targetHeight:targetHeight];
@@ -1029,9 +1211,28 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         _timestampOriginUs = nowUs;
     }
     uint64_t relativeTimestampUs = nowUs - _timestampOriginUs;
-    CMTime presentationTime = CMTimeMake((int64_t)relativeTimestampUs, 1000000);
 
     BOOL forceKeyFrame = _needsKeyFrame;
+    if (_activeEncoderMode == XCWVideoEncoderModeH264Software) {
+        BOOL encoded = [self encodePixelBufferWithX264Locked:encodePixelBuffer
+                                                 targetWidth:targetWidth
+                                                targetHeight:targetHeight
+                                                     timeUs:nowUs
+                                         relativeTimestampUs:relativeTimestampUs
+                                              forceKeyFrame:forceKeyFrame];
+        CVPixelBufferRelease(encodePixelBuffer);
+        if (encoded) {
+            _needsKeyFrame = NO;
+        }
+        return encoded;
+    }
+
+    if (![self ensureCompressionSessionWithWidth:targetWidth height:targetHeight]) {
+        CVPixelBufferRelease(encodePixelBuffer);
+        return NO;
+    }
+
+    CMTime presentationTime = CMTimeMake((int64_t)relativeTimestampUs, 1000000);
     NSDictionary *frameOptions = nil;
     if (forceKeyFrame) {
         frameOptions = @{ (__bridge NSString *)kVTEncodeFrameOptionKey_ForceKeyFrame: @YES };
@@ -1055,11 +1256,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 
     _inFlightFrameCount += 1;
     _submittedFrameCount += 1;
-    if (_activeEncoderMode == XCWVideoEncoderModeH264Software) {
-        _lastSoftwareSubmissionUs = nowUs;
-    } else if (_activeEncoderMode == XCWVideoEncoderModeAuto || _activeEncoderMode == XCWVideoEncoderModeH264Hardware) {
-        _lastHardwareSubmissionUs = nowUs;
-    }
+    [self recordFrameSubmissionLockedAtTimeUs:nowUs software:NO];
     _maxInFlightFrameCount = MAX(_maxInFlightFrameCount, _inFlightFrameCount);
     if (_activeEncoderMode == XCWVideoEncoderModeH264Software || !_realtimeStreamMode) {
         VTCompressionSessionCompleteFrames(_compressionSession, presentationTime);
@@ -1068,6 +1265,9 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 }
 
 - (BOOL)ensureCompressionSessionWithWidth:(int32_t)width height:(int32_t)height {
+    if (_activeEncoderMode == XCWVideoEncoderModeH264Software) {
+        return NO;
+    }
     if (_compressionSession != NULL && _width == width && _height == height) {
         return YES;
     }
@@ -1180,20 +1380,21 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 }
 
 - (void)invalidateCompressionSessionLocked {
-    if (_compressionSession == NULL) {
-        [self invalidateScalingResourcesLocked];
-        return;
-    }
+    [self invalidateX264EncoderLocked];
 
-    VTCompressionSessionInvalidate(_compressionSession);
-    CFRelease(_compressionSession);
-    _compressionSession = NULL;
+    if (_compressionSession != NULL) {
+        VTCompressionSessionInvalidate(_compressionSession);
+        CFRelease(_compressionSession);
+        _compressionSession = NULL;
+    }
     _width = 0;
     _height = 0;
     _timestampOriginUs = 0;
     _inFlightFrameCount = 0;
     _lastSoftwareSubmissionUs = 0;
     _lastHardwareSubmissionUs = 0;
+    _nextSoftwareSubmissionDueUs = 0;
+    _nextHardwareSubmissionDueUs = 0;
     _latestEncodeLatencyUs = 0;
     _averageEncodeLatencyUs = 0;
     _peakEncodeLatencyUs = 0;
@@ -1273,6 +1474,311 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     }
 
     return scaledPixelBuffer;
+}
+
+- (BOOL)ensureX264EncoderWithWidth:(int32_t)width height:(int32_t)height {
+    if (_x264Encoder != NULL && _x264Width == width && _x264Height == height) {
+        return YES;
+    }
+
+    if (_compressionSession != NULL) {
+        VTCompressionSessionInvalidate(_compressionSession);
+        CFRelease(_compressionSession);
+        _compressionSession = NULL;
+        _inFlightFrameCount = 0;
+        _lastHardwareSubmissionUs = 0;
+    }
+    [self invalidateX264EncoderLocked];
+
+    x264_param_t parameters;
+    if (x264_param_default_preset(&parameters, "ultrafast", "zerolatency") < 0) {
+        _lastSessionStatus = -1;
+        return NO;
+    }
+
+    int expectedFrameRate = MAX(1, [self expectedFrameRateLocked]);
+    int averageBitRate = XCWAverageBitRateForDimensions(width,
+                                                        height,
+                                                        _activeEncoderMode,
+                                                        _lowLatencyMode,
+                                                        _realtimeStreamMode);
+    parameters.i_width = width;
+    parameters.i_height = height;
+    parameters.i_csp = X264_CSP_NV12;
+    parameters.i_fps_num = expectedFrameRate;
+    parameters.i_fps_den = 1;
+    parameters.i_timebase_num = 1;
+    parameters.i_timebase_den = expectedFrameRate;
+    parameters.i_keyint_max = MAX(1, expectedFrameRate * XCWRealtimeKeyFrameIntervalSeconds);
+    parameters.i_keyint_min = parameters.i_keyint_max;
+    parameters.b_intra_refresh = 0;
+    parameters.b_repeat_headers = 1;
+    parameters.b_annexb = 1;
+    parameters.i_threads = 0;
+    parameters.i_sync_lookahead = 0;
+    parameters.i_log_level = X264_LOG_NONE;
+    parameters.rc.i_rc_method = X264_RC_ABR;
+    parameters.rc.i_bitrate = MAX(1, averageBitRate / 1000);
+    parameters.rc.i_vbv_max_bitrate = parameters.rc.i_bitrate;
+    parameters.rc.i_vbv_buffer_size = parameters.rc.i_bitrate;
+    if (x264_param_apply_profile(&parameters, "baseline") < 0) {
+        _lastSessionStatus = -2;
+        return NO;
+    }
+
+    x264_t *encoder = x264_encoder_open(&parameters);
+    if (encoder == NULL) {
+        _lastSessionStatus = -3;
+        return NO;
+    }
+
+    x264_picture_t picture;
+    if (x264_picture_alloc(&picture, X264_CSP_NV12, width, height) < 0) {
+        x264_encoder_close(encoder);
+        _lastSessionStatus = -4;
+        return NO;
+    }
+
+    _x264Encoder = encoder;
+    _x264Picture = picture;
+    _x264PictureAllocated = YES;
+    _x264Width = width;
+    _x264Height = height;
+    _x264FrameIndex = 0;
+    _x264ColorConversionReady = NO;
+    _width = width;
+    _height = height;
+    _hardwareAccelerated = NO;
+    _selectedEncoderID = @"org.videolan.x264";
+    _x264Codec = @"avc1.42e01f";
+    _lastSessionStatus = 0;
+    _lastPrepareStatus = 0;
+    return YES;
+}
+
+- (void)invalidateX264EncoderLocked {
+    if (_x264PictureAllocated) {
+        x264_picture_clean(&_x264Picture);
+        _x264PictureAllocated = NO;
+    }
+    if (_x264Encoder != NULL) {
+        x264_encoder_close(_x264Encoder);
+        _x264Encoder = NULL;
+    }
+    _x264Width = 0;
+    _x264Height = 0;
+    _x264FrameIndex = 0;
+    _x264ColorConversionReady = NO;
+    _x264Codec = nil;
+}
+
+- (BOOL)ensureX264ColorConversionLocked {
+    if (_x264ColorConversionReady) {
+        return YES;
+    }
+
+    vImage_YpCbCrPixelRange pixelRange = {
+        .Yp_bias = 16,
+        .CbCr_bias = 128,
+        .YpRangeMax = 235,
+        .CbCrRangeMax = 240,
+        .YpMax = 255,
+        .YpMin = 0,
+        .CbCrMax = 255,
+        .CbCrMin = 0,
+    };
+    vImage_Error status =
+        vImageConvert_ARGBToYpCbCr_GenerateConversion(kvImage_ARGBToYpCbCrMatrix_ITU_R_709_2,
+                                                      &pixelRange,
+                                                      &_x264ColorConversion,
+                                                      kvImageARGB8888,
+                                                      kvImage420Yp8_CbCr8,
+                                                      kvImageNoFlags);
+    _lastScaleStatus = status;
+    _x264ColorConversionReady = status == kvImageNoError;
+    return _x264ColorConversionReady;
+}
+
+- (BOOL)copyPixelBufferIntoX264PictureLocked:(CVPixelBufferRef)pixelBuffer {
+    if (_x264Encoder == NULL || !_x264PictureAllocated) {
+        return NO;
+    }
+
+    int32_t width = (int32_t)CVPixelBufferGetWidth(pixelBuffer);
+    int32_t height = (int32_t)CVPixelBufferGetHeight(pixelBuffer);
+    if (width != _x264Width || height != _x264Height || (width % 2) != 0 || (height % 2) != 0) {
+        _lastScaleStatus = -10;
+        return NO;
+    }
+
+    OSType pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
+    CVReturn lockStatus = CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    if (lockStatus != kCVReturnSuccess) {
+        _lastScaleStatus = lockStatus;
+        return NO;
+    }
+
+    BOOL copied = NO;
+    if (pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
+        pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) {
+        const uint8_t *sourceY = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0);
+        const uint8_t *sourceCbCr = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1);
+        if (sourceY != NULL && sourceCbCr != NULL) {
+            XCWCopyPlaneRows(_x264Picture.img.plane[0],
+                             (size_t)_x264Picture.img.i_stride[0],
+                             sourceY,
+                             CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0),
+                             (size_t)width,
+                             (size_t)height);
+            XCWCopyPlaneRows(_x264Picture.img.plane[1],
+                             (size_t)_x264Picture.img.i_stride[1],
+                             sourceCbCr,
+                             CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1),
+                             (size_t)width,
+                             (size_t)(height / 2));
+            copied = YES;
+            _lastScaleStatus = 0;
+        }
+    } else if (pixelFormat == kCVPixelFormatType_32BGRA && [self ensureX264ColorConversionLocked]) {
+        vImage_Buffer sourceBuffer = {
+            .data = CVPixelBufferGetBaseAddress(pixelBuffer),
+            .height = (vImagePixelCount)height,
+            .width = (vImagePixelCount)width,
+            .rowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer),
+        };
+        vImage_Buffer destinationY = {
+            .data = _x264Picture.img.plane[0],
+            .height = (vImagePixelCount)height,
+            .width = (vImagePixelCount)width,
+            .rowBytes = (size_t)_x264Picture.img.i_stride[0],
+        };
+        vImage_Buffer destinationCbCr = {
+            .data = _x264Picture.img.plane[1],
+            .height = (vImagePixelCount)(height / 2),
+            .width = (vImagePixelCount)(width / 2),
+            .rowBytes = (size_t)_x264Picture.img.i_stride[1],
+        };
+        const uint8_t bgraPermuteMap[4] = {3, 2, 1, 0};
+        vImage_Error status =
+            vImageConvert_ARGB8888To420Yp8_CbCr8(&sourceBuffer,
+                                                 &destinationY,
+                                                 &destinationCbCr,
+                                                 &_x264ColorConversion,
+                                                 bgraPermuteMap,
+                                                 kvImageNoFlags);
+        _lastScaleStatus = status;
+        copied = status == kvImageNoError;
+    } else {
+        _lastScaleStatus = -11;
+    }
+
+    CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    return copied;
+}
+
+- (void)recordEncodeLatencyLockedWithSubmittedAtUs:(uint64_t)submittedAtUs measuredAtUs:(uint64_t)measuredAtUs {
+    if (submittedAtUs == 0 || measuredAtUs == 0) {
+        return;
+    }
+    _latestEncodeLatencyUs = measuredAtUs >= submittedAtUs ? measuredAtUs - submittedAtUs : 0;
+    _peakEncodeLatencyUs = MAX(_peakEncodeLatencyUs, _latestEncodeLatencyUs);
+    _averageEncodeLatencyUs = _averageEncodeLatencyUs <= 0.0
+        ? (double)_latestEncodeLatencyUs
+        : (_averageEncodeLatencyUs * (1.0 - XCWEncoderLatencyEWMAAlpha)) + ((double)_latestEncodeLatencyUs * XCWEncoderLatencyEWMAAlpha);
+    uint64_t encoderBudgetUs = [self activeFrameIntervalUsLocked];
+    double averageLoadPercent = encoderBudgetUs > 0
+        ? (_averageEncodeLatencyUs * 100.0) / (double)encoderBudgetUs
+        : 0.0;
+    double latestLoadPercent = encoderBudgetUs > 0
+        ? ((double)_latestEncodeLatencyUs * 100.0) / (double)encoderBudgetUs
+        : 0.0;
+    if (encoderBudgetUs > 0 && _latestEncodeLatencyUs > encoderBudgetUs) {
+        _overBudgetFrameCount += 1;
+        _consecutiveOverBudgetFrameCount += 1;
+    } else {
+        _consecutiveOverBudgetFrameCount = 0;
+    }
+    if (latestLoadPercent >= XCWEncoderStrainedLoadPercent) {
+        _consecutiveStrainedFrameCount += 1;
+    } else {
+        _consecutiveStrainedFrameCount = 0;
+    }
+    BOOL overloaded = averageLoadPercent >= XCWEncoderOverloadedLoadPercent ||
+        _consecutiveOverBudgetFrameCount >= XCWEncoderConsecutiveOverBudgetFrameThreshold;
+    if (overloaded && !_wasOverloaded) {
+        _overloadEventCount += 1;
+    }
+    _wasOverloaded = overloaded;
+    [self adaptSoftwarePacingForLatencyUs:_latestEncodeLatencyUs];
+}
+
+- (BOOL)encodePixelBufferWithX264Locked:(CVPixelBufferRef)pixelBuffer
+                             targetWidth:(int32_t)targetWidth
+                            targetHeight:(int32_t)targetHeight
+                                  timeUs:(uint64_t)nowUs
+                      relativeTimestampUs:(uint64_t)relativeTimestampUs
+                           forceKeyFrame:(BOOL)forceKeyFrame {
+    if (![self ensureX264EncoderWithWidth:targetWidth height:targetHeight]) {
+        _encodeFailureCount += 1;
+        _needsKeyFrame = YES;
+        return NO;
+    }
+    if (![self copyPixelBufferIntoX264PictureLocked:pixelBuffer]) {
+        _encodeFailureCount += 1;
+        _needsKeyFrame = YES;
+        return NO;
+    }
+
+    _x264Picture.i_pts = (int64_t)_x264FrameIndex++;
+    _x264Picture.i_type = forceKeyFrame ? X264_TYPE_IDR : X264_TYPE_AUTO;
+
+    x264_nal_t *nals = NULL;
+    int nalCount = 0;
+    x264_picture_t outputPicture;
+    _submittedFrameCount += 1;
+    [self recordFrameSubmissionLockedAtTimeUs:nowUs software:YES];
+    int frameBytes = x264_encoder_encode(_x264Encoder,
+                                         &nals,
+                                         &nalCount,
+                                         &_x264Picture,
+                                         &outputPicture);
+    uint64_t measuredAtUs = (uint64_t)(CACurrentMediaTime() * 1000000.0);
+    if (frameBytes < 0) {
+        _lastEncodeStatus = frameBytes;
+        _encodeFailureCount += 1;
+        _needsKeyFrame = YES;
+        return NO;
+    }
+    _lastEncodeStatus = 0;
+    [self recordEncodeLatencyLockedWithSubmittedAtUs:nowUs measuredAtUs:measuredAtUs];
+    if (frameBytes == 0 || nalCount <= 0 || nals == NULL) {
+        return YES;
+    }
+
+    NSMutableData *sampleData = [NSMutableData dataWithCapacity:(NSUInteger)frameBytes];
+    for (int index = 0; index < nalCount; index++) {
+        if (nals[index].p_payload != NULL && nals[index].i_payload > 0) {
+            [sampleData appendBytes:nals[index].p_payload length:(NSUInteger)nals[index].i_payload];
+        }
+    }
+    if (sampleData.length == 0) {
+        return YES;
+    }
+
+    BOOL isKeyFrame = outputPicture.b_keyframe != 0;
+    if (isKeyFrame) {
+        _x264Codec = XCWCodecStringFromAnnexBSample(sampleData);
+        _keyFrameOutputCount += 1;
+    }
+    _outputFrameCount += 1;
+    CGSize dimensions = CGSizeMake(_x264Width, _x264Height);
+    self.outputHandler(sampleData,
+                       relativeTimestampUs,
+                       isKeyFrame,
+                       _x264Codec ?: @"avc1.42e01f",
+                       nil,
+                       dimensions);
+    return YES;
 }
 
 - (BOOL)shouldUseSoftwareScalerForSourceWidth:(int32_t)sourceWidth
@@ -1530,6 +2036,18 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     });
 }
 
+- (void)completeEncodedSampleBufferLocked:(CMSampleBufferRef)sampleBuffer
+                            submittedAtUs:(uint64_t)submittedAtUs
+                              shouldDrain:(BOOL)shouldDrain {
+    [self handleEncodedSampleBuffer:sampleBuffer submittedAtUs:submittedAtUs];
+    if (_inFlightFrameCount > 0) {
+        _inFlightFrameCount -= 1;
+    }
+    if (shouldDrain) {
+        [self drainPendingFramesLocked];
+    }
+}
+
 - (void)completeFailedFrame {
     dispatch_async(_queue, ^{
         self->_encodeFailureCount += 1;
@@ -1547,14 +2065,19 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         return;
     }
 
+    if (dispatch_get_specific(XCWH264EncoderQueueSpecificKey) == XCWH264EncoderQueueSpecificKey) {
+        [self completeEncodedSampleBufferLocked:sampleBuffer
+                                  submittedAtUs:submittedAtUs
+                                    shouldDrain:!_drainingPendingFrames];
+        return;
+    }
+
     CFRetain(sampleBuffer);
     dispatch_async(_queue, ^{
-        [self handleEncodedSampleBuffer:sampleBuffer submittedAtUs:submittedAtUs];
+        [self completeEncodedSampleBufferLocked:sampleBuffer
+                                  submittedAtUs:submittedAtUs
+                                    shouldDrain:YES];
         CFRelease(sampleBuffer);
-        if (self->_inFlightFrameCount > 0) {
-            self->_inFlightFrameCount -= 1;
-        }
-        [self drainPendingFramesLocked];
     });
 }
 

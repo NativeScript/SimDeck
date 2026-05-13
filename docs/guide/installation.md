@@ -5,6 +5,7 @@
 - macOS on Apple Silicon.
 - Xcode with the simulator runtimes you want to use.
 - Node.js 18 or newer.
+- x264 when building from source (`brew install x264`).
 - Optional Android SDK tools for Android emulator support.
 - Optional Rust stable when building from source.
 

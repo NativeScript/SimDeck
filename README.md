@@ -35,7 +35,7 @@ view inside the editor.
 
 ## Features
 
-- Local iOS Simulator video over browser-native WebRTC H.264 with H.264 WebSocket fallback for streaming
+- Local iOS Simulator video over browser-native WebRTC H.264 with VideoToolbox hardware encode and x264 software encode
 - Android emulator frames are sourced from emulator gRPC; loopback browsers use raw RGBA over WebRTC, and non-loopback browsers use VideoToolbox-encoded H.264
 - Full simulator control & inspection using private iOS accessibility APIs and Android UIAutomator - available using `simdeck` CLI
 - Real-time screen `describe` command using accessibility view tree - available in token-efficient format for agents
@@ -92,11 +92,11 @@ simdeck daemon killall
 `simdeck daemon` manages the normal per-project warm process. `daemon killall`
 stops SimDeck daemons across all workspaces.
 
-Use software H.264's low-latency profile on slower runners where freshness is
-more important than full-resolution smoothness:
+Use software H.264 when the hardware encoder is unavailable, busy, or starved
+by screen recording:
 
 ```sh
-simdeck daemon start --video-codec software --low-latency
+simdeck daemon start --video-codec software
 ```
 
 Restart the CoreSimulator service layer when `simctl` reports a stale service

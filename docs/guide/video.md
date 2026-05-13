@@ -2,6 +2,8 @@
 
 SimDeck streams live device video to the browser. Local sessions default to high quality. Remote or constrained sessions can trade detail for lower CPU and latency.
 
+iOS simulator H.264 uses VideoToolbox for hardware encoding and x264 for software encoding.
+
 ## Pick A Stream Quality
 
 Start with the default:
@@ -39,11 +41,11 @@ simdeck daemon restart --video-codec hardware
 simdeck daemon restart --video-codec software
 ```
 
-| Codec      | Use it for                                                            |
-| ---------- | --------------------------------------------------------------------- |
-| `auto`     | Normal use. SimDeck can move between hardware and software as needed. |
-| `hardware` | Dedicated local machines where hardware H.264 is reliable.            |
-| `software` | CI, screen recording conflicts, or hardware encoder stalls.           |
+| Codec      | Use it for                                                                          |
+| ---------- | ----------------------------------------------------------------------------------- |
+| `auto`     | Normal use. SimDeck can move between hardware and software as needed.               |
+| `hardware` | Dedicated local machines where VideoToolbox hardware H.264 is reliable.             |
+| `software` | x264 software H.264 for CI, screen recording conflicts, or hardware encoder stalls. |
 
 For very constrained software sessions:
 

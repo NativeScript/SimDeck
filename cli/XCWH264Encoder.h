@@ -21,6 +21,7 @@ typedef void (^XCWH264EncoderOutputHandler)(NSData *sampleData,
 - (void)requestKeyFrame;
 - (void)reconfigureForStreamQualityChange;
 - (void)setClientForeground:(BOOL)foreground;
+- (void)resetStatistics;
 - (NSDictionary *)statsRepresentation;
 - (void)invalidate;
 

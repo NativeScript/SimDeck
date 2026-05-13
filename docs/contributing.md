@@ -9,6 +9,7 @@ Requirements:
 - macOS with Xcode and iOS Simulator runtimes.
 - Node.js 18 or newer.
 - Rust stable.
+- x264 (`brew install x264`).
 - Optional Android SDK tools for Android emulator work.
 
 ```sh

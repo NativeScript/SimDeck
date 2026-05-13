@@ -1068,6 +1068,12 @@ fn negotiated_h264_profile_level_id(
         {
             return encoder_profile_level_id.to_owned();
         }
+        if offered_profile_level_ids
+            .iter()
+            .any(|offered| h264_profile_level_ids_are_compatible(encoder_profile_level_id, offered))
+        {
+            return encoder_profile_level_id.to_owned();
+        }
     }
 
     for baseline_profile in ["42e01f", "42001f"] {
@@ -1083,6 +1089,25 @@ fn negotiated_h264_profile_level_id(
         .first()
         .cloned()
         .unwrap_or_else(|| "42e01f".to_owned())
+}
+
+fn h264_profile_level_ids_are_compatible(encoder: &str, offered: &str) -> bool {
+    let encoder = encoder.to_ascii_lowercase();
+    let offered = offered.to_ascii_lowercase();
+    if encoder.len() < 4 || offered.len() < 4 {
+        return false;
+    }
+    let encoder_profile = &encoder[..2];
+    let offered_profile = &offered[..2];
+    if encoder_profile != offered_profile {
+        return false;
+    }
+    // Baseline and constrained-baseline offers commonly differ only in constraint
+    // bits while level-asymmetry allows a sender to use a higher level.
+    if encoder_profile == "42" {
+        return true;
+    }
+    encoder[..4] == offered[..4]
 }
 
 fn offer_h264_profile_level_ids(sdp: &str) -> Vec<String> {
@@ -2461,6 +2486,11 @@ impl WebRtcSendTiming {
             .try_into()
             .unwrap_or(DEFAULT_FRAME_DURATION_US);
 
+        if realtime_stream {
+            self.last_timestamp_us = Some(frame.timestamp_us);
+            return default_duration;
+        }
+
         let duration_us = self
             .last_timestamp_us
             .and_then(|previous| frame.timestamp_us.checked_sub(previous))
@@ -2557,6 +2587,11 @@ mod tests {
             "a=rtpmap:99 H264/90000\r\na=fmtp:99 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640c1f\r\na=rtpmap:100 H264/90000\r\na=fmtp:100 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\n"
         )
         .contains("profile-level-id=42e01f"));
+        assert!(h264_sdp_fmtp_line(
+            "avc1.42c034",
+            "a=rtpmap:99 H264/90000\r\na=fmtp:99 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\n"
+        )
+        .contains("profile-level-id=42c034"));
     }
 
     #[test]
@@ -2775,7 +2810,7 @@ mod tests {
     }
 
     #[test]
-    fn realtime_send_timing_uses_frame_timestamps_after_first_frame() {
+    fn realtime_send_timing_uses_fixed_sample_duration() {
         let mut timing = WebRtcSendTiming::new();
         let first = FramePacket {
             frame_sequence: 1,
@@ -2804,7 +2839,7 @@ mod tests {
         );
         assert_eq!(
             timing.duration_for(&second, true),
-            Duration::from_micros(15_500)
+            super::realtime_sample_duration()
         );
     }
 
