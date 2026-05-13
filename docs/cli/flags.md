@@ -63,6 +63,8 @@ Used by `simdeck ui`, `daemon start`, `daemon restart`, `service on`, and `servi
 | ---------------- | ---------------------------------------------------- |
 | `screenshot`     | `--output <path>`, `--stdout`                        |
 | `logs`           | `--seconds <seconds>`, `--limit <count>`             |
+| `stats`          | `--pid <pid>`, `--watch`, `--interval <seconds>`     |
+| `sample`         | `--pid <pid>`, `--seconds <seconds>`                 |
 | `pasteboard set` | `--stdin`, `--file`                                  |
 | `batch`          | `--step`, `--file`, `--stdin`, `--continue-on-error` |
 

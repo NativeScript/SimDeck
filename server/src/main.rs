@@ -10,6 +10,7 @@ mod logging;
 mod logs;
 mod metrics;
 mod native;
+mod performance;
 mod service;
 mod simulators;
 mod static_files;
@@ -26,6 +27,7 @@ use logs::LogRegistry;
 use metrics::counters::Metrics;
 use native::bridge::{NativeBridge, NativeInputSession};
 use native::ffi;
+use performance::PerformanceRegistry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use simulators::registry::SessionRegistry;
@@ -42,7 +44,7 @@ use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tracing::info;
 
 const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
@@ -182,6 +184,25 @@ enum Command {
         seconds: f64,
         #[arg(long, default_value_t = 200)]
         limit: usize,
+    },
+    Processes {
+        udid: String,
+    },
+    Stats {
+        udid: String,
+        #[arg(long)]
+        pid: Option<i32>,
+        #[arg(long)]
+        watch: bool,
+        #[arg(long, default_value_t = 1.5)]
+        interval: f64,
+    },
+    Sample {
+        udid: String,
+        #[arg(long)]
+        pid: Option<i32>,
+        #[arg(long, default_value_t = 3)]
+        seconds: u64,
     },
     Screenshot {
         udid: String,
@@ -1415,6 +1436,9 @@ fn is_known_command(value: &str) -> bool {
             | "uninstall"
             | "pasteboard"
             | "logs"
+            | "processes"
+            | "stats"
+            | "sample"
             | "screenshot"
             | "describe"
             | "touch"
@@ -2323,6 +2347,53 @@ fn main() -> anyhow::Result<()> {
             .cloned()
             .unwrap_or(Value::Array(Vec::new()));
             println_json(&serde_json::json!({ "entries": entries }))?;
+            Ok(())
+        }
+        Command::Processes { udid } => {
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
+            let processes = service_get_json(
+                &service_url,
+                &format!("/api/simulators/{}/processes", url_path_component(&udid)),
+            )?;
+            println_json(&processes)?;
+            Ok(())
+        }
+        Command::Stats {
+            udid,
+            pid,
+            watch,
+            interval,
+        } => {
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
+            if watch {
+                run_stats_watch(&service_url, &udid, pid, interval)?;
+            } else {
+                let stats = service_performance_json(&service_url, &udid, pid)?;
+                println_json(&stats)?;
+            }
+            Ok(())
+        }
+        Command::Sample { udid, pid, seconds } => {
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
+            let pid = match pid {
+                Some(pid) => pid,
+                None => service_performance_json(&service_url, &udid, None)?
+                    .get("selectedPid")
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("No foreground simulator app process is available.")
+                    })? as i32,
+            };
+            let report = service_post_sample(&service_url, &udid, pid, seconds)?;
+            let sample = report.get("sample").unwrap_or(&Value::Null);
+            if let Some(text) = sample.get("report").and_then(Value::as_str) {
+                print!("{text}");
+                if !text.ends_with('\n') {
+                    println!();
+                }
+            } else {
+                println_json(&report)?;
+            }
             Ok(())
         }
         Command::Screenshot {
@@ -3587,6 +3658,149 @@ fn service_launch(server_url: &str, udid: &str, bundle_id: &str) -> anyhow::Resu
         "launch",
         &serde_json::json!({ "bundleId": bundle_id }),
     )
+}
+
+fn service_performance_json(
+    server_url: &str,
+    udid: &str,
+    pid: Option<i32>,
+) -> anyhow::Result<Value> {
+    let mut path = format!(
+        "/api/simulators/{}/performance?windowMs=120000",
+        url_path_component(udid)
+    );
+    if let Some(pid) = pid {
+        path.push_str(&format!("&pid={pid}"));
+    }
+    service_get_json(server_url, &path)
+}
+
+fn service_post_sample(
+    server_url: &str,
+    udid: &str,
+    pid: i32,
+    seconds: u64,
+) -> anyhow::Result<Value> {
+    http_request_json(
+        server_url,
+        "POST",
+        &format!(
+            "/api/simulators/{}/processes/{pid}/sample?seconds={}",
+            url_path_component(udid),
+            seconds.clamp(1, 30)
+        ),
+        None,
+    )
+}
+
+fn run_stats_watch(
+    server_url: &str,
+    udid: &str,
+    pid: Option<i32>,
+    interval: f64,
+) -> anyhow::Result<()> {
+    let interval = Duration::from_secs_f64(interval.clamp(0.25, 60.0));
+    loop {
+        let stats = service_performance_json(server_url, udid, pid)?;
+        print_performance_line(&stats)?;
+        std::thread::sleep(interval);
+    }
+}
+
+fn print_performance_line(stats: &Value) -> anyhow::Result<()> {
+    let current = stats
+        .get("current")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("No current performance sample is available."))?;
+    let pid = current.get("pid").and_then(Value::as_i64).unwrap_or(0);
+    let process = stats
+        .get("processes")
+        .and_then(Value::as_array)
+        .and_then(|processes| {
+            processes
+                .iter()
+                .find(|process| process.get("pid").and_then(Value::as_i64) == Some(pid))
+        })
+        .and_then(|process| process.get("process"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let cpu = current
+        .get("cpuPercent")
+        .and_then(Value::as_f64)
+        .map(|value| format!("{value:.1}%"))
+        .unwrap_or_else(|| "--".to_owned());
+    let memory = current
+        .get("memoryFootprintBytes")
+        .or_else(|| current.get("memoryResidentBytes"))
+        .and_then(Value::as_u64)
+        .map(format_bytes_cli)
+        .unwrap_or_else(|| "--".to_owned());
+    let disk = current
+        .get("diskWriteBytesPerSecond")
+        .and_then(Value::as_f64)
+        .map(|value| format!("{}/s", format_bytes_cli(value.max(0.0) as u64)))
+        .unwrap_or_else(|| "--".to_owned());
+    let network_in = current
+        .get("networkReceivedBytesPerSecond")
+        .and_then(Value::as_f64)
+        .map(|value| format!("{}/s", format_bytes_cli(value.max(0.0) as u64)))
+        .unwrap_or_else(|| "--".to_owned());
+    let network_out = current
+        .get("networkSentBytesPerSecond")
+        .and_then(Value::as_f64)
+        .map(|value| format!("{}/s", format_bytes_cli(value.max(0.0) as u64)))
+        .unwrap_or_else(|| "--".to_owned());
+    let connections = current
+        .get("networkConnectionCount")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "--".to_owned());
+    let hang = current
+        .get("hang")
+        .and_then(|hang| hang.get("state"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    println!(
+        "{} pid={} process={} cpu={} memory={} diskWrite={} netIn={} netOut={} connections={} hang={}",
+        chrono_like_time_label(),
+        pid,
+        process,
+        cpu,
+        memory,
+        disk,
+        network_in,
+        network_out,
+        connections,
+        hang
+    );
+    io::stdout().flush()?;
+    Ok(())
+}
+
+fn format_bytes_cli(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn chrono_like_time_label() -> String {
+    let now = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let seconds = now % 60;
+    let minutes = (now / 60) % 60;
+    let hours = (now / 3600) % 24;
+    format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
 fn service_touch(server_url: &str, udid: &str, x: f64, y: f64, phase: &str) -> anyhow::Result<()> {
@@ -5617,6 +5831,7 @@ async fn serve(
         logs,
         inspectors,
         metrics,
+        performance: PerformanceRegistry::default(),
         stream_clients: Default::default(),
         simulator_inventory: Default::default(),
         android: Default::default(),

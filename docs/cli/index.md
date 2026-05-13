@@ -39,6 +39,8 @@ simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
 simdeck describe <udid> --format agent --max-depth 3
 simdeck screenshot <udid> --output screen.png
 simdeck logs <udid> --seconds 30 --limit 200
+simdeck stats <udid>
+simdeck sample <udid> --seconds 3
 ```
 
 Most successful commands print JSON so they can be piped into tools such as `jq`.

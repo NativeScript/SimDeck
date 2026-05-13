@@ -68,6 +68,19 @@ simdeck assert <udid> --id login.button --source auto --max-depth 8
 
 Default source selection prefers a connected framework inspector, then the Swift in-app agent, then native accessibility.
 
+## Performance
+
+```sh
+simdeck processes <udid>
+simdeck stats <udid>
+simdeck stats <udid> --pid 12345
+simdeck stats <udid> --watch
+simdeck sample <udid>
+simdeck sample <udid> --pid 12345 --seconds 3
+```
+
+Performance data is simulator-only and uses host-process telemetry for matching app, extension, helper, and web-content PIDs. `stats` reports CPU, memory, disk write rate, network receive/send rates, connection count, hang state, and recent crash or termination signals. `sample` captures a short macOS `sample` report for the selected or foreground app process.
+
 ## Input
 
 Coordinates are screen points unless `--normalized` is present.

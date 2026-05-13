@@ -10,6 +10,7 @@ import type {
   UIKitScriptResult,
 } from "../../api/types";
 import { ConsolePanel } from "./ConsolePanel";
+import { PerformancePanel } from "./PerformancePanel";
 import {
   ancestorAccessibilityIds,
   accessibilityIdentifier,
@@ -39,7 +40,7 @@ interface AccessibilityInspectorProps {
   visible: boolean;
 }
 
-type InspectorTab = "console" | "inspector";
+type InspectorTab = "console" | "inspector" | "performance";
 
 export function AccessibilityInspector({
   availableSources,
@@ -245,12 +246,26 @@ export function AccessibilityInspector({
         >
           <ConsoleIcon />
         </button>
+        <button
+          aria-label="Performance"
+          className={`tbtn icon-btn ${activeTab === "performance" ? "active" : ""}`}
+          onClick={() => setActiveTab("performance")}
+          title="Performance"
+          type="button"
+        >
+          <PerformanceIcon />
+        </button>
       </div>
       {activeTab === "console" ? (
         <ConsolePanel
           accessibilityRoots={roots}
           selectedSimulator={selectedSimulator}
           visible={visible && activeTab === "console"}
+        />
+      ) : activeTab === "performance" ? (
+        <PerformancePanel
+          selectedSimulator={selectedSimulator}
+          visible={visible && activeTab === "performance"}
         />
       ) : (
         <div className="hierarchy-tree">
@@ -452,6 +467,19 @@ function ConsoleIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
         strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
+function PerformanceIcon() {
+  return (
+    <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
+      <path
+        d="M2.5 11.5h11M3.5 10V6.5M6.5 10V3.5M9.5 10V7.5M12.5 10V5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.45"
       />
     </svg>
   );
@@ -941,5 +969,5 @@ function readStoredTab(): InspectorTab {
     return "inspector";
   }
   const tab = window.localStorage.getItem("xcw-hierarchy-active-tab");
-  return tab === "console" ? "console" : "inspector";
+  return tab === "console" || tab === "performance" ? tab : "inspector";
 }

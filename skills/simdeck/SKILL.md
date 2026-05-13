@@ -208,9 +208,13 @@ simdeck screenshot <UDID> --output screen.png
 simdeck screenshot <UDID> --stdout > screen.png
 simdeck logs <UDID> --seconds 30 --limit 200
 simdeck chrome-profile <UDID>
+simdeck processes <UDID>
+simdeck stats <UDID>
+simdeck stats <UDID> --watch
+simdeck sample <UDID> --seconds 3
 ```
 
-Use screenshots for still evidence. Prefer describe for token-efficient state dumps, if they have enough context.
+Use screenshots for still evidence. Use `stats` for simulator app CPU, memory, disk write, network receive/send rates, connections, hang, and crash/termination signals. Use `sample` only when a short CPU stack capture is worth the extra pause. Prefer describe for token-efficient state dumps, if they have enough context.
 
 ## Default Loop
 

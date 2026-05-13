@@ -69,6 +69,25 @@ Device IDs come from `/api/simulators`. Android IDs use the `android:` prefix.
 | `POST` | `/api/simulators/{udid}/launch`    | `{ "bundleId": "com.example.App" }` |
 | `POST` | `/api/simulators/{udid}/open-url`  | `{ "url": "https://example.com" }`  |
 
+## Performance
+
+iOS simulator app processes run as host macOS processes. These endpoints expose host-process telemetry for matching simulator app PIDs.
+
+| Method | Path                                                 | Purpose                                                     |
+| ------ | ---------------------------------------------------- | ----------------------------------------------------------- |
+| `GET`  | `/api/simulators/{udid}/processes`                   | List app, extension, helper, and web-content PIDs           |
+| `GET`  | `/api/simulators/{udid}/performance`                 | Current sample plus rolling CPU/memory/disk/network history |
+| `GET`  | `/api/simulators/{udid}/processes/{pid}/performance` | Performance data for one simulator app process              |
+| `POST` | `/api/simulators/{udid}/processes/{pid}/sample`      | Capture a short CPU stack sample with `sample`              |
+
+Performance query parameters:
+
+| Parameter      | Notes                                                     |
+| -------------- | --------------------------------------------------------- |
+| `pid=123`      | Select a process; defaults to the foreground app          |
+| `windowMs=...` | History window, clamped between 10 seconds and 10 minutes |
+| `seconds=3`    | Stack sample duration for `POST .../sample`               |
+
 ## Live Video
 
 | Method | Path                                  | Purpose                                |

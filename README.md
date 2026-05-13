@@ -39,6 +39,7 @@ view inside the editor.
 - Android emulator frames are sourced from emulator gRPC; loopback browsers use raw RGBA over WebRTC, and non-loopback browsers use VideoToolbox-encoded H.264
 - Full simulator control & inspection using private iOS accessibility APIs and Android UIAutomator - available using `simdeck` CLI
 - Real-time screen `describe` command using accessibility view tree - available in token-efficient format for agents
+- Simulator app performance gauges for CPU, memory, disk writes, network throughput, hang signals, and stack sampling
 - CoreSimulator chrome asset rendering for device bezels
 - NativeScript, React Native, Flutter, UIKit and SwiftUI runtime inspector plugins to debug app's view hierarchy live
 - `simdeck/test` for fast JS-based app tests that can query accessibility state and drive simulator controls
@@ -161,6 +162,9 @@ simdeck rotate-left <udid>
 simdeck rotate-right <udid>
 simdeck chrome-profile <udid>
 simdeck logs <udid> --seconds 30 --limit 200
+simdeck processes <udid>
+simdeck stats <udid> --watch
+simdeck sample <udid> --seconds 3
 ```
 
 `simdeck list` defaults to compact JSON for agent-friendly device selection.
