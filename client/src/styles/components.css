@@ -1667,6 +1667,23 @@
   pointer-events: none;
 }
 
+.accessibility-dom-overlay,
+.accessibility-visual-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.accessibility-dom-node {
+  position: absolute;
+  min-width: 1px;
+  min-height: 1px;
+  overflow: hidden;
+  border: 0;
+  opacity: 0;
+  pointer-events: auto;
+}
+
 .touch-interaction-overlay {
   position: absolute;
   inset: 0;
