@@ -18,11 +18,16 @@ interface SimulatorMenuProps {
   isLoading: boolean;
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
+  onBoot: () => void;
   onChangeSearch: (value: string) => void;
   onCloseMenu: () => void;
   onDismissKeyboard: () => void;
+  onHome: () => void;
+  onOpenAppSwitcher: () => void;
   onOpenBundlePrompt: () => void;
   onOpenUrlPrompt: () => void;
+  onRotateRight: () => void;
+  onShutdown: () => void;
   onStreamEncoderChange: (encoder: StreamEncoder) => void;
   onStreamFpsChange: (fps: StreamFps) => void;
   onStreamQualityChange: (quality: StreamQualityPreset) => void;
@@ -35,6 +40,8 @@ interface SimulatorMenuProps {
   search: string;
   selectedSimulator: SimulatorMetadata | null;
   setSelectedUDID: (udid: string) => void;
+  showBootButton: boolean;
+  showStopButton: boolean;
   streamConfig: StreamConfig;
   streamTransport: StreamTransport;
   touchOverlayVisible: boolean;
@@ -47,11 +54,16 @@ export function SimulatorMenu({
   isLoading,
   menuOpen,
   menuRef,
+  onBoot,
   onChangeSearch,
   onCloseMenu,
   onDismissKeyboard,
+  onHome,
+  onOpenAppSwitcher,
   onOpenBundlePrompt,
   onOpenUrlPrompt,
+  onRotateRight,
+  onShutdown,
   onStreamEncoderChange,
   onStreamFpsChange,
   onStreamQualityChange,
@@ -64,6 +76,8 @@ export function SimulatorMenu({
   search,
   selectedSimulator,
   setSelectedUDID,
+  showBootButton,
+  showStopButton,
   streamConfig,
   streamTransport,
   touchOverlayVisible,
@@ -206,11 +220,60 @@ export function SimulatorMenu({
               </div>
               <div className="menu-divider" />
               <div className="menu-actions">
+                {showBootButton ? (
+                  <button
+                    className="menu-action mobile-menu-action"
+                    onClick={() => {
+                      onBoot();
+                      onCloseMenu();
+                    }}
+                  >
+                    Boot
+                  </button>
+                ) : null}
+                {showStopButton ? (
+                  <button
+                    className="menu-action mobile-menu-action"
+                    onClick={() => {
+                      onShutdown();
+                      onCloseMenu();
+                    }}
+                  >
+                    Stop
+                  </button>
+                ) : null}
                 <button className="menu-action" onClick={onOpenUrlPrompt}>
                   Open URL…
                 </button>
                 <button className="menu-action" onClick={onOpenBundlePrompt}>
                   Launch Bundle…
+                </button>
+                <button
+                  className="menu-action mobile-menu-action"
+                  onClick={() => {
+                    onHome();
+                    onCloseMenu();
+                  }}
+                >
+                  Home
+                </button>
+                <button
+                  className="menu-action mobile-menu-action"
+                  onClick={() => {
+                    onOpenAppSwitcher();
+                    onCloseMenu();
+                  }}
+                >
+                  App Switcher
+                </button>
+                <button
+                  className="menu-action mobile-menu-action"
+                  onClick={() => {
+                    onRotateRight();
+                    onCloseMenu();
+                  }}
+                >
+                  Rotate Right
                 </button>
                 <button
                   className="menu-action"

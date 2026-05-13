@@ -142,11 +142,16 @@ export function Toolbar({
           isLoading={isLoading}
           menuOpen={menuOpen}
           menuRef={menuRef}
+          onBoot={onBoot}
           onChangeSearch={onChangeSearch}
           onCloseMenu={closeMenu}
           onDismissKeyboard={onDismissKeyboard}
+          onHome={onHome}
+          onOpenAppSwitcher={onOpenAppSwitcher}
           onOpenBundlePrompt={onOpenBundlePrompt}
           onOpenUrlPrompt={onOpenUrlPrompt}
+          onRotateRight={onRotateRight}
+          onShutdown={onShutdown}
           onStreamEncoderChange={onStreamEncoderChange}
           onStreamFpsChange={onStreamFpsChange}
           onStreamQualityChange={onStreamQualityChange}
@@ -159,6 +164,8 @@ export function Toolbar({
           search={search}
           selectedSimulator={selectedSimulator}
           setSelectedUDID={setSelectedUDID}
+          showBootButton={showBootButton}
+          showStopButton={showStopButton}
           streamConfig={streamConfig}
           streamTransport={streamTransport}
           touchOverlayVisible={touchOverlayVisible}
@@ -211,7 +218,7 @@ export function Toolbar({
             ) : null}
             <button
               aria-label="Open URL"
-              className="tbtn icon-btn"
+              className="tbtn icon-btn toolbar-mobile-hidden"
               onClick={onOpenUrlPrompt}
               title="Open URL"
             >
@@ -219,7 +226,7 @@ export function Toolbar({
             </button>
             <button
               aria-label="Home"
-              className="tbtn icon-btn"
+              className="tbtn icon-btn toolbar-mobile-hidden"
               onClick={onHome}
               title="Home"
             >
@@ -227,7 +234,7 @@ export function Toolbar({
             </button>
             <button
               aria-label="App Switcher"
-              className="tbtn icon-btn"
+              className="tbtn icon-btn toolbar-mobile-hidden"
               onClick={onOpenAppSwitcher}
               title="App Switcher"
             >
@@ -243,7 +250,7 @@ export function Toolbar({
             </button>
             <button
               aria-label="Rotate Right"
-              className="tbtn icon-btn"
+              className="tbtn icon-btn toolbar-mobile-hidden"
               onClick={onRotateRight}
               title="Rotate Right"
             >

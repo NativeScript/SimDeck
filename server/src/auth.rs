@@ -177,7 +177,7 @@ fn origin_allowed_or_absent(config: &Config, headers: &HeaderMap) -> bool {
     headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok())
-        .map(|origin| origin_is_allowed(config, origin))
+        .map(|origin| origin_is_allowed_for_request(config, headers, origin))
         .unwrap_or(true)
 }
 
@@ -185,7 +185,11 @@ fn origin_allowed(config: &Config, headers: &HeaderMap) -> bool {
     headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|origin| origin_is_allowed(config, origin))
+        .is_some_and(|origin| origin_is_allowed_for_request(config, headers, origin))
+}
+
+fn origin_is_allowed_for_request(config: &Config, headers: &HeaderMap, origin: &str) -> bool {
+    origin_is_allowed(config, origin) || origin_matches_request_host(headers, origin)
 }
 
 fn origin_is_allowed(config: &Config, origin: &str) -> bool {
@@ -202,6 +206,33 @@ fn origin_is_allowed(config: &Config, origin: &str) -> bool {
 
 fn origin_is_cors_allowed(config: &Config, origin: &str) -> bool {
     origin == "null" || origin_is_allowed(config, origin)
+}
+
+fn origin_matches_request_host(headers: &HeaderMap, origin: &str) -> bool {
+    let Some(origin_authority) = origin_authority(origin) else {
+        return false;
+    };
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(normalize_authority)
+        .is_some_and(|host| host == origin_authority)
+}
+
+fn origin_authority(origin: &str) -> Option<String> {
+    let without_scheme = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))?;
+    let authority = without_scheme
+        .split_once('/')
+        .map(|(authority, _)| authority)
+        .unwrap_or(without_scheme)
+        .trim();
+    (!authority.is_empty()).then(|| normalize_authority(authority))
+}
+
+fn normalize_authority(authority: &str) -> String {
+    authority.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
 fn extra_allowed_origins() -> impl Iterator<Item = String> {
@@ -332,6 +363,38 @@ mod tests {
     }
 
     #[test]
+    fn accepts_cookie_for_same_origin_tailscale_host() {
+        let config = Config::new(
+            4310,
+            PathBuf::from("client/dist"),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            Some("192.168.1.50".to_owned()),
+            "auto".to_owned(),
+            false,
+            Some("secret-token".to_owned()),
+            Some("123456".to_owned()),
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("simdeck_token=secret-token"),
+        );
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://100.64.10.20:4310"),
+        );
+        headers.insert(header::HOST, HeaderValue::from_static("100.64.10.20:4310"));
+
+        assert!(api_request_authorized(
+            &config,
+            &Method::GET,
+            &headers,
+            false,
+            None
+        ));
+    }
+
+    #[test]
     fn rejects_cross_origin_cookie_without_header_token() {
         let config = config();
         let mut headers = HeaderMap::new();
@@ -347,6 +410,29 @@ mod tests {
         assert!(!api_request_authorized(
             &config,
             &Method::POST,
+            &headers,
+            false,
+            None
+        ));
+    }
+
+    #[test]
+    fn rejects_cross_origin_cookie_when_origin_does_not_match_host() {
+        let config = config();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("simdeck_token=secret-token"),
+        );
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://100.64.10.20:4310"),
+        );
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:4310"));
+
+        assert!(!api_request_authorized(
+            &config,
+            &Method::GET,
             &headers,
             false,
             None

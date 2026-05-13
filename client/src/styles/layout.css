@@ -11,6 +11,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   height: 40px;
   padding: 0 8px;
   background: var(--toolbar-bg);
@@ -37,8 +40,10 @@
 .toolbar-sim-info {
   display: flex;
   align-items: center;
+  flex: 1 1 0;
   gap: 8px;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
 }
 
@@ -59,6 +64,7 @@
 .toolbar-sim-name {
   font-weight: 600;
   font-size: 13px;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -122,7 +128,6 @@
 
   .toolbar-right {
     flex: 0 0 auto;
-    max-width: 58%;
     min-width: 0;
     overflow: visible;
   }
@@ -142,12 +147,12 @@
     max-width: 96px;
   }
 
-  .toolbar-mobile-hidden {
-    display: inline-flex;
+  .toolbar .toolbar-mobile-hidden {
+    display: none;
   }
 
-  .mobile-menu-action {
-    display: none;
+  .menu-actions .mobile-menu-action {
+    display: block;
   }
 
   .debug-grid {
