@@ -104,6 +104,30 @@ describe("uiState", () => {
     expect(viewportStateForUDID({}, "missing")).toEqual(DEFAULT_VIEWPORT_STATE);
   });
 
+  it("can force a persisted viewport back to fit mode", () => {
+    expect(
+      viewportStateForUDID(
+        {
+          viewportByUDID: {
+            "sim-1": {
+              pan: { x: 20, y: 30 },
+              rotationQuarterTurns: 1,
+              viewMode: "manual",
+              zoom: 1.7,
+            },
+          },
+        },
+        "sim-1",
+        { forceFit: true },
+      ),
+    ).toEqual({
+      pan: DEFAULT_VIEWPORT_STATE.pan,
+      rotationQuarterTurns: 1,
+      viewMode: "fit",
+      zoom: null,
+    });
+  });
+
   it("uses the supplied stored-flag default outside the browser", () => {
     expect(readStoredFlag("missing-flag", true)).toBe(true);
   });

@@ -141,6 +141,7 @@ const STREAM_TRANSPORT_VALUES = new Set<StreamTransport>([
   "h264",
   "webrtc",
 ]);
+const MOBILE_VIEWPORT_MEDIA_QUERY = "(max-width: 600px)";
 clearLegacyVolatileUiState();
 
 interface StreamQualityResponse {
@@ -238,6 +239,16 @@ function defaultStreamConfigForTransport(
     };
   }
   return base;
+}
+
+function shouldForceInitialFitMode(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return (
+    window.matchMedia?.(MOBILE_VIEWPORT_MEDIA_QUERY).matches ??
+    window.innerWidth <= 600
+  );
 }
 
 function writeStreamTransportQueryParam(transport: StreamTransport) {
@@ -344,8 +355,11 @@ export function AppShell({
       readDeviceQueryParam() ??
       initialUiState.selectedUDID,
   );
+  const forceInitialFitMode = shouldForceInitialFitMode();
   const initialViewportState = initialSelectedUDID
-    ? viewportStateForUDID(initialUiState, initialSelectedUDID)
+    ? viewportStateForUDID(initialUiState, initialSelectedUDID, {
+        forceFit: forceInitialFitMode,
+      })
     : DEFAULT_VIEWPORT_STATE;
   const {
     error: listError,
@@ -975,6 +989,7 @@ export function AppShell({
     const nextViewportState = viewportStateForUDID(
       persistedState,
       selectedSimulator.udid,
+      { forceFit: shouldForceInitialFitMode() },
     );
     setStreamStamp(Date.now());
     setChromeProfile(null);

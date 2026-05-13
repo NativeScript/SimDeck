@@ -182,8 +182,18 @@ export function writePersistedUiState(
 export function viewportStateForUDID(
   state: PersistedUiState,
   udid: string,
+  options: { forceFit?: boolean } = {},
 ): PersistedViewportState {
-  return state.viewportByUDID?.[udid] ?? DEFAULT_VIEWPORT_STATE;
+  const viewportState = state.viewportByUDID?.[udid] ?? DEFAULT_VIEWPORT_STATE;
+  if (!options.forceFit) {
+    return viewportState;
+  }
+  return {
+    ...viewportState,
+    pan: DEFAULT_VIEWPORT_STATE.pan,
+    viewMode: "fit",
+    zoom: null,
+  };
 }
 
 export function sanitizePersistedUiState(

@@ -169,8 +169,29 @@
     max-width: calc(100vw - 24px);
   }
 
-  .menu-popover {
-    width: min(260px, calc(100vw - 16px));
+  .toolbar .menu-wrap .menu-popover {
+    position: fixed;
+    top: 46px;
+    right: 6px;
+    left: 6px;
+    width: auto;
+    height: calc(100dvh - 52px);
+    max-height: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .menu-popover .sidebar-search {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--surface);
+  }
+
+  .menu-popover .sim-list {
+    flex: 1 1 55dvh;
+    min-height: min(360px, 44dvh);
+    overflow-y: auto;
   }
 
   .hierarchy-panel {
