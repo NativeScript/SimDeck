@@ -5,36 +5,34 @@ description: Use for simulator lifecycle, app install/launch, live viewing, UI i
 
 # SimDeck Agent Guide
 
-SimDeck automates iOS Simulators and Android emulators. Use the CLI for automation and the browser UI for live human visibility. iOS works with UIKit, SwiftUI, React Native, Expo, and NativeScript apps; Android works through ADB, emulator lifecycle, screenshots, logs, and UIAutomator hierarchy dumps.
+SimDeck automates iOS Simulators and Android emulators. Use the CLI for automation and the browser UI for live human visibility. iOS works with NativeScript, UIKit, SwiftUI, React Native, Expo, and Flutter apps; Android works through ADB, emulator lifecycle, screenshots, logs, and UIAutomator hierarchy dumps.
 
-SimDeck uses one warm daemon per project. Check it with `simdeck daemon status`; start it or open the browser UI when needed:
+SimDeck uses one daemon per workspace (CWD). Use `simdeck ui` and it will print JSON with `url` key. If it was already running, it prints the existing daemon URL and `started` is set to `false`. Contains workspace in `projectRoot` key. Example response:
 
-```bash
-simdeck
-simdeck "iPhone 17 Pro Max"
-simdeck -d
-simdeck -k
-simdeck -r
-simdeck daemon start
-simdeck daemon restart
-simdeck daemon killall
-simdeck ui
-npm run build:cli && ./build/simdeck ui --open
-simdeck daemon start --video-codec software
-simdeck daemon start --video-codec software --low-latency
-simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
-simdeck batch <udid> --step "tap --label Continue" --step "type 'hello'" --step "wait-for --label hello"
+```json
+{
+  "ok": true,
+  "pairingCode": "401974",
+  "pid": 91285,
+  "projectRoot": "-",
+  "started": true,
+  "url": "http://127.0.0.1:4310"
+}
 ```
 
-`simdeck` alone starts a foreground workspace daemon, prints URLs. The optional single argument is a simulator name or UDID to select by default. Use `-d` for detached start, `-k` to kill the background daemon, and `-r` to restart it.
+```bash
+simdeck ui
+simdeck -k # kills the daemon
+simdeck -r  # restarts the daemon
+simdeck daemon killall # kills all daemons on the machine, use with care
+```
 
-Viewer: usually `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
-Use `?stream=h264` to force H.264 over WebSocket, or `?stream=webrtc` to force
-WebRTC. `?stream=auto` is the browser default: WebRTC first, H.264 WebSocket
-next if no decoded frame renders.
+Usually `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
+Port may increment if multiple daemons are running.
 
-Open the URL reported by the CLI in the in-app browser using Browser Use if available.
-`simdeck ui --open` would open the default browser - taking focus away from the app - so prefer the in app browser always. `--open` is not meant for agents.
+Always first run `simdeck ui` to open the URL reported by the `simdeck ui` in the in-app browser using Browser Use tool if available.
+
+If Browser Use is not available, only then use `simdeck ui --open` - it would open the default browser - taking focus away from the app.
 
 ## Device And App
 
@@ -42,6 +40,7 @@ Device commands take `<UDID>` immediately after the command.
 
 ```bash
 simdeck list
+simdeck list --format json
 simdeck boot <UDID>
 simdeck shutdown <UDID>
 simdeck erase <UDID>
@@ -55,17 +54,18 @@ simdeck open-url <UDID> https://example.com
 simdeck toggle-appearance <UDID>
 ```
 
+`simdeck list` defaults to compact JSON for token-efficient agent selection.
+Use `simdeck list --format json` only when you need full paths and display
+metadata.
+
 Build apps with project tooling.
 
 Android devices use IDs like `android:Pixel_8_API_36`. `simdeck list` discovers
-AVDs from the Android SDK, `boot` starts `emulator -avd ... -no-window`, and
-live browser viewing uses WebRTC. Local loopback Android viewing sends raw RGBA
-frames over a WebRTC data channel; non-loopback Android viewing uses
-VideoToolbox-encoded H.264. `simdeck stream` is still iOS-only.
+AVDs from the Android SDK.
 
 ## Fast Agent Inspection
 
-Use targeted checks for test loops. `describe` is a diagnostic snapshot of the whole hierarchy; it is useful for planning, but it is expensive. For verification, prefer the daemon APIs exposed by `simdeck/test`: `query`, `waitFor`, `assert`, selector `tap`, and `batch`.
+Use targeted checks for test loops. `describe` is a diagnostic snapshot of the whole hierarchy. For verification, prefer the daemon APIs exposed by `simdeck/test`: `query`, `waitFor`, `assert`, selector `tap`, and `batch`.
 
 ```bash
 simdeck describe <UDID>
@@ -80,6 +80,8 @@ simdeck describe <UDID> --source uikit
 simdeck describe <UDID> --source native-ax
 simdeck describe <UDID> --source android-uiautomator
 simdeck describe <UDID> --direct
+simdeck wait-for <UDID> --label "Welcome" --timeout-ms 5000
+simdeck assert <UDID> --id login.button --source auto --max-depth 8
 ```
 
 Use `--source auto` with the project daemon. Use `--direct` or `--source native-ax` for the private CoreSimulator accessibility bridge. Use `--source android-uiautomator` for Android emulator UIAutomator hierarchies. NativeScript, React Native, and Flutter inspector runtimes can add richer hierarchy data.
@@ -99,13 +101,15 @@ For persistent app integration tests, use `simdeck/test` instead of shelling out
 ```ts
 import { connect } from "simdeck/test";
 
-const simdeck = await connect();
+const udid = "your-device-udid";
+const simdeck = await connect({ udid });
+
 try {
-  await simdeck.launch(udid, "com.example.App");
-  await simdeck.waitFor(udid, { id: "login.button" }, { maxDepth: 8 });
-  await simdeck.tap(udid, 0.5, 0.5);
-  await simdeck.assert(udid, { label: "Welcome" }, { maxDepth: 8 });
-  const matches = await simdeck.query(udid, { id: "account.name" });
+  await simdeck.launch("com.example.App");
+  await simdeck.waitFor({ id: "login.button" }, { maxDepth: 8 });
+  await simdeck.tap(0.5, 0.5);
+  await simdeck.assert({ label: "Welcome" }, { maxDepth: 8 });
+  const matches = await simdeck.query({ id: "account.name" });
   console.log(matches);
 } finally {
   simdeck.close();
@@ -163,8 +167,6 @@ Use `--stdin` or `--file` for text with quotes, newlines, shell variables, or sh
 
 ## Timing, Batch
 
-Input dispatch success does not prove the app reacted. Prefer selector waits/asserts, then use screenshot/logs/viewer when visual evidence matters.
-
 ```bash
 simdeck tap <UDID> --label "Continue" --wait-timeout-ms 5000
 simdeck swipe <UDID> 200 700 200 200 --pre-delay-ms 100 --post-delay-ms 250
@@ -183,7 +185,7 @@ simdeck batch <UDID> \
   --step "pinch --start-distance 0.20 --end-distance 0.35 --normalized"
 ```
 
-Batch rules: one source (`--step`, `--file`, or `--stdin`); keep `<UDID>` at batch level; ordered steps; fail-fast by default; `--continue-on-error` for best effort. Step commands: `tap`, `swipe`, `gesture`, `pinch`, `rotate-gesture`, `touch`, `type`, `button`, `key`, `key-sequence`, `key-combo`, `sleep`.
+Batch rules: one source (`--step`, `--file`, or `--stdin`); keep `<UDID>` at batch level; ordered steps; fail-fast by default; `--continue-on-error` for best effort. Step commands: `tap`, `wait-for`, `assert`, `swipe`, `gesture`, `pinch`, `rotate-gesture`, `touch`, `type`, `button`, `key`, `key-sequence`, `key-combo`, `sleep`.
 
 For JS tests, batch can combine action and verification without extra CLI process startup:
 
@@ -212,7 +214,7 @@ Use screenshots for still evidence. Prefer describe for token-efficient state du
 
 ## Default Loop
 
-1. Serve, list, boot/select `<UDID>`, optionally open viewer if in-app browser available
+1. Start UI, list, boot/select `<UDID>`, open viewer if in-app browser available
 2. Build with project tools; install and launch with SimDeck.
 3. Use one `describe --format agent --max-depth 4` to understand an unfamiliar screen.
 4. Interact with selectors first; use coordinates only when needed.
@@ -251,5 +253,5 @@ import "expo-router/entry";
 Import it before `expo-router/entry` or `AppRegistry.registerComponent(...)`.
 The auto entrypoint no-ops outside development, reads
 `EXPO_PUBLIC_SIMDECK_PORT` when present, and otherwise scans common SimDeck
-daemon ports. Use the manual `startSimDeckReactNativeInspector(...)` API only
+daemon ports. Use the manual `startSimDeckReactNativeInspector(...)` API
 when you need custom host/path/security options.

@@ -10,22 +10,20 @@ SimDeck supports two testing workflows:
 ```ts
 import { connect } from "simdeck/test";
 
-const sim = await connect();
+const udid = process.env.SIMDECK_UDID!;
+const sim = await connect({ udid });
 
 try {
-  const { simulators } = await sim.list();
-  const udid = simulators.find((device) => device.isBooted)?.udid;
-
-  await sim.launch(udid, "com.example.App");
-  await sim.tap(udid, 0.5, 0.5);
-  await sim.waitFor(udid, { label: "Continue" });
-  await sim.screenshot(udid);
+  await sim.launch("com.example.App");
+  await sim.tap(0.5, 0.5);
+  await sim.waitFor({ label: "Continue" });
+  await sim.screenshot();
 } finally {
   sim.close();
 }
 ```
 
-`connect()` starts the project daemon if needed, reuses a healthy daemon, and only stops daemons it started itself.
+`connect()` starts the project daemon if needed, reuses a healthy daemon, and only stops daemons it started itself. Pass `udid` to `connect()` to make it the default for session methods; methods still accept an explicit UDID as their first argument.
 
 ## Useful Test Methods
 

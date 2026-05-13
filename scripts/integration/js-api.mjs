@@ -99,6 +99,7 @@ async function main() {
         projectRoot: root,
         isolated: true,
         videoCodec: "software",
+        udid: simulatorUDID,
       }),
     { phase: phaseSetup },
   );
@@ -152,15 +153,14 @@ async function main() {
       throw new Error("JS list did not include temp simulator.");
     }
   });
-  await measuredStep("JS chromeProfile", async () => {
-    assertJson(await session.chromeProfile(simulatorUDID), "chromeProfile");
+  await measuredStep("JS default-UDID chromeProfile", async () => {
+    assertJson(await session.chromeProfile(), "chromeProfile");
   });
   await measuredStep("JS launch fixture", async () => {
     await retryAsync(
       async () => {
-        await session.launch(simulatorUDID, fixtureBundleId);
+        await session.launch(fixtureBundleId);
         await session.waitFor(
-          simulatorUDID,
           { id: "fixture.continue" },
           {
             source: "native-ax",
@@ -175,20 +175,18 @@ async function main() {
       5_000,
     );
     await session.waitFor(
-      simulatorUDID,
       { id: "fixture.continue" },
       { source: "native-ax", maxDepth: 3, timeoutMs: 20_000, pollMs: 250 },
     );
   });
   await measuredStep("JS tree describe", async () => {
     assertRoots(
-      await session.tree(simulatorUDID, { source: "native-ax", maxDepth: 1 }),
+      await session.tree({ source: "native-ax", maxDepth: 1 }),
       "tree",
     );
   });
   await measuredStep("JS selector tap", async () => {
     await session.tapElement(
-      simulatorUDID,
       { id: "fixture.continue" },
       {
         source: "native-ax",

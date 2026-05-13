@@ -29,12 +29,15 @@ simdeck daemon restart --video-codec software --stream-quality low
 
 ```sh
 simdeck list
+simdeck list --format json
 simdeck boot <udid>
 simdeck shutdown <udid>
 simdeck erase <udid>
 ```
 
 Android emulators appear as IDs such as `android:Pixel_8_API_36`.
+`list` defaults to compact JSON. Use `--format json` for the full simulator
+inventory, including paths and display metadata.
 
 ## Apps And URLs
 
@@ -59,6 +62,8 @@ simdeck describe <udid> --source flutter
 simdeck describe <udid> --source uikit
 simdeck describe <udid> --source native-ax
 simdeck describe <udid> --point 120,240
+simdeck wait-for <udid> --label "Welcome" --timeout-ms 5000
+simdeck assert <udid> --id login.button --source auto --max-depth 8
 ```
 
 Default source selection prefers a connected framework inspector, then the Swift in-app agent, then native accessibility.

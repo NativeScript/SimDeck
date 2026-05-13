@@ -132,6 +132,8 @@ simdeck stream <udid> --frames 120 > stream.h264
 simdeck describe <udid>
 simdeck describe <udid> --format agent --max-depth 4
 simdeck describe <udid> --point 120,240
+simdeck wait-for <udid> --label "Welcome" --timeout-ms 5000
+simdeck assert <udid> --id login.button --source auto --max-depth 8
 simdeck tap <udid> 120 240
 simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
 simdeck swipe <udid> 200 700 200 200
@@ -160,6 +162,10 @@ simdeck rotate-right <udid>
 simdeck chrome-profile <udid>
 simdeck logs <udid> --seconds 30 --limit 200
 ```
+
+`simdeck list` defaults to compact JSON for agent-friendly device selection.
+Use `simdeck list --format json` for the full inventory with paths and display
+metadata.
 
 `boot` uses SimDeck's private CoreSimulator boot path so it can start devices
 without launching Simulator.app. If that private path is unavailable, the
@@ -190,18 +196,20 @@ coordinates directly.
 ```ts
 import { connect } from "simdeck/test";
 
-const sim = await connect();
+const sim = await connect({ udid: "<udid>" });
 try {
-  await sim.tap("<udid>", 0.5, 0.5);
-  await sim.waitFor("<udid>", { label: "Continue" });
-  await sim.screenshot("<udid>");
+  await sim.tap(0.5, 0.5);
+  await sim.waitFor({ label: "Continue" });
+  await sim.screenshot();
 } finally {
   sim.close();
 }
 ```
 
 `connect()` starts the project daemon when needed, reuses it when it is already
-healthy, and only stops daemons it started itself.
+healthy, and only stops daemons it started itself. Pass `udid` to `connect()`
+to make it the default for session methods; each method still accepts an
+explicit UDID as the first argument when needed.
 
 ## NativeScript Inspector
 

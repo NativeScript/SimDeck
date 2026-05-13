@@ -19,7 +19,7 @@ mod webkit;
 use anyhow::Context;
 use api::routes::{router, AppState};
 use axum::Router;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use config::Config;
 use inspector::{InspectorHub, InspectorRegistryAdvertisement};
 use logs::LogRegistry;
@@ -140,7 +140,10 @@ enum Command {
         #[command(subcommand)]
         command: CoreSimulatorCommand,
     },
-    List,
+    List {
+        #[arg(long, value_enum, default_value_t = ListFormat::CompactJson)]
+        format: ListFormat,
+    },
     Boot {
         udid: String,
     },
@@ -247,6 +250,36 @@ enum Command {
         pre_delay_ms: u64,
         #[arg(long, default_value_t = 0)]
         post_delay_ms: u64,
+    },
+    WaitFor {
+        udid: String,
+        #[command(flatten)]
+        selector: SelectorArgs,
+        #[arg(long, value_enum, default_value_t = DescribeUiSource::Auto)]
+        source: DescribeUiSource,
+        #[arg(long)]
+        max_depth: Option<usize>,
+        #[arg(long)]
+        include_hidden: bool,
+        #[arg(long, default_value_t = 5_000)]
+        timeout_ms: u64,
+        #[arg(long, default_value_t = 100)]
+        poll_interval_ms: u64,
+    },
+    Assert {
+        udid: String,
+        #[command(flatten)]
+        selector: SelectorArgs,
+        #[arg(long, value_enum, default_value_t = DescribeUiSource::Auto)]
+        source: DescribeUiSource,
+        #[arg(long)]
+        max_depth: Option<usize>,
+        #[arg(long)]
+        include_hidden: bool,
+        #[arg(long, default_value_t = 5_000)]
+        timeout_ms: u64,
+        #[arg(long, default_value_t = 100)]
+        poll_interval_ms: u64,
     },
     Swipe {
         udid: String,
@@ -591,6 +624,36 @@ enum PasteboardCommand {
     },
 }
 
+#[derive(Args, Clone, Debug, Default)]
+struct SelectorArgs {
+    #[arg(long)]
+    id: Option<String>,
+    #[arg(long)]
+    label: Option<String>,
+    #[arg(long)]
+    value: Option<String>,
+    #[arg(long, alias = "type")]
+    element_type: Option<String>,
+}
+
+impl SelectorArgs {
+    fn is_empty(&self) -> bool {
+        self.id.is_none()
+            && self.label.is_none()
+            && self.value.is_none()
+            && self.element_type.is_none()
+    }
+
+    fn to_json(&self) -> Value {
+        serde_json::json!({
+            "id": self.id.as_deref(),
+            "label": self.label.as_deref(),
+            "value": self.value.as_deref(),
+            "elementType": self.element_type.as_deref(),
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum VideoCodecMode {
     Auto,
@@ -626,6 +689,12 @@ impl StreamQualityProfileArg {
             Self::CiSoftware => "ci-software",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum ListFormat {
+    CompactJson,
+    Json,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -2108,16 +2177,13 @@ fn main() -> anyhow::Result<()> {
             CoreSimulatorCommand::Shutdown => core_simulator::shutdown(),
             CoreSimulatorCommand::Restart => core_simulator::restart(),
         },
-        Command::List => {
+        Command::List { format } => {
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             let simulators = service_get_json(&service_url, "/api/simulators")?
                 .get("simulators")
                 .cloned()
                 .unwrap_or(Value::Array(Vec::new()));
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({ "simulators": simulators }))?
-            );
+            print_list_simulators(&simulators, format)?;
             Ok(())
         }
         Command::Boot { udid } => {
@@ -2447,6 +2513,54 @@ fn main() -> anyhow::Result<()> {
                 sleep_ms(post_delay_ms);
             }
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "tap" }))?;
+            Ok(())
+        }
+        Command::WaitFor {
+            udid,
+            selector,
+            source,
+            max_depth,
+            include_hidden,
+            timeout_ms,
+            poll_interval_ms,
+        } => {
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
+            let result = service_wait_for_selector(
+                &service_url,
+                &udid,
+                "wait-for",
+                selector,
+                source,
+                max_depth,
+                include_hidden,
+                timeout_ms,
+                poll_interval_ms,
+            )?;
+            println_json(&result)?;
+            Ok(())
+        }
+        Command::Assert {
+            udid,
+            selector,
+            source,
+            max_depth,
+            include_hidden,
+            timeout_ms,
+            poll_interval_ms,
+        } => {
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
+            let result = service_wait_for_selector(
+                &service_url,
+                &udid,
+                "assert",
+                selector,
+                source,
+                max_depth,
+                include_hidden,
+                timeout_ms,
+                poll_interval_ms,
+            )?;
+            println_json(&result)?;
             Ok(())
         }
         Command::Swipe {
@@ -3389,6 +3503,62 @@ fn fetch_service_accessibility_point(
     http_get_json(server_url, &path)
 }
 
+fn print_list_simulators(simulators: &Value, format: ListFormat) -> anyhow::Result<()> {
+    match format {
+        ListFormat::Json => {
+            println_json(&serde_json::json!({ "simulators": simulators }))?;
+        }
+        ListFormat::CompactJson => {
+            let compact = simulators
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(compact_simulator_list_entry)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({ "simulators": compact }))?
+            );
+        }
+    }
+    Ok(())
+}
+
+fn compact_simulator_list_entry(simulator: &Value) -> Value {
+    let mut entry = serde_json::Map::new();
+    copy_json_field(simulator, &mut entry, "udid");
+    copy_json_field(simulator, &mut entry, "name");
+    copy_json_field(simulator, &mut entry, "state");
+    copy_json_field(simulator, &mut entry, "isBooted");
+    copy_json_field(simulator, &mut entry, "isAvailable");
+    copy_json_field(simulator, &mut entry, "platform");
+    copy_json_field(simulator, &mut entry, "deviceTypeName");
+    copy_json_field(simulator, &mut entry, "runtimeName");
+    if let Some(display) = simulator.get("privateDisplay") {
+        copy_json_field_as(display, &mut entry, "displayStatus", "displayStatus");
+        copy_json_field_as(display, &mut entry, "displayReady", "displayReady");
+    }
+    Value::Object(entry)
+}
+
+fn copy_json_field(source: &Value, target: &mut serde_json::Map<String, Value>, key: &str) {
+    copy_json_field_as(source, target, key, key);
+}
+
+fn copy_json_field_as(
+    source: &Value,
+    target: &mut serde_json::Map<String, Value>,
+    source_key: &str,
+    target_key: &str,
+) {
+    if let Some(value) = source.get(source_key).filter(|value| !value.is_null()) {
+        target.insert(target_key.to_owned(), value.clone());
+    }
+}
+
 fn http_get_json(server_url: &str, path: &str) -> anyhow::Result<Value> {
     http_request_json(server_url, "GET", path, None)
 }
@@ -3447,6 +3617,33 @@ fn service_tap(
 
 fn service_tap_element(server_url: &str, udid: &str, body: Value) -> anyhow::Result<()> {
     service_post_ok(server_url, udid, "tap", &body)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn service_wait_for_selector(
+    server_url: &str,
+    udid: &str,
+    action: &str,
+    selector: SelectorArgs,
+    source: DescribeUiSource,
+    max_depth: Option<usize>,
+    include_hidden: bool,
+    timeout_ms: u64,
+    poll_interval_ms: u64,
+) -> anyhow::Result<Value> {
+    if selector.is_empty() {
+        anyhow::bail!("{action} requires a selector flag.");
+    }
+    let body = serde_json::json!({
+        "selector": selector.to_json(),
+        "source": source.as_query_value(),
+        "maxDepth": max_depth,
+        "includeHidden": include_hidden,
+        "timeoutMs": timeout_ms,
+        "pollMs": poll_interval_ms,
+    });
+    let path = format!("/api/simulators/{}/{}", url_path_component(udid), action);
+    http_request_json(server_url, "POST", &path, Some(&body))
 }
 
 fn service_batch(
