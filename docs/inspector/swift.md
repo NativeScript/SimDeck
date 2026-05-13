@@ -1,24 +1,20 @@
-# Swift In-App Inspector Agent
+# Swift Inspector
 
-`SimDeckInspectorAgent` is a debug-only iOS Swift package that exposes a UIKit hierarchy and live property edits through the [`SDI/0.1`](/api/inspector-protocol) protocol. Apps that link it for `Debug` builds can be inspected from the SimDeck browser client without going through the system accessibility stack.
+`SimDeckInspectorAgent` is a debug-only Swift package for UIKit and SwiftUI apps. It exposes richer hierarchy data and debug actions than accessibility alone.
 
-The package source lives at `packages/inspector-agent/` in this repo.
+## Add The Package
 
-## Install
-
-Add the local Swift package to your app:
+Add this local Swift package to your app:
 
 ```text
 packages/inspector-agent
 ```
 
-Then link the `SimDeckInspectorAgent` product into your app target for `Debug` configurations only.
+Link the `SimDeckInspectorAgent` product only in debug builds.
 
-## Start the agent
+## Start It
 
-Call the initializer early in app startup, behind a `#if DEBUG` guard.
-
-### SwiftUI
+SwiftUI:
 
 ```swift
 #if DEBUG
@@ -41,7 +37,7 @@ struct DemoApp: App {
 }
 ```
 
-### UIKit
+UIKit:
 
 ```swift
 func application(
@@ -55,32 +51,9 @@ func application(
 }
 ```
 
-## How discovery works
+## SwiftUI Trees
 
-The agent listens on TCP `127.0.0.1:47370` by default. If that port is already in use it tries the next 32 ports and listens on the first free one. It also advertises Bonjour service type `_simdeckinspector._tcp` so other tools can find it without probing.
-
-The SimDeck server discovers the agent for a given simulator by:
-
-1. Probing TCP `47370–47402` on `127.0.0.1`.
-2. Calling `Inspector.getInfo` to read the agent's `processIdentifier`.
-3. Running `ps -p <pid> -o command=` and matching the simulator's UDID against the process command line.
-
-This lets multiple inspector-enabled apps run side by side without colliding.
-
-## Talking to the agent directly
-
-The protocol is newline-delimited JSON over TCP — convenient enough for `nc`:
-
-```sh
-printf '{"id":1,"method":"Inspector.getInfo"}\n' | nc 127.0.0.1 47370
-printf '{"id":2,"method":"View.getHierarchy","params":{"maxDepth":4}}\n' | nc 127.0.0.1 47370
-```
-
-For the full envelope shape and method list, see the [Inspector Protocol](/api/inspector-protocol).
-
-## SwiftUI view tree
-
-For SwiftUI apps you control, attach the root publisher to the top of your scene. The agent reflects the current SwiftUI value/body tree and publishes it as the `swiftui` hierarchy source while keeping the raw UIKit host tree available as `uikit`.
+Publish a SwiftUI root when you want the declared SwiftUI tree instead of only the backing UIKit views:
 
 ```swift
 WindowGroup {
@@ -89,95 +62,43 @@ WindowGroup {
 }
 ```
 
-`View.getHierarchy` returns the published SwiftUI tree by default. Pass `"source": "uikit"` to inspect the backing hosting views instead.
-
-This is a debug aid built on Swift reflection. It can show the declared view/body structure, including custom subviews, containers, labels, modifier names, active conditional branches, and `ForEach` rows whose data and content builder are available through SwiftUI's public API. Private/custom containers may still be opaque when they do not expose a child view value or content builder.
-
-## Experimental SwiftUI preview runner
-
-The repo includes a hacky local preview runner that extracts a `#Preview { ... }` block from a Swift file, builds it into a versioned iOS Simulator dylib, and asks a tiny installed host app to `dlopen` it. The host is rebuilt and reinstalled with `--rebuild-host`; cached runs send the new dylib over a localhost TCP reload socket so the simulator does not need a new app install.
-
-```sh
-npm run preview:swiftui -- \
-  --udid <booted-simulator-udid> \
-  --file Sources/MyFeature/MyView.swift \
-  --preview "Default" \
-  --watch
-```
-
-If `--udid` is omitted, the first booted simulator is used. Extra local source files can be passed with repeated `--extra-swift` flags, and raw compiler flags can be passed with repeated `--swiftc-arg` flags.
-
-Useful speed flags:
-
-- `--skip-codesign` skips ad-hoc signing for simulator reload dylibs. This worked in local simulator smoke tests and removed roughly 170-205ms.
-- `--split-compile` caches the preview source without its `#Preview` blocks as a testable Swift module. When only the preview body changes, reloads compile a tiny wrapper and link against the cached object.
-- `--profile` prints reload-stage timings so changes can be compared without Instruments.
-
-For a closer Xcode-compatible path, point the runner at the app workspace/project and scheme:
-
-```sh
-npm run preview:swiftui -- \
-  --workspace MyApp.xcworkspace \
-  --scheme MyApp \
-  --configuration Debug \
-  --udid <booted-simulator-udid> \
-  --file MyApp/Features/Profile/ProfileView.swift \
-  --preview "Default" \
-  --watch
-```
-
-In that mode the runner asks `xcodebuild` for the target build settings, does one warm app build, copies the app bundle's resources/frameworks into the preview host, and links reload dylibs against the target's Xcode-built debug dylib. Reloads then compile the edited preview source plus a tiny wrapper instead of rebuilding and reinstalling the whole app target. For the fastest loop after a warm build, pass `--skip-xcode-build --skip-codesign --split-compile`.
-
-The host listens on local TCP ports `47440-47455`. The preferred protocol streams the dylib bytes directly into the app's Documents directory and waits for a tiny `OK` acknowledgement. If that fails, the runner falls back to copying into the app container and notifying via TCP path reload, then to `simctl openurl`.
-
-When `--skip-xcode-build` is used, the runner also reuses a cached Xcode build context under `--build-root` after the first successful settings lookup. Delete that build root or run without `--skip-xcode-build` after changing schemes, destinations, package resolution, or major build settings.
-
-This is intentionally still not full Xcode Preview compatibility. It is best for simulator-debuggable app targets with Swift modules and a `.debug.dylib` available in DerivedData. Project dependencies and assets are reused from the warm Xcode build, but complex preview setup, generated sources that changed after the warm build, or build systems with unusual output layouts may still need `--extra-swift`, `--swiftc-arg`, or another warm `xcodebuild`.
-
-## SwiftUI tagging
-
-The agent also reports SwiftUI hosting and bridge `UIView`s in the UIKit tree. To make specific SwiftUI elements addressable in the raw UIKit hierarchy, tag them in source:
+Tag important SwiftUI views so they are easy to find:
 
 ```swift
 Text("Continue")
     .simDeckInspectorTag("continue-label", id: "onboarding.continue.label")
 ```
 
-Tagged SwiftUI views appear as lightweight, non-interactive probe `UIView`s in the hierarchy with `swiftUI.isProbe = true`. The browser client surfaces them in the inspector pane.
+Then inspect:
 
-## Publishing a framework hierarchy
-
-Frameworks with their own logical tree can publish that tree into the agent. When a published snapshot exists, `View.getHierarchy` returns it by default; pass `"source": "uikit"` to force the raw UIKit tree.
-
-```swift
-try? SimDeckInspectorAgent.shared.publishHierarchySnapshot(
-    source: "nativescript",
-    snapshotJSON: #"{"source":"nativescript","roots":[]}"#
-)
+```sh
+simdeck describe <udid> --source swiftui --format agent
+simdeck describe <udid> --source uikit --format agent
 ```
 
-This is exactly how the [NativeScript runtime inspector](/inspector/nativescript) exposes its logical tree.
+## Debug Actions
 
-Framework snapshots can attach source locations to individual nodes:
+When the selected view supports it, the browser can:
 
-```json
-{
-  "type": "Label",
-  "title": "Continue",
-  "sourceLocation": {
-    "file": "src/app/home.component.html",
-    "line": 12,
-    "column": 5,
-    "offset": 238
-  }
-}
+- Read runtime properties.
+- Set simple UIKit properties for debugging.
+- Perform actions such as tap, focus, set text, or scroll.
+
+These edits are temporary and meant for debugging, not persistent app state.
+
+## Direct Protocol Check
+
+The Swift agent listens on `127.0.0.1:47370` and tries nearby ports if needed.
+
+```sh
+printf '{"id":1,"method":"Inspector.getInfo"}\n' | nc 127.0.0.1 47370
 ```
 
-The browser client uses these to jump from the hierarchy back to source.
+For protocol details, see [Inspector Protocol](/api/inspector-protocol).
 
-## Auth token
+## Shared Hosts
 
-For shared-network simulator sessions, start the agent with a token and require every request to include a top-level `token`:
+For shared or remote hosts, bind deliberately and set an auth token:
 
 ```swift
 try? SimDeckInspectorAgent.shared.start(
@@ -189,20 +110,18 @@ try? SimDeckInspectorAgent.shared.start(
 )
 ```
 
-When a token is set, requests without a matching `token` field are rejected with `error.code = -32401`.
+Keep the default localhost binding for normal local development.
 
-## Recommended configuration
+## SwiftUI Preview Runner
 
-For most apps the defaults are correct:
+This repo also includes an experimental preview runner for local development:
 
-- Bind to `127.0.0.1` only.
-- Listen on `47370` (with auto-fallback if busy).
-- No auth token.
+```sh
+npm run preview:swiftui -- \
+  --udid <booted-simulator-udid> \
+  --file Sources/MyFeature/MyView.swift \
+  --preview "Default" \
+  --watch
+```
 
-For multi-user development setups (shared simulator hosts on a LAN, CI rigs), set `bindToLocalhostOnly: false` plus an auth token and forward the inspector port through your VPN or SSH tunnel of choice.
-
-## Compatibility with the NativeScript inspector
-
-The Swift agent and the NativeScript runtime inspector implement the same protocol on different transports. Anything that can talk `SDI/0.1` over TCP can also talk it over the SimDeck WebSocket hub, and vice versa.
-
-The SimDeck server prefers connected NativeScript inspectors over Swift TCP agents when both are present for the same process. Direct TCP clients can pick whichever transport they prefer.
+It is intended for simulator-debuggable app targets and may need extra flags for complex projects.

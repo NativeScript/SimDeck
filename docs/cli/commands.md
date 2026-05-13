@@ -1,174 +1,31 @@
-# Command Reference
+# Commands
 
-Every public subcommand exposed by `simdeck`. Replace `simdeck` with `./build/simdeck` when running from a local checkout.
+Replace `simdeck` with `./build/simdeck` when running from a source checkout.
 
 ## UI And Daemon
 
-### No Subcommand
+| Command                          | Purpose                                     |
+| -------------------------------- | ------------------------------------------- |
+| `simdeck`                        | Start a foreground browser session          |
+| `simdeck <name-or-udid>`         | Start and select a device                   |
+| `simdeck -d`                     | Start or reuse the detached project daemon  |
+| `simdeck -k`                     | Stop the detached project daemon            |
+| `simdeck -r`                     | Restart the detached project daemon         |
+| `simdeck ui --open`              | Open the browser UI from a daemon           |
+| `simdeck daemon status`          | Show daemon URL, PID, token, and log path   |
+| `simdeck daemon stop`            | Stop the current project daemon             |
+| `simdeck daemon killall`         | Stop all project daemons                    |
+| `simdeck service on/off/restart` | Manage the optional always-on macOS service |
 
-Start a foreground workspace daemon and print clean local and LAN browser URLs:
-
-```sh
-simdeck
-simdeck "iPhone 17 Pro Max"
-simdeck 9750DF52-0471-48FF-B49A-B184C4BD3A3D
-simdeck --detached
-simdeck --kill
-simdeck --restart
-```
-
-The single optional argument is a simulator name or UDID to select by default in the UI. The foreground daemon binds to all interfaces, advertises the detected LAN address when available, prints the LAN HTTP URL plus a six-digit LAN pairing code, and stops when the command exits, when you press `q`, or when you press Ctrl-C.
-
-Shorthand lifecycle flags are available without a subcommand:
-
-- `-d`, `--detached` starts or reuses the background project daemon, like `simdeck daemon start`.
-- `-k`, `--kill` stops the background project daemon and returns the killed PID.
-- `-r`, `--restart` stops the background project daemon, starts a fresh one, and returns the same JSON shape as `daemon start`.
-
-### `ui`
-
-Start or reuse the project daemon and serve the browser UI.
+Examples:
 
 ```sh
-simdeck ui [--port 4310] [--bind 127.0.0.1] [--advertise-host <host>]
-           [--client-root <path>] [--video-codec auto|hardware|software]
-           [--low-latency] [--stream-quality <profile>]
-           [--local-stream-fps <15-240>] [--open]
+simdeck ui --port 4320 --open
+simdeck ui --open
+simdeck daemon restart --video-codec software --stream-quality low
 ```
 
-`--open` opens the authenticated local URL after the daemon is ready.
-
-### `studio expose`
-
-Expose one local simulator through SimDeck Studio:
-
-```sh
-simdeck studio expose [simulator] [--studio-url https://simdeck.djdev.me]
-                      [--port 4310] [--bind 127.0.0.1]
-                      [--video-codec auto|hardware|software]
-                      [--low-latency] [--stream-quality <profile>]
-```
-
-Studio expose defaults to software H.264, realtime stream delivery, and the
-`smooth` stream quality profile. The process prints the Studio URL plus the
-active codec/profile, and keeps the outbound bridge alive until Ctrl-C.
-`--video-codec hardware` opts back into the hardware encoder when that is preferable.
-
-### `provider`
-
-Run a self-hosted SimDeck Studio provider on an always-on Mac:
-
-```sh
-simdeck provider connect --studio-url https://simdeck.djdev.me \
-                         --host-id <id> --host-token <token>
-simdeck provider run [--max-capacity 1] [--simulator-template "iPhone 17 Pro"]
-simdeck provider status
-```
-
-`provider connect` stores the Studio host credential in
-`~/.simdeck/studio-provider.json` with user-only permissions. `provider run`
-starts or reuses the local daemon, heartbeats to Studio, polls for allocation
-jobs, clones simulators from the configured template, installs downloaded
-artifacts, launches the configured bundle id, proxies Studio API requests to the
-local daemon, and deletes session clones on release.
-
-### `daemon start`
-
-Start or reuse the project daemon without opening the browser:
-
-```sh
-simdeck daemon start [--port 4310] [--bind 127.0.0.1]
-                     [--advertise-host <host>] [--client-root <path>]
-                     [--video-codec auto|hardware|software] [--low-latency]
-                     [--stream-quality <profile>] [--local-stream-fps <15-240>]
-```
-
-Output:
-
-```json
-{
-  "ok": true,
-  "projectRoot": "/path/to/app",
-  "pid": 12345,
-  "pairingCode": "123456",
-  "url": "http://127.0.0.1:4310",
-  "started": true
-}
-```
-
-### `daemon status`
-
-Print daemon metadata for the current project:
-
-```sh
-simdeck daemon status
-```
-
-Detached daemons report the supervisor PID and `logPath`; the supervised child
-process is restarted automatically after recoverable server exits.
-
-### `daemon restart`
-
-Stop the daemon for the current project, then start a fresh one with the same
-options as `daemon start`:
-
-```sh
-simdeck daemon restart [--port 4310] [--bind 127.0.0.1]
-                       [--advertise-host <host>] [--client-root <path>]
-                       [--video-codec auto|hardware|software] [--low-latency]
-                       [--stream-quality <profile>] [--local-stream-fps <15-240>]
-```
-
-### `daemon stop`
-
-Stop the daemon for the current project:
-
-```sh
-simdeck daemon stop
-```
-
-### `daemon killall`
-
-Stop SimDeck project daemons across all workspaces:
-
-```sh
-simdeck daemon killall
-```
-
-### `service`
-
-Manage the optional always-on macOS user service. Use `simdeck daemon` for the
-normal per-project process; use `simdeck service` when you want a LaunchAgent
-that starts after login and stays available.
-
-```sh
-simdeck service on [--port 4310] [--bind 127.0.0.1]
-                   [--advertise-host <host>] [--client-root <path>]
-                   [--video-codec auto|hardware|software] [--low-latency]
-                   [--stream-quality <profile>] [--local-stream-fps <15-240>]
-                   [--access-token <token>]
-simdeck service restart [same options as service on]
-simdeck service off
-```
-
-`service on` installs `~/Library/LaunchAgents/dev.nativescript.simdeck.plist`
-and starts a LaunchAgent that serves SimDeck after login. It is intended for
-agents and editor integrations that should be able to open the UI without first
-starting a project daemon.
-
-### `core-simulator`
-
-Manage Apple's CoreSimulator service layer:
-
-```sh
-simdeck core-simulator restart
-simdeck core-simulator start
-simdeck core-simulator shutdown
-```
-
-Use this when `simctl` reports stale service state or simulator display attachment gets stuck before the first frame.
-
-## Simulator Lifecycle
+## Device Lifecycle
 
 ```sh
 simdeck list
@@ -177,12 +34,7 @@ simdeck shutdown <udid>
 simdeck erase <udid>
 ```
 
-`list` returns the same simulator inventory the browser UI renders, including
-Android AVDs as IDs like `android:Pixel_8_API_36`. iOS lifecycle commands use
-the native bridge. `boot` uses the private CoreSimulator path and does not fall
-back to `xcrun simctl boot`; other iOS lifecycle commands still use `xcrun
-simctl` where Apple exposes stable subcommands. Android lifecycle commands use
-the Android SDK `emulator` and `adb` tools.
+Android emulators appear as IDs such as `android:Pixel_8_API_36`.
 
 ## Apps And URLs
 
@@ -195,9 +47,7 @@ simdeck open-url <udid> https://example.com
 simdeck toggle-appearance <udid>
 ```
 
-`launch` and `open-url` use the warm daemon fast path when available.
-
-## Inspect
+## Inspect UI
 
 ```sh
 simdeck describe <udid>
@@ -208,14 +58,10 @@ simdeck describe <udid> --source react-native
 simdeck describe <udid> --source flutter
 simdeck describe <udid> --source uikit
 simdeck describe <udid> --source native-ax
-simdeck describe <udid> --source android-uiautomator
 simdeck describe <udid> --point 120,240
-simdeck describe <udid> --direct
 ```
 
-By default, `describe` uses the project daemon so it can prefer connected NativeScript, React Native, Flutter, or UIKit in-app inspectors, then fall back to the private CoreSimulator accessibility bridge. `--direct` skips the daemon and uses the native accessibility bridge directly.
-
-Use `--format agent` for compact hierarchy text intended for agent planning, and `--format compact-json` when a script needs parseable lower-token output.
+Default source selection prefers a connected framework inspector, then the Swift in-app agent, then native accessibility.
 
 ## Input
 
@@ -225,23 +71,25 @@ Coordinates are screen points unless `--normalized` is present.
 simdeck tap <udid> 120 240
 simdeck tap <udid> 0.5 0.5 --normalized
 simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
-simdeck touch <udid> 0.5 0.5 --phase began --normalized
-simdeck touch <udid> 120 240 --down --up --delay-ms 800
 simdeck swipe <udid> 200 700 200 200
 simdeck gesture <udid> scroll-down
 simdeck pinch <udid> --start-distance 160 --end-distance 80
 simdeck rotate-gesture <udid> --radius 100 --degrees 90
+simdeck type <udid> "hello"
+simdeck type <udid> --file message.txt
 simdeck key <udid> enter
 simdeck key-sequence <udid> --keycodes h,e,l,l,o
 simdeck key-combo <udid> --modifiers cmd --key a
-simdeck type <udid> "hello"
-simdeck type <udid> --file message.txt
+```
+
+System controls:
+
+```sh
 simdeck button <udid> lock --duration-ms 1000
 simdeck button <udid> volume-up
-simdeck button <udid> action --duration-ms 1000
+simdeck button <udid> action
 simdeck button <udid> digital-crown
 simdeck crown <udid> --delta 50
-simdeck button <udid> left-side-button
 simdeck dismiss-keyboard <udid>
 simdeck home <udid>
 simdeck app-switcher <udid>
@@ -249,50 +97,53 @@ simdeck rotate-left <udid>
 simdeck rotate-right <udid>
 ```
 
-Use selectors (`--id`, `--label`, `--value`, `--element-type`) when possible. Use `--stdin` or `--file` for text containing quotes, newlines, or shell-sensitive characters.
-
 ## Batch
-
-Run a known sequence through one command:
 
 ```sh
 simdeck batch <udid> \
   --step "tap --label Continue --wait-timeout-ms 5000" \
   --step "type 'hello world'" \
-  --step "wait-for --label 'hello world' --timeout-ms 5000" \
-  --step "gesture scroll-down"
+  --step "wait-for --label 'hello world' --timeout-ms 5000"
 ```
 
-Batch input can come from `--step`, `--file`, or `--stdin`. Use `wait-for` or `assert` with selector flags (`--id`, `--label`, `--value`, `--element-type`) to wait for UI state instead of fixed delays. `sleep 500` waits 500 ms; suffix seconds explicitly with `s`, as in `sleep 0.5s`. It fails fast by default; pass `--continue-on-error` for best-effort execution.
+Use `wait-for` or `assert` steps instead of fixed sleeps when possible.
 
 ## Evidence
 
 ```sh
 simdeck screenshot <udid> --output screen.png
 simdeck screenshot <udid> --stdout > screen.png
-simdeck stream <udid> --frames 120 > stream.h264
 simdeck pasteboard set <udid> "hello"
 simdeck pasteboard get <udid>
 simdeck logs <udid> --seconds 30 --limit 200
 simdeck chrome-profile <udid>
 ```
 
-`stream` writes Annex B H.264 samples to stdout and runs until interrupted, or
-until `--frames` samples have been written. It is intended for diagnostics and
-external tools, and is iOS-only. Android live viewing in the browser uses the
-WebRTC H.264 endpoint; raw frames come from emulator gRPC and are encoded
-through VideoToolbox.
-
-`logs` fetches recent simulator logs or Android `logcat` output. `chrome-profile`
-returns the CoreSimulator chrome layout for iOS and a screen-sized profile for
-Android.
-
-## HTTP Fast Path
-
-Supported hot controls use the daemon automatically. To target a specific daemon, set:
+Diagnostic iOS H.264 stream:
 
 ```sh
-export SIMDECK_SERVER_URL=http://127.0.0.1:4310
+simdeck stream <udid> --frames 120 > stream.h264
 ```
 
-This avoids repeated native setup in short-lived CLI processes. Commands that need local files, screenshots, pasteboard, or direct AX point queries still use the direct native path when appropriate.
+## Studio And Providers
+
+For hosted Studio workflows:
+
+```sh
+simdeck studio expose [simulator]
+simdeck provider connect --studio-url <url> --host-id <id> --host-token <token>
+simdeck provider run
+simdeck provider status
+```
+
+These commands are mainly for managed remote simulator hosts.
+
+## CoreSimulator Service
+
+```sh
+simdeck core-simulator restart
+simdeck core-simulator start
+simdeck core-simulator shutdown
+```
+
+Use this when Apple's simulator service is stale or unresponsive.

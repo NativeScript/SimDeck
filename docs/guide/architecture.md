@@ -1,128 +1,60 @@
-# Architecture
+# How It Works
 
-SimDeck is intentionally split into a small number of clearly-scoped layers. Every layer has a single concern and a single owner directory in the repo.
+This page is a short mental model for users and contributors. For daily usage, start with [Quick Start](/guide/quick-start) and [CLI commands](/cli/commands).
 
-## High-level layout
+## Pieces
 
-SimDeck has three layers stacked between the browser and the target device:
+| Piece              | What it does                                                        |
+| ------------------ | ------------------------------------------------------------------- |
+| CLI                | Starts SimDeck and exposes scriptable commands                      |
+| Local daemon       | Serves the browser UI, API, streams, metrics, and inspector routing |
+| Browser client     | Shows the live device, toolbar, inspector panes, and diagnostics    |
+| Native bridge      | Handles simulator-specific work on macOS                            |
+| Inspector runtimes | Optional app packages that publish richer UI trees                  |
+| `simdeck/test`     | JS/TS wrapper for automation                                        |
 
-1. **Browser / VS Code** runs the React client from `client/`. It speaks HTTP for control and WebRTC H.264 for live video, served by the Rust server.
-2. **The Rust server** (`server/`, built on `axum` + `tokio`) owns the CLI entrypoint, project daemon lifecycle, REST routes (`api/`), the stream transports (`transport/`), the inspector WebSocket hub (`inspector.rs`), the per-UDID session registry (`simulators/`), metrics, and log streaming.
-3. **Native device bridges** own platform-specific work. The Objective-C bridge (`cli/`) is reached through a narrow C ABI in `cli/native/XCWNativeBridge.*` for iOS. The Rust Android bridge (`server/src/android.rs`) shells out to the Android SDK for AVD discovery, emulator lifecycle, ADB input, screenshots, UIAutomator, and logcat.
+## Request Flow
 
-Underneath all of that are the iOS Simulator (`CoreSimulator` and `SimulatorKit`) and the Android emulator (`emulator` and `adb`).
+Most user actions follow the same path:
 
-## Layer responsibilities
+1. Browser, CLI, or test sends a command to the daemon.
+2. The daemon checks the selected device and starts a warm session when needed.
+3. SimDeck performs the requested simulator or emulator action.
+4. The command returns JSON, a screenshot, logs, or updated stream state.
 
-### `server/` — Rust HTTP and WebRTC transport
+This is why a long-lived daemon feels faster than repeatedly calling lower-level simulator tools.
 
-Owns the public CLI shape (`simdeck`, `simdeck ui`, `daemon`, `boot`, `shutdown`, …), daemon metadata, the HTTP API, WebRTC streaming, the inspector hub, log streaming, and metrics.
+## Video Flow
 
-Key modules:
+The browser opens a live stream for the selected device. SimDeck sends fresh frames, drops stale ones when a client falls behind, and lets the browser request refreshes. The UI can use WebRTC or H.264-over-WebSocket fallback depending on browser support and network behavior.
 
-| Module                              | Responsibility                                                                                                   |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `server/src/main.rs`                | CLI entrypoint, project daemon management, AppKit main-thread shim, tokio runtime bootstrap.                     |
-| `server/src/api/routes.rs`          | Every `/api/*` route, including simulator control, accessibility, and inspector proxy.                           |
-| `server/src/android.rs`             | Android AVD discovery, emulator lifecycle, ADB input, emulator gRPC video, screenshots, UIAutomator, and logcat. |
-| `server/src/transport/webrtc.rs`    | WebRTC offer/answer endpoint for H.264 browser video.                                                            |
-| `server/src/transport/packet.rs`    | Shared encoded frame type used between simulator sessions and transports.                                        |
-| `server/src/inspector.rs`           | WebSocket hub for the NativeScript runtime inspector.                                                            |
-| `server/src/simulators/registry.rs` | Per-UDID session registry with lazy attachment to the native bridge.                                             |
-| `server/src/simulators/session.rs`  | Frame broadcast channel, keyframe gating, refresh requests.                                                      |
-| `server/src/metrics/counters.rs`    | Atomic counters and per-client stream stats accepted from stream transports or `/api/client-stream-stats`.       |
-| `server/src/logs.rs`                | `os_log` log streaming and filtering.                                                                            |
+Tune this from the user-facing controls or with:
 
-The Rust server runs the tokio runtime on a worker thread while the AppKit main loop spins on the main thread. The native bridge needs the main loop to deliver display callbacks and HID events.
+```sh
+simdeck daemon restart --video-codec software --stream-quality low
+```
 
-### `cli/` — Objective-C native bridge
+## Inspector Flow
 
-Anything that depends on macOS frameworks, `xcrun simctl`, or private `CoreSimulator` / `SimulatorKit` APIs lives here. The Rust side talks to it through a narrow C ABI:
+`simdeck describe` and the browser inspector use the best available source:
 
-- `cli/native/XCWNativeBridge.{h,m}` — exported C functions for simulator control, chrome rendering, and frame callbacks.
-- `cli/native/XCWNativeSession.{h,m}` — wraps one Objective-C private simulator session handle for the Rust registry.
+1. Framework runtime inspector, such as NativeScript, React Native, or Flutter.
+2. Swift in-app agent for UIKit or SwiftUI apps.
+3. Native accessibility snapshot as the universal fallback.
 
-Inside the bridge:
+The response tells you which source was used and why a requested source fell back.
 
-- **`XCWSimctl.{h,m}`** wraps `xcrun simctl` for discovery, lifecycle management, app launching, URL opening, and screenshot capture.
-- **`XCWPrivateSimulatorBooter.{h,m}`** uses private `CoreSimulator` APIs for direct simulator boot without launching Simulator.app.
-- **`DFPrivateSimulatorDisplayBridge.{h,m}`** owns headless private display frames plus HID-based touch and keyboard injection. It resolves the active Xcode developer directory explicitly, prefers direct CoreSimulator screen IOSurface callbacks, and activates the older SimulatorKit offscreen renderable view only when direct frame callbacks are unavailable.
-- **`XCWPrivateSimulatorSession.{h,m}`** owns one private display bridge per booted simulator plus a selectable hardware or software H.264 encoder.
-- **`XCWPrivateSimulatorChromeBridge.{h,m}`** is an experimental private `SimulatorKit` chrome bridge kept nearby as a reference.
-- **`XCWChromeRenderer.{h,m}`** renders Apple's CoreSimulator device-type PDF chrome assets into PNGs for the browser.
-- **`XCWH264Encoder.{h,m}`** software / hardware H.264 encode.
+## Repository Layout
 
-### `client/` — React browser UI
+| Folder      | Purpose                                           |
+| ----------- | ------------------------------------------------- |
+| `server/`   | CLI entrypoint, daemon, API, streaming, metrics   |
+| `cli/`      | macOS simulator bridge                            |
+| `client/`   | Browser UI                                        |
+| `packages/` | Inspectors, VS Code extension, and `simdeck/test` |
+| `scripts/`  | Build, packaging, and integration helpers         |
+| `docs/`     | Documentation site                                |
 
-The React app served at `/` is a thin shell that calls the REST API. It consumes
-live device video over WebRTC H.264. iOS frames come from the native simulator
-display bridge; Android frames come from emulator gRPC `streamScreenshot` and
-are encoded through VideoToolbox on the server.
+## Contributor Boundary
 
-Layout under `client/src/`:
-
-- `app/AppShell.tsx` — top-level shell.
-- `api/` — typed wrappers around `/api/*` (`client.ts`, `controls.ts`, `simulators.ts`, `types.ts`).
-- `features/stream/` — WebRTC client, receiver stats, and frame plumbing.
-- `features/viewport/` — frame canvas, hit testing, chrome compositing.
-- `features/input/` — touch/keyboard/hardware button affordances.
-- `features/accessibility/` — accessibility tree pane and source switcher.
-- `features/simulators/` — simulator list, boot/shutdown affordances.
-- `features/toolbar/` — top toolbar (rotate, home, app switcher, dark mode toggle).
-
-The client never depends on private APIs and never assumes anything not exposed by the HTTP API.
-
-### `packages/` — companion packages
-
-- **`packages/nativescript-inspector/`** ships `@nativescript/simdeck-inspector`, a TypeScript runtime that connects from a NativeScript app to the server's WebSocket inspector hub. See [NativeScript Runtime](/inspector/nativescript).
-- **`packages/react-native-inspector/`** ships `react-native-simdeck`, a React Native runtime that connects from an app to the server's WebSocket inspector hub and publishes React Fiber hierarchy data. See [React Native Runtime](/inspector/react-native).
-- **`packages/flutter-inspector/`** ships `simdeck_flutter_inspector`, a Flutter runtime plugin that connects from an app to the server's WebSocket inspector hub and publishes widget, render, and semantics hierarchy data. See [Flutter Runtime](/inspector/flutter).
-- **`packages/inspector-agent/`** ships `SimDeckInspectorAgent`, a Swift Package you can link from a debug iOS app to expose its UIKit hierarchy. See [Swift In-App Agent](/inspector/swift).
-- **`packages/vscode-extension/`** is the VS Code extension that opens the browser client inside a webview panel and auto-starts the server.
-- **`packages/simdeck-test/`** ships `simdeck/test`, a small JS/TS wrapper around daemon startup and the REST control API. See [Testing](/guide/testing).
-
-## Data flow
-
-### Simulator control
-
-Most control endpoints follow the same path: a typed Rust handler in `server/src/api/routes.rs` calls `SessionRegistry::bridge()`, which dispatches into `cli/native/XCWNativeBridge.*` over the C ABI. From there the call lands in the matching Objective-C unit. For example, `POST /api/simulators/{udid}/boot` ends up in `XCWPrivateSimulatorBooter`, which uses private `CoreSimulator` APIs for direct boot and returns a clear error if that private path fails.
-
-### Live video
-
-The browser posts an SDP offer to `/api/simulators/{udid}/webrtc/offer`. The handler in `transport::webrtc` starts the selected frame source, waits for the first H.264 keyframe, returns an SDP answer, and writes H.264 samples to a WebRTC video track. iOS frames come from the private display bridge, which first waits for direct CoreSimulator screen IOSurface callbacks and then falls back to the SimulatorKit offscreen renderable view. For Android, the source is emulator gRPC raw pixels passed through the shared VideoToolbox encoder path.
-
-### Input
-
-Touch and keyboard events POST to `/api/simulators/{udid}/touch` and `/key`. The handler resolves the active session and replays the event through the private display bridge using HID.
-
-### Inspectors
-
-The accessibility tree endpoint blends three sources, in priority order:
-
-1. **NativeScript runtime inspector** — preferred when the foreground app has connected to `/api/inspector/connect` over WebSocket.
-2. **Swift in-app inspector agent** — used when the foreground app links the `SimDeckInspectorAgent` Swift Package and listens on a TCP port discovered between `47370` and `47402`.
-3. **Accessibility snapshot** — a final fallback that shells out to the accessibility snapshot
-
-The server discovers which inspectors are reachable for a given Simulator and surfaces the available list in the `availableSources` field on every accessibility-tree response.
-
-## Process model
-
-SimDeck stays in one OS process. The Rust binary:
-
-1. Calls `xcw_native_initialize_app()` so AppKit creates an `NSApplication` on the main thread.
-2. Spawns a tokio runtime on a worker thread that owns the HTTP server, WebRTC transport, inspector hub, and registry.
-3. Spins the AppKit main loop in 50 ms slices on the main thread to dispatch display and HID callbacks.
-
-Normal CLI commands may spawn `simdeck daemon run` in the background for the current project. The daemon writes metadata under the system temp directory, and later commands reuse it while `/api/health` stays healthy.
-
-## Working rules
-
-If you contribute, keep the following invariants in mind:
-
-- Simulator-native logic stays in Objective-C under `cli/`.
-- Rust server logic stays under `server/`.
-- Browser-only presentation logic stays in `client/`.
-- NativeScript app runtime inspection logic stays in `packages/nativescript-inspector/`.
-- Flutter app runtime inspection logic stays in `packages/flutter-inspector/`.
-- Add a server endpoint before adding client-only assumptions.
-- The supported live video paths are the WebRTC H.264 offer endpoint plus the `/api/simulators/{udid}/h264` WebSocket fallback. Do not bring back legacy `/stream.h264` handling.
+Keep platform-specific simulator work in the native layer, server behavior in `server/`, and browser presentation in `client/`. Add API support before adding UI assumptions that cannot be scripted.

@@ -1,34 +1,35 @@
 # Accessibility
 
-SimDeck's universal fallback inspector uses the private iOS Simulator accessibility APIs. It works against any simulator app — no SDK linking required — but only reports what the system accessibility stack exposes.
+Accessibility is SimDeck's universal inspector. It works with any simulator app and requires no app changes.
 
-## Coverage
+## What It Shows
 
-It reports anything the app publishes through the accessibility tree:
+- Accessibility label, identifier, value, hint, role, and actions.
+- Bounds and frames in screen points.
+- Enough structure for selector-based taps, waits, and assertions.
 
-- `AXLabel`, `AXIdentifier`, `AXValue`, `help` (hint).
-- `bounds` and `frameInScreen` in UIKit screen points.
-- Role, sub-role, and the small set of custom accessibility actions a view exposes.
+Use it from the CLI:
 
-It does **not** see:
+```sh
+simdeck describe <udid> --source native-ax
+simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
+```
 
-- SwiftUI value-tree internals unless the app links the Swift agent and attaches the SwiftUI root publisher.
-- NativeScript logical tree nodes.
-- UIView properties that aren't part of the accessibility surface.
+## What It Cannot Show
 
-For those, you need to link the [Swift in-app agent](/inspector/swift), attach the SwiftUI root publisher, or use a framework runtime inspector such as [NativeScript](/inspector/nativescript), [React Native](/inspector/react-native), or [Flutter](/inspector/flutter).
+- Internal SwiftUI value trees.
+- NativeScript, React Native, or Flutter component/widget structure.
+- UIKit properties that are not exposed through accessibility.
+- Source locations.
 
-## When AX is the right call
+Use an in-app inspector when you need those details.
 
-- You're inspecting an app you do not control (a system app, a third-party binary).
-- You only need to find an element by label or ID and tap it.
-- You're building accessibility QA workflows where the accessibility surface is the actual surface you care about.
+## Good Uses
 
-## Limitations and gotchas
+- Testing labels, identifiers, and accessibility quality.
+- Driving apps you do not control.
+- Building stable selector-based automation.
 
-- **Foreground app only.** Like the iOS accessibility stack, AX snapshot sees the foreground app at the time of the call. If you switch apps mid-call, the snapshot may straddle two processes.
-- **Coordinates are in UIKit points.** Multiply by `displayScale` (from the inspector metadata or the simulator's device profile) when correlating with pixel-space frames.
+## Coordinate Note
 
-## Combining with in-app inspectors
-
-When both AX and an in-app inspector are available, the response includes both in `availableSources`. The browser client offers a source selector so you can compare the trees side by side. This is especially useful when you suspect a NativeScript element is not making it into the accessibility tree the way you expect.
+Frames are in screen points, not pixels. Use the simulator scale or inspector metadata if you need pixel coordinates.

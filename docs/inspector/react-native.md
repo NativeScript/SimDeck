@@ -1,8 +1,8 @@
-# React Native Runtime Inspector
+# React Native Inspector
 
-`react-native-simdeck` is a debug-only React Native iOS package that publishes the React component tree to SimDeck. It uses the same [Inspector Protocol](/api/inspector-protocol) as the Swift and NativeScript inspectors, but connects outbound to the SimDeck server over WebSocket.
+`react-native-simdeck` publishes a React Native component tree to SimDeck in development builds.
 
-The package source lives at `packages/react-native-inspector/` in this repo.
+Use it when you want component names, host tags, `testID`/`nativeID`, source locations, and best-effort debug actions.
 
 ## Install
 
@@ -11,16 +11,18 @@ npm install react-native-simdeck
 cd ios && pod install
 ```
 
-## Start the inspector
+## Start It
 
-Import the auto entrypoint before `AppRegistry.registerComponent(...)` so the package can install the React Fiber hook before the app's first render. For Expo Router, import it before `expo-router/entry`.
+Import the auto entrypoint before the app registers.
+
+Expo Router:
 
 ```ts
 import "react-native-simdeck/auto";
 import "expo-router/entry";
 ```
 
-For manual React Native entrypoints:
+Manual entrypoint:
 
 ```ts
 import "react-native-simdeck/auto";
@@ -30,40 +32,40 @@ import App from "./App";
 AppRegistry.registerComponent("Example", () => App);
 ```
 
-The auto entrypoint no-ops outside development, reads `EXPO_PUBLIC_SIMDECK_PORT` when present, and otherwise scans common SimDeck daemon ports.
-
-If you need explicit options, call `startSimDeckReactNativeInspector(...)` before registering the app:
+Explicit options:
 
 ```ts
-import { AppRegistry } from "react-native";
 import { startSimDeckReactNativeInspector } from "react-native-simdeck";
-import App from "./App";
 
 if (__DEV__) {
   startSimDeckReactNativeInspector({ port: 4310 });
 }
-
-AppRegistry.registerComponent("Example", () => App);
 ```
 
-`port` is the SimDeck server port. React Native apps do not need to choose a local inspector port.
+`port` is the SimDeck server port.
 
-## What it exposes
+## Inspect
 
-`View.getHierarchy` returns the React component hierarchy by default. Each node may include:
+```sh
+simdeck describe <udid> --source react-native --format agent
+```
 
-- `type` — the component or host component name.
-- `title` — derived from accessibility label, `testID`, `nativeID`, or text children.
-- `frame` and `frameInScreen` — measured screen-point bounds when the node resolves to a native host tag.
-- `reactNative` — React Native metadata such as host tag, `testID`, and `nativeID`.
-- `sourceLocation` — Metro dev-mode file/line/column data from React's `_debugSource` metadata.
+Nodes may include:
 
-Source locations depend on development builds. Production bundles normally strip this metadata.
+- Component or host component name.
+- Accessibility label, `testID`, `nativeID`, and text.
+- Screen-point frames when the component resolves to a native host.
+- Metro dev-mode source locations.
 
-## Debug edits and JS execution
+## Debug Edits
 
-The package supports the standard `View.getProperties`, `View.setProperty`, and `View.evaluateScript` methods.
+`View.setProperty` is best-effort. If the node resolves to a native host instance, the runtime calls `setNativeProps(...)`. The app's next React render can overwrite the edit.
 
-`View.setProperty` is best-effort: when the selected node resolves to a native host instance, it calls `setNativeProps(...)`. It cannot rewrite immutable React component props, and the app's next render can override debug edits.
+`View.evaluateScript` runs with useful React Native objects in scope for diagnostics.
 
-`View.evaluateScript` runs with `fiber`, `props`, `instance`, and `ReactNative` in scope.
+## Troubleshooting
+
+- Import the auto entrypoint before app registration.
+- Use a development build for source locations.
+- Set `EXPO_PUBLIC_SIMDECK_PORT=4310` if auto port scanning cannot find the daemon.
+- Bring the app to the foreground before inspecting.

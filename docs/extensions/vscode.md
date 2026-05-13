@@ -1,76 +1,71 @@
 # VS Code Extension
 
-A bundled VS Code extension opens the SimDeck browser client inside an editor panel and can start or reuse the project daemon when needed. The extension lives in `packages/vscode-extension/` and ships pre-bundled with the npm package.
+The VS Code extension opens the SimDeck browser UI in an editor panel and can start the project daemon for you.
 
 ## Install
 
-The fastest path is to package the extension from this checkout and install it locally with the VS Code CLI:
-
-```sh
-npm run package:vscode-extension
-npm run install:vscode-extension
-```
-
-Short aliases are available too:
+From a source checkout:
 
 ```sh
 npm run package:vscode
 npm run install:vscode
 ```
 
-This:
+This builds and installs `build/vscode/simdeck-vscode.vsix`.
 
-1. Builds a `.vsix` at `build/vscode/simdeck-vscode.vsix`.
-2. Installs it via `code --install-extension build/vscode/simdeck-vscode.vsix --force`.
+If the `code` command is missing, run **Shell Command: Install 'code' command in PATH** from the VS Code command palette.
 
-If the `code` command isn't on your `PATH`, install it from VS Code via **Shell Command: Install 'code' command in PATH** in the command palette.
+## Open SimDeck
 
-## Use it
-
-After installing, open the command palette and run:
+Run this command from the command palette:
 
 ```text
 SimDeck: Open Simulator View
 ```
 
-The extension opens a webview panel pointed at a SimDeck daemon URL. If the configured URL is not reachable, the extension runs `simdeck ui`, reads the returned daemon URL, and loads that URL in the webview.
+The extension tries the configured server URL first. If it is not reachable and auto-start is enabled, it runs `simdeck ui` for the current workspace.
 
-Two more commands round out the surface:
+## Commands
 
-- **SimDeck: Stop Project Daemon** — runs `simdeck daemon stop` for the current workspace.
-- **SimDeck: Show Output** — opens the extension's output channel for debugging.
+| Command                        | Purpose                   |
+| ------------------------------ | ------------------------- |
+| `SimDeck: Open Simulator View` | Open the webview panel    |
+| `SimDeck: Stop Project Daemon` | Run `simdeck daemon stop` |
+| `SimDeck: Show Output`         | Open extension logs       |
 
 ## Settings
 
-All settings live under the `simdeck.*` namespace in VS Code settings:
+| Setting                   | Default                 | Purpose                      |
+| ------------------------- | ----------------------- | ---------------------------- |
+| `simdeck.serverUrl`       | `http://127.0.0.1:4310` | Preferred daemon URL         |
+| `simdeck.cliPath`         | empty                   | Explicit path to the CLI     |
+| `simdeck.port`            | `4310`                  | Port for auto-start          |
+| `simdeck.bindAddress`     | `127.0.0.1`             | Bind address for auto-start  |
+| `simdeck.autoStartDaemon` | `true`                  | Start the daemon when needed |
 
-| Setting                   | Default                 | Notes                                                                                                                                   |
-| ------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `simdeck.serverUrl`       | `http://127.0.0.1:4310` | Preferred URL to try first. If auto-start launches the daemon on a different port, the extension uses the URL returned by `simdeck ui`. |
-| `simdeck.cliPath`         | _empty_                 | Optional explicit path to the `simdeck` CLI. Empty means: workspace `build/`, then `PATH`.                                              |
-| `simdeck.port`            | `4310`                  | Preferred port passed to `simdeck ui` when auto-starting the project daemon.                                                            |
-| `simdeck.bindAddress`     | `127.0.0.1`             | Bind address passed to `simdeck ui` when auto-starting the project daemon.                                                              |
-| `simdeck.autoStartDaemon` | `true`                  | If `true`, the extension starts or reuses the project daemon when opening the simulator view if the preferred URL is not reachable.     |
-| `simdeck.autoStartServer` | `true`                  | Deprecated compatibility alias for `simdeck.autoStartDaemon`.                                                                           |
+CLI resolution order:
 
-## Resolving the CLI
+1. `simdeck.cliPath`
+2. Workspace `build/simdeck`
+3. `simdeck` on `PATH`
 
-When the extension needs to start or stop the project daemon it looks for the CLI in this order:
+## Remote Or LAN Server
 
-1. The explicit `simdeck.cliPath` setting.
-2. The workspace's `build/simdeck` (handy when developing on this repo).
-3. `simdeck` from `PATH`.
+Set `simdeck.serverUrl` to the remote SimDeck URL and disable auto-start:
 
-If none of those resolve, the extension surfaces an error in the output channel pointing you at this documentation.
+```json
+{
+  "simdeck.serverUrl": "http://192.168.1.50:4310",
+  "simdeck.autoStartDaemon": false
+}
+```
 
-## Talking to a remote server
-
-Set `simdeck.serverUrl` to any reachable SimDeck endpoint. The extension is purely a webview shell and doesn't ship its own version of the React client. Whatever the daemon serves is what you get.
-
-For [LAN-reachable daemons](/guide/lan-access), point the extension at `http://<advertise-host>:<port>` and disable `autoStartDaemon` so the extension does not start a local project daemon.
+Pair in the webview if the server asks for the LAN code.
 
 ## Troubleshooting
 
-- **The webview shows a blank panel.** Open the output channel; the extension logs the daemon URL returned by `simdeck ui` and any CLI stderr.
-- **Auto-start doesn't work.** Ensure the resolved `cliPath` exists and is executable. The extension shows the resolved path in the output channel.
-- **Stale daemon stays running.** Use **SimDeck: Stop Project Daemon** to run `simdeck daemon stop`, then reopen the simulator view.
+| Symptom                  | Fix                                                                 |
+| ------------------------ | ------------------------------------------------------------------- |
+| Blank panel              | Open `SimDeck: Show Output` and check the daemon URL and CLI stderr |
+| Auto-start fails         | Set `simdeck.cliPath` to the real CLI path                          |
+| Old server keeps loading | Run `SimDeck: Stop Project Daemon`, then reopen                     |
