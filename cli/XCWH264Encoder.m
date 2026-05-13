@@ -1383,9 +1383,12 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
                              kVTCompressionPropertyKey_MaximumRealTimeFrameRate,
                              (__bridge CFTypeRef)@(expectedFrameRate));
     }
-#ifdef kVTCompressionPropertyKey_MaxFrameDelayCount
     VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxFrameDelayCount, (__bridge CFTypeRef)@0);
-#endif
+    if (@available(macOS 15.0, *)) {
+        VTSessionSetProperty(session,
+                             kVTCompressionPropertyKey_SuggestedLookAheadFrameCount,
+                             (__bridge CFTypeRef)@0);
+    }
 
     status = VTCompressionSessionPrepareToEncodeFrames(session);
     _lastPrepareStatus = status;
