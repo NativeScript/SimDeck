@@ -1056,6 +1056,31 @@ async function resolveKnownSystemPromptsWithQueries(label) {
     );
     await sleep(500);
   }
+
+  const snapshot = await queryUi(label, {
+    limit: 128,
+    maxDepth: 8,
+    maxElapsedMs: httpActionBudgetMs,
+  });
+  if (!looksLikeKeyboardTipQuery(snapshot)) {
+    return;
+  }
+
+  logStep(`handling system keyboard-tip prompt after ${label}`);
+  await retryHttpJson(
+    "POST",
+    `/api/simulators/${simulatorUDID}/tap`,
+    {
+      source: "native-ax",
+      maxDepth: 8,
+      waitTimeoutMs: 2_000,
+      durationMs: 80,
+      ...keyboardTipContinueTapTarget(snapshot),
+    },
+    `${label} tap keyboard-tip prompt`,
+    { attempts: 1, maxElapsedMs: httpActionBudgetMs },
+  );
+  await sleep(500);
 }
 
 function summarizeUiCheck(options = {}) {
@@ -1384,6 +1409,96 @@ function looksLikeKeyboardTipPrompt(snapshot) {
   return (
     /Speed up your typing/i.test(snapshot) &&
     /Button(?:\s+#[^:\n]+)?:\s+Continue\b/.test(snapshot)
+  );
+}
+
+function looksLikeKeyboardTipQuery(snapshot) {
+  const text = JSON.stringify(snapshot?.matches ?? snapshot ?? []);
+  return /Speed up your typing/i.test(text) && /\bContinue\b/.test(text);
+}
+
+function keyboardTipContinueTapTarget(snapshot) {
+  const nodes = compactQueryNodes(snapshot);
+  const rootFrame = nodes
+    .map((node) => node.frame)
+    .filter(validFrame)
+    .sort((a, b) => b.width * b.height - a.width * a.height)[0];
+  const continueButton =
+    nodes.find(
+      (node) =>
+        node.label === "Continue" &&
+        node.id !== "fixture.continue" &&
+        String(node.role ?? "")
+          .toLowerCase()
+          .includes("button") &&
+        validFrame(node.frame),
+    ) ??
+    nodes.find(
+      (node) =>
+        node.label === "Continue" &&
+        String(node.role ?? "")
+          .toLowerCase()
+          .includes("button") &&
+        validFrame(node.frame),
+    );
+
+  if (rootFrame && continueButton?.frame) {
+    return {
+      normalized: true,
+      x:
+        (continueButton.frame.x +
+          continueButton.frame.width / 2 -
+          rootFrame.x) /
+        rootFrame.width,
+      y:
+        (continueButton.frame.y +
+          continueButton.frame.height / 2 -
+          rootFrame.y) /
+        rootFrame.height,
+    };
+  }
+
+  return {
+    selector: { label: "Continue", elementType: "Button" },
+  };
+}
+
+function compactQueryNodes(snapshot) {
+  const nodes = [];
+  const visit = (node) => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (
+      "role" in node ||
+      "id" in node ||
+      "label" in node ||
+      "value" in node ||
+      "frame" in node
+    ) {
+      nodes.push(node);
+    }
+    for (const child of Array.isArray(node.children) ? node.children : []) {
+      visit(child);
+    }
+  };
+  for (const match of Array.isArray(snapshot?.matches)
+    ? snapshot.matches
+    : []) {
+    visit(match);
+  }
+  return nodes;
+}
+
+function validFrame(frame) {
+  return (
+    frame &&
+    Number.isFinite(frame.x) &&
+    Number.isFinite(frame.y) &&
+    Number.isFinite(frame.width) &&
+    Number.isFinite(frame.height) &&
+    frame.width > 0 &&
+    frame.height > 0
   );
 }
 
