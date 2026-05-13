@@ -1,96 +1,75 @@
-# Flags & Options
+# Flags
 
-A consolidated list of the public SimDeck CLI flags, grouped by command.
-
-::: tip Help output
-Pass `--help` to any command to see the generated flag list from the binary:
+Pass `--help` to any command for the generated flag list:
 
 ```sh
-simdeck ui --help
-simdeck daemon start --help
+simdeck --help
 simdeck tap --help
+simdeck daemon start --help
 ```
 
-:::
+## Global
 
-## Global Flags
+| Flag                 | Env                  | Purpose                          |
+| -------------------- | -------------------- | -------------------------------- |
+| `--server-url <url>` | `SIMDECK_SERVER_URL` | Target a specific running daemon |
 
-### `--server-url <url>`
+## Server Options
 
-| Default | unset                |
-| ------- | -------------------- |
-| Env     | `SIMDECK_SERVER_URL` |
-| Type    | `http://` URL        |
+Used by `simdeck ui`, `daemon start`, `daemon restart`, `service on`, and `service restart`.
 
-Targets a specific running SimDeck daemon for commands that support the HTTP fast path. If unset, commands start or reuse the current project's daemon when needed.
-
-## `ui`, `daemon start`, And `daemon restart`
-
-`ui`, `daemon start`, and `daemon restart` accept the same server options. `ui` also accepts `--open`.
-
-| Flag                 | Default               | Description                                                                                                                   |
-| -------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `--port <u16>`       | `4310`                | HTTP port for the REST API, browser UI, and WebRTC offer endpoint.                                                            |
-| `--bind <ip>`        | `127.0.0.1`           | Bind address (`0.0.0.0` for [LAN access](/guide/lan-access), `::` for IPv6).                                                  |
-| `--advertise-host`   | matches local host    | Hostname or IP printed for LAN browser access.                                                                                |
-| `--client-root`      | bundled `client/dist` | Override the static browser client directory.                                                                                 |
-| `--video-codec`      | `auto`                | One of `auto`, `hardware`, or `software`. See [Video Pipeline](/guide/video).                                                 |
-| `--low-latency`      | `false`               | Software H.264 profile for slower runners: caps at 15 fps and favors freshness.                                               |
-| `--stream-quality`   | `full`                | Realtime stream quality profile: `full`, `quality`, `balanced`, `fast`, `smooth`, `economy`, `low`, `tiny`, or `ci-software`. |
-| `--local-stream-fps` | `60`                  | Local quality stream frame target, from 15 to 240 fps.                                                                        |
-| `--open`             | `false`               | `ui` only. Open the browser after the daemon is ready.                                                                        |
-
-`studio expose` defaults to software H.264. Pass `--video-codec hardware` to
-opt into the hardware encoder when that is preferable.
-
-The public commands generate an access token automatically. Use `simdeck daemon status` to read it for direct API callers.
+| Flag                         | Default        | Notes                                                                             |
+| ---------------------------- | -------------- | --------------------------------------------------------------------------------- | ------ | ------------ |
+| `--port <port>`              | `4310`         | HTTP port                                                                         |
+| `--bind <ip>`                | `127.0.0.1`    | Use `0.0.0.0` or `::` for LAN access                                              |
+| `--advertise-host <host>`    | detected       | Host printed for remote browsers                                                  |
+| `--client-root <path>`       | bundled client | Static client directory                                                           |
+| `--video-codec auto          | hardware       | software`                                                                         | `auto` | Encoder mode |
+| `--stream-quality <profile>` | `full`         | `full`, `balanced`, `economy`, `low`, `tiny`, `ci-software`, and related profiles |
+| `--local-stream-fps <fps>`   | `60`           | Local stream frame target                                                         |
+| `--low-latency`              | off            | Conservative software H.264 profile                                               |
+| `--open`                     | off            | `ui` only                                                                         |
 
 ## `describe`
 
-| Flag               | Default                        | Description                                                                                                          |
-| ------------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `--format`         | `json`                         | Output format: `json`, `compact-json`, or `agent`.                                                                   |
-| `--source`         | `auto`                         | Hierarchy source: `auto`, `nativescript`, `react-native`, `flutter`, `uikit`, `native-ax`, or `android-uiautomator`. |
-| `--max-depth`      | unlimited native / `80` daemon | Trim descendants after the requested depth.                                                                          |
-| `--include-hidden` | `false`                        | Include hidden in-app inspector views when supported.                                                                |
-| `--direct`         | `false`                        | Skip the daemon and use the private native accessibility bridge directly.                                            |
-| `--point <x>,<y>`  | unset                          | Return the native element at a screen point.                                                                         |
+| Flag               | Purpose                                           |
+| ------------------ | ------------------------------------------------- | ------------ | ------------------- | ----- | --------- | -------------------- | --------------------- |
+| `--format json     | compact-json                                      | agent`       | Choose output shape |
+| `--source auto     | nativescript                                      | react-native | flutter             | uikit | native-ax | android-uiautomator` | Pick inspector source |
+| `--max-depth <n>`  | Trim hierarchy depth                              |
+| `--include-hidden` | Include hidden nodes when supported               |
+| `--point <x>,<y>`  | Describe the element at a screen point            |
+| `--direct`         | Skip daemon and use native accessibility directly |
 
-## Input Flags
+## Input
 
-Common input commands:
+| Command          | Useful flags                                                                                         |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| `tap`            | `--id`, `--label`, `--value`, `--element-type`, `--wait-timeout-ms`, `--normalized`, `--duration-ms` |
+| `touch`          | `--phase`, `--normalized`, `--down`, `--up`, `--delay-ms`                                            |
+| `swipe`          | `--normalized`, `--duration-ms`, `--steps`                                                           |
+| `gesture`        | `--normalized`, `--duration-ms`, `--delta`                                                           |
+| `pinch`          | `--start-distance`, `--end-distance`, `--angle-degrees`, `--normalized`                              |
+| `rotate-gesture` | `--radius`, `--degrees`, `--normalized`                                                              |
+| `type`           | `--stdin`, `--file`, `--delay-ms`                                                                    |
+| `key`            | `--modifiers`, `--duration-ms`                                                                       |
+| `key-sequence`   | `--keycodes`, `--delay-ms`                                                                           |
+| `key-combo`      | `--modifiers`, `--key`                                                                               |
+| `button`         | `--duration-ms`                                                                                      |
 
-| Command          | Important flags                                                                                                                                                 |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tap`            | `--id`, `--label`, `--value`, `--element-type`, `--wait-timeout-ms`, `--poll-interval-ms`, `--normalized`, `--duration-ms`, `--pre-delay-ms`, `--post-delay-ms` |
-| `touch`          | `--phase`, `--normalized`, `--down`, `--up`, `--delay-ms`                                                                                                       |
-| `swipe`          | `--normalized`, `--duration-ms`, `--steps`, `--pre-delay-ms`, `--post-delay-ms`                                                                                 |
-| `gesture`        | `--screen-width`, `--screen-height`, `--normalized`, `--duration-ms`, `--delta`, `--pre-delay-ms`, `--post-delay-ms`                                            |
-| `pinch`          | `--start-distance`, `--end-distance`, `--angle-degrees`, `--normalized`, `--duration-ms`, `--steps`                                                             |
-| `rotate-gesture` | `--radius`, `--degrees`, `--normalized`, `--duration-ms`, `--steps`                                                                                             |
-| `type`           | `--stdin`, `--file`, `--delay-ms`                                                                                                                               |
-| `key`            | `--modifiers`, `--duration-ms`, `--pre-delay-ms`, `--post-delay-ms`                                                                                             |
-| `key-sequence`   | `--keycodes`, `--delay-ms`                                                                                                                                      |
-| `key-combo`      | `--modifiers`, `--key`                                                                                                                                          |
-| `button`         | `--duration-ms`                                                                                                                                                 |
-
-Coordinates are screen points unless `--normalized` is present. Normalized coordinates are clamped to `0.0..1.0`.
-
-## Evidence And Batch Flags
+## Evidence And Batch
 
 | Command          | Flags                                                |
 | ---------------- | ---------------------------------------------------- |
 | `screenshot`     | `--output <path>`, `--stdout`                        |
-| `logs`           | `--seconds <f64>`, `--limit <usize>`                 |
+| `logs`           | `--seconds <seconds>`, `--limit <count>`             |
 | `pasteboard set` | `--stdin`, `--file`                                  |
 | `batch`          | `--step`, `--file`, `--stdin`, `--continue-on-error` |
 
 ## Exit Codes
 
-| Exit code | Meaning                                                                    |
-| --------- | -------------------------------------------------------------------------- |
-| `0`       | Success.                                                                   |
-| `1`       | Command-level failure (bad usage, missing simulator, native bridge error). |
-| `2`       | Clap parser errors.                                                        |
-
-Errors print a short message to stderr; structured JSON is reserved for success output.
+| Code | Meaning                    |
+| ---- | -------------------------- |
+| `0`  | Success                    |
+| `1`  | Runtime or command failure |
+| `2`  | Argument parsing failure   |

@@ -3,70 +3,73 @@ layout: home
 
 hero:
   name: SimDeck
-  text: Simulator control panel
-  tagline: Stream simulator from your favorite IDE, with built-in tools to enhance DX for developing mobile apps
+  text: Simulator control in your browser
+  tagline: Stream, inspect, and automate iOS Simulators and Android emulators from one local tool.
   actions:
     - theme: brand
-      text: Get Started
+      text: Quick Start
       link: /guide/quick-start
     - theme: alt
-      text: Why SimDeck?
-      link: /guide/
+      text: Install
+      link: /guide/installation
     - theme: alt
-      text: View on GitHub
-      link: https://github.com/NativeScript/SimDeck
+      text: CLI Reference
+      link: /cli/
 
 features:
   - icon:
       src: /icons/monitor-smartphone.svg
       width: 28
       height: 28
-    title: Browser-first simulator
-    details: "`simdeck` starts a foreground project daemon and prints local/LAN URLs for a client live WebRTC H.264 video & low-latency input."
+    title: Browser simulator view
+    details: Run `simdeck`, open the printed URL, and control the device from a local or LAN browser.
   - icon:
       src: /icons/zap.svg
       width: 28
       height: 28
-    title: Native macOS performance
-    details: "A Rust HTTP server fronts an Objective-C bridge that talks to CoreSimulator, SimulatorKit, private display APIs."
-  - icon:
-      src: /icons/network.svg
-      width: 28
-      height: 28
-    title: Streaming remote
-    details: "WebRTC/WebSocket transports allow remote streaming/tunneling the simulator stream efficiently. Share your simulator streams with coworkers, or use in CI."
+    title: Fast local control
+    details: Boot devices, install apps, open URLs, type, tap, swipe, rotate, capture screenshots, and read logs from the CLI.
   - icon:
       src: /icons/scan-search.svg
       width: 28
       height: 28
-    title: First-class inspectors
-    details: "`describe` and the UI prefer NativeScript, React Native, UIKit, SwiftUI in-app inspectors when available, fall back to accessibility tree."
+    title: Useful inspection
+    details: Use accessibility, NativeScript, React Native, Flutter, Swift, UIKit, SwiftUI, WebKit, and DevTools views when available.
   - icon:
       src: /icons/puzzle.svg
       width: 28
       height: 28
-    title: Built-in extension
-    details: "VS Code extension opens the simulator inside the editor, and `simdeck/test` gives JS/TS tests a fast API for app automation."
+    title: Tests and editor workflows
+    details: Use `simdeck/test` for JS/TS automation and the VS Code extension to keep a simulator panel inside the editor.
+  - icon:
+      src: /icons/network.svg
+      width: 28
+      height: 28
+    title: Local first, shareable
+    details: Bind to localhost for daily use, or expose a paired LAN session when another device or teammate needs access.
   - icon:
       src: /icons/shield-check.svg
       width: 28
       height: 28
-    title: Remote streaming
-    details: "Local first but simulator streams can be shared using tools like Cloudflare Tunnel."
+    title: Built for agents
+    details: Compact `describe` output, selector-based input, batch commands, and clear JSON errors keep automation predictable.
 ---
 
 <div class="vp-doc" style="max-width: 1152px; margin: 4rem auto 0; padding: 0 24px;">
 
-## What you can do with SimDeck
+## Start here
 
-SimDeck packages a full simulator workflow into one cross-tool surface:
+```sh
+npx simdeck
+```
 
-- **Stream a Simulator into a browser tab.** Run `simdeck` and open one of the printed URLs, or use `simdeck ui --open` for a reusable background daemon.
-- **Debug view hierarchy.** Integrates with NativeScript, React Native, UIKit, SwiftUI and Flutter and allows debugging views/layout.
-- **Drive Simulators from JavaScript.** `simdeck/test` can launch apps, tap, wait for accessibility state, batch steps, and capture screenshots.
-- **Embed a Simulator in your editor.** The bundled VS Code extension opens the same surface inside a panel.
-- **Replace ad-hoc `simctl` scripts.** A single CLI handles `boot`, `shutdown`, app install/launch, URL opening, pasteboard, logs, screenshots, and UI input.
+That starts a foreground SimDeck server for the current workspace and prints browser URLs. Open the local URL to view and control the simulator. Press `q` or Ctrl-C to stop it.
 
-Read [Architecture](/guide/architecture) for a deeper tour, or jump straight into [Quick Start](/guide/quick-start).
+Common next steps:
+
+- [Install the CLI](/guide/installation) for repeated use.
+- [Open a simulator in the browser](/guide/quick-start).
+- [Drive a simulator from the CLI](/cli/commands).
+- [Troubleshoot startup, stream, or inspector issues](/guide/troubleshooting).
 
 </div>

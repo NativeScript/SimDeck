@@ -1,24 +1,20 @@
 # GitHub Actions
 
-SimDeck can run an iOS Simulator session from a pull request comment. A repository
-needs two pieces:
+SimDeck can post a temporary hosted simulator session from a pull request comment.
 
-1. A build workflow that uploads a zipped iOS Simulator `.app` artifact.
-2. A comment workflow that calls SimDeck's session action when someone
-   comments `simdeck run ios` on a pull request.
+You need:
+
+1. A build workflow that uploads a zipped iOS Simulator `.app`.
+2. A comment workflow that starts the SimDeck session when someone comments `simdeck run ios`.
 
 ## Build Workflow
-
-Build your app however your project normally builds a simulator target, then use
-the upload action to package and publish the `.app` artifact:
 
 ```yaml
 name: Build iOS Simulator
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
 
 permissions:
@@ -43,20 +39,16 @@ jobs:
           app-glob: platforms/ios/build/**/*-iphonesimulator/*.app
 ```
 
-The uploaded artifact name defaults to `ios-simulator-app-<commit-sha>`. For pull
-requests, the SHA is the PR head commit.
+Pin the action to a release tag when you want a stable integration point.
 
 ## Comment Workflow
-
-Add a second workflow that delegates the hosted simulator session to SimDeck:
 
 ```yaml
 name: SimDeck iOS Comment
 
 on:
   issue_comment:
-    types:
-      - created
+    types: [created]
 
 permissions:
   actions: read
@@ -86,22 +78,13 @@ jobs:
           bundle_id: com.example.app
 ```
 
-When triggered, the session action:
+## Pull Request Command
 
-- reacts to the command comment immediately;
-- installs `simdeck` and `cloudflared` on a single macOS runner;
-- starts SimDeck with software encoding and the `tiny` stream profile by default;
-- prefers `iPhone 17 Pro`, then falls back to the newest available iPhone simulator;
-- restores the CoreSimulator device cache when available;
-- posts the first bot comment only after a simulator UDID has been selected,
-  mentioning the requester when `command_comment_author` is set;
-- downloads the simulator app artifact for the PR head commit, installs it, and
-  launches it;
-- stops after 30 minutes by default, or earlier if the simulator shuts down.
+```text
+simdeck run ios
+```
 
-## Comment Flags
-
-The comment can include lightweight flags:
+Optional flags:
 
 ```text
 simdeck run ios no-cache-sim
@@ -111,26 +94,26 @@ simdeck run ios quality=low
 simdeck run ios public-health
 ```
 
-Supported quality values are `tiny`, `low`, `economy`, `fast`, `smooth`,
-`balanced`, `full`, `quality`, and `ci-software`.
+Supported quality values include `tiny`, `low`, `economy`, `fast`, `smooth`, `balanced`, `full`, `quality`, and `ci-software`.
 
-## Inputs
+## Common Inputs
 
-The most common session action inputs are:
+| Input               | Default                   | Purpose                                     |
+| ------------------- | ------------------------- | ------------------------------------------- |
+| `bundle_id`         | empty                     | Bundle ID to launch                         |
+| `build_workflow`    | `build-ios-simulator.yml` | Workflow file that uploads the app artifact |
+| `artifact_prefix`   | `ios-simulator-app`       | Artifact prefix                             |
+| `simdeck_version`   | `latest`                  | npm version or dist-tag                     |
+| `stream_profile`    | `tiny`                    | Default stream quality                      |
+| `simulator_name`    | `iPhone 17 Pro`           | Preferred simulator                         |
+| `keepalive_seconds` | `1800`                    | Session lifetime after launch               |
+| `simulator_cache`   | `true`                    | Restore and save simulator cache            |
 
-| Input                    | Default                   | Purpose                                       |
-| ------------------------ | ------------------------- | --------------------------------------------- |
-| `bundle_id`              | empty                     | Fallback app bundle id to launch.             |
-| `build_workflow`         | `build-ios-simulator.yml` | Workflow file that uploads the app artifact.  |
-| `command_comment_id`     | empty                     | Comment id to react to immediately.           |
-| `command_comment_author` | empty                     | GitHub user to mention when the URL is ready. |
-| `artifact_prefix`        | `ios-simulator-app`       | Prefix used for `<prefix>-<sha>` artifacts.   |
-| `simdeck_version`        | `latest`                  | npm version or dist-tag to install.           |
-| `stream_profile`         | `tiny`                    | Default stream quality profile.               |
-| `simulator_name`         | `iPhone 17 Pro`           | Preferred simulator device name.              |
-| `keepalive_seconds`      | `1800`                    | Session lifetime after app launch.            |
-| `simulator_cache`        | `true`                    | Restore and save CoreSimulator device cache.  |
+## What The Session Does
 
-The caller workflow owns job-level settings such as `runs-on`,
-`timeout-minutes`, permissions, and concurrency. Pin `NativeScript/SimDeck` to a
-release tag instead of `@main` when you want a stable integration point.
+- Installs SimDeck and tunnel tooling on a macOS runner.
+- Picks or creates an iOS Simulator.
+- Downloads the app artifact for the PR head commit.
+- Installs and launches the app.
+- Posts a browser URL back to the pull request.
+- Stops after the configured keepalive window.

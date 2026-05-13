@@ -7,7 +7,7 @@ const siteUrl = "https://simdeck.nativescript.org";
 export default defineConfig({
   title: "SimDeck",
   description:
-    "A local-first iOS Simulator control plane with a browser UI, REST API, and WebRTC video.",
+    "Stream, inspect, and automate iOS Simulators and Android emulators from a browser, CLI, or test.",
   lang: "en-US",
   cleanUrls: true,
   lastUpdated: true,
@@ -21,7 +21,7 @@ export default defineConfig({
       {
         property: "og:description",
         content:
-          "A local iOS Simulator control plane with a browser UI, REST API, and WebRTC video.",
+          "Stream, inspect, and automate iOS Simulators and Android emulators from a browser, CLI, or test.",
       },
     ],
     ["meta", { property: "og:url", content: `${siteUrl}/` }],
@@ -36,7 +36,7 @@ export default defineConfig({
       { text: "CLI", link: "/cli/", activeMatch: "/cli/" },
       { text: "API", link: "/api/rest", activeMatch: "/api/" },
       {
-        text: "Inspector",
+        text: "Inspectors",
         link: "/inspector/",
         activeMatch: "/inspector/",
       },
@@ -46,16 +46,10 @@ export default defineConfig({
         activeMatch: "/extensions/",
       },
       {
-        text: "0.1.0",
+        text: "0.1.5",
         items: [
-          {
-            text: "Changelog",
-            link: `${githubUrl}/releases`,
-          },
-          {
-            text: "Contributing",
-            link: "/contributing",
-          },
+          { text: "Changelog", link: `${githubUrl}/releases` },
+          { text: "Contributing", link: "/contributing" },
         ],
       },
     ],
@@ -63,28 +57,28 @@ export default defineConfig({
     sidebar: {
       "/guide/": [
         {
-          text: "Getting Started",
+          text: "Start",
           items: [
-            { text: "Introduction", link: "/guide/" },
-            { text: "Installation", link: "/guide/installation" },
+            { text: "Overview", link: "/guide/" },
+            { text: "Install", link: "/guide/installation" },
             { text: "Quick Start", link: "/guide/quick-start" },
           ],
         },
         {
-          text: "Concepts",
+          text: "Use",
           items: [
-            { text: "Architecture", link: "/guide/architecture" },
-            { text: "Video Pipeline", link: "/guide/video" },
+            { text: "Daemon", link: "/guide/daemon" },
+            { text: "Video & Streaming", link: "/guide/video" },
             { text: "LAN Access", link: "/guide/lan-access" },
-            { text: "Project Daemon", link: "/guide/daemon" },
             { text: "Testing", link: "/guide/testing" },
             { text: "GitHub Actions", link: "/guide/github-actions" },
           ],
         },
         {
-          text: "Operating SimDeck",
+          text: "Reference",
           items: [
             { text: "Troubleshooting", link: "/guide/troubleshooting" },
+            { text: "How It Works", link: "/guide/architecture" },
             { text: "Contributing", link: "/contributing" },
           ],
         },
@@ -95,23 +89,18 @@ export default defineConfig({
           text: "CLI",
           items: [
             { text: "Overview", link: "/cli/" },
-            { text: "Command Reference", link: "/cli/commands" },
-            { text: "Flags & Options", link: "/cli/flags" },
+            { text: "Commands", link: "/cli/commands" },
+            { text: "Flags", link: "/cli/flags" },
           ],
         },
       ],
 
       "/api/": [
         {
-          text: "HTTP API",
+          text: "API",
           items: [
-            { text: "REST Endpoints", link: "/api/rest" },
+            { text: "REST", link: "/api/rest" },
             { text: "Health & Metrics", link: "/api/health" },
-          ],
-        },
-        {
-          text: "Inspectors",
-          items: [
             { text: "Inspector Protocol", link: "/api/inspector-protocol" },
           ],
         },
@@ -119,26 +108,14 @@ export default defineConfig({
 
       "/inspector/": [
         {
-          text: "Inspector",
+          text: "Inspectors",
           items: [
             { text: "Overview", link: "/inspector/" },
             { text: "Accessibility", link: "/inspector/accessibility" },
-            {
-              text: "Swift In-App Agent",
-              link: "/inspector/swift",
-            },
-            {
-              text: "NativeScript Runtime",
-              link: "/inspector/nativescript",
-            },
-            {
-              text: "React Native Runtime",
-              link: "/inspector/react-native",
-            },
-            {
-              text: "Flutter Runtime",
-              link: "/inspector/flutter",
-            },
+            { text: "Swift", link: "/inspector/swift" },
+            { text: "NativeScript", link: "/inspector/nativescript" },
+            { text: "React Native", link: "/inspector/react-native" },
+            { text: "Flutter", link: "/inspector/flutter" },
           ],
         },
       ],
@@ -167,7 +144,7 @@ export default defineConfig({
 
     footer: {
       message: "Released under the Apache-2.0 License.",
-      copyright: `Copyright © 2026 SimDeck contributors.`,
+      copyright: "Copyright (c) 2026 SimDeck contributors.",
     },
 
     outline: {

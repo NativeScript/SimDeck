@@ -1,10 +1,14 @@
 # Health & Metrics
 
-Two endpoints expose every observable signal SimDeck collects: `GET /api/health` for the bootstrap surface and `GET /api/metrics` for the running counters.
+Use these endpoints to check whether a daemon is reachable and to diagnose stream performance.
 
-## `GET /api/health`
+## Health
 
-Returns the static bootstrap information the browser client needs, plus a freshness timestamp.
+```http
+GET /api/health
+```
+
+Example:
 
 ```json
 {
@@ -13,6 +17,11 @@ Returns the static bootstrap information the browser client needs, plus a freshn
   "timestamp": 1714094761.234,
   "videoCodec": "auto",
   "lowLatency": false,
+  "realtimeStream": true,
+  "localStreamFps": 60,
+  "streamQuality": {
+    "profile": "full"
+  },
   "webRtc": {
     "iceServers": [{ "urls": ["stun:stun.l.google.com:19302"] }],
     "iceTransportPolicy": "all"
@@ -20,118 +29,42 @@ Returns the static bootstrap information the browser client needs, plus a freshn
 }
 ```
 
-| Field                       | Notes                                                                                                 |
-| --------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `ok`                        | Always `true` if the route is reachable. Network failures are signalled by HTTP errors.               |
-| `httpPort`                  | HTTP port for the REST API, browser UI, and WebRTC offer endpoint.                                    |
-| `timestamp`                 | Server-side `time.now()` as a fractional Unix epoch in seconds.                                       |
-| `videoCodec`                | Requested encoder mode. One of `auto`, `hardware`, or `software`. See [Video Pipeline](/guide/video). |
-| `lowLatency`                | `true` when software H.264 low-latency mode was enabled at daemon startup.                            |
-| `realtimeStream`            | `true` when the WebRTC stream is configured to favor freshness and realtime pacing.                   |
-| `localStreamFps`            | Local quality stream frame target, from 15 to 240 fps. Defaults to 60.                                |
-| `streamQuality`             | Active realtime quality profile and encoder limits such as `maxEdge`, `fps`, and bitrate.             |
-| `webRtc.iceServers`         | ICE servers the browser should use when creating the WebRTC peer connection.                          |
-| `webRtc.iceTransportPolicy` | Browser ICE transport policy. One of `all` or `relay`.                                                |
+Important fields:
 
-The default access token is regenerated every time the server restarts. A client should refetch `/api/health` after any disconnection.
+| Field           | Meaning                                                 |
+| --------------- | ------------------------------------------------------- |
+| `ok`            | Server is alive                                         |
+| `httpPort`      | Port serving UI and API                                 |
+| `videoCodec`    | Requested codec mode: `auto`, `hardware`, or `software` |
+| `streamQuality` | Active stream profile and limits                        |
+| `webRtc`        | ICE settings the browser should use                     |
 
-## `GET /api/metrics`
+## Metrics
 
-Returns a snapshot of every server-side counter and the rolling buffer of client-reported stats:
-
-```json
-{
-  "frames_encoded": 12039,
-  "keyframes_encoded": 17,
-  "frames_sent": 11982,
-  "frames_dropped_server": 21,
-  "keyframe_requests": 4,
-  "active_streams": 1,
-  "subscribers_connected": 3,
-  "subscribers_disconnected": 2,
-  "avg_send_queue_depth": 0.91,
-  "max_send_queue_depth": 2,
-  "latest_first_frame_ms": 412,
-  "encoders": [
-    {
-      "udid": "9D7E5BB7-...",
-      "encoder": {
-        "encoderMode": "auto",
-        "activeEncoderMode": "hardware",
-        "clientForeground": true,
-        "autoSoftwareFallbackActive": false,
-        "hardwareAccelerated": true,
-        "overloadState": "nominal",
-        "averageEncoderLoadPercent": 42.1,
-        "averageEncodeLatencyUs": 7021.0,
-        "encoderBudgetUs": 16667,
-        "overloadEvents": 0
-      }
-    }
-  ],
-  "client_streams": [
-    {
-      "clientId": "browser-ABC",
-      "kind": "viewport",
-      "udid": "9D7E5BB7-...",
-      "timestampMs": 1714094761234.0,
-      "codec": "h264",
-      "width": 1170,
-      "height": 2532,
-      "decodedFps": 59.7,
-      "renderedFps": 59.7,
-      "droppedFps": 0.0,
-      "latestRenderMs": 6.2
-    }
-  ]
-}
+```http
+GET /api/metrics
 ```
 
-### Counter glossary
+Useful fields:
 
-| Counter                    | Increments when…                                                                        |
-| -------------------------- | --------------------------------------------------------------------------------------- |
-| `frames_encoded`           | The native bridge produces a frame.                                                     |
-| `keyframes_encoded`        | The encoder emits a keyframe (always a subset of `frames_encoded`).                     |
-| `frames_sent`              | A frame is written to a WebRTC client.                                                  |
-| `frames_dropped_server`    | A client is too slow and the broadcast channel skips frames for them.                   |
-| `keyframe_requests`        | The transport hub asks the encoder for a fresh keyframe (e.g. on reconnect or refresh). |
-| `active_streams`           | Currently open WebRTC streams.                                                          |
-| `subscribers_connected`    | Lifetime count of WebRTC streams opened.                                                |
-| `subscribers_disconnected` | Lifetime count of WebRTC streams closed.                                                |
-| `avg_send_queue_depth`     | Running average of broadcast channel pressure.                                          |
-| `max_send_queue_depth`     | Peak broadcast channel pressure.                                                        |
-| `latest_first_frame_ms`    | First-frame latency for the most recent connect, in milliseconds.                       |
+| Field                              | What to look for                             |
+| ---------------------------------- | -------------------------------------------- |
+| `latest_first_frame_ms`            | First-frame startup time                     |
+| `frames_dropped_server`            | Server dropping stale frames to stay current |
+| `keyframe_requests`                | Stream refresh or recovery activity          |
+| `active_streams`                   | Open browser streams                         |
+| `encoders[].encoder.overloadState` | `nominal`, `strained`, or `overloaded`       |
+| `client_streams`                   | Recent browser decoder and render reports    |
 
-### Encoder overload state
+If `overloadState` is `overloaded` or dropped frames keep increasing, lower stream quality or restart with software encoding:
 
-`encoders` contains one entry per active simulator session. `encoder.overloadState`
-is derived from native VideoToolbox submit-to-output latency:
+```sh
+simdeck daemon restart --video-codec software --stream-quality low
+```
 
-| State        | Meaning                                                                                 |
-| ------------ | --------------------------------------------------------------------------------------- |
-| `nominal`    | Smoothed encode latency is comfortably below the active frame budget.                   |
-| `strained`   | Smoothed latency is near the frame budget or several frames are close to budget.        |
-| `overloaded` | Smoothed latency exceeds the budget or several frames in a row took longer than budget. |
+## Submit Client Stats
 
-This is an inferred pressure signal rather than a private macOS hardware queue
-counter. It is useful for deciding when to lower stream resolution/FPS or switch
-from hardware to software encoding. When `encoderMode` is `auto`, SimDeck uses
-this signal to temporarily rebuild the active session with software H.264 if the
-hardware encoder is overloaded, then retries hardware after a cooldown. The
-`activeEncoderMode`, `autoSoftwareFallbackActive`, `autoSoftwareFallbacks`, and
-`autoHardwareRetries` fields expose that state. `clientForeground` is `false`
-when all current browser viewers for the simulator are hidden or unfocused; in
-that state the native session uses software H.264 until a viewer returns
-foreground.
-
-### Client stream stats
-
-`client_streams` is a rolling buffer of the most recent reports from browser stream transports. WebRTC clients normally send reports over the telemetry data channel, H.264 WebSocket clients send them on the stream socket, and simple clients can still post to `POST /api/client-stream-stats`. The server keeps the last 48 entries per `(clientId, kind)` pair.
-
-The browser client uses these to render its in-app diagnostics overlay and to size its decoder workers. Every field is optional except `clientId` and `kind`; see [`ClientStreamStats`](https://github.com/NativeScript/SimDeck/blob/main/server/src/metrics/counters.rs) for the full schema.
-
-## Submitting client stats
+Custom clients can report their own stream stats:
 
 ```http
 POST /api/client-stream-stats
@@ -142,31 +75,16 @@ Content-Type: application/json
   "kind": "viewport",
   "udid": "9D7E5BB7-...",
   "codec": "h264",
-  "width": 1170,
-  "height": 2532,
   "decodedFps": 59.7,
   "droppedFps": 0.0,
   "latestRenderMs": 6.2
 }
 ```
 
-Required fields:
+Required fields are `clientId` and `kind`.
 
-- `clientId` — any stable identifier you pick.
-- `kind` — what slice of the client is reporting (`viewport`, `decoder`, `renderer`, …).
+Read only the client buffer:
 
-Anything else is optional but typed; unknown fields are rejected.
-
-A successful submission returns:
-
-```json
-{ "ok": true }
-```
-
-## `GET /api/client-stream-stats`
-
-Returns the same `clientStreams` array that `GET /api/metrics` includes, in case you only want the client-side view:
-
-```json
-{ "clientStreams": [ ... ] }
+```http
+GET /api/client-stream-stats
 ```

@@ -1,57 +1,39 @@
-# Installation
+# Install
 
-SimDeck ships as a single npm package that contains the launcher, the client bundle, and the native CLI binary.
+## Requirements
 
-## Prerequisites
+- macOS on Apple Silicon.
+- Xcode with the simulator runtimes you want to use.
+- Node.js 18 or newer.
+- Optional Android SDK tools for Android emulator support.
+- Optional Rust stable when building from source.
 
-SimDeck only runs on macOS. The native bridge links private `CoreSimulator` and `SimulatorKit` frameworks, so it cannot run on Linux or Windows.
-
-| Requirement                        | Why                                                                                                              |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **macOS 13+**                      | Required for current `CoreSimulator` and Apple's VideoToolbox H.264 encoder.                                     |
-| **Xcode + iOS Simulator runtimes** | The native bridge loads Xcode's private simulator frameworks and invokes `xcrun simctl` for non-boot operations. |
-| **Android SDK tools**              | Optional. Required for Android emulator support (`emulator`, `adb`, and AVD images).                             |
-| **Node.js ≥ 18**                   | The launcher (`bin/simdeck.mjs`) and the bundled client tooling.                                                 |
-| **Rust (stable)**                  | Required only when building from source. Installed via [rustup](https://rustup.rs/).                             |
-
-The package contains a macOS native binary. Non-macOS installs are unsupported.
-
-## Install from npm
-
-The fastest path is the published CLI:
+Check Xcode selection if you have multiple installs:
 
 ```sh
-npm install -g simdeck
+xcode-select -p
 ```
 
-This installs the launcher and bundled native binary to your global `node_modules`. After it finishes:
+## Install From npm
+
+Use `npx` for a quick try:
 
 ```sh
+npx simdeck
+```
+
+Install globally for regular use:
+
+```sh
+npm install -g simdeck@latest
 simdeck
 ```
 
-The foreground command prints local and LAN HTTP URLs and stops its workspace daemon when you press `q` or Ctrl-C. You can select a simulator by name or UDID with `simdeck "iPhone 17 Pro Max"`.
+The package installs the launcher, browser client, and native binary.
 
-The global install prints the next setup steps:
+## Install The Codex Skill
 
-```sh
-simdeck
-npx skills add NativeScript/SimDeck --skill simdeck -a codex -g
-simdeck service on
-```
-
-Install the `nativescript.simdeck` VS Code extension if you want the simulator
-view inside VS Code.
-
-`simdeck service on` is recommended when agents or editor integrations should be
-able to reach SimDeck any time after login. It installs a localhost macOS
-LaunchAgent and can be removed with `simdeck service off`.
-
-## Install the Codex skill
-
-SimDeck includes an agent skill at `skills/simdeck/SKILL.md`. Install it with
-[skills.sh](https://skills.sh/) so Codex can choose the right commands and
-inspection loops automatically:
+For Codex workflows, install the SimDeck skill so agents use the stable commands:
 
 ```sh
 npx skills add NativeScript/SimDeck --skill simdeck -a codex -g
@@ -59,95 +41,45 @@ npx skills add NativeScript/SimDeck --skill simdeck -a codex -g
 
 Restart Codex after installing the skill.
 
-## Install from source
+## VS Code
 
-Clone the repo and install dependencies:
+Install the VS Code extension if you want the simulator inside an editor panel:
+
+```sh
+npm run package:vscode
+npm run install:vscode
+```
+
+From the marketplace, use `nativescript.simdeck-vscode` when available.
+
+## Build From Source
 
 ```sh
 git clone https://github.com/NativeScript/SimDeck.git
-cd simdeck
+cd SimDeck
 npm install
-```
-
-Build the source checkout before running it directly or installing it globally:
-
-```sh
 npm run build
-```
-
-The native CLI build writes:
-
-```text
-build/simdeck
-build/simdeck-bin
-```
-
-You can then run the local checkout directly:
-
-```sh
 ./build/simdeck
 ```
 
-Or install the local checkout globally:
+Useful build scripts:
 
-```sh
-npm install -g .
-```
+| Script                 | What it builds                            |
+| ---------------------- | ----------------------------------------- |
+| `npm run build`        | Native CLI and browser client             |
+| `npm run build:cli`    | Native CLI only                           |
+| `npm run build:client` | Browser client only                       |
+| `npm run build:all`    | CLI, client, inspectors, and test package |
+| `npm run build:docs`   | Documentation site                        |
 
-After a global install you can call `simdeck` from anywhere.
-
-## Build the React client
-
-The client bundle ships pre-built when installed from npm. When working from source, build it explicitly:
-
-```sh
-./scripts/build-client.sh
-```
-
-This calls `npm install` and `npm run build` inside the `client/` workspace and writes the production bundle to `client/dist`. The Rust server serves that bundle at the HTTP root.
-
-## Build from source
-
-The root `package.json` exposes a one-shot app build for the native CLI and browser client:
-
-```sh
-npm run build
-```
-
-This runs:
-
-- `npm run build:cli` — Rust server + Objective-C bridge → `build/simdeck`
-- `npm run build:client` — Vite production build → `client/dist`
-
-Use `npm run build:all` when you also need the companion package outputs:
-
-```sh
-npm run build:all
-```
-
-That adds:
-
-- `npm run build:nativescript-inspector` — TypeScript build of the NativeScript inspector
-- `npm run build:react-native-inspector` — TypeScript build of the React Native inspector
-- `npm run build:simdeck-test` — TypeScript build of `simdeck/test`
-
-Other convenience scripts include `npm run build:docs`, `npm run build:vscode-extension`, `npm run package:vscode`, and `npm run package:all`. You can also run any one of the component scripts on its own.
-
-## Update or uninstall
-
-To update from npm:
+## Update Or Remove
 
 ```sh
 npm install -g simdeck@latest
-```
-
-To remove the global install:
-
-```sh
 npm uninstall -g simdeck
 ```
 
-If a project daemon is running, stop it before uninstalling so your shell does not keep talking to the old binary:
+Stop a running daemon before uninstalling:
 
 ```sh
 simdeck daemon stop

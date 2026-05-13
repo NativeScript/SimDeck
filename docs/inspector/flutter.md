@@ -1,8 +1,8 @@
-# Flutter Runtime Inspector
+# Flutter Inspector
 
-`simdeck_flutter_inspector` is a debug-only Flutter iOS plugin that publishes the live Flutter widget hierarchy to SimDeck. It uses the same [Inspector Protocol](/api/inspector-protocol) as the Swift, NativeScript, and React Native inspectors, and connects outbound to the SimDeck server over WebSocket.
+`simdeck_flutter_inspector` publishes a Flutter widget tree to SimDeck in debug builds.
 
-The package source lives at `packages/flutter-inspector/` in this repo.
+Use it when accessibility does not show enough widget, render, semantics, or source-location data.
 
 ## Install
 
@@ -10,9 +10,7 @@ The package source lives at `packages/flutter-inspector/` in this repo.
 flutter pub add simdeck_flutter_inspector
 ```
 
-## Start the inspector
-
-Start the inspector during app startup in debug builds:
+## Start It
 
 ```dart
 import 'package:flutter/foundation.dart';
@@ -30,30 +28,41 @@ void main() {
 }
 ```
 
-`port` is the SimDeck server port. Flutter apps do not need to choose a local inspector port.
+`port` is the SimDeck server port.
 
-## What it exposes
+## Inspect
 
-`View.getHierarchy` returns the Flutter widget tree. Each node may include:
+```sh
+simdeck describe <udid> --source flutter --format agent
+```
 
-- `type` and `displayName` — the widget runtime type.
-- `title` — derived from semantics labels, common widget diagnostics, text, tooltip, value, or key.
-- `frame` and `frameInScreen` — RenderObject bounds in logical screen points.
-- `flutter` — widget, element, state type, key, and depth metadata.
-- `semantics` — label, value, hint, identifier, role, flags, and supported semantics actions.
-- `sourceLocation` — file, line, and column from Flutter widget creation tracking.
+Nodes may include:
 
-Source locations require debug builds with `--track-widget-creation`, which Flutter enables by default for debug runs.
+- Widget, element, and state type.
+- Text, keys, tooltips, labels, values, and semantics roles.
+- RenderObject bounds in logical screen points.
+- Semantics actions.
+- Source locations from Flutter widget creation tracking.
 
-## Debug actions
+Flutter enables widget creation tracking for normal debug runs.
 
-The Flutter runtime supports `View.getProperties`, `View.listActions`, and `View.perform`.
+## Debug Actions
 
-`View.perform` is best-effort and uses Flutter's own runtime APIs:
+The runtime supports best-effort actions such as:
 
-- `tap`, `longPress`, `increase`, and `decrease` dispatch matching semantics actions.
-- `focus` and `resignFirstResponder` use Flutter focus scopes.
-- `setText` updates the nearest `EditableText`.
-- `scrollBy` and `scrollTo` drive the nearest `Scrollable`.
+- `tap`
+- `longPress`
+- `focus`
+- `setText`
+- `scrollBy`
+- `scrollTo`
+- semantics `increase` and `decrease`
 
-Flutter widgets are immutable, so `View.setProperty` returns an unsupported-method error. Runtime interactions should go through `View.perform`, while persistent visual changes should still be made in app source.
+Flutter widgets are immutable, so persistent visual changes should still be made in app source.
+
+## Troubleshooting
+
+- Use a debug build.
+- Bring the app to the foreground.
+- Confirm the app can reach the SimDeck server port.
+- Force `--source flutter` to read the fallback reason.

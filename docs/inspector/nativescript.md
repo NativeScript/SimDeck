@@ -1,8 +1,8 @@
-# NativeScript Runtime Inspector
+# NativeScript Inspector
 
-`@nativescript/simdeck-inspector` is the runtime that connects a NativeScript app's view hierarchy to the SimDeck server without linking the Swift inspector framework. It implements the same [Inspector Protocol](/api/inspector-protocol) as the Swift agent but ships as a TypeScript package and runs entirely inside the NativeScript runtime.
+`@nativescript/simdeck-inspector` publishes a NativeScript app's logical view tree to SimDeck.
 
-The package source lives at `packages/nativescript-inspector/` in this repo.
+Use it when accessibility does not show enough framework context or when you want source locations.
 
 ## Install
 
@@ -10,13 +10,9 @@ The package source lives at `packages/nativescript-inspector/` in this repo.
 npm install @nativescript/simdeck-inspector
 ```
 
-The package is `darwin`-friendly because the underlying NativeScript runtime is iOS-only; it works fine in NativeScript-iOS builds.
+## Start It
 
-## Start the inspector
-
-Call `startSimDeckInspector(...)` as early as possible in app startup, ideally before any view is bootstrapped.
-
-### NativeScript Core
+Call it before app bootstrap in debug builds:
 
 ```ts
 import { startSimDeckInspector } from "@nativescript/simdeck-inspector";
@@ -26,13 +22,9 @@ if (__DEV__) {
 }
 ```
 
-::: tip Port semantics
-`port` here is the **SimDeck server port**, not a per-app inspector port. NativeScript apps do not need to choose a unique local inspector port — they connect outbound to the server's WebSocket hub.
-:::
+`port` is the SimDeck server port.
 
-### NativeScript + Angular
-
-For Angular NativeScript apps, call `startSimDeckInspector()` **before** `runNativeScriptAngularApp()`:
+For Angular NativeScript apps, start the inspector before `runNativeScriptAngularApp(...)`:
 
 ```ts
 import { startSimDeckInspector } from "@nativescript/simdeck-inspector";
@@ -40,52 +32,35 @@ import { startSimDeckInspector } from "@nativescript/simdeck-inspector";
 startSimDeckInspector({ port: 4310 });
 
 runNativeScriptAngularApp({
-  appModuleBootstrap: () =>
-    bootstrapApplication(AppComponent, {
-      providers: [
-        provideNativeScriptHttpClient(withInterceptorsFromDi()),
-        provideNativeScriptRouter(routes),
-      ],
-    }),
+  appModuleBootstrap: () => bootstrapApplication(AppComponent),
 });
 ```
 
-The package installs a small compatibility shim for Angular 20 dev-mode template source locations on NativeScript views.
+## What You Get
 
-## What it exposes
+NativeScript hierarchy nodes can include:
 
-`View.getHierarchy` returns the NativeScript logical tree by default — the actual `View` nodes you wrote, not just their UIKit backings. Pass `"source": "uikit"` to force the raw UIKit hierarchy.
+- NativeScript view type.
+- Text, labels, IDs, CSS classes, and bindings.
+- Screen-point frames.
+- Underlying UIKit view information.
+- Source locations when available.
 
-Each NativeScript node carries:
+Inspect it:
 
-- `type` — the view's class name (`Label`, `StackLayout`, `GridLayout`, …).
-- `title` — derived text content or accessibility label when available.
-- `bounds` and `frameInScreen` — UIKit screen points.
-- `nativeScript` — NativeScript-specific metadata (CSS class names, IDs, bindings).
-- `sourceLocation` — file/line/column when source maps are available.
-
-When the in-app NativeScript inspector is the source, the SimDeck server returns `"source": "nativescript"` on the accessibility tree response and surfaces the matching `bundleIdentifier`, `processIdentifier`, and `displayScale` in the `inspector` block.
-
-## Connection model
-
-The runtime opens a WebSocket from the simulator app to the SimDeck server:
-
-```text
-ws://127.0.0.1:4310/api/inspector/connect
+```sh
+simdeck describe <udid> --source nativescript --format agent
 ```
 
-After the WebSocket is up, the server sends `Inspector.getInfo` and the runtime responds with the protocol version, `processIdentifier`, bundle metadata, and the available hierarchy sources. The server registers the runtime under that PID and prefers it over any TCP-based inspector for the same process.
+Force UIKit instead:
 
-If the WebSocket transport is not available, the runtime falls back to long-polling:
+```sh
+simdeck describe <udid> --source uikit --format agent
+```
 
-- `GET /api/inspector/poll?processIdentifier=<pid>` — waits for the next request from the server.
-- `POST /api/inspector/response` — sends the response back.
+## Angular Source Locations
 
-Both transports speak the same envelope, so the same JS code handles them.
-
-## Source locations from Angular templates
-
-The NativeScript runtime can attach `sourceLocation` metadata to individual nodes when Angular dev-mode template source locations are enabled. Wire up your NativeScript webpack config:
+Enable Angular template source locations in your NativeScript webpack config when you want nodes to point back to templates:
 
 ```js
 const webpack = require("@nativescript/webpack");
@@ -120,23 +95,7 @@ module.exports = (env) => {
 };
 ```
 
-With that in place, hierarchy nodes carry entries like:
-
-```json
-{
-  "type": "Label",
-  "sourceLocation": {
-    "file": "src/app/home.component.html",
-    "line": 12,
-    "column": 5,
-    "offset": 238
-  }
-}
-```
-
-The SimDeck browser client renders the file path inline so you can jump straight to source.
-
-## Stopping the inspector
+## Stop It
 
 ```ts
 import { stopSimDeckInspector } from "@nativescript/simdeck-inspector";
@@ -144,8 +103,9 @@ import { stopSimDeckInspector } from "@nativescript/simdeck-inspector";
 stopSimDeckInspector();
 ```
 
-This closes the WebSocket and stops responding to inspector requests. Subsequent calls to `startSimDeckInspector(...)` will spin a fresh runtime.
+## Troubleshooting
 
-## Coexistence with the Swift agent
-
-If both the Swift in-app inspector agent and the NativeScript runtime are present in the same app, the SimDeck server prefers the NativeScript runtime because it can publish the framework-level hierarchy. Direct TCP clients of the Swift agent are unaffected.
+- Start the inspector before bootstrap.
+- Confirm the app can reach `http://127.0.0.1:4310/api/health`.
+- Bring the app to the foreground before calling `describe`.
+- Force `--source nativescript` to read the fallback reason.

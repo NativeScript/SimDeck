@@ -1,55 +1,45 @@
-# Introduction
+# Overview
 
-SimDeck is a local-first control plane for the iOS Simulator. It bundles a Rust HTTP server, a native Objective-C bridge for CoreSimulator and SimulatorKit APIs, a React browser UI, and a JS/TS test API into one project-local CLI.
+SimDeck is a local tool for viewing, controlling, inspecting, and automating mobile simulators.
 
-The goal is simple: turn a booted Simulator into a streamable, scriptable surface that any tool — a browser, VS Code, a NativeScript runtime, or an automated test — can drive through one local daemon.
+Run `simdeck` from your project. It starts a local server, serves a browser UI, and exposes the same controls through the CLI and HTTP API.
 
-## Why SimDeck?
+## What You Can Do
 
-The default Simulator is great when it sits in front of you. It is much less great when:
+- View a live iOS Simulator or Android emulator in a browser.
+- Tap, swipe, type, press hardware buttons, rotate, and open URLs.
+- Install, launch, uninstall, boot, shut down, and erase devices.
+- Capture screenshots, logs, pasteboard text, and accessibility trees.
+- Inspect app UI through built-in accessibility or optional in-app inspectors.
+- Write JS/TS automation with `simdeck/test`.
+- Share a paired browser session over your LAN.
+- Open the simulator view inside VS Code.
 
-- You want to see your app running while writing code in another window.
-- You want to drive a Simulator from a remote machine on your LAN.
-- You want to build automation around `simctl` without stitching together shell pipelines.
-- You want to inspect a NativeScript or Swift app's view hierarchy without linking the Xcode debugger.
-- You want a project daemon that stays warm instead of cold-starting native simulator control for every command.
+## Daily Workflow
 
-SimDeck addresses all of those with one CLI, one HTTP API, one WebRTC stream path, and one daemon per project.
+```sh
+simdeck
+```
 
-## What's in the box
+Open the local URL, pick a device, and use the toolbar or CLI commands:
 
-SimDeck ships as a single npm package (`simdeck`) that installs:
+```sh
+simdeck list
+simdeck boot <udid>
+simdeck install <udid> /path/to/App.app
+simdeck launch <udid> com.example.App
+simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
+simdeck describe <udid> --format agent --max-depth 3
+```
 
-1. **A native CLI and project daemon.** Rust + Objective-C, compiled on install. It serves the HTTP API and WebRTC H.264 video.
-2. **A bundled React client.** `simdeck` starts a foreground daemon and prints browser URLs; `simdeck ui --open` starts or reuses a background daemon.
-3. **A JS/TS testing package.** `simdeck/test` gives app tests a small API for launching, tapping, querying accessibility state, batching actions, and taking screenshots.
+Use `simdeck -d` for a detached background daemon, `simdeck -k` to stop it, and `simdeck -r` to restart it.
 
-Optional companion packages:
+## Pick A Page
 
-- [`@nativescript/simdeck-inspector`](/inspector/nativescript) — a debug-only NativeScript inspector runtime.
-- [`react-native-simdeck`](/inspector/react-native) — a debug-only React Native inspector runtime.
-- [`simdeck_flutter_inspector`](/inspector/flutter) — a debug-only Flutter inspector runtime.
-- [`packages/inspector-agent`](/inspector/swift) — a Swift Package you can link from your iOS app to expose its UIKit hierarchy.
-- [`packages/vscode-extension`](/extensions/vscode) — opens the simulator inside a VS Code panel.
-
-## High-level architecture
-
-The repository splits cleanly along the layers SimDeck talks to:
-
-- **`server/`** holds the CLI entrypoint, project daemon, Rust HTTP server, WebRTC transport, inspector hub, and metrics. It serves the REST API at `/api/*`, live video at `/api/simulators/{udid}/webrtc/offer`, and the inspector WebSocket at `/api/inspector/connect`.
-- **`cli/`** holds the Objective-C native bridge that links private `CoreSimulator` and `SimulatorKit` APIs. The Rust server calls into it through a narrow C ABI for boot, frame capture, encode, and HID input.
-- **`client/`** holds the React UI that renders the streamed simulator and the inspector tools.
-- **`packages/`** holds companion packages: NativeScript inspector, React Native inspector, Swift inspector agent, VS Code extension, and `simdeck/test`.
-- **`scripts/`** holds repeatable build entrypoints used both locally and by CI.
-
-For a full breakdown, see [Architecture](/guide/architecture).
-
-## Where to next
-
-- **[Installation](/guide/installation)** — how to install the CLI from npm or build it from source.
-- **[Quick Start](/guide/quick-start)** — boot a simulator and stream it to your browser in under a minute.
-- **[Project Daemon](/guide/daemon)** — how `ui`, `daemon start`, and automatic daemon reuse work.
-- **[Testing](/guide/testing)** — use `simdeck/test` and run the simulator-backed integration suite.
-- **[Architecture](/guide/architecture)** — the layout, data flow, and private-API surface.
-- **[CLI Reference](/cli/commands)** — every command with its flags.
-- **[HTTP API](/api/rest)** — every REST endpoint, with response shapes.
+- [Install](/guide/installation): requirements and setup.
+- [Quick Start](/guide/quick-start): first browser session.
+- [Daemon](/guide/daemon): foreground, detached, and always-on modes.
+- [Video & Streaming](/guide/video): stream quality and codec choices.
+- [LAN Access](/guide/lan-access): pairing and remote browser access.
+- [Testing](/guide/testing): `simdeck/test` and integration tests.
+- [Troubleshooting](/guide/troubleshooting): practical fixes for common failures.

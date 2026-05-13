@@ -1,133 +1,210 @@
 # Troubleshooting
 
-Most SimDeck issues fall into one of three buckets: simulator boot, video stream, or accessibility/inspector. This page lists the symptoms and fixes for the ones we hit most often.
+Use this page when SimDeck does not start, cannot see a device, shows a bad stream, or falls back to the wrong inspector.
 
-## Server won't start
-
-### `bind HTTP listener on 127.0.0.1:4310`
-
-Another process already owns the HTTP port. Pick a different one:
+## First Checks
 
 ```sh
-simdeck daemon start --port 4320
+simdeck --version
+xcode-select -p
+simdeck daemon status
+simdeck list
 ```
 
-Or find what's holding it:
+If a background daemon may be stale:
+
+```sh
+simdeck daemon stop
+simdeck
+```
+
+## Server Will Not Start
+
+### Port is already in use
+
+```text
+bind HTTP listener on 127.0.0.1:4310
+```
+
+Use another port:
+
+```sh
+simdeck ui --port 4320 --open
+```
+
+Or find the listener:
 
 ```sh
 lsof -nP -iTCP:4310 -sTCP:LISTEN
 ```
 
-If the holder is an old SimDeck daemon for the current project, stop it:
+If it is an old project daemon:
 
 ```sh
 simdeck daemon stop
 ```
 
-### `simdeck native binary is missing`
+### Native binary is missing
 
-The launcher script could not find the native binary. Reinstall the package or run the local build:
-
-```sh
-npm install -g simdeck
-# or, from a checkout:
-./scripts/build-cli.sh
-```
-
-### Native build fails from source
-
-`npm run build:cli` runs `cargo build --release` and Apple's Clang against the Objective-C bridge. The most common failures are:
-
-- **Rust missing.** Install via [rustup](https://rustup.rs/), then reinstall.
-- **Xcode command-line tools missing.** Run `xcode-select --install`.
-- **Sandboxed CI without macOS frameworks.** Build the npm package on macOS so the published tarball contains the native binary.
-
-## Simulator never boots
-
-### Private CoreSimulator boot errors
-
-SimDeck boots devices through private CoreSimulator APIs so it does not launch Simulator.app. If booting fails, the CLI returns that private CoreSimulator error directly and does not fall back to `xcrun simctl boot`. Confirm Xcode selection first:
+Reinstall from npm:
 
 ```sh
-xcode-select -p
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer simdeck boot <udid>
+npm install -g simdeck@latest
 ```
 
-If Xcode selection is correct but SimDeck still fails, capture the server log and file an issue. Running `xcrun simctl boot <udid>` can still be useful as a manual comparison, but it may launch Simulator.app and is not SimDeck's fallback path.
+From a source checkout:
 
-### CoreSimulator service unhealthy
+```sh
+npm run build:cli
+```
 
-If `simctl list` itself hangs or returns garbage, the macOS `com.apple.CoreSimulator.CoreSimulatorService` is wedged. Restart it:
+### Source build fails
+
+Check the common prerequisites:
+
+```sh
+xcode-select --install
+rustc --version
+node --version
+```
+
+Builds must run on macOS because SimDeck links macOS simulator frameworks.
+
+## Device Does Not Boot Or List
+
+### `simdeck list` hangs or returns stale data
+
+Restart Apple's simulator service:
 
 ```sh
 simdeck core-simulator restart
+simdeck list
 ```
 
-Re-run `simdeck list` to confirm before retrying.
-
-### Multiple Xcode installs
-
-When more than one Xcode is installed, `xcrun simctl` uses whichever Xcode is selected by `xcode-select`. Pick the one whose runtimes you care about:
+### Wrong Xcode is selected
 
 ```sh
 sudo xcode-select -s /Applications/Xcode.app
+simdeck list
 ```
 
-## Stream is black or stuck
+Or run one command with an explicit developer directory:
 
-### "Timed out waiting for initial simulator keyframe"
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer simdeck list
+```
 
-The encoder did not produce a keyframe within 3 seconds. The most common causes:
+### Android emulator is missing
 
-- **VideoToolbox is busy.** macOS screen recording can starve the hardware H.264 encoder. Auto mode detects sustained hardware encode overload and temporarily falls back to software H.264. For a fully software-only run, start with:
+Confirm Android SDK tools are on `PATH`:
 
-  ```sh
-  simdeck daemon stop
-  simdeck daemon start --video-codec software
-  ```
+```sh
+adb devices
+emulator -list-avds
+```
 
-  On virtualized CI Macs where hardware H.264 is unavailable, use
-  `--video-codec software --stream-quality ci-software`. That profile
-  targets a 960-pixel longest edge at 24 fps and lowers bitrate/CPU pressure
-  before backlog turns into visible stream delay.
+Android IDs in SimDeck use `android:<avd-name>`.
 
-- **The Simulator window is minimised or off-screen.** The private display bridge captures from a headless context, so this is rare, but if you see it after waking from sleep, shut the simulator down and boot it again.
-- **The simulator is mid-shutdown.** Wait for `simdeck list` to report `isBooted: true`.
+## Stream Is Black Or Stuck
 
-### Frequent stutter or "Refresh stream" loops
+### Timed out waiting for the first frame
 
-The transport hub forces a keyframe whenever a client falls behind. If `frames_dropped_server` on `/api/metrics` climbs steadily, the bottleneck is between the encoder and the decoder.
+Try software encoding:
 
-- Bring the client closer (LAN with low latency vs Wi-Fi mesh hops).
-- Check `client_streams` in `/api/metrics`. If `decodedFps` is much lower than `packetFps`, the client decoder is the bottleneck.
+```sh
+simdeck daemon restart --video-codec software
+```
 
-## Inspector returns AX instead of NativeScript / UIKit
+For CI or virtualized Macs:
 
-The accessibility tree endpoint blends three inspector sources and falls back to AX snapshot when none of the others are reachable. The response includes both a `source` field and a `fallbackReason` field that explains what happened.
+```sh
+simdeck daemon restart --video-codec software --stream-quality ci-software
+```
 
-Common reasons:
+### Stream stutters or refreshes repeatedly
 
-| `fallbackReason`                                          | Fix                                                                                      |
-| --------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `The in-app inspector process is not the foreground app.` | Bring the inspector-enabled app to the foreground.                                       |
-| `NativeScript hierarchy is not published by the app.`     | Make sure the app calls `startSimDeckInspector(...)` before bootstrapping.               |
-| `No connected NativeScript inspector ...`                 | The NativeScript inspector hasn't completed its WebSocket handshake yet. Reload the app. |
-| `No in-app inspector found ... on ports 47370-47402`      | The Swift agent isn't listening; confirm the app links and starts the agent in DEBUG.    |
+Lower the quality:
 
-For more on the inspector matrix, see the [Inspector Overview](/inspector/).
+```sh
+simdeck daemon restart --stream-quality low
+```
 
-## NativeScript inspector won't connect
+Check metrics:
 
-- Confirm `startSimDeckInspector({ port: 4310 })` runs in the simulator app's main thread before bootstrap.
-- Confirm the simulator can reach the host: from inside the app, `fetch('http://127.0.0.1:4310/api/health')` should succeed.
-- For Angular apps, make sure `startSimDeckInspector(...)` runs **before** `runNativeScriptAngularApp(...)`.
-- Watch the server log for messages such as `Registered NativeScript inspector for process …`. If you don't see one, the WebSocket never completed.
+```sh
+curl http://127.0.0.1:4310/api/metrics
+```
 
-## Logs
+If `frames_dropped_server` keeps climbing, the client or network cannot keep up. Move closer to the host, reduce quality, or switch to software encoding.
 
-When all else fails, capture the server log:
+### Browser cannot establish WebRTC
 
-- Dev server: read `build/cli.log` when using `npm run dev`.
-- Project daemon: stop and restart it from a terminal when you need foreground logs for a reproduction.
+Force the H.264 WebSocket fallback while testing:
 
-Include both files when filing an issue, along with `simdeck --version`, the macOS version, and the Xcode version.
+```text
+http://127.0.0.1:4310?stream=h264
+```
+
+For routed remote sessions, configure TURN as described in [Video & Streaming](/guide/video#remote-browsers).
+
+## Inspector Looks Wrong
+
+### `describe` returns accessibility instead of framework data
+
+The fallback is expected when no in-app inspector is available. Check:
+
+- The app with the inspector is foregrounded.
+- The app was built in debug mode.
+- The inspector package starts before the app UI boots.
+- The app is pointing at the active SimDeck port.
+
+Use a forced source to see the failure reason:
+
+```sh
+simdeck describe <udid> --source nativescript
+simdeck describe <udid> --source react-native
+simdeck describe <udid> --source flutter
+simdeck describe <udid> --source uikit
+```
+
+### NativeScript inspector does not connect
+
+- Call `startSimDeckInspector({ port: 4310 })` before bootstrap.
+- For Angular, call it before `runNativeScriptAngularApp(...)`.
+- Confirm the simulator app can reach `http://127.0.0.1:4310/api/health`.
+
+### React Native source locations are missing
+
+Use a development build. Production bundles usually strip React debug source metadata.
+
+### Flutter source locations are missing
+
+Run a debug build with widget creation tracking. Flutter enables this by default for normal debug runs.
+
+## LAN Browser Cannot Connect
+
+Start SimDeck with a LAN bind and reachable advertised host:
+
+```sh
+simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
+```
+
+Then check:
+
+- The remote browser opens `http://192.168.1.50:4310`.
+- macOS Firewall allows the port.
+- The pairing code matches the current daemon.
+- API scripts send the daemon token.
+
+See [LAN Access](/guide/lan-access).
+
+## Logs To Include In Issues
+
+Include:
+
+- `simdeck --version`
+- macOS version
+- Xcode version
+- The command you ran
+- Foreground daemon output, or `build/cli.log` when using `npm run dev`
+- `simdeck daemon status` without sharing the token publicly

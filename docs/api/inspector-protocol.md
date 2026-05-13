@@ -1,60 +1,45 @@
 # Inspector Protocol
 
-In-app inspectors talk to SimDeck using a small newline-delimited JSON protocol called `SDI/0.1`. Both transports (TCP and WebSocket) speak the same envelope and method set, so app-side code is interchangeable between them.
+In-app inspectors use SimDeck's small JSON protocol to publish richer UI trees and handle debug actions.
+
+Most users do not need this page. Use it when you are building or debugging an inspector runtime.
 
 ## Transports
 
-There are two equivalent transports:
+| Transport                                                    | Used by                                                          |
+| ------------------------------------------------------------ | ---------------------------------------------------------------- |
+| TCP on `127.0.0.1:47370-47402`                               | Swift in-app agent                                               |
+| WebSocket `/api/inspector/connect`                           | NativeScript, React Native, Flutter, and other outbound runtimes |
+| Polling `/api/inspector/poll` plus `/api/inspector/response` | Fallback when WebSocket is unavailable                           |
 
-### Newline-delimited TCP
-
-The original Swift in-app agent listens on TCP. The default port is `47370`; if it is busy the agent tries the next 32 ports and listens on the first free one. Clients should probe `47370–47402` and call `Inspector.getInfo` to disambiguate.
+TCP is newline-delimited JSON:
 
 ```sh
 printf '{"id":1,"method":"Inspector.getInfo"}\n' | nc 127.0.0.1 47370
 ```
 
-The agent also advertises Bonjour service type `_simdeckinspector._tcp`.
+## Envelope
 
-### WebSocket via the server
-
-NativeScript apps connect outbound to the SimDeck server:
-
-```text
-GET /api/inspector/connect
-```
-
-After connection the server sends `Inspector.getInfo` and waits for a response that includes a `processIdentifier`. Once that arrives, the server treats the WebSocket as the preferred transport for that PID and routes inspector requests there.
-
-While the inspector is registered, the daemon advertises it in `~/.simdeck/inspectors.json` so other local SimDeck daemons can find the owning daemon and relay requests to the same app inspector.
-
-A polling fallback is available for environments without WebSocket support:
-
-- `GET /api/inspector/poll?processIdentifier=<pid>` — long-polls for the next request, returning `204 No Content` if nothing arrives within 25 seconds.
-- `POST /api/inspector/response` — submits the response body.
-
-## Envelopes
-
-### Request
+Request:
 
 ```json
 {
   "id": 1,
   "method": "View.getHierarchy",
-  "params": { "includeHidden": false }
+  "params": { "maxDepth": 4 }
 }
 ```
 
-### Response
+Success:
 
 ```json
 {
   "id": 1,
-  "result": { "protocolVersion": "0.1", "roots": [] }
+  "result": { "roots": [] }
 }
 ```
 
-### Error
+Error:
 
 ```json
 {
@@ -66,65 +51,50 @@ A polling fallback is available for environments without WebSocket support:
 }
 ```
 
-### Event
+Event:
 
 ```json
 {
   "event": "Inspector.connected",
-  "params": { "protocolVersion": "0.1", "framing": "ndjson" }
+  "params": { "protocolVersion": "0.1" }
 }
 ```
 
-If the agent is started with an `authToken`, every request must include a matching top-level `token` field.
+If an inspector is started with an auth token, requests must include a matching top-level `token`.
 
-All point input and `frameInScreen` values use UIKit screen points, **not pixels**. Multiply by `displayScale` from `Inspector.getInfo` to convert to native pixels.
+## Core Methods
 
-## Methods
+| Method                 | Purpose                                                |
+| ---------------------- | ------------------------------------------------------ |
+| `Runtime.ping`         | Connectivity check                                     |
+| `Inspector.getInfo`    | Protocol version, app metadata, display scale, sources |
+| `View.getHierarchy`    | Current UI hierarchy                                   |
+| `View.get`             | One subtree by ID                                      |
+| `View.hitTest`         | Topmost view at a point                                |
+| `View.describeAtPoint` | Hit view plus ancestors                                |
+| `View.listActions`     | Supported actions for a view                           |
+| `View.perform`         | Run an action such as `tap`, `setText`, or `scrollBy`  |
+| `View.getProperties`   | Editable debug properties                              |
+| `View.setProperty`     | Best-effort runtime property edit                      |
+| `View.evaluateScript`  | Debug script evaluation                                |
 
-The full method list. The SimDeck HTTP proxy at `POST /api/simulators/{udid}/inspector/request` only allows a curated subset (see [REST endpoints](/api/rest#post-api-simulators-udid-inspector-request)); direct TCP/WebSocket clients can call any of them.
+Coordinates and frames use UIKit screen points, not pixels. Multiply by `displayScale` when you need pixels.
 
-### `Runtime.ping`
-
-Quick connectivity check. Returns:
-
-```json
-{ "result": { "ok": true } }
-```
-
-### `Inspector.getInfo`
-
-Returns protocol version, app process metadata, display scale, coordinate space, and the available method list. Required first call after connect.
+## Hierarchy Request
 
 ```json
 {
-  "result": {
-    "protocolVersion": "0.1",
-    "processIdentifier": 73214,
-    "bundleIdentifier": "com.example.MyApp",
-    "bundleName": "MyApp",
-    "displayScale": 3,
-    "coordinateSpace": "uikit-screen-points",
-    "appHierarchy": {
-      "available": true,
-      "source": "nativescript"
-    }
+  "id": 2,
+  "method": "View.getHierarchy",
+  "params": {
+    "includeHidden": false,
+    "maxDepth": 20,
+    "source": "uikit"
   }
 }
 ```
 
-### `View.getHierarchy`
-
-Returns the current hierarchy rooted at every visible window.
-
-Params:
-
-```json
-{ "includeHidden": false, "maxDepth": 20, "source": "uikit" }
-```
-
-By default the agent returns the published framework hierarchy (for example NativeScript, React Native, Flutter, or SwiftUI) when one exists. Pass `"source": "uikit"` to force the raw UIKit tree when the runtime supports UIKit inspection.
-
-Published framework nodes may include `sourceLocation`:
+Framework runtimes may return logical nodes with source locations:
 
 ```json
 {
@@ -133,124 +103,29 @@ Published framework nodes may include `sourceLocation`:
   "sourceLocation": {
     "file": "src/app/home.component.html",
     "line": 12,
-    "column": 5,
-    "offset": 238
+    "column": 5
   }
 }
 ```
 
-`line` and `column` are one-based when produced by NativeScript or React Native development metadata.
-
-### `View.get`
-
-Returns one view subtree by id:
+## Actions
 
 ```json
 {
-  "id": 4,
-  "method": "View.get",
-  "params": { "id": "view:0x1234", "maxDepth": 2 }
-}
-```
-
-IDs are process-local and valid until the underlying object is destroyed.
-
-### `View.hitTest`
-
-Returns the topmost hit-tested view for a screen point:
-
-```json
-{
-  "id": 5,
-  "method": "View.hitTest",
-  "params": { "x": 120, "y": 240, "maxDepth": 1 }
-}
-```
-
-### `View.describeAtPoint`
-
-Returns the hit view plus its ancestor chain.
-
-```json
-{ "id": 6, "method": "View.describeAtPoint", "params": { "x": 120, "y": 240 } }
-```
-
-### `View.listActions`
-
-Lists the safe interactions a view supports.
-
-```json
-{ "id": 7, "method": "View.listActions", "params": { "id": "view:0x1234" } }
-```
-
-### `View.perform`
-
-Performs a high-level action on a view.
-
-Supported actions: `tap`, `focus`, `resignFirstResponder`, `accessibilityActivate`, `setText`, `setValue`, `toggle`, `scrollBy`, `scrollTo`.
-
-Examples:
-
-```json
-{
-  "id": 8,
-  "method": "View.perform",
-  "params": { "id": "view:0x1234", "action": "tap" }
-}
-```
-
-```json
-{
-  "id": 9,
-  "method": "View.perform",
-  "params": { "id": "view:0x1234", "action": "setText", "value": "hello" }
-}
-```
-
-```json
-{
-  "id": 10,
+  "id": 3,
   "method": "View.perform",
   "params": {
     "id": "view:0x1234",
-    "action": "scrollBy",
-    "y": 400,
-    "animated": true
+    "action": "tap"
   }
 }
 ```
 
-### `View.getProperties`
+Common actions include `tap`, `focus`, `resignFirstResponder`, `setText`, `setValue`, `toggle`, `scrollBy`, and `scrollTo`. Support depends on the inspector runtime and selected view.
 
-Returns editable runtime properties for a view:
+## SwiftUI Publishing
 
-```json
-{ "id": 11, "method": "View.getProperties", "params": { "id": "view:0x1234" } }
-```
-
-### `View.setProperty`
-
-Sets a UIKit property dynamically. This is a debug-only escape hatch; agents reject unsafe property names and coerce structured UIKit values such as `UIColor`, `CGRect`, `CGPoint`, `CGSize`, and `UIEdgeInsets`.
-
-```json
-{
-  "id": 12,
-  "method": "View.setProperty",
-  "params": {
-    "id": "view:0x1234",
-    "property": "backgroundColor",
-    "value": { "$type": "UIColor", "hex": "#FF6600FF" }
-  }
-}
-```
-
-### `View.evaluateScript`
-
-Evaluates a small UIKit script against a view. Used by the browser inspector to run pre-canned diagnostics.
-
-## SwiftUI
-
-For SwiftUI apps you control, attach the root publisher to the top of your scene:
+Swift apps can publish a SwiftUI root tree:
 
 ```swift
 WindowGroup {
@@ -259,23 +134,16 @@ WindowGroup {
 }
 ```
 
-The agent reflects the current SwiftUI value/body tree and publishes it as the `swiftui` hierarchy source. `View.getHierarchy` returns that tree by default; pass `"source": "uikit"` to inspect the backing hosting views instead.
-
-This is a debug aid built on Swift reflection. It can show the declared view/body structure, including custom subviews, containers, labels, modifier names, active conditional branches, and `ForEach` rows whose data and content builder are available through SwiftUI's public API. Private/custom containers may still be opaque when they do not expose a child view value or content builder.
-
-The agent also exposes SwiftUI in the raw UIKit tree:
-
-1. **Automatic detection.** UIKit bridge or hosting views whose runtime classes contain `SwiftUI` or `UIHosting` are reported with `swiftUI.isHost` or `swiftUI.isProbe` markers.
-2. **Source-level tags.** Apps can tag SwiftUI views with `View.simDeckInspectorTag(_:id:metadata:)` from the Swift agent. Tagged views appear as lightweight probe `UIView`s with `swiftUI.isProbe = true`.
+They can also tag specific SwiftUI views so the inspector can find them:
 
 ```swift
 Text("Continue")
     .simDeckInspectorTag("continue-label", id: "onboarding.continue.label")
 ```
 
-## Allowed proxy methods
+## HTTP Proxy Allow List
 
-When you call the inspector via `POST /api/simulators/{udid}/inspector/request`, the SimDeck server enforces an allow-list to keep the HTTP surface small:
+The public proxy at `POST /api/simulators/{udid}/inspector/request` allows:
 
 - `Runtime.ping`
 - `Inspector.getInfo`
@@ -287,4 +155,4 @@ When you call the inspector via `POST /api/simulators/{udid}/inspector/request`,
 - `View.listActions`
 - `View.perform`
 
-For anything not in this list, talk directly to the inspector over TCP or WebSocket.
+For other methods, talk directly to the inspector transport.
