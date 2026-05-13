@@ -2,7 +2,6 @@
 
 #import <Accelerate/Accelerate.h>
 #import <CoreMedia/CoreMedia.h>
-#import <IOSurface/IOSurface.h>
 #import <os/lock.h>
 #import <QuartzCore/QuartzCore.h>
 #import <VideoToolbox/VideoToolbox.h>
@@ -48,20 +47,7 @@ static const NSUInteger XCWEncoderConsecutiveOverBudgetFrameThreshold = 3;
 static const double XCWHardwareFallbackLoadPercent = 500.0;
 static const NSUInteger XCWHardwareFallbackConsecutiveOverBudgetFrameThreshold = 60;
 static const uint64_t XCWAutoHardwareRetryIntervalUs = 10000000;
-static const size_t XCWFrameFingerprintSampleRows = 128;
-static const size_t XCWFrameFingerprintSampleSegmentsPerRow = 8;
-static const size_t XCWFrameFingerprintSampleBytesPerSegment = 16;
 static void *XCWH264EncoderQueueSpecificKey = &XCWH264EncoderQueueSpecificKey;
-
-typedef struct {
-    int32_t width;
-    int32_t height;
-    OSType pixelFormat;
-    BOOL hasSurfaceToken;
-    uint64_t surfaceToken;
-    BOOL hasSampleHash;
-    uint64_t sampleHash;
-} XCWFrameFingerprint;
 
 typedef NS_ENUM(NSUInteger, XCWVideoEncoderMode) {
     XCWVideoEncoderModeAuto,
@@ -222,135 +208,6 @@ static NSString *XCWVideoEncoderIDForMode(XCWVideoEncoderMode mode) {
         default:
             return nil;
     }
-}
-
-static uint64_t XCWHashUInt64(uint64_t hash, uint64_t value) {
-    static const uint64_t prime = 1099511628211ull;
-    for (NSUInteger byteIndex = 0; byteIndex < sizeof(value); byteIndex++) {
-        hash ^= (value >> (byteIndex * 8)) & 0xff;
-        hash *= prime;
-    }
-    return hash;
-}
-
-static uint64_t XCWHashBytes(uint64_t hash, const uint8_t *bytes, size_t length) {
-    static const uint64_t prime = 1099511628211ull;
-    for (size_t index = 0; index < length; index++) {
-        hash ^= bytes[index];
-        hash *= prime;
-    }
-    return hash;
-}
-
-static size_t XCWMeaningfulPlaneRowBytes(CVPixelBufferRef pixelBuffer, size_t plane, OSType pixelFormat) {
-    size_t rowBytes = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, plane);
-    size_t width = CVPixelBufferGetWidthOfPlane(pixelBuffer, plane);
-    if (pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
-        pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) {
-        size_t bytesPerPixel = plane == 0 ? 1 : 2;
-        return MIN(rowBytes, width * bytesPerPixel);
-    }
-    return rowBytes;
-}
-
-static uint64_t XCWHashSampledRows(uint64_t hash,
-                                   const uint8_t *baseAddress,
-                                   size_t rowBytes,
-                                   size_t meaningfulRowBytes,
-                                   size_t height) {
-    if (baseAddress == NULL || rowBytes == 0 || meaningfulRowBytes == 0 || height == 0) {
-        return hash;
-    }
-    size_t sampleRows = MIN(height, XCWFrameFingerprintSampleRows);
-    for (size_t sampleIndex = 0; sampleIndex < sampleRows; sampleIndex++) {
-        size_t row = sampleRows <= 1 ? 0 : (sampleIndex * (height - 1)) / (sampleRows - 1);
-        const uint8_t *rowAddress = baseAddress + (row * rowBytes);
-        hash = XCWHashUInt64(hash, (uint64_t)row);
-        if (meaningfulRowBytes <= XCWFrameFingerprintSampleSegmentsPerRow * XCWFrameFingerprintSampleBytesPerSegment) {
-            hash = XCWHashBytes(hash, rowAddress, meaningfulRowBytes);
-            continue;
-        }
-        for (size_t segment = 0; segment < XCWFrameFingerprintSampleSegmentsPerRow; segment++) {
-            size_t offset = segment == 0
-                ? 0
-                : (segment * (meaningfulRowBytes - XCWFrameFingerprintSampleBytesPerSegment)) / (XCWFrameFingerprintSampleSegmentsPerRow - 1);
-            hash = XCWHashUInt64(hash, (uint64_t)offset);
-            hash = XCWHashBytes(hash, rowAddress + offset, XCWFrameFingerprintSampleBytesPerSegment);
-        }
-    }
-    return hash;
-}
-
-static BOOL XCWFrameFingerprintCreate(CVPixelBufferRef pixelBuffer, BOOL includeSampleHash, XCWFrameFingerprint *fingerprint) {
-    if (pixelBuffer == NULL || fingerprint == NULL) {
-        return NO;
-    }
-
-    memset(fingerprint, 0, sizeof(*fingerprint));
-    fingerprint->width = (int32_t)CVPixelBufferGetWidth(pixelBuffer);
-    fingerprint->height = (int32_t)CVPixelBufferGetHeight(pixelBuffer);
-    fingerprint->pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
-
-    IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixelBuffer);
-    if (surface != NULL) {
-        fingerprint->hasSurfaceToken = YES;
-        fingerprint->surfaceToken = (((uint64_t)IOSurfaceGetID(surface)) << 32) ^ IOSurfaceGetSeed(surface);
-    }
-    if (!includeSampleHash) {
-        return fingerprint->hasSurfaceToken;
-    }
-
-    CVReturn lockStatus = CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
-    if (lockStatus != kCVReturnSuccess) {
-        return fingerprint->hasSurfaceToken;
-    }
-
-    uint64_t hash = 1469598103934665603ull;
-    hash = XCWHashUInt64(hash, (uint64_t)fingerprint->width);
-    hash = XCWHashUInt64(hash, (uint64_t)fingerprint->height);
-    hash = XCWHashUInt64(hash, (uint64_t)fingerprint->pixelFormat);
-
-    if (CVPixelBufferIsPlanar(pixelBuffer)) {
-        size_t planeCount = CVPixelBufferGetPlaneCount(pixelBuffer);
-        hash = XCWHashUInt64(hash, (uint64_t)planeCount);
-        for (size_t plane = 0; plane < planeCount; plane++) {
-            const uint8_t *baseAddress = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, plane);
-            size_t rowBytes = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, plane);
-            size_t meaningfulRowBytes = XCWMeaningfulPlaneRowBytes(pixelBuffer, plane, fingerprint->pixelFormat);
-            size_t height = CVPixelBufferGetHeightOfPlane(pixelBuffer, plane);
-            hash = XCWHashUInt64(hash, (uint64_t)plane);
-            hash = XCWHashUInt64(hash, (uint64_t)meaningfulRowBytes);
-            hash = XCWHashSampledRows(hash, baseAddress, rowBytes, meaningfulRowBytes, height);
-        }
-    } else {
-        const uint8_t *baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer);
-        size_t rowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer);
-        size_t width = CVPixelBufferGetWidth(pixelBuffer);
-        size_t meaningfulRowBytes = rowBytes;
-        if (fingerprint->pixelFormat == kCVPixelFormatType_32BGRA ||
-            fingerprint->pixelFormat == kCVPixelFormatType_32ARGB) {
-            meaningfulRowBytes = MIN(rowBytes, width * 4);
-        }
-        hash = XCWHashUInt64(hash, (uint64_t)meaningfulRowBytes);
-        hash = XCWHashSampledRows(hash, baseAddress, rowBytes, meaningfulRowBytes, CVPixelBufferGetHeight(pixelBuffer));
-    }
-
-    CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
-    fingerprint->hasSampleHash = YES;
-    fingerprint->sampleHash = hash;
-    return YES;
-}
-
-static BOOL XCWFrameFingerprintMatches(XCWFrameFingerprint lhs, XCWFrameFingerprint rhs) {
-    if (lhs.width != rhs.width ||
-        lhs.height != rhs.height ||
-        lhs.pixelFormat != rhs.pixelFormat) {
-        return NO;
-    }
-    if (lhs.hasSurfaceToken && rhs.hasSurfaceToken && lhs.surfaceToken == rhs.surfaceToken) {
-        return YES;
-    }
-    return lhs.hasSampleHash && rhs.hasSampleHash && lhs.sampleHash == rhs.sampleHash;
 }
 
 static NSData *XCWDecoderConfigurationRecordFromFormatDescription(CMFormatDescriptionRef formatDescription,
@@ -783,9 +640,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     NSInteger _lastPrepareStatus;
     NSInteger _lastScaleStatus;
     NSInteger _lastEncodeStatus;
-    BOOL _hasLastEncodedFrameFingerprint;
-    XCWFrameFingerprint _lastEncodedFrameFingerprint;
-    NSUInteger _duplicateFrameSkipCount;
     x264_t *_x264Encoder;
     x264_picture_t _x264Picture;
     BOOL _x264PictureAllocated;
@@ -919,8 +773,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         self->_hardwarePacedFrameCount = 0;
         self->_nextSoftwareSubmissionDueUs = 0;
         self->_nextHardwareSubmissionDueUs = 0;
-        self->_hasLastEncodedFrameFingerprint = NO;
-        self->_duplicateFrameSkipCount = 0;
     });
 }
 
@@ -978,7 +830,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
             @"encodeFailures": @(self->_encodeFailureCount),
             @"outputFrames": @(self->_outputFrameCount),
             @"keyFrameOutputs": @(self->_keyFrameOutputCount),
-            @"duplicateFramesSkipped": @(self->_duplicateFrameSkipCount),
             @"inFlightFrames": @(self->_inFlightFrameCount),
             @"pendingFrame": @(pendingFrame),
             @"drainScheduled": @(drainScheduled),
@@ -1351,25 +1202,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 
     uint64_t nowUs = (uint64_t)(CACurrentMediaTime() * 1000000.0);
     [self retryAutoHardwareIfNeededLockedAtTimeUs:nowUs];
-    BOOL forceKeyFrame = _needsKeyFrame;
-    XCWFrameFingerprint frameFingerprint;
-    BOOL hasFrameFingerprint = XCWFrameFingerprintCreate(pixelBuffer, NO, &frameFingerprint);
-    if (!forceKeyFrame &&
-        hasFrameFingerprint &&
-        _hasLastEncodedFrameFingerprint &&
-        XCWFrameFingerprintMatches(frameFingerprint, _lastEncodedFrameFingerprint)) {
-        _duplicateFrameSkipCount += 1;
-        return YES;
-    }
-    if (!forceKeyFrame) {
-        hasFrameFingerprint = XCWFrameFingerprintCreate(pixelBuffer, YES, &frameFingerprint);
-        if (hasFrameFingerprint &&
-            _hasLastEncodedFrameFingerprint &&
-            XCWFrameFingerprintMatches(frameFingerprint, _lastEncodedFrameFingerprint)) {
-            _duplicateFrameSkipCount += 1;
-            return YES;
-        }
-    }
 
     CGSize targetSize = XCWScaledDimensionsForSourceSize(sourceWidth, sourceHeight, _activeEncoderMode, _lowLatencyMode, _realtimeStreamMode);
     int32_t targetWidth = (int32_t)targetSize.width;
@@ -1391,6 +1223,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     }
     uint64_t relativeTimestampUs = nowUs - _timestampOriginUs;
 
+    BOOL forceKeyFrame = _needsKeyFrame;
     if (_activeEncoderMode == XCWVideoEncoderModeH264Software) {
         BOOL encoded = [self encodePixelBufferWithX264Locked:encodePixelBuffer
                                                  targetWidth:targetWidth
@@ -1401,13 +1234,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         CVPixelBufferRelease(encodePixelBuffer);
         if (encoded) {
             _needsKeyFrame = NO;
-            if (!hasFrameFingerprint || !frameFingerprint.hasSampleHash) {
-                hasFrameFingerprint = XCWFrameFingerprintCreate(pixelBuffer, YES, &frameFingerprint);
-            }
-            if (hasFrameFingerprint) {
-                _lastEncodedFrameFingerprint = frameFingerprint;
-                _hasLastEncodedFrameFingerprint = YES;
-            }
         }
         return encoded;
     }
@@ -1450,13 +1276,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
 
     _inFlightFrameCount += 1;
     _submittedFrameCount += 1;
-    if (!hasFrameFingerprint || !frameFingerprint.hasSampleHash) {
-        hasFrameFingerprint = XCWFrameFingerprintCreate(pixelBuffer, YES, &frameFingerprint);
-    }
-    if (hasFrameFingerprint) {
-        _lastEncodedFrameFingerprint = frameFingerprint;
-        _hasLastEncodedFrameFingerprint = YES;
-    }
     [self recordFrameSubmissionLockedAtTimeUs:nowUs software:NO];
     _maxInFlightFrameCount = MAX(_maxInFlightFrameCount, _inFlightFrameCount);
     if (_activeEncoderMode == XCWVideoEncoderModeH264Software || !_realtimeStreamMode) {
@@ -1602,7 +1421,6 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _consecutiveOverBudgetFrameCount = 0;
     _consecutiveStrainedFrameCount = 0;
     _wasOverloaded = NO;
-    _hasLastEncodedFrameFingerprint = NO;
     _hardwareAccelerated = NO;
     _selectedEncoderID = nil;
     _scalingActive = NO;
