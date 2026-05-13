@@ -97,6 +97,7 @@ fn main() {
         "CoreMedia",
         "CoreVideo",
         "ImageIO",
+        "IOSurface",
         "QuartzCore",
         "VideoToolbox",
     ] {
