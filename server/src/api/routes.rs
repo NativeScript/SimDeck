@@ -5016,7 +5016,7 @@ async fn ui_application_service_details(
         .map(|pid| pid as i64)
         .unwrap_or(service.pid);
     if process_identifier <= 0
-        || !launchctl_value(&text, "state").is_some_and(|value| value == "running")
+        || launchctl_value(&text, "state").is_none_or(|value| value != "running")
     {
         return Ok(None);
     }

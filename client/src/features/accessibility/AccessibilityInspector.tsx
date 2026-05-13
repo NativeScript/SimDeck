@@ -551,8 +551,8 @@ function NodeDetails({
 function isAndroidSimulator(simulator: SimulatorMetadata | null): boolean {
   return Boolean(
     simulator?.platform === "android-emulator" ||
-      simulator?.deviceTypeIdentifier === "android-emulator" ||
-      simulator?.udid.startsWith("android:"),
+    simulator?.deviceTypeIdentifier === "android-emulator" ||
+    simulator?.udid.startsWith("android:"),
   );
 }
 

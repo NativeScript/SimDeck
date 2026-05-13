@@ -89,7 +89,13 @@ export function PerformancePanel({
         window.clearTimeout(timer);
       }
     };
-  }, [followForeground, selectedPid, selectedSimulator?.isBooted, udid, visible]);
+  }, [
+    followForeground,
+    selectedPid,
+    selectedSimulator?.isBooted,
+    udid,
+    visible,
+  ]);
 
   const current = performance?.current ?? null;
   const selectedProcess = useMemo(

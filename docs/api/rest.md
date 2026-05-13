@@ -73,12 +73,12 @@ Device IDs come from `/api/simulators`. Android IDs use the `android:` prefix.
 
 iOS simulator app processes run as host macOS processes. These endpoints expose host-process telemetry for matching simulator app PIDs.
 
-| Method | Path                                                 | Purpose                                             |
-| ------ | ---------------------------------------------------- | --------------------------------------------------- |
-| `GET`  | `/api/simulators/{udid}/processes`                   | List app, extension, helper, and web-content PIDs   |
+| Method | Path                                                 | Purpose                                                     |
+| ------ | ---------------------------------------------------- | ----------------------------------------------------------- |
+| `GET`  | `/api/simulators/{udid}/processes`                   | List app, extension, helper, and web-content PIDs           |
 | `GET`  | `/api/simulators/{udid}/performance`                 | Current sample plus rolling CPU/memory/disk/network history |
-| `GET`  | `/api/simulators/{udid}/processes/{pid}/performance` | Performance data for one simulator app process      |
-| `POST` | `/api/simulators/{udid}/processes/{pid}/sample`      | Capture a short CPU stack sample with `sample`      |
+| `GET`  | `/api/simulators/{udid}/processes/{pid}/performance` | Performance data for one simulator app process              |
+| `POST` | `/api/simulators/{udid}/processes/{pid}/sample`      | Capture a short CPU stack sample with `sample`              |
 
 Performance query parameters:
 
