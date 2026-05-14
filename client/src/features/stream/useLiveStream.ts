@@ -100,7 +100,7 @@ function currentClientBundle(): string {
 }
 
 function isDocumentForeground(): boolean {
-  return document.visibilityState === "visible";
+  return document.visibilityState === "visible" && document.hasFocus();
 }
 
 export function useLiveStream({

@@ -37,7 +37,7 @@ pub struct MetricsSnapshot {
     pub client_streams: Vec<ClientStreamStats>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientStreamStats {
     pub client_id: String,

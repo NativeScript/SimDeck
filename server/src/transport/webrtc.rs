@@ -1,7 +1,7 @@
 use crate::android;
 use crate::api::routes::{
-    apply_stream_quality_payload, run_control_message, run_toggle_appearance_control, AppState,
-    ControlMessage, StreamQualityPayload,
+    apply_stream_client_foreground_from_stats, apply_stream_quality_payload, run_control_message,
+    run_toggle_appearance_control, AppState, ControlMessage, StreamQualityPayload,
 };
 use crate::error::AppError;
 use crate::metrics::counters::ClientStreamStats;
@@ -641,6 +641,7 @@ fn attach_control_data_channel(
                 match message {
                     WebRtcDataChannelMessage::ClientStats { stats } => {
                         if !stats.client_id.trim().is_empty() && !stats.kind.trim().is_empty() {
+                            apply_stream_client_foreground_from_stats(&state, &stats);
                             state.metrics.record_client_stream_stats(*stats);
                         }
                     }
