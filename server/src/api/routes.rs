@@ -1408,9 +1408,7 @@ fn client_stats_foreground(stats: &ClientStreamStats) -> Option<bool> {
     if stats.kind != "page" {
         return None;
     }
-    let visible = stats.visibility_state.as_deref() == Some("visible");
-    let focused = stats.focused?;
-    Some(visible && focused)
+    Some(stats.visibility_state.as_deref()? == "visible")
 }
 
 async fn native_inspector_connect(
@@ -6141,7 +6139,7 @@ mod tests {
     }
 
     #[test]
-    fn client_stats_foreground_requires_visible_and_focused_page() {
+    fn client_stats_foreground_uses_page_visibility() {
         let page_stats =
             |visibility_state: Option<&str>, focused: Option<bool>| ClientStreamStats {
                 client_id: "client".to_owned(),
@@ -6157,7 +6155,7 @@ mod tests {
         );
         assert_eq!(
             client_stats_foreground(&page_stats(Some("visible"), Some(false))),
-            Some(false)
+            Some(true)
         );
         assert_eq!(
             client_stats_foreground(&page_stats(Some("hidden"), Some(true))),
@@ -6165,6 +6163,10 @@ mod tests {
         );
         assert_eq!(
             client_stats_foreground(&page_stats(Some("visible"), None)),
+            Some(true)
+        );
+        assert_eq!(
+            client_stats_foreground(&page_stats(None, Some(true))),
             None
         );
         assert_eq!(

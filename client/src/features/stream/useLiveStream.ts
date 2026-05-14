@@ -100,7 +100,7 @@ function currentClientBundle(): string {
 }
 
 function isDocumentForeground(): boolean {
-  return document.visibilityState === "visible" && document.hasFocus();
+  return document.visibilityState === "visible";
 }
 
 export function useLiveStream({
@@ -371,8 +371,6 @@ export function useLiveStream({
 
     sendCurrentForegroundState();
     document.addEventListener("visibilitychange", sendCurrentForegroundState);
-    window.addEventListener("focus", sendCurrentForegroundState);
-    window.addEventListener("blur", sendCurrentForegroundState);
     window.addEventListener("pageshow", sendCurrentForegroundState);
     window.addEventListener("pagehide", sendBackgroundState);
     return () => {
@@ -380,8 +378,6 @@ export function useLiveStream({
         "visibilitychange",
         sendCurrentForegroundState,
       );
-      window.removeEventListener("focus", sendCurrentForegroundState);
-      window.removeEventListener("blur", sendCurrentForegroundState);
       window.removeEventListener("pageshow", sendCurrentForegroundState);
       window.removeEventListener("pagehide", sendBackgroundState);
     };
