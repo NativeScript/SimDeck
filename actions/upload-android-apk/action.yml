@@ -1,0 +1,105 @@
+name: Upload Android APK for SimDeck
+description: Package one Android APK and upload it using SimDeck's artifact naming convention.
+
+inputs:
+  apk-path:
+    description: Path to the built APK. When omitted, apk-glob is used.
+    required: false
+    default: ""
+  apk-glob:
+    description: Glob used to find the built APK when apk-path is omitted.
+    required: false
+    default: "**/build/outputs/apk/**/*.apk"
+  artifact-prefix:
+    description: Artifact prefix. The final name defaults to <artifact-prefix>-<artifact-sha>.
+    required: false
+    default: android-apk
+  artifact-name:
+    description: Exact artifact name to upload. Overrides artifact-prefix and artifact-sha when set.
+    required: false
+    default: ""
+  artifact-sha:
+    description: Commit SHA used in the default artifact name. Defaults to the PR head SHA or github.sha.
+    required: false
+    default: ""
+  retention-days:
+    description: Artifact retention in days.
+    required: false
+    default: "7"
+
+outputs:
+  artifact-name:
+    description: Uploaded artifact name.
+    value: ${{ steps.package.outputs.artifact_name }}
+  apk-path:
+    description: Path to the APK artifact.
+    value: ${{ steps.package.outputs.apk_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Locate APK
+      id: package
+      shell: bash
+      env:
+        APK_PATH_INPUT: ${{ inputs.apk-path }}
+        APK_GLOB: ${{ inputs.apk-glob }}
+        ARTIFACT_PREFIX: ${{ inputs.artifact-prefix }}
+        ARTIFACT_NAME_INPUT: ${{ inputs.artifact-name }}
+        ARTIFACT_SHA_INPUT: ${{ inputs.artifact-sha }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        GITHUB_SHA_VALUE: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+
+        if [[ -n "${APK_PATH_INPUT}" ]]; then
+          apk_path="${APK_PATH_INPUT}"
+        else
+          apk_path="$(APK_GLOB="${APK_GLOB}" python3 - <<'PY'
+        import glob
+        import os
+
+        matches = sorted(
+            path
+            for path in glob.glob(os.environ["APK_GLOB"], recursive=True)
+            if os.path.isfile(path) and path.endswith(".apk")
+        )
+        if not matches:
+            raise SystemExit(1)
+        print(matches[0])
+        PY
+          )" || {
+            echo "No APK matched '${APK_GLOB}'" >&2
+            exit 1
+          }
+        fi
+
+        if [[ ! -f "${apk_path}" || "${apk_path}" != *.apk ]]; then
+          echo "Expected an .apk file, got: ${apk_path}" >&2
+          exit 1
+        fi
+
+        artifact_sha="${ARTIFACT_SHA_INPUT:-${PR_HEAD_SHA:-${GITHUB_SHA_VALUE}}}"
+        if [[ -z "${artifact_sha}" ]]; then
+          echo "Could not resolve artifact SHA" >&2
+          exit 1
+        fi
+
+        if [[ -n "${ARTIFACT_NAME_INPUT}" ]]; then
+          artifact_name="${ARTIFACT_NAME_INPUT}"
+        else
+          artifact_name="${ARTIFACT_PREFIX}-${artifact_sha}"
+        fi
+
+        echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+        echo "apk_path=${apk_path}" >> "${GITHUB_OUTPUT}"
+        echo "APK path: ${apk_path}"
+        echo "Artifact name: ${artifact_name}"
+
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.package.outputs.artifact_name }}
+        path: ${{ steps.package.outputs.apk_path }}
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}
