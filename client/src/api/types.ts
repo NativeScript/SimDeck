@@ -40,6 +40,12 @@ export interface SimulatorMetadata {
   runtimeIdentifier?: string;
   deviceTypeName?: string;
   deviceTypeIdentifier?: string;
+  pairedWatchUDID?: string;
+  pairedWatchName?: string;
+  pairedPhoneUDID?: string;
+  pairedPhoneName?: string;
+  devicePairIdentifier?: string;
+  devicePairState?: string;
   isBooted: boolean;
   android?: {
     avdName?: string;

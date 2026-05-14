@@ -169,21 +169,11 @@ impl SessionRegistry<SimulatorSession> {
                             "rotationQuarterTurns": 0,
                         })
                     });
-                json!({
-                    "udid": simulator.udid,
-                    "name": simulator.name,
-                    "state": simulator.state,
-                    "isBooted": simulator.is_booted,
-                    "isAvailable": simulator.is_available,
-                    "lastBootedAt": simulator.last_booted_at,
-                    "dataPath": simulator.data_path,
-                    "logPath": simulator.log_path,
-                    "deviceTypeIdentifier": simulator.device_type_identifier,
-                    "deviceTypeName": simulator.device_type_name,
-                    "runtimeIdentifier": simulator.runtime_identifier,
-                    "runtimeName": simulator.runtime_name,
-                    "privateDisplay": private_display,
-                })
+                let mut entry = serde_json::to_value(&simulator).unwrap_or_else(|_| json!({}));
+                if let Some(object) = entry.as_object_mut() {
+                    object.insert("privateDisplay".to_owned(), private_display);
+                }
+                entry
             })
             .collect()
     }

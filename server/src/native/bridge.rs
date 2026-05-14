@@ -40,6 +40,42 @@ pub struct Simulator {
     pub runtime_identifier: serde_json::Value,
     #[serde(rename = "runtimeName")]
     pub runtime_name: String,
+    #[serde(
+        rename = "pairedWatchUDID",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub paired_watch_udid: Option<String>,
+    #[serde(
+        rename = "pairedWatchName",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub paired_watch_name: Option<String>,
+    #[serde(
+        rename = "pairedPhoneUDID",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub paired_phone_udid: Option<String>,
+    #[serde(
+        rename = "pairedPhoneName",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub paired_phone_name: Option<String>,
+    #[serde(
+        rename = "devicePairIdentifier",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub device_pair_identifier: Option<String>,
+    #[serde(
+        rename = "devicePairState",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub device_pair_state: Option<String>,
 }
 
 #[derive(Debug, Clone)]

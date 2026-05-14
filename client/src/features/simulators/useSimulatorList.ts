@@ -46,7 +46,7 @@ export function useSimulatorList({
       if (cancelled) {
         return;
       }
-      startTransition(() => setSimulators(nextSimulators));
+      startTransition(() => setSimulators(bootedFirst(nextSimulators)));
       setError("");
       lastLoadFailedRef.current = false;
     } catch (loadError) {
@@ -89,7 +89,7 @@ export function useSimulatorList({
             ...nextSimulator,
           };
         });
-        return replaced ? nextSimulators : [nextSimulator, ...current];
+        return bootedFirst(replaced ? nextSimulators : [nextSimulator, ...current]);
       }),
     );
   }, []);
@@ -145,4 +145,16 @@ export function useSimulatorList({
     simulators,
     updateSimulator,
   };
+}
+
+function bootedFirst(simulators: SimulatorMetadata[]): SimulatorMetadata[] {
+  return simulators
+    .map((simulator, index) => ({ simulator, index }))
+    .sort((left, right) => {
+      if (left.simulator.isBooted !== right.simulator.isBooted) {
+        return left.simulator.isBooted ? -1 : 1;
+      }
+      return left.index - right.index;
+    })
+    .map(({ simulator }) => simulator);
 }

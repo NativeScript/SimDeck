@@ -52,7 +52,7 @@ See [Health & Metrics](/api/health) for details.
 | Method | Path                                       | Purpose                                   |
 | ------ | ------------------------------------------ | ----------------------------------------- |
 | `GET`  | `/api/simulators`                          | List iOS Simulators and Android emulators |
-| `POST` | `/api/simulators`                          | Create an iOS Simulator                   |
+| `POST` | `/api/simulators`                          | Create and boot a simulator or emulator   |
 | `GET`  | `/api/simulators/create-options`           | List device types and runtimes for create |
 | `GET`  | `/api/simulators/{udid}/state`             | Get one device state                      |
 | `POST` | `/api/simulators/{udid}/boot`              | Boot a simulator or emulator              |
@@ -61,12 +61,18 @@ See [Health & Metrics](/api/health) for details.
 | `POST` | `/api/simulators/{udid}/toggle-appearance` | Toggle light/dark appearance              |
 
 Device IDs come from `/api/simulators`. Android IDs use the `android:` prefix.
+Booted devices are listed first. Paired iPhone and Apple Watch entries include
+`pairedWatchUDID` or `pairedPhoneUDID` when CoreSimulator reports a pairing.
 
-Create requests use CoreSimulator device type and runtime identifiers from
-`/api/simulators/create-options`:
+Create requests use identifiers from `/api/simulators/create-options`. New
+devices are booted before the response is returned. If an iOS simulator is
+created with `pairedWatch`, the watch is created, paired, and booted too.
+
+iOS:
 
 ```json
 {
+  "platform": "ios",
   "name": "iPhone Air",
   "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-Air",
   "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
@@ -75,6 +81,17 @@ Create requests use CoreSimulator device type and runtime identifiers from
     "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-11-46mm",
     "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.watchOS-26-4"
   }
+}
+```
+
+Android:
+
+```json
+{
+  "platform": "android",
+  "name": "Pixel_8_API_36",
+  "deviceTypeIdentifier": "pixel_8",
+  "runtimeIdentifier": "system-images;android-36;google_apis;arm64-v8a"
 }
 ```
 

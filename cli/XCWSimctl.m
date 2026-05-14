@@ -107,6 +107,54 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
     if (![devicesByRuntime isKindOfClass:[NSDictionary class]]) {
         devicesByRuntime = @{};
     }
+    NSMutableDictionary<NSString *, NSDictionary *> *pairInfoByDeviceUDID = [NSMutableDictionary dictionary];
+    NSDictionary *pairs = payload[@"pairs"];
+    if ([pairs isKindOfClass:[NSDictionary class]]) {
+        [pairs enumerateKeysAndObjectsUsingBlock:^(id pairIdentifierValue, id pairValue, __unused BOOL *stop) {
+            if (![pairValue isKindOfClass:[NSDictionary class]]) {
+                return;
+            }
+            NSDictionary *pair = (NSDictionary *)pairValue;
+            NSDictionary *phone = [pair[@"phone"] isKindOfClass:[NSDictionary class]] ? pair[@"phone"] : nil;
+            NSDictionary *watch = [pair[@"watch"] isKindOfClass:[NSDictionary class]] ? pair[@"watch"] : nil;
+            NSString *phoneUDID = XCWStringValue(phone[@"udid"]);
+            NSString *watchUDID = XCWStringValue(watch[@"udid"]);
+            if (phoneUDID.length == 0 || watchUDID.length == 0) {
+                return;
+            }
+
+            NSString *pairIdentifier = XCWStringValue(pairIdentifierValue);
+            NSString *pairState = XCWStringValue(pair[@"state"]);
+            NSString *phoneName = XCWStringValue(phone[@"name"]);
+            NSString *watchName = XCWStringValue(watch[@"name"]);
+
+            NSMutableDictionary *phonePairInfo = [NSMutableDictionary dictionary];
+            phonePairInfo[@"pairedWatchUDID"] = watchUDID;
+            if (watchName.length > 0) {
+                phonePairInfo[@"pairedWatchName"] = watchName;
+            }
+            if (pairIdentifier.length > 0) {
+                phonePairInfo[@"devicePairIdentifier"] = pairIdentifier;
+            }
+            if (pairState.length > 0) {
+                phonePairInfo[@"devicePairState"] = pairState;
+            }
+            pairInfoByDeviceUDID[phoneUDID] = phonePairInfo;
+
+            NSMutableDictionary *watchPairInfo = [NSMutableDictionary dictionary];
+            watchPairInfo[@"pairedPhoneUDID"] = phoneUDID;
+            if (phoneName.length > 0) {
+                watchPairInfo[@"pairedPhoneName"] = phoneName;
+            }
+            if (pairIdentifier.length > 0) {
+                watchPairInfo[@"devicePairIdentifier"] = pairIdentifier;
+            }
+            if (pairState.length > 0) {
+                watchPairInfo[@"devicePairState"] = pairState;
+            }
+            pairInfoByDeviceUDID[watchUDID] = watchPairInfo;
+        }];
+    }
     [devicesByRuntime enumerateKeysAndObjectsUsingBlock:^(NSString *runtimeIdentifier, NSArray *devices, __unused BOOL *stop) {
         if (![devices isKindOfClass:[NSArray class]]) {
             return;
@@ -124,7 +172,7 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
             NSString *state = device[@"state"] ?: @"Unknown";
             BOOL isAvailable = [device[@"isAvailable"] respondsToSelector:@selector(boolValue)] ? [device[@"isAvailable"] boolValue] : YES;
 
-            [flattened addObject:@{
+            NSMutableDictionary *entry = [@{
                 @"udid": udid,
                 @"name": device[@"name"] ?: @"Unknown Simulator",
                 @"state": state,
@@ -137,7 +185,12 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
                 @"deviceTypeName": deviceType[@"name"] ?: device[@"name"] ?: @"Unknown Simulator",
                 @"runtimeIdentifier": runtimeIdentifier ?: [NSNull null],
                 @"runtimeName": XCWRuntimeDisplayName(runtime, runtimeIdentifier),
-            }];
+            } mutableCopy];
+            NSDictionary *pairInfo = pairInfoByDeviceUDID[udid];
+            if (pairInfo != nil) {
+                [entry addEntriesFromDictionary:pairInfo];
+            }
+            [flattened addObject:entry];
         }
     }];
 

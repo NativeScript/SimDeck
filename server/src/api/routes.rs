@@ -1742,6 +1742,7 @@ async fn create_simulator(
             .and_then(Value::as_str)
             .ok_or_else(|| AppError::internal("Android create did not return an emulator ID."))?
             .to_owned();
+        boot_android_device(state.clone(), udid.clone()).await?;
         let devices = all_device_values(state, true).await?;
         let simulator = devices
             .iter()
@@ -1803,6 +1804,10 @@ async fn create_simulator(
         .get("pairedWatchUDID")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    boot_ios_device(state.clone(), udid.clone()).await?;
+    if let Some(watch_udid) = paired_watch_udid.clone() {
+        boot_ios_device(state.clone(), watch_udid).await?;
+    }
     let devices = all_device_values(state, true).await?;
     let simulator = devices
         .iter()
@@ -2096,26 +2101,29 @@ fn performance_log_entry_matches(
     .any(|needle| haystack.contains(needle))
 }
 
+async fn boot_android_device(state: AppState, udid: String) -> Result<(), AppError> {
+    run_android_action(state, move |android| {
+        android.boot(&udid)?;
+        android.wait_until_booted(&udid, Duration::from_secs(240))?;
+        Ok(())
+    })
+    .await
+}
+
+async fn boot_ios_device(state: AppState, udid: String) -> Result<(), AppError> {
+    forget_lifecycle_session(&state, &udid);
+    run_bridge_action(state, move |bridge| bridge.boot_simulator(&udid)).await
+}
+
 async fn boot_simulator(
     State(state): State<AppState>,
     Path(udid): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     if android::is_android_id(&udid) {
-        let action_udid = udid.clone();
-        run_android_action(state.clone(), move |android| {
-            android.boot(&action_udid)?;
-            android.wait_until_booted(&action_udid, Duration::from_secs(240))?;
-            Ok(())
-        })
-        .await?;
+        boot_android_device(state.clone(), udid.clone()).await?;
         return android_simulator_payload(state, udid).await;
     }
-    forget_lifecycle_session(&state, &udid);
-    let action_udid = udid.clone();
-    run_bridge_action(state.clone(), move |bridge| {
-        bridge.boot_simulator(&action_udid)
-    })
-    .await?;
+    boot_ios_device(state.clone(), udid.clone()).await?;
     simulator_payload(state, udid).await
 }
 
@@ -6416,7 +6424,25 @@ async fn all_device_values(state: AppState, force_refresh: bool) -> Result<Vec<V
     let android_devices =
         run_android_action(state.clone(), |android| android.list_devices()).await?;
     values.extend(state.android.enrich_devices(android_devices));
-    Ok(values)
+    Ok(booted_first(values))
+}
+
+fn booted_first(values: Vec<Value>) -> Vec<Value> {
+    let mut indexed_values = values.into_iter().enumerate().collect::<Vec<_>>();
+    indexed_values.sort_by(|(left_index, left), (right_index, right)| {
+        let left_booted = left
+            .get("isBooted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let right_booted = right
+            .get("isBooted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        right_booted
+            .cmp(&left_booted)
+            .then_with(|| left_index.cmp(right_index))
+    });
+    indexed_values.into_iter().map(|(_, value)| value).collect()
 }
 
 async fn list_simulators_cached(
