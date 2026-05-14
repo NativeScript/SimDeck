@@ -100,6 +100,21 @@ impl StreamClientForegroundRegistry {
         let next = any_foreground_client_for_udid(&clients, udid).unwrap_or(true);
         (next, previous != Some(next))
     }
+
+    pub fn remove(&self, udid: &str, client_id: &str) -> (bool, bool) {
+        let now = Instant::now();
+        let mut clients = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clients.retain(|_, state| {
+            now.duration_since(state.updated_at) <= STREAM_CLIENT_FOREGROUND_TTL
+        });
+        let previous = any_foreground_client_for_udid(&clients, udid);
+        clients.remove(&(udid.to_owned(), client_id.to_owned()));
+        let next = any_foreground_client_for_udid(&clients, udid).unwrap_or(false);
+        (next, previous != Some(next))
+    }
 }
 
 fn any_foreground_client_for_udid(
@@ -6042,9 +6057,9 @@ mod tests {
         split_filter_values, stream_quality_profile, suppress_native_ax_translation_error,
         tap_point_from_snapshot, trim_tree_depth, ui_application_foreground_score,
         AccessibilityHierarchySource, ElementSelectorPayload, InspectorSession,
-        InspectorSessionTransport, StreamQualityLimits, StreamQualityPayload,
-        UIKitApplicationServiceDetails, SOURCE_FLUTTER, SOURCE_NATIVE_AX, SOURCE_NATIVE_SCRIPT,
-        SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
+        InspectorSessionTransport, StreamClientForegroundRegistry, StreamQualityLimits,
+        StreamQualityPayload, UIKitApplicationServiceDetails, SOURCE_FLUTTER, SOURCE_NATIVE_AX,
+        SOURCE_NATIVE_SCRIPT, SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
     };
     use crate::inspector::PublishedInspector;
     use crate::transport::packet::FramePacket;
@@ -6074,6 +6089,16 @@ mod tests {
                 }]
             }]
         })
+    }
+
+    #[test]
+    fn stream_client_foreground_remove_pauses_when_last_visible_client_leaves() {
+        let registry = StreamClientForegroundRegistry::default();
+
+        assert_eq!(registry.record("udid", "visible", true), (true, true));
+        assert_eq!(registry.record("udid", "hidden", false), (true, false));
+        assert_eq!(registry.remove("udid", "visible"), (false, true));
+        assert_eq!(registry.remove("udid", "hidden"), (false, false));
     }
 
     #[test]

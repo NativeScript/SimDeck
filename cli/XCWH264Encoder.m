@@ -604,6 +604,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     XCWVideoEncoderMode _encoderMode;
     XCWVideoEncoderMode _activeEncoderMode;
     BOOL _clientForeground;
+    BOOL _acceptingFrameInput;
     BOOL _lowLatencyMode;
     BOOL _realtimeStreamMode;
     CMVideoCodecType _codecType;
@@ -670,6 +671,7 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     _encoderMode = XCWVideoEncoderModeFromEnvironment();
     _activeEncoderMode = _encoderMode;
     _clientForeground = YES;
+    _acceptingFrameInput = YES;
     _lowLatencyMode = (_encoderMode == XCWVideoEncoderModeH264Software) && XCWLowLatencyModeFromEnvironment();
     _realtimeStreamMode = XCWRealtimeStreamModeFromEnvironment() || _lowLatencyMode;
     _codecType = XCWVideoCodecTypeForMode(_activeEncoderMode);
@@ -687,9 +689,13 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
         return;
     }
 
-    CVPixelBufferRetain(pixelBuffer);
     BOOL shouldScheduleDrain = NO;
     os_unfair_lock_lock(&_pendingLock);
+    if (!_acceptingFrameInput) {
+        os_unfair_lock_unlock(&_pendingLock);
+        return;
+    }
+    CVPixelBufferRetain(pixelBuffer);
     _inputFrameCount += 1;
     if (_pendingPixelBuffer != NULL) {
         _pendingReplacementCount += 1;
@@ -744,7 +750,23 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
             return;
         }
         self->_clientForeground = foreground;
+        os_unfair_lock_lock(&self->_pendingLock);
+        self->_acceptingFrameInput = foreground;
+        if (!foreground) {
+            if (self->_pendingPixelBuffer != NULL) {
+                CVPixelBufferRelease(self->_pendingPixelBuffer);
+                self->_pendingPixelBuffer = NULL;
+            }
+            self->_drainScheduled = NO;
+        }
+        os_unfair_lock_unlock(&self->_pendingLock);
+        if (!foreground) {
+            [self invalidateCompressionSessionLocked];
+            self->_needsKeyFrame = YES;
+            return;
+        }
         [self updateActiveEncoderModeForClientForegroundLockedAtTimeUs:(uint64_t)(CACurrentMediaTime() * 1000000.0)];
+        self->_needsKeyFrame = YES;
     });
 }
 
@@ -1158,6 +1180,18 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     BOOL wasDraining = _drainingPendingFrames;
     _drainingPendingFrames = YES;
     while (YES) {
+        if (!_clientForeground) {
+            os_unfair_lock_lock(&_pendingLock);
+            if (_pendingPixelBuffer != NULL) {
+                CVPixelBufferRelease(_pendingPixelBuffer);
+                _pendingPixelBuffer = NULL;
+            }
+            _drainScheduled = NO;
+            os_unfair_lock_unlock(&_pendingLock);
+            _drainingPendingFrames = wasDraining;
+            return;
+        }
+
         if (_inFlightFrameCount >= [self maximumInFlightFrameCountLocked]) {
             _drainScheduled = NO;
             _drainingPendingFrames = wasDraining;
@@ -1198,6 +1232,9 @@ static void XCWH264EncoderOutputCallback(void *outputCallbackRefCon,
     int32_t sourceHeight = (int32_t)CVPixelBufferGetHeight(pixelBuffer);
     if (sourceWidth <= 0 || sourceHeight <= 0) {
         return NO;
+    }
+    if (!_clientForeground) {
+        return YES;
     }
 
     uint64_t nowUs = (uint64_t)(CACurrentMediaTime() * 1000000.0);

@@ -175,6 +175,7 @@ pub async fn create_answer(
             state.registry.remove(&udid);
             return Err(error);
         }
+        apply_stream_client_foreground(&state, &session, &payload.client_id, Some(true));
         WebRtcVideoSource::Simulator(session)
     };
 
@@ -330,12 +331,14 @@ pub async fn create_answer(
 
     let first_frame_width = first_frame.width;
     let first_frame_height = first_frame.height;
+    let client_id = payload.client_id.clone();
     let (cancellation_token, cancellation) =
         register_webrtc_media_stream(&udid, payload.client_id.as_deref(), true);
     tokio::spawn(
         WebRtcMediaStream {
             state,
             udid,
+            client_id,
             source,
             first_frame,
             peer_connection,
@@ -703,6 +706,25 @@ fn apply_stream_client_foreground(
             .record(session.udid(), client_id, foreground);
     if changed {
         session.set_client_foreground(any_foreground);
+    }
+}
+
+fn remove_stream_client_foreground(
+    state: &AppState,
+    source: &WebRtcVideoSource,
+    udid: &str,
+    client_id: &Option<String>,
+) {
+    let Some(client_id) = client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let (any_foreground, changed) = state.stream_clients.remove(udid, client_id);
+    if changed {
+        source.set_client_foreground(any_foreground);
     }
 }
 
@@ -1775,6 +1797,12 @@ impl WebRtcVideoSource {
             Self::Android(source) => source.request_keyframe(),
         }
     }
+
+    fn set_client_foreground(&self, foreground: bool) {
+        if let Self::Simulator(session) = self {
+            session.set_client_foreground(foreground);
+        }
+    }
 }
 
 enum WebRtcFrameReceiver {
@@ -1810,6 +1838,7 @@ struct WebRtcMediaStream {
     state: AppState,
     source: WebRtcVideoSource,
     udid: String,
+    client_id: Option<String>,
     first_frame: SharedFrame,
     peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
     video_track: Arc<TrackLocalStaticRTP>,
@@ -1953,6 +1982,7 @@ impl WebRtcMediaStream {
             state,
             source,
             udid,
+            client_id,
             first_frame,
             peer_connection,
             video_track,
@@ -2110,6 +2140,7 @@ impl WebRtcMediaStream {
 
         warn!("WebRTC media stream ended for {udid}");
         clear_webrtc_media_stream(&udid, &cancellation_token);
+        remove_stream_client_foreground(&state, &source, &udid, &client_id);
         let _ = peer_connection.close().await;
     }
 }
