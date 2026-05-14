@@ -505,10 +505,10 @@ static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, N
     return values;
 }
 
-static NSArray<NSValue *> *XCWAXFallbackHitTestPoints(void) {
+static NSArray<NSValue *> *XCWAXRootRecoveryHitTestPoints(void) {
     NSMutableArray<NSValue *> *points = [NSMutableArray array];
-    NSArray<NSNumber *> *xValues = @[@24, @100, @220, @340, @420];
-    NSArray<NSNumber *> *yValues = @[@80, @150, @220, @300, @380, @460, @540, @620, @700, @780, @860, @930];
+    NSArray<NSNumber *> *xValues = @[@40, @120, @220, @340, @420];
+    NSArray<NSNumber *> *yValues = @[@120, @220, @360, @520, @700, @840];
     for (NSNumber *yValue in yValues) {
         for (NSNumber *xValue in xValues) {
             [points addObject:[NSValue valueWithPoint:CGPointMake(xValue.doubleValue, yValue.doubleValue)]];
@@ -517,12 +517,76 @@ static NSArray<NSValue *> *XCWAXFallbackHitTestPoints(void) {
     return points;
 }
 
-static NSString *XCWAXElementIdentity(NSDictionary *element) {
-    id identifier = element[@"AXUniqueId"];
-    id label = element[@"AXLabel"];
-    id role = element[@"role"];
-    id frame = element[@"AXFrame"];
-    return [@[role ?: @"", identifier ?: @"", label ?: @"", frame ?: @""] componentsJoinedByString:@"|"];
+static pid_t XCWAXTranslationPID(id translation) {
+    SEL selector = sel_registerName("pid");
+    if (translation == nil || ![translation respondsToSelector:selector]) {
+        return 0;
+    }
+    @try {
+        return ((pid_t(*)(id, SEL))objc_msgSend)(translation, selector);
+    } @catch (NSException *exception) {
+        XCWAXDebugLog(@"translation pid threw %@", exception);
+        return 0;
+    }
+}
+
+static void XCWAXSetBridgeDelegateTokenOnTranslation(id translation, NSString *token) {
+    if (translation != nil && [translation respondsToSelector:sel_registerName("setBridgeDelegateToken:")]) {
+        ((void(*)(id, SEL, id))objc_msgSend)(translation, sel_registerName("setBridgeDelegateToken:"), token);
+    }
+}
+
+static id XCWAXApplicationTranslationForPID(id translator, pid_t pid, NSString *token) {
+    if (pid <= 0 || translator == nil) {
+        return nil;
+    }
+
+    Class requestClass = NSClassFromString(@"AXPTranslatorRequest");
+    Class translationClass = NSClassFromString(@"AXPTranslationObject");
+    SEL sendSelector = sel_registerName("sendTranslatorRequest:");
+    if (requestClass != Nil && translationClass != Nil && [translator respondsToSelector:sendSelector]) {
+        @try {
+            // translationApplicationObjectForPid: builds this request without a
+            // bridge token, which cannot route through the simulator delegate
+            // after some private display lifecycle changes.
+            id request = [requestClass new];
+            id requestTranslation = [translationClass new];
+            if ([requestTranslation respondsToSelector:sel_registerName("setPid:")]) {
+                ((void(*)(id, SEL, pid_t))objc_msgSend)(requestTranslation, sel_registerName("setPid:"), pid);
+            }
+            XCWAXSetBridgeDelegateTokenOnTranslation(requestTranslation, token);
+
+            if ([request respondsToSelector:sel_registerName("setRequestType:")]) {
+                ((void(*)(id, SEL, NSUInteger))objc_msgSend)(request, sel_registerName("setRequestType:"), (NSUInteger)1);
+            }
+            if ([request respondsToSelector:sel_registerName("setParameters:")]) {
+                ((void(*)(id, SEL, id))objc_msgSend)(request, sel_registerName("setParameters:"), @{ @"pid": @(pid) });
+            }
+            if ([request respondsToSelector:sel_registerName("setTranslation:")]) {
+                ((void(*)(id, SEL, id))objc_msgSend)(request, sel_registerName("setTranslation:"), requestTranslation);
+            }
+
+            id response = ((id(*)(id, SEL, id))objc_msgSend)(translator, sendSelector, request);
+            id translation = XCWAXObject(response, "translationResponse");
+            XCWAXSetBridgeDelegateTokenOnTranslation(translation, token);
+            if (translation != nil) {
+                return translation;
+            }
+        } @catch (NSException *exception) {
+            XCWAXDebugLog(@"tokenized application translation request for pid:%d threw %@", pid, exception);
+        }
+    }
+
+    SEL selector = sel_registerName("translationApplicationObjectForPid:");
+    if (![translator respondsToSelector:selector]) {
+        return nil;
+    }
+    @try {
+        return ((id(*)(id, SEL, pid_t))objc_msgSend)(translator, selector, pid);
+    } @catch (NSException *exception) {
+        XCWAXDebugLog(@"translationApplicationObjectForPid:%d threw %@", pid, exception);
+        return nil;
+    }
 }
 
 @implementation XCWAccessibilityBridge
@@ -596,65 +660,50 @@ static NSString *XCWAXElementIdentity(NSDictionary *element) {
             }
         }
         if (translation == nil && pointValue == nil) {
-            NSMutableArray *fallbackRoots = [NSMutableArray array];
-            NSMutableSet<NSString *> *seenElements = [NSMutableSet set];
-            for (NSValue *fallbackPoint in XCWAXFallbackHitTestPoints()) {
+            NSMutableSet<NSNumber *> *attemptedPIDs = [NSMutableSet set];
+            for (NSValue *recoveryPoint in XCWAXRootRecoveryHitTestPoints()) {
                 for (NSNumber *displayID in XCWAXCandidateDisplayIDs()) {
                     uint32_t display = displayID.unsignedIntValue;
-                    CGPoint point = fallbackPoint.pointValue;
-                    id fallbackTranslation = ((id(*)(id, SEL, CGPoint, uint32_t, id))objc_msgSend)(
+                    CGPoint point = recoveryPoint.pointValue;
+                    id hitTranslation = ((id(*)(id, SEL, CGPoint, uint32_t, id))objc_msgSend)(
                         translator,
                         sel_registerName("objectAtPoint:displayId:bridgeDelegateToken:"),
                         point,
                         display,
                         token
                     );
-                    XCWAXDebugLog(@"fallback translation lookup point=%@ display=%@ result=%@", fallbackPoint, displayID, fallbackTranslation);
-                    if (fallbackTranslation == nil) {
+                    XCWAXDebugLog(@"root recovery hit-test point=%@ display=%@ result=%@", recoveryPoint, displayID, hitTranslation);
+                    pid_t pid = XCWAXTranslationPID(hitTranslation);
+                    if (pid <= 0) {
                         continue;
                     }
-                    if ([fallbackTranslation respondsToSelector:sel_registerName("setBridgeDelegateToken:")]) {
-                        ((void(*)(id, SEL, id))objc_msgSend)(fallbackTranslation, sel_registerName("setBridgeDelegateToken:"), token);
-                    }
-                    id fallbackElement = ((id(*)(id, SEL, id))objc_msgSend)(
-                        translator,
-                        sel_registerName("macPlatformElementFromTranslation:"),
-                        fallbackTranslation
-                    );
-                    NSHashTable *visited = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
-                    NSMutableDictionary *root = XCWAXSerializeElement(fallbackElement, token, visited, 0, MIN(maxDepth, XCWAXMaxDepth));
-                    NSString *identity = root != nil ? XCWAXElementIdentity(root) : @"";
-                    if (identity.length > 0 && ![seenElements containsObject:identity]) {
-                        [seenElements addObject:identity];
-                        [fallbackRoots addObject:root];
+                    NSNumber *pidNumber = @(pid);
+                    if (![attemptedPIDs containsObject:pidNumber]) {
+                        [attemptedPIDs addObject:pidNumber];
+
+                        id applicationTranslation = XCWAXApplicationTranslationForPID(translator, pid, token);
+                        XCWAXDebugLog(@"root recovery pid=%d application=%@", pid, applicationTranslation);
+                        if (applicationTranslation != nil) {
+                            translation = applicationTranslation;
+                            resolvedDisplayID = displayID;
+                            break;
+                        }
                     }
                 }
-            }
-            if (fallbackRoots.count > 0) {
-                NSArray *rootsWithChildren = [fallbackRoots filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *root, NSDictionary *bindings) {
-                    (void)bindings;
-                    NSArray *children = [root[@"children"] isKindOfClass:NSArray.class] ? root[@"children"] : @[];
-                    return children.count > 0;
-                }]];
-                NSArray *roots = rootsWithChildren.count > 0 ? rootsWithChildren : fallbackRoots;
-                XCWAXDebugLog(@"frontmost lookup failed; returning %lu sampled fallback elements", (unsigned long)roots.count);
-                return @{
-                    @"roots": roots,
-                    @"source": @"native-ax",
-                };
+                if (translation != nil) {
+                    break;
+                }
             }
         }
 
         if (translation == nil) {
             XCWAXDebugLog(@"translation lookup returned nil point=%@", pointValue);
             if (error != NULL) {
-                *error = XCWAXError(9, @"No translation object returned for simulator. The point may be invalid or hidden by a fullscreen dialog.");
+                *error = XCWAXError(9, @"No application accessibility root returned for simulator. The simulator may be between lifecycle states or hidden by a fullscreen dialog.");
             }
             return nil;
         }
-        if ([translation respondsToSelector:sel_registerName("setBridgeDelegateToken:")]) {
-            ((void(*)(id, SEL, id))objc_msgSend)(translation, sel_registerName("setBridgeDelegateToken:"), token);
-        }
+        XCWAXSetBridgeDelegateTokenOnTranslation(translation, token);
         XCWAXDebugLog(@"using accessibility display %@", resolvedDisplayID);
 
         id element = ((id(*)(id, SEL, id))objc_msgSend)(
