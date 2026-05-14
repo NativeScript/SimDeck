@@ -1,15 +1,15 @@
-name: Run iOS App in SimDeck
+name: Run Android App in SimDeck
 
-description: Start a Cloudflare Tunnel-backed SimDeck iOS session for a pull request simulator app artifact.
+description: Start a Cloudflare Tunnel-backed SimDeck Android session for a pull request APK artifact.
 
 inputs:
   pr_number:
     description: Pull request number to run in SimDeck.
     required: true
   command:
-    description: Original issue comment body. Flags such as no-cache-sim, latest-device, and quality=tiny are honored.
+    description: Original issue comment body. Flags such as quality=tiny and public-health are honored.
     required: false
-    default: simdeck run ios
+    default: simdeck run android
   command_comment_id:
     description: GitHub issue comment id that triggered the session. When set, the action reacts to this comment immediately.
     required: false
@@ -27,19 +27,19 @@ inputs:
     required: false
     default: ""
   build_workflow:
-    description: Workflow file name that uploads the iOS simulator app artifact.
+    description: Workflow file name that uploads the Android APK artifact.
     required: false
-    default: build-ios-simulator.yml
+    default: build-android-apk.yml
   artifact_prefix:
     description: Artifact prefix. The default artifact name is <artifact_prefix>-<pr_sha>.
     required: false
-    default: ios-simulator-app
+    default: android-apk
   artifact_name:
     description: Exact artifact name to download. Overrides artifact_prefix when set.
     required: false
     default: ""
-  bundle_id:
-    description: Bundle id to launch when the app Info.plist does not contain a concrete CFBundleIdentifier.
+  package_name:
+    description: Android package name to launch when it cannot be read from the APK.
     required: false
     default: ""
   keepalive_seconds:
@@ -62,22 +62,26 @@ inputs:
     description: SimDeck stream quality profile.
     required: false
     default: tiny
-  simulator_name:
-    description: Preferred iOS simulator device name.
+  avd_name:
+    description: Android AVD name to create or reuse.
     required: false
-    default: iPhone 17 Pro
-  device_strategy:
-    description: Fallback selection strategy when simulator_name is unavailable. Use latest or small.
+    default: SimDeck_Pixel_CI
+  android_api_level:
+    description: Android API level for the managed AVD.
     required: false
-    default: latest
-  simulator_cache:
-    description: Restore and save the CoreSimulator device cache.
+    default: "36"
+  android_target:
+    description: Android SDK system image target.
     required: false
-    default: "true"
-  cache_version:
-    description: Manual cache key suffix for CoreSimulator cache experiments.
+    default: google_apis
+  android_arch:
+    description: Android SDK system image architecture. When empty, the runner architecture is used.
     required: false
-    default: v1
+    default: ""
+  android_build_tools:
+    description: Android SDK build-tools version used to inspect APK metadata.
+    required: false
+    default: "36.0.0"
   public_health_check:
     description: Verify the public Cloudflare Tunnel health endpoint before continuing.
     required: false
@@ -86,7 +90,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Prepare SimDeck session inputs
+    - name: Prepare SimDeck Android session inputs
       shell: bash
       env:
         GH_TOKEN_VALUE: ${{ github.token }}
@@ -97,14 +101,16 @@ runs:
         COMMAND_COMMENT_ID_VALUE: ${{ inputs.command_comment_id }}
         COMMAND_COMMENT_AUTHOR_VALUE: ${{ inputs.command_comment_author }}
         COMMAND_REACTION_VALUE: ${{ inputs.command_reaction }}
-        SIMDECK_BUNDLE_ID_VALUE: ${{ inputs.bundle_id }}
+        ANDROID_PACKAGE_NAME_VALUE: ${{ inputs.package_name }}
         SIMDECK_PORT_VALUE: ${{ inputs.simdeck_port }}
         SIMDECK_PACKAGE_VALUE: ${{ inputs.simdeck_package }}
         SIMDECK_VERSION_VALUE: ${{ inputs.simdeck_version }}
         INPUT_STREAM_PROFILE_VALUE: ${{ inputs.stream_profile }}
-        INPUT_SIMULATOR_NAME_VALUE: ${{ inputs.simulator_name }}
-        INPUT_DEVICE_STRATEGY_VALUE: ${{ inputs.device_strategy }}
-        INPUT_SIMULATOR_CACHE_VALUE: ${{ inputs.simulator_cache }}
+        INPUT_AVD_NAME_VALUE: ${{ inputs.avd_name }}
+        INPUT_ANDROID_API_LEVEL_VALUE: ${{ inputs.android_api_level }}
+        INPUT_ANDROID_TARGET_VALUE: ${{ inputs.android_target }}
+        INPUT_ANDROID_ARCH_VALUE: ${{ inputs.android_arch }}
+        INPUT_ANDROID_BUILD_TOOLS_VALUE: ${{ inputs.android_build_tools }}
         INPUT_PUBLIC_HEALTH_CHECK_VALUE: ${{ inputs.public_health_check }}
         KEEPALIVE_SECONDS_VALUE: ${{ inputs.keepalive_seconds }}
         BUILD_WORKFLOW_VALUE: ${{ inputs.build_workflow }}
@@ -132,20 +138,23 @@ runs:
         write_env "COMMAND_COMMENT_ID" "${COMMAND_COMMENT_ID_VALUE}"
         write_env "COMMAND_COMMENT_AUTHOR" "${COMMAND_COMMENT_AUTHOR_VALUE}"
         write_env "COMMAND_REACTION" "${COMMAND_REACTION_VALUE}"
-        write_env "SIMDECK_BUNDLE_ID" "${SIMDECK_BUNDLE_ID_VALUE}"
+        write_env "ANDROID_PACKAGE_NAME" "${ANDROID_PACKAGE_NAME_VALUE}"
         write_env "SIMDECK_PORT" "${SIMDECK_PORT_VALUE}"
         write_env "SIMDECK_PACKAGE" "${SIMDECK_PACKAGE_VALUE}"
         write_env "SIMDECK_VERSION" "${SIMDECK_VERSION_VALUE}"
         write_env "INPUT_STREAM_PROFILE" "${INPUT_STREAM_PROFILE_VALUE}"
-        write_env "INPUT_SIMULATOR_NAME" "${INPUT_SIMULATOR_NAME_VALUE}"
-        write_env "INPUT_DEVICE_STRATEGY" "${INPUT_DEVICE_STRATEGY_VALUE}"
-        write_env "INPUT_SIMULATOR_CACHE" "${INPUT_SIMULATOR_CACHE_VALUE}"
+        write_env "SIMDECK_ANDROID_AVD_NAME" "${INPUT_AVD_NAME_VALUE}"
+        write_env "SIMDECK_ANDROID_API_LEVEL" "${INPUT_ANDROID_API_LEVEL_VALUE}"
+        write_env "SIMDECK_ANDROID_TARGET" "${INPUT_ANDROID_TARGET_VALUE}"
+        write_env "SIMDECK_ANDROID_ARCH" "${INPUT_ANDROID_ARCH_VALUE}"
+        write_env "SIMDECK_ANDROID_BUILD_TOOLS" "${INPUT_ANDROID_BUILD_TOOLS_VALUE}"
         write_env "INPUT_PUBLIC_HEALTH_CHECK" "${INPUT_PUBLIC_HEALTH_CHECK_VALUE}"
         write_env "KEEPALIVE_SECONDS" "${KEEPALIVE_SECONDS_VALUE}"
         write_env "BUILD_WORKFLOW" "${BUILD_WORKFLOW_VALUE}"
         write_env "ARTIFACT_PREFIX" "${ARTIFACT_PREFIX_VALUE}"
         write_env "ARTIFACT_NAME_INPUT" "${ARTIFACT_NAME_INPUT_VALUE}"
         write_env "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24" "true"
+
     - name: React to command and resolve flags
       shell: bash
       run: |
@@ -160,30 +169,12 @@ runs:
         fi
 
         body="${SIMDECK_COMMENT_BODY}"
-        simulator_cache=0
-        if [[ "${INPUT_SIMULATOR_CACHE}" == "true" ]]; then
-          simulator_cache=1
-        fi
-
-        simulator_name="${INPUT_SIMULATOR_NAME}"
-        device_strategy="${INPUT_DEVICE_STRATEGY:-latest}"
         stream_profile="${INPUT_STREAM_PROFILE:-tiny}"
         public_health_check=0
         if [[ "${INPUT_PUBLIC_HEALTH_CHECK}" == "true" ]]; then
           public_health_check=1
         fi
 
-        if [[ "${body}" == *" no-cache-sim"* ]]; then
-          simulator_cache=0
-        fi
-        if [[ "${body}" == *" latest-device"* ]]; then
-          simulator_name=""
-          device_strategy=latest
-        fi
-        if [[ "${body}" == *" small-device"* ]]; then
-          simulator_name=""
-          device_strategy=small
-        fi
         for profile in tiny low economy fast smooth balanced full quality ci-software; do
           if [[ "${body}" == *" ${profile}"* || "${body}" == *" quality=${profile}"* ]]; then
             stream_profile="${profile}"
@@ -193,15 +184,59 @@ runs:
           public_health_check=1
         fi
 
-        echo "SIMDECK_SIMULATOR_CACHE=${simulator_cache}" >> "${GITHUB_ENV}"
-        echo "SIMDECK_SIMULATOR_NAME=${simulator_name}" >> "${GITHUB_ENV}"
-        echo "SIMDECK_DEVICE_STRATEGY=${device_strategy}" >> "${GITHUB_ENV}"
         echo "SIMDECK_STREAM_PROFILE=${stream_profile}" >> "${GITHUB_ENV}"
         echo "SIMDECK_PUBLIC_HEALTH_CHECK=${public_health_check}" >> "${GITHUB_ENV}"
-        echo "Simulator cache: ${simulator_cache}"
-        echo "Preferred simulator: ${simulator_name:-<none>}"
-        echo "Device strategy: ${device_strategy}"
         echo "Stream profile: ${stream_profile}"
+
+    - name: Install Android SDK packages
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        export ANDROID_HOME="${ANDROID_HOME:-${HOME}/Library/Android/sdk}"
+        export ANDROID_SDK_ROOT="${ANDROID_HOME}"
+        mkdir -p "${ANDROID_HOME}"
+        echo "ANDROID_HOME=${ANDROID_HOME}" >> "${GITHUB_ENV}"
+        echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "${GITHUB_ENV}"
+        echo "${ANDROID_HOME}/cmdline-tools/latest/bin" >> "${GITHUB_PATH}"
+        echo "${ANDROID_HOME}/platform-tools" >> "${GITHUB_PATH}"
+        echo "${ANDROID_HOME}/emulator" >> "${GITHUB_PATH}"
+        export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/emulator:${PATH}"
+
+        if ! command -v sdkmanager >/dev/null 2>&1; then
+          mkdir -p "${ANDROID_HOME}/cmdline-tools"
+          curl -fsSL "https://dl.google.com/android/repository/commandlinetools-mac-13114758_latest.zip" -o "${RUNNER_TEMP:-/tmp}/android-commandlinetools.zip"
+          rm -rf "${ANDROID_HOME}/cmdline-tools/latest"
+          unzip -q "${RUNNER_TEMP:-/tmp}/android-commandlinetools.zip" -d "${ANDROID_HOME}/cmdline-tools"
+          mv "${ANDROID_HOME}/cmdline-tools/cmdline-tools" "${ANDROID_HOME}/cmdline-tools/latest"
+        fi
+
+        arch="${SIMDECK_ANDROID_ARCH}"
+        if [[ -z "${arch}" ]]; then
+          case "$(uname -m)" in
+            arm64) arch="arm64-v8a" ;;
+            *) arch="x86_64" ;;
+          esac
+        fi
+        echo "SIMDECK_ANDROID_ARCH=${arch}" >> "${GITHUB_ENV}"
+
+        system_image="system-images;android-${SIMDECK_ANDROID_API_LEVEL};${SIMDECK_ANDROID_TARGET};${arch}"
+        yes | sdkmanager --licenses >/dev/null || true
+        sdkmanager \
+          "platform-tools" \
+          "emulator" \
+          "build-tools;${SIMDECK_ANDROID_BUILD_TOOLS}" \
+          "platforms;android-${SIMDECK_ANDROID_API_LEVEL}" \
+          "${system_image}"
+        echo "${ANDROID_HOME}/build-tools/${SIMDECK_ANDROID_BUILD_TOOLS}" >> "${GITHUB_PATH}"
+
+        if ! emulator -list-avds | grep -Fxq "${SIMDECK_ANDROID_AVD_NAME}"; then
+          echo "no" | avdmanager create avd \
+            --force \
+            --name "${SIMDECK_ANDROID_AVD_NAME}" \
+            --package "${system_image}" \
+            --device "pixel_6"
+        fi
 
     - name: Install tools, start SimDeck and tunnel
       id: stream
@@ -215,7 +250,7 @@ runs:
         mkdir -p "${npm_prefix}" "${cloudflared_dir}" "${simdeck_dir}" "${bin_dir}"
 
         export NPM_CONFIG_PREFIX="${npm_prefix}"
-        export PATH="${bin_dir}:${npm_prefix}/bin:${cloudflared_dir}:${PATH}"
+        export PATH="${bin_dir}:${npm_prefix}/bin:${cloudflared_dir}:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/emulator:${PATH}"
 
         echo "${bin_dir}" >> "${GITHUB_PATH}"
         echo "${npm_prefix}/bin" >> "${GITHUB_PATH}"
@@ -290,6 +325,7 @@ runs:
         fi
 
         SIMDECK_VIDEO_CODEC=software \
+          SIMDECK_ANDROID_VIDEO_CODEC=software \
           SIMDECK_ALLOWED_ORIGINS='*' \
           SIMDECK_REALTIME_STREAM=1 \
           SIMDECK_STREAM_QUALITY_PROFILE="${SIMDECK_STREAM_PROFILE}" \
@@ -401,7 +437,7 @@ runs:
         fi
         echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
 
-    - name: Start simulator artifact download
+    - name: Start APK artifact download
       shell: bash
       run: |
         set -euo pipefail
@@ -448,104 +484,20 @@ runs:
         ) &
         echo "$!" > /tmp/simdeck-artifact-download.pid
 
-    - name: Select Xcode
-      id: xcode
-      shell: bash
-      run: |
-        set -euo pipefail
-
-        sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-        xcodebuild -version
-        xcodebuild -showsdks
-        xcode_key="$(xcodebuild -version | shasum -a 256 | awk '{ print $1 }')"
-        echo "cache_key=${xcode_key}" >> "${GITHUB_OUTPUT}"
-
-    - name: Restore CoreSimulator device cache
-      id: coresim-cache
-      if: env.SIMDECK_SIMULATOR_CACHE == '1'
-      uses: actions/cache/restore@v4
-      with:
-        path: ~/Library/Developer/CoreSimulator/Devices
-        key: coresim-devices-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.cache_key }}-${{ env.SIMDECK_SIMULATOR_NAME }}-${{ env.SIMDECK_DEVICE_STRATEGY }}-${{ inputs.cache_version }}
-
-    - name: Select and preboot simulator
+    - name: Boot Android emulator
+      id: emulator
       shell: bash
       run: |
         set -euo pipefail
         date +%s > /tmp/sim-boot-start
-
-        udid="$(xcrun simctl list devices available --json | SIMDECK_SIMULATOR_NAME="${SIMDECK_SIMULATOR_NAME}" SIMDECK_DEVICE_STRATEGY="${SIMDECK_DEVICE_STRATEGY}" python3 -c '
-        import json
-        import re
-        import os
-        import sys
-
-        def small_device_score(name: str) -> int:
-            normalized = name.lower()
-            scores = [
-                ("iphone se", 0),
-                ("iphone 16e", 1),
-                ("iphone 15", 2),
-                ("iphone 16", 3),
-                ("iphone 17", 4),
-                ("plus", 30),
-                ("pro max", 40),
-                ("pro", 20),
-            ]
-            score = 10
-            for needle, value in scores:
-                if needle in normalized:
-                    score = min(score, value)
-            return score
-
-        data = json.load(sys.stdin)
-        preferred_name = os.environ.get("SIMDECK_SIMULATOR_NAME", "").strip().lower()
-        strategy = os.environ.get("SIMDECK_DEVICE_STRATEGY", "latest")
-        choices = []
-        for runtime, devices in data.get("devices", {}).items():
-            if "iOS" not in runtime:
-                continue
-            version = tuple(int(x) for x in re.findall(r"\d+", runtime)[:3]) or (0,)
-            for index, device in enumerate(devices):
-                name = device.get("name", "")
-                if device.get("isAvailable") and "iPhone" in name:
-                    choices.append((version, index, device["udid"], name))
-
-        if not choices:
-            raise SystemExit("No available iPhone simulator was found")
-
-        exact = []
-        if preferred_name:
-            exact = [choice for choice in choices if choice[3].lower() == preferred_name]
-
-        if exact:
-            exact.sort(key=lambda choice: (choice[0], -choice[1]), reverse=True)
-            selected = exact[0]
-            reason = f"preferred simulator {selected[3]}"
-        elif strategy == "small":
-            choices.sort(key=lambda choice: (choice[0], -small_device_score(choice[3]), -choice[1]), reverse=True)
-            selected = choices[0]
-            reason = f"{strategy} strategy"
-        else:
-            choices.sort(key=lambda choice: (choice[0], -choice[1]), reverse=True)
-            selected = choices[0]
-            reason = f"{strategy} strategy"
-
-        print(selected[2])
-        print(f"Selected {selected[3]} using {reason}", file=sys.stderr)
-        ')"
-
-        echo "SIMULATOR_UDID=${udid}" >> "${GITHUB_ENV}"
-        echo "Prebooting ${udid}"
-        xcrun simctl boot "${udid}" || true
-        if ! xcrun simctl bootstatus "${udid}" -b > /tmp/sim-boot.log 2>&1; then
-          cat /tmp/sim-boot.log || true
-          echo "Simulator ${udid} did not finish booting." >&2
-          exit 1
-        fi
+        udid="android:${SIMDECK_ANDROID_AVD_NAME}"
+        echo "ANDROID_UDID=${udid}" >> "${GITHUB_ENV}"
+        echo "udid=${udid}" >> "${GITHUB_OUTPUT}"
+        echo "Booting ${udid}"
+        simdeck --server-url "http://127.0.0.1:${SIMDECK_PORT}" boot "${udid}"
         date +%s > /tmp/sim-boot-end
 
-    - name: Update status comment with booted simulator URL
+    - name: Update status comment with booted emulator URL
       shell: bash
       run: |
         set -euo pipefail
@@ -555,11 +507,11 @@ runs:
         fi
 
         cat > comment.md <<'EOF'
-        __MENTION__SimDeck iOS session is ready: [Open SimDeck](${{ steps.stream.outputs.url }}?simdeckToken=${{ steps.stream.outputs.access_token }}&device=${{ env.SIMULATOR_UDID }})
+        __MENTION__SimDeck Android session is ready: [Open SimDeck](${{ steps.stream.outputs.url }}?simdeckToken=${{ steps.stream.outputs.access_token }}&device=${{ steps.emulator.outputs.udid }})
 
-        The selected simulator is booted and the PR app will launch here once its build artifact is installed.
+        The selected emulator is booted and the PR APK will launch here once its build artifact is installed.
 
-        This session will stop after ${{ inputs.keepalive_seconds }} seconds, or earlier if the simulator shuts down.
+        This session will stop after ${{ inputs.keepalive_seconds }} seconds, or earlier if the emulator shuts down.
         EOF
 
         body="$(cat comment.md)"
@@ -578,7 +530,7 @@ runs:
 
         exit 1
 
-    - name: Wait for simulator artifact download
+    - name: Wait for APK artifact download
       shell: bash
       run: |
         set -euo pipefail
@@ -594,102 +546,63 @@ runs:
           exit "${status}"
         fi
 
-    - name: Install and launch app
-      id: simulator
+    - name: Install and launch APK
+      id: android
       shell: bash
       run: |
         set -euo pipefail
 
-        app_path="$(find downloaded-app -name '*.app' -type d | head -n 1)"
-        if [[ -z "${app_path}" ]]; then
-          app_zip="$(find downloaded-app -name '*.app.zip' -type f | head -n 1)"
-          if [[ -z "${app_zip}" ]]; then
-            app_zip="$(find downloaded-app -name '*.zip' -type f | head -n 1)"
+        apk_path="$(find downloaded-app -name '*.apk' -type f | head -n 1)"
+        if [[ -z "${apk_path}" ]]; then
+          apk_zip="$(find downloaded-app -name '*.zip' -type f | head -n 1)"
+          if [[ -n "${apk_zip}" ]]; then
+            mkdir -p unpacked-app
+            unzip -q "${apk_zip}" -d unpacked-app
+            apk_path="$(find unpacked-app -name '*.apk' -type f | head -n 1)"
           fi
-          if [[ -z "${app_zip}" ]]; then
-            echo "No downloaded .app bundle or .app.zip artifact was found" >&2
-            find downloaded-app -maxdepth 3 -type f -print >&2
-            exit 1
-          fi
-
-          mkdir -p unpacked-app
-          ditto -x -k "${app_zip}" unpacked-app
-          app_path="$(find unpacked-app -name '*.app' -type d | head -n 1)"
         fi
 
-        if [[ -z "${app_path}" ]]; then
-          echo "The artifact did not contain an .app bundle" >&2
+        if [[ -z "${apk_path}" ]]; then
+          echo "The artifact did not contain an APK" >&2
+          find downloaded-app -maxdepth 3 -type f -print >&2
           exit 1
         fi
 
-        udid="${SIMULATOR_UDID}"
+        udid="${{ steps.emulator.outputs.udid }}"
         echo "udid=${udid}" >> "${GITHUB_OUTPUT}"
 
-        bundle_id="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "${app_path}/Info.plist" 2>/dev/null || true)"
-        if [[ -z "${bundle_id}" || "${bundle_id}" == *'$('* || "${bundle_id}" == *'${'* ]]; then
-          bundle_id="${SIMDECK_BUNDLE_ID}"
-          fi
-          if [[ -z "${bundle_id}" ]]; then
-            echo "Could not determine app bundle id. Pass bundle_id to the SimDeck session action." >&2
-            exit 1
-          fi
-        echo "bundle_id=${bundle_id}" >> "${GITHUB_OUTPUT}"
+        package_name="${ANDROID_PACKAGE_NAME}"
+        if [[ -z "${package_name}" ]] && command -v aapt >/dev/null 2>&1; then
+          package_name="$(aapt dump badging "${apk_path}" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1 || true)"
+        fi
+        if [[ -z "${package_name}" ]]; then
+          echo "Could not determine APK package name. Pass package_name to the SimDeck session action." >&2
+          exit 1
+        fi
+        echo "package_name=${package_name}" >> "${GITHUB_OUTPUT}"
 
         install_start="$(date +%s)"
-        installed=0
-        for attempt in {1..60}; do
-          if xcrun simctl install "${udid}" "${app_path}"; then
-            installed=1
-            break
-          fi
-          echo "Install attempt ${attempt} failed while simulator is booting; retrying."
-          sleep 3
-        done
-        if [[ "${installed}" -ne 1 ]]; then
-          cat /tmp/sim-boot.log || true
-          echo "Could not install ${app_path} on ${udid}" >&2
-          exit 1
-        fi
-        echo "App install became available after $(( $(date +%s) - install_start )) seconds."
+        simdeck --server-url "http://127.0.0.1:${SIMDECK_PORT}" install "${udid}" "${apk_path}"
+        echo "APK install completed after $(( $(date +%s) - install_start )) seconds."
 
         launch_start="$(date +%s)"
-        launched=0
-        for attempt in {1..40}; do
-          if xcrun simctl launch "${udid}" "${bundle_id}"; then
-            launched=1
-            break
-          fi
-          echo "Launch attempt ${attempt} failed while simulator is finishing boot; retrying."
-          sleep 3
-        done
-        if [[ "${launched}" -ne 1 ]]; then
-          cat /tmp/sim-boot.log || true
-          echo "Could not launch ${bundle_id} on ${udid}" >&2
-          exit 1
-        fi
-        echo "App launch became available after $(( $(date +%s) - launch_start )) seconds."
+        simdeck --server-url "http://127.0.0.1:${SIMDECK_PORT}" launch "${udid}" "${package_name}"
+        echo "APK launch completed after $(( $(date +%s) - launch_start )) seconds."
 
         if [[ -f /tmp/sim-boot-start && -f /tmp/sim-boot-end ]]; then
-          echo "Simulator boot took $(( $(cat /tmp/sim-boot-end) - $(cat /tmp/sim-boot-start) )) seconds."
+          echo "Android emulator boot took $(( $(cat /tmp/sim-boot-end) - $(cat /tmp/sim-boot-start) )) seconds."
         fi
-
-    - name: Save CoreSimulator device cache
-      if: env.SIMDECK_SIMULATOR_CACHE == '1' && steps.coresim-cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
-      with:
-        path: ~/Library/Developer/CoreSimulator/Devices
-        key: coresim-devices-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.cache_key }}-${{ env.SIMDECK_SIMULATOR_NAME }}-${{ env.SIMDECK_DEVICE_STRATEGY }}-${{ inputs.cache_version }}
 
     - name: Update status comment after app launch
       shell: bash
       run: |
         cat > comment.md <<'EOF'
-        SimDeck iOS session is ready: [Open SimDeck](${{ steps.stream.outputs.url }}?simdeckToken=${{ steps.stream.outputs.access_token }}&device=${{ steps.simulator.outputs.udid }})
+        SimDeck Android session is ready: [Open SimDeck](${{ steps.stream.outputs.url }}?simdeckToken=${{ steps.stream.outputs.access_token }}&device=${{ steps.android.outputs.udid }})
 
-        App: `${{ steps.simulator.outputs.bundle_id }}`
+        App: `${{ steps.android.outputs.package_name }}`
         Commit: `${{ steps.pr.outputs.sha }}`
 
-        This session will stop after ${{ inputs.keepalive_seconds }} seconds, or earlier if the simulator shuts down.
+        This session will stop after ${{ inputs.keepalive_seconds }} seconds, or earlier if the emulator shuts down.
         EOF
 
         body="$(cat comment.md)"
@@ -706,7 +619,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        udid="${{ steps.simulator.outputs.udid }}"
+        udid="${{ steps.android.outputs.udid }}"
         end=$((SECONDS + KEEPALIVE_SECONDS))
 
         while (( SECONDS < end )); do
@@ -715,9 +628,22 @@ runs:
             exit 1
           fi
 
-          state="$(xcrun simctl list devices | awk -v udid="${udid}" '$0 ~ udid { print $0 }')"
-          if [[ "${state}" != *"(Booted)"* ]]; then
-            echo "Simulator ${udid} is no longer booted; stopping session."
+          list_json="$(simdeck --server-url "http://127.0.0.1:${SIMDECK_PORT}" list --format json)"
+          if ! SIMDECK_LIST_JSON="${list_json}" python3 - "${udid}" <<'PY'
+        import json
+        import os
+        import sys
+
+        data = json.loads(os.environ["SIMDECK_LIST_JSON"])
+        udid = sys.argv[1]
+        simulators = data.get("simulators", data if isinstance(data, list) else [])
+        for simulator in simulators:
+            if simulator.get("udid") == udid and simulator.get("isBooted") is True:
+                raise SystemExit(0)
+        raise SystemExit(1)
+        PY
+          then
+            echo "Android emulator ${udid} is no longer booted; stopping session."
             exit 0
           fi
 
@@ -733,13 +659,13 @@ runs:
         if [[ -f cloudflared.pid ]]; then
           kill "$(cat cloudflared.pid)"
         fi
+        if [[ -n "${ANDROID_UDID:-}" ]]; then
+          simdeck --server-url "http://127.0.0.1:${SIMDECK_PORT}" shutdown "${ANDROID_UDID}" || true
+        fi
         if [[ -f simdeck.pid ]]; then
           kill "$(cat simdeck.pid)"
         fi
         simdeck daemon stop
-        if [[ -n "${SIMULATOR_UDID:-}" ]]; then
-          xcrun simctl shutdown "${SIMULATOR_UDID}"
-        fi
 
     - name: Update status comment at end
       if: always()
@@ -754,7 +680,7 @@ runs:
           commit_sha="${GITHUB_SHA}"
         fi
 
-        body="SimDeck iOS session for commit \`${commit_sha}\` has ended. Re-run it by commenting \`simdeck run ios\`."
+        body="SimDeck Android session for commit \`${commit_sha}\` has ended. Re-run it by commenting \`simdeck run android\`."
         for attempt in {1..5}; do
           if [[ -n "${SIMDECK_STATUS_COMMENT_ID:-}" ]] && gh api -X PATCH "repos/${REPO}/issues/comments/${SIMDECK_STATUS_COMMENT_ID}" -f body="${body}"; then
             exit 0
