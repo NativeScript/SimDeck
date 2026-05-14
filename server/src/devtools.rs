@@ -1,5 +1,5 @@
 use axum::extract::ws::{Message, WebSocket};
-use futures::{SinkExt, StreamExt};
+use futures::{future::join_all, SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -103,8 +103,8 @@ struct CdpResponse {
 
 const DEVTOOLS_HOST: &str = "127.0.0.1";
 const DEVTOOLS_DISCOVERY_HOSTS: &[&str] = &["127.0.0.1", "[::1]"];
-const DEVTOOLS_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(450);
-const DEVTOOLS_LISTENERS_TIMEOUT: Duration = Duration::from_secs(1);
+const DEVTOOLS_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(300);
+const DEVTOOLS_LISTENERS_TIMEOUT: Duration = Duration::from_millis(500);
 const DEVTOOLS_MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const COMMON_METRO_PORTS: &[u16] = &[8081, 8082, 8083, 19000, 19001, 19002];
 const COMMON_CHROME_INSPECTOR_PORTS: &[u16] =
@@ -223,8 +223,14 @@ pub async fn discover_external_devtools_targets(
     let mut targets = Vec::new();
     let mut seen_ids = BTreeSet::new();
     let ports = candidate_devtools_ports().await;
-    for port in ports {
-        let list = match fetch_devtools_target_list(port).await {
+    let results = join_all(
+        ports
+            .into_iter()
+            .map(|port| async move { (port, fetch_devtools_target_list(port).await) }),
+    )
+    .await;
+    for (port, result) in results {
+        let list = match result {
             Ok(value) => value,
             Err(error) => {
                 debug!("DevTools discovery skipped {DEVTOOLS_HOST}:{port}: {error}");

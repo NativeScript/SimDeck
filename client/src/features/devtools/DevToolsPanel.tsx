@@ -13,13 +13,10 @@ import type {
 import { accessTokenFromLocation } from "../../api/client";
 import { apiUrl } from "../../api/config";
 import {
-  fetchAccessibilityPoint,
   fetchChromeDevToolsTargets,
   fetchWebKitTargets,
 } from "../../api/simulators";
 import type {
-  AccessibilityNode,
-  AccessibilityTreeResponse,
   ChromeDevToolsTarget,
   ChromeDevToolsTargetDiscovery,
   SimulatorMetadata,
@@ -28,12 +25,11 @@ import type {
 } from "../../api/types";
 import { usePanelPresence } from "../../shared/hooks/usePanelPresence";
 
-const DEVTOOLS_TARGET_REFRESH_MS = 300;
-const SAFARI_ACTIVE_URL_REFRESH_MS = 300;
-const SAFARI_ACTIVE_URL_REQUEST_TIMEOUT_MS = 900;
+const DEVTOOLS_TARGET_REFRESH_MS = 750;
 const CHROME_DEVTOOLS_REQUEST_TIMEOUT_MS = 6000;
 const WEBKIT_DEVTOOLS_REQUEST_TIMEOUT_MS = 6000;
 const DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS = 8000;
+const SAFARI_AUTO_TARGET_ID = "webkit:safari:auto";
 const DEVTOOLS_PANEL_WIDTH_STORAGE_KEY = "xcw-devtools-panel-width";
 const LEGACY_PANEL_WIDTH_STORAGE_KEYS = [
   "xcw-chrome-devtools-panel-width",
@@ -59,7 +55,7 @@ interface ResizeState {
   startValue: number;
 }
 
-interface DevToolsTarget {
+export interface DevToolsTarget {
   appId?: string | null;
   appActive?: boolean;
   appName?: string | null;
@@ -68,7 +64,9 @@ interface DevToolsTarget {
   id: string;
   meta: string;
   pageActive?: boolean;
+  pageId?: number;
   processIdentifier?: number | null;
+  safariAuto?: boolean;
   source: string;
   title: string;
   url?: string | null;
@@ -79,16 +77,25 @@ interface DevToolsDiscovery {
   warnings: string[];
 }
 
+export interface DevToolsTargetSelectionInput {
+  currentForegroundKey: string;
+  currentTargetId: string;
+  foregroundApp: ChromeDevToolsTargetDiscovery["foregroundApp"];
+  manualOverride: boolean;
+  pendingForegroundApp: ChromeDevToolsTargetDiscovery["foregroundApp"];
+  pendingForegroundKey: string;
+  targets: DevToolsTarget[];
+}
+
+export interface DevToolsTargetSelection {
+  automaticTargetId: string;
+  shouldClearPendingForeground: boolean;
+  targetId: string;
+}
+
 type ChromeDiscoveryResult =
   PromiseSettledResult<ChromeDevToolsTargetDiscovery>;
 type WebKitDiscoveryResult = PromiseSettledResult<WebKitTargetDiscovery>;
-type WebKitSocketState =
-  | ""
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "disconnected"
-  | "failed";
 
 export function DevToolsPanel({
   disconnected,
@@ -106,19 +113,13 @@ export function DevToolsPanel({
   const [frameInstanceKey, setFrameInstanceKey] = useState(0);
   const [frameLoaded, setFrameLoaded] = useState(false);
   const [overviewVisible, setOverviewVisible] = useState(false);
-  const [activeWebKitUrlHint, setActiveWebKitUrlHint] = useState("");
-  const [webKitSocketState, setWebKitSocketState] =
-    useState<WebKitSocketState>("");
-  const activeWebKitUrlHintRef = useRef("");
   const discoveryRef = useRef<DevToolsDiscovery | null>(null);
   const emptyDiscoveryGraceUntilRef = useRef(0);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const loadingTargetsRef = useRef(false);
-  const loadingActiveWebKitUrlRef = useRef(false);
   const loadingWebKitTargetsRef = useRef(false);
   const panelWidthRef = useRef(panelWidth);
   const requestIdRef = useRef(0);
-  const reconnectFrameTimerRef = useRef<number | null>(null);
   const resizeStateRef = useRef<ResizeState | null>(null);
   const selectedSimulatorBootedRef = useRef(false);
   const selectedSimulatorUdidRef = useRef<string | null>(null);
@@ -132,6 +133,7 @@ export function DevToolsPanel({
     useRef<ChromeDevToolsTargetDiscovery["foregroundApp"]>(null);
   const pendingForegroundKeyRef = useRef("");
   const selectedTargetIdRef = useRef("");
+  const manualTargetSelectionRef = useRef(false);
   const { isPresent, panelState } = usePanelPresence(visible);
 
   const targets = discovery?.targets ?? [];
@@ -171,14 +173,6 @@ export function DevToolsPanel({
     setSelectedTargetId(nextTargetId);
   }, []);
 
-  const applyActiveWebKitUrlHint = useCallback((nextHint: string) => {
-    if (activeWebKitUrlHintRef.current === nextHint) {
-      return;
-    }
-    activeWebKitUrlHintRef.current = nextHint;
-    setActiveWebKitUrlHint(nextHint);
-  }, []);
-
   const resetTargetDiscovery = useCallback(
     (options: { holdEmptyGrace?: boolean } = {}) => {
       requestIdRef.current += 1;
@@ -189,19 +183,18 @@ export function DevToolsPanel({
         : 0;
       applyDiscovery(null);
       applySelectedTargetId("");
-      applyActiveWebKitUrlHint("");
       foregroundKeyRef.current = "";
       foregroundAppRef.current = null;
       pendingForegroundKeyRef.current = "";
       pendingForegroundAppRef.current = null;
+      manualTargetSelectionRef.current = false;
       setError("");
       setFrameLoaded(false);
       setIsLoading(false);
       setIsWebKitLoading(false);
       setOverviewVisible(false);
-      setWebKitSocketState("");
     },
-    [applyActiveWebKitUrlHint, applyDiscovery, applySelectedTargetId],
+    [applyDiscovery, applySelectedTargetId],
   );
 
   const loadTargets = useCallback(async () => {
@@ -329,27 +322,28 @@ export function DevToolsPanel({
         if (providerDisconnectedError) {
           applyDiscovery(null);
           applySelectedTargetId("");
+          manualTargetSelectionRef.current = false;
           setError(NOT_CONNECTED_MESSAGE);
           setFrameLoaded(false);
           setIsLoading(false);
           setIsWebKitLoading(false);
           setOverviewVisible(false);
-          setWebKitSocketState("");
           return;
         }
 
         warnings = cleanDevToolsMessages(warnings);
         errors = cleanDevToolsMessages(errors);
 
+        const discoverableTargets = withSafariAutoTarget(nextTargets);
         const nextDiscovery = {
-          targets: nextTargets,
+          targets: discoverableTargets,
           warnings: mergeWarnings(warnings, errors),
         };
 
         const webKitDiscoveryPending =
           !webKitResult && shouldLoadWebKit && loadingWebKitTargetsRef.current;
         const hasEmptyDiscovery =
-          nextTargets.length === 0 && errors.length === 0;
+          discoverableTargets.length === 0 && errors.length === 0;
         if (
           hasEmptyDiscovery &&
           selectedSimulator.isBooted &&
@@ -374,52 +368,24 @@ export function DevToolsPanel({
         }
 
         applyDiscovery(nextDiscovery);
-        const current = selectedTargetIdRef.current;
-        const currentTarget = nextTargets.find(
-          (target) => target.id === current,
-        );
-        const pendingForegroundApp = pendingForegroundAppRef.current;
-        const pendingForegroundKey = pendingForegroundKeyRef.current;
-        const foregroundApp = foregroundAppRef.current;
-        const compatibleTarget =
-          pendingForegroundApp &&
-          pendingForegroundKey &&
-          pendingForegroundKey === currentForegroundKey
-            ? highlyCompatibleTargetForForeground(
-                nextTargets,
-                pendingForegroundApp,
-                current,
-              )
-            : isSafariForegroundApp(foregroundApp)
-              ? highlyCompatibleTargetForForeground(
-                  nextTargets,
-                  foregroundApp,
-                  current,
-                )
-              : null;
-        if (compatibleTarget) {
+        const selection = resolveDevToolsTargetSelection({
+          currentForegroundKey,
+          currentTargetId: selectedTargetIdRef.current,
+          foregroundApp: foregroundAppRef.current,
+          manualOverride: manualTargetSelectionRef.current,
+          pendingForegroundApp: pendingForegroundAppRef.current,
+          pendingForegroundKey: pendingForegroundKeyRef.current,
+          targets: discoverableTargets,
+        });
+        if (selection.shouldClearPendingForeground) {
           pendingForegroundKeyRef.current = "";
           pendingForegroundAppRef.current = null;
         }
-        const activeUrlTarget = bestWebKitTargetForUrlHint(
-          nextTargets,
-          activeWebKitUrlHintRef.current,
-          current,
-        );
-        const nextTargetId =
-          activeUrlTarget?.id ||
-          compatibleTarget?.id ||
-          currentTarget?.id ||
-          nextTargets[0]?.id ||
-          "";
-        if (
-          (activeUrlTarget || compatibleTarget) &&
-          !overviewPinnedRef.current
-        ) {
+        if (selection.automaticTargetId && !overviewPinnedRef.current) {
           setOverviewVisible(false);
         }
-        applySelectedTargetId(nextTargetId);
-        if (nextTargets.length === 0 && errors.length > 0) {
+        applySelectedTargetId(selection.targetId);
+        if (discoverableTargets.length === 0 && errors.length > 0) {
           setError(errors.join(" "));
         }
       };
@@ -445,12 +411,12 @@ export function DevToolsPanel({
       if (isProviderDisconnectedMessage(message)) {
         applyDiscovery(null);
         applySelectedTargetId("");
+        manualTargetSelectionRef.current = false;
         setError(NOT_CONNECTED_MESSAGE);
         setFrameLoaded(false);
         setIsLoading(false);
         setIsWebKitLoading(false);
         setOverviewVisible(false);
-        setWebKitSocketState("");
         return;
       }
       const previousDiscovery = discoveryRef.current;
@@ -466,6 +432,7 @@ export function DevToolsPanel({
       }
       applyDiscovery(null);
       applySelectedTargetId("");
+      manualTargetSelectionRef.current = false;
       setError(userFacingDevToolsMessage(message));
     } finally {
       if (requestId === requestIdRef.current) {
@@ -482,58 +449,6 @@ export function DevToolsPanel({
     resetTargetDiscovery,
     selectedSimulator?.isBooted,
     selectedSimulator?.udid,
-  ]);
-
-  const loadActiveSafariUrlHint = useCallback(async () => {
-    if (
-      disconnected ||
-      !visible ||
-      !selectedSimulator?.isBooted ||
-      !selectedSimulator.udid ||
-      loadingActiveWebKitUrlRef.current
-    ) {
-      return;
-    }
-    const currentTargets = discoveryRef.current?.targets ?? [];
-    if (!currentTargets.some((target) => target.source === "Safari")) {
-      return;
-    }
-
-    const probePoints = safariActiveUrlProbePoints(selectedSimulator);
-    if (probePoints.length === 0) {
-      return;
-    }
-
-    loadingActiveWebKitUrlRef.current = true;
-    try {
-      for (const point of probePoints) {
-        const snapshot = await requestWithTimeout(
-          (signal) =>
-            fetchAccessibilityPoint(selectedSimulator.udid, point.x, point.y, {
-              maxDepth: 0,
-              signal,
-            }),
-          SAFARI_ACTIVE_URL_REQUEST_TIMEOUT_MS,
-          "Timed out loading Safari active URL.",
-        );
-        const hint = activeUrlHintFromAccessibilitySnapshot(snapshot);
-        if (hint) {
-          applyActiveWebKitUrlHint(hint);
-          return;
-        }
-      }
-    } catch {
-      // Safari tab matching is opportunistic; target discovery remains usable.
-    } finally {
-      loadingActiveWebKitUrlRef.current = false;
-    }
-  }, [
-    applyActiveWebKitUrlHint,
-    disconnected,
-    selectedSimulator,
-    selectedSimulator?.isBooted,
-    selectedSimulator?.udid,
-    visible,
   ]);
 
   useEffect(() => {
@@ -570,113 +485,17 @@ export function DevToolsPanel({
   }, [loadTargets, selectedSimulator?.isBooted, visible]);
 
   useEffect(() => {
-    if (!visible || !selectedSimulator?.isBooted) {
+    if (visible) {
       return;
     }
-    void loadActiveSafariUrlHint();
-    const interval = window.setInterval(() => {
-      void loadActiveSafariUrlHint();
-    }, SAFARI_ACTIVE_URL_REFRESH_MS);
-    return () => window.clearInterval(interval);
-  }, [loadActiveSafariUrlHint, selectedSimulator?.isBooted, visible]);
-
-  useEffect(() => {
-    if (!activeWebKitUrlHint || overviewPinnedRef.current) {
-      return;
-    }
-    const target = bestWebKitTargetForUrlHint(
-      discoveryRef.current?.targets ?? [],
-      activeWebKitUrlHint,
-      selectedTargetIdRef.current,
-    );
-    if (!target || target.id === selectedTargetIdRef.current) {
-      return;
-    }
-    applySelectedTargetId(target.id);
-    setOverviewVisible(false);
-  }, [activeWebKitUrlHint, applySelectedTargetId]);
+    manualTargetSelectionRef.current = false;
+    pendingForegroundKeyRef.current = "";
+    pendingForegroundAppRef.current = null;
+  }, [visible]);
 
   useEffect(() => {
     setFrameLoaded(false);
-    setWebKitSocketState("");
-    if (reconnectFrameTimerRef.current != null) {
-      window.clearTimeout(reconnectFrameTimerRef.current);
-      reconnectFrameTimerRef.current = null;
-    }
   }, [frameUrl]);
-
-  useEffect(() => {
-    function handleWebKitSocketState(event: MessageEvent) {
-      if (frameRef.current?.contentWindow !== event.source) {
-        return;
-      }
-      const data = event.data;
-      if (
-        !data ||
-        typeof data !== "object" ||
-        data.type !== "simdeck:webkit-inspector:socket"
-      ) {
-        return;
-      }
-      const state = data.state;
-      if (
-        state === "connecting" ||
-        state === "connected" ||
-        state === "reconnecting" ||
-        state === "disconnected" ||
-        state === "failed"
-      ) {
-        setWebKitSocketState(state);
-      }
-    }
-
-    window.addEventListener("message", handleWebKitSocketState);
-    return () => window.removeEventListener("message", handleWebKitSocketState);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (reconnectFrameTimerRef.current != null) {
-        window.clearTimeout(reconnectFrameTimerRef.current);
-        reconnectFrameTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (
-      !visible ||
-      overviewVisible ||
-      !selectedTarget ||
-      !isWebKitTarget(selectedTarget)
-    ) {
-      return;
-    }
-    if (
-      webKitSocketState === "reconnecting" ||
-      webKitSocketState === "disconnected" ||
-      webKitSocketState === "failed"
-    ) {
-      void loadTargets();
-      if (reconnectFrameTimerRef.current == null) {
-        reconnectFrameTimerRef.current = window.setTimeout(() => {
-          reconnectFrameTimerRef.current = null;
-          if (selectedTargetIdRef.current !== selectedTarget.id) {
-            return;
-          }
-          setFrameLoaded(false);
-          setWebKitSocketState("");
-          setFrameInstanceKey((current) => current + 1);
-        }, 1500);
-      }
-    }
-  }, [
-    loadTargets,
-    overviewVisible,
-    selectedTarget,
-    visible,
-    webKitSocketState,
-  ]);
 
   useEffect(() => {
     function handlePointerMove(event: PointerEvent) {
@@ -785,6 +604,7 @@ export function DevToolsPanel({
   }
 
   function openTarget(targetId: string) {
+    manualTargetSelectionRef.current = true;
     overviewPinnedRef.current = false;
     pendingForegroundKeyRef.current = "";
     pendingForegroundAppRef.current = null;
@@ -810,10 +630,11 @@ export function DevToolsPanel({
   const chromeDevToolsBlocked = Boolean(
     selectedTarget && isChromeTarget(selectedTarget) && isSafariBrowser(),
   );
-  const webKitConnectionMessage =
-    selectedTarget && isWebKitTarget(selectedTarget)
-      ? webKitSocketStatusMessage(webKitSocketState)
-      : "";
+  const safariAutoWaiting = Boolean(
+    selectedTarget &&
+    isSafariAutoTarget(selectedTarget) &&
+    !selectedTarget.frameUrl,
+  );
   const statusMessage = effectivelyDisconnected
     ? NOT_CONNECTED_MESSAGE
     : chromeDevToolsBlocked
@@ -823,11 +644,13 @@ export function DevToolsPanel({
           ? "No simulator selected."
           : isDiscoveringTargets && targets.length === 0
             ? "Connecting..."
-            : targets.length === 0
-              ? selectedSimulator.isBooted
-                ? "No DevTools targets. Open Safari, enable inspectable WKWebViews, start Metro, or launch a Chrome remote debugging target."
-                : "No DevTools targets. Boot the simulator for Safari/WebKit, or start Metro or Chrome remote debugging."
-              : "");
+            : safariAutoWaiting
+              ? "Finding current Safari tab..."
+              : targets.length === 0
+                ? selectedSimulator.isBooted
+                  ? "No DevTools targets. Open Safari, enable inspectable WKWebViews, start Metro, or launch a Chrome remote debugging target."
+                  : "No DevTools targets. Boot the simulator for Safari/WebKit, or start Metro or Chrome remote debugging."
+                : "");
   const emptyOverviewMessage = effectivelyDisconnected
     ? NOT_CONNECTED_MESSAGE
     : isDiscoveringTargets
@@ -900,10 +723,12 @@ export function DevToolsPanel({
           aria-label="Refresh DevTools Targets"
           className="tbtn icon-btn"
           onClick={() => {
+            manualTargetSelectionRef.current = false;
+            pendingForegroundKeyRef.current = "";
+            pendingForegroundAppRef.current = null;
             emptyDiscoveryGraceUntilRef.current =
               Date.now() + DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS;
             setFrameLoaded(false);
-            setWebKitSocketState("");
             setFrameInstanceKey((current) => current + 1);
             void loadTargets();
           }}
@@ -955,10 +780,6 @@ export function DevToolsPanel({
             {!frameLoaded ? (
               <div className="webkit-status" role="status">
                 Connecting...
-              </div>
-            ) : webKitConnectionMessage ? (
-              <div className="webkit-status" role="status">
-                {webKitConnectionMessage}
               </div>
             ) : null}
           </>
@@ -1046,10 +867,109 @@ function mapWebKitTarget(target: WebKitTarget): DevToolsTarget {
     id: `webkit:${target.id}`,
     meta: target.url ?? "",
     pageActive: target.pageActive ?? false,
+    pageId: target.pageId,
     processIdentifier: webKitTargetProcessIdentifier(target),
     source: webKitTargetKindLabel(target),
     title: webKitTargetLabel(target),
     url: target.url ?? null,
+  };
+}
+
+export function withSafariAutoTarget(
+  targets: DevToolsTarget[],
+): DevToolsTarget[] {
+  const concreteTargets = targets.filter(
+    (target) => !isSafariAutoTarget(target),
+  );
+  const safariTargets = concreteTargets.filter(
+    (target) => target.source === "Safari",
+  );
+  if (safariTargets.length === 0) {
+    return concreteTargets;
+  }
+
+  const activeTarget =
+    safariTargets.find((target) => target.pageActive) ?? null;
+  const newestTarget = safariTargets
+    .slice()
+    .sort((left, right) => (right.pageId ?? 0) - (left.pageId ?? 0))[0];
+  const fallbackTarget = activeTarget ?? newestTarget ?? safariTargets[0];
+  const autoTarget: DevToolsTarget = {
+    appId: fallbackTarget?.appId ?? "com.apple.mobilesafari",
+    appActive: safariTargets.some((target) => target.appActive),
+    appName: fallbackTarget?.appName ?? "Safari",
+    bundleIdentifier:
+      fallbackTarget?.bundleIdentifier ?? "com.apple.mobilesafari",
+    frameUrl: fallbackTarget?.frameUrl ?? "",
+    id: SAFARI_AUTO_TARGET_ID,
+    meta: fallbackTarget?.url ?? "Latest Safari tab",
+    pageActive: Boolean(activeTarget),
+    pageId: fallbackTarget?.pageId,
+    processIdentifier: fallbackTarget?.processIdentifier ?? null,
+    safariAuto: true,
+    source: "Safari",
+    title: "Auto",
+    url: fallbackTarget?.url ?? null,
+  };
+  return [autoTarget, ...concreteTargets];
+}
+
+export function resolveDevToolsTargetSelection({
+  currentForegroundKey,
+  currentTargetId,
+  foregroundApp,
+  manualOverride,
+  pendingForegroundApp,
+  pendingForegroundKey,
+  targets,
+}: DevToolsTargetSelectionInput): DevToolsTargetSelection {
+  const currentTarget = targets.find((target) => target.id === currentTargetId);
+  if (manualOverride) {
+    return {
+      automaticTargetId: "",
+      shouldClearPendingForeground: false,
+      targetId: currentTarget?.id || targets[0]?.id || "",
+    };
+  }
+
+  const pendingForegroundMatches =
+    Boolean(pendingForegroundApp) &&
+    Boolean(pendingForegroundKey) &&
+    pendingForegroundKey === currentForegroundKey;
+  const safariAutoTarget = targets.find(isSafariAutoTarget);
+  const safariForeground =
+    isSafariForegroundApp(foregroundApp) ||
+    (pendingForegroundMatches && isSafariForegroundApp(pendingForegroundApp));
+  if (safariAutoTarget && safariForeground) {
+    return {
+      automaticTargetId: safariAutoTarget.id,
+      shouldClearPendingForeground: Boolean(
+        pendingForegroundMatches && isSafariForegroundApp(pendingForegroundApp),
+      ),
+      targetId: safariAutoTarget.id,
+    };
+  }
+
+  const compatibleTarget =
+    pendingForegroundApp && pendingForegroundMatches
+      ? highlyCompatibleTargetForForeground(
+          targets,
+          pendingForegroundApp,
+          currentTargetId,
+        )
+      : isSafariForegroundApp(foregroundApp)
+        ? highlyCompatibleTargetForForeground(
+            targets,
+            foregroundApp,
+            currentTargetId,
+          )
+        : null;
+  const automaticTarget = compatibleTarget;
+
+  return {
+    automaticTargetId: automaticTarget?.id ?? "",
+    shouldClearPendingForeground: Boolean(compatibleTarget),
+    targetId: automaticTarget?.id || currentTarget?.id || targets[0]?.id || "",
   };
 }
 
@@ -1079,67 +999,6 @@ function highlyCompatibleTargetForForeground(
     return currentTarget.target;
   }
   return bestTarget.target;
-}
-
-function bestWebKitTargetForUrlHint(
-  targets: DevToolsTarget[],
-  urlHint: string,
-  currentTargetId = "",
-): DevToolsTarget | null {
-  const hint = urlHint.trim();
-  if (!hint) {
-    return null;
-  }
-  const scoredTargets = targets
-    .filter(isWebKitTarget)
-    .map((target) => ({
-      score: safariActiveUrlMatchScore(hint, target),
-      target,
-    }))
-    .filter(({ score }) => score > 0)
-    .sort((left, right) => right.score - left.score);
-  const bestTarget = scoredTargets[0] ?? null;
-  if (!bestTarget) {
-    return null;
-  }
-  const currentTarget = scoredTargets.find(
-    ({ target }) => target.id === currentTargetId,
-  );
-  if (currentTarget && currentTarget.score >= bestTarget.score) {
-    return currentTarget.target;
-  }
-  return bestTarget.target;
-}
-
-function safariActiveUrlMatchScore(
-  urlHint: string,
-  target: DevToolsTarget,
-): number {
-  const targetUrl = target.url?.trim() ?? "";
-  if (!targetUrl) {
-    return 0;
-  }
-  const hintKey = normalizedUrlKey(urlHint);
-  const targetKey = normalizedUrlKey(targetUrl);
-  if (!hintKey || !targetKey) {
-    return 0;
-  }
-  if (hintKey === targetKey) {
-    return 100;
-  }
-
-  const hintHost = normalizedUrlHost(hintKey);
-  const targetHost = normalizedUrlHost(targetKey);
-  if (hintHost && hintHost === targetHost) {
-    return 90;
-  }
-  if (
-    targetKey.includes(hintKey) ||
-    (targetHost && hintKey.includes(targetHost))
-  ) {
-    return 80;
-  }
-  return 0;
 }
 
 function foregroundCompatibilityScore(
@@ -1256,138 +1115,12 @@ function isSafariForeground(
   );
 }
 
-function safariActiveUrlProbePoints(
-  simulator: SimulatorMetadata,
-): { x: number; y: number }[] {
-  const { width, height } = logicalScreenSizeFromSimulator(simulator);
-  const centerX = Math.max(width * 0.5, 1);
-  return [
-    { x: centerX, y: Math.max(height - 54, 1) },
-    { x: centerX, y: Math.min(92, Math.max(height * 0.18, 1)) },
-  ];
-}
-
-function logicalScreenSizeFromSimulator(simulator: SimulatorMetadata): {
-  width: number;
-  height: number;
-} {
-  const displayWidth = simulator.privateDisplay?.displayWidth ?? 0;
-  const displayHeight = simulator.privateDisplay?.displayHeight ?? 0;
-  const inferred = logicalScreenSizeFromDisplayPixels(
-    displayWidth,
-    displayHeight,
-  );
-  return inferred ?? { width: 402, height: 874 };
-}
-
-function logicalScreenSizeFromDisplayPixels(
-  width: number,
-  height: number,
-): { width: number; height: number } | null {
-  if (
-    !Number.isFinite(width) ||
-    !Number.isFinite(height) ||
-    width <= 0 ||
-    height <= 0
-  ) {
-    return null;
-  }
-  const shortEdge = Math.min(width, height);
-  const longEdge = Math.max(width, height);
-  const scale =
-    shortEdge <= 1320 && longEdge >= 1800
-      ? 3
-      : shortEdge >= 700 && longEdge >= 1000
-        ? 2
-        : 1;
-  return { width: width / scale, height: height / scale };
-}
-
-function activeUrlHintFromAccessibilitySnapshot(
-  snapshot: AccessibilityTreeResponse,
-): string {
-  for (const root of snapshot.roots ?? []) {
-    const hint = activeUrlHintFromAccessibilityNode(root);
-    if (hint) {
-      return hint;
-    }
-  }
-  return "";
-}
-
-function activeUrlHintFromAccessibilityNode(node: AccessibilityNode): string {
-  const values = node as AccessibilityNode & Record<string, unknown>;
-  for (const key of [
-    "AXValue",
-    "value",
-    "url",
-    "AXLabel",
-    "label",
-    "title",
-    "name",
-  ]) {
-    const hint = sanitizeActiveUrlHint(values[key]);
-    if (hint) {
-      return hint;
-    }
-  }
-  for (const child of node.children ?? []) {
-    const hint = activeUrlHintFromAccessibilityNode(child);
-    if (hint) {
-      return hint;
-    }
-  }
-  return "";
-}
-
-function sanitizeActiveUrlHint(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const cleaned = value
-    .replace(/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
-    .trim();
-  if (!cleaned || cleaned.toLowerCase() === "address") {
-    return "";
-  }
-  const lower = cleaned.toLowerCase();
-  return lower.startsWith("http://") ||
-    lower.startsWith("https://") ||
-    lower.startsWith("file://") ||
-    cleaned.includes(".")
-    ? cleaned
-    : "";
-}
-
-function normalizedUrlKey(value: string): string {
-  let key = value
-    .trim()
-    .replace(/^"|"$/g, "")
-    .replace(/\/+$/g, "")
-    .toLowerCase();
-  for (const prefix of ["https://", "http://", "file://"]) {
-    if (key.startsWith(prefix)) {
-      key = key.slice(prefix.length);
-      break;
-    }
-  }
-  if (key.startsWith("www.")) {
-    key = key.slice(4);
-  }
-  return key.replace(/\/+$/g, "");
-}
-
-function normalizedUrlHost(value: string): string {
-  return (
-    normalizedUrlKey(value)
-      .split(/[/?#]/, 1)[0]
-      ?.replace(/^www\./, "")
-      .trim() ?? ""
-  );
-}
-
 function isChromeTarget(target: DevToolsTarget): boolean {
   return target.id.startsWith("chrome:");
+}
+
+function isSafariAutoTarget(target: DevToolsTarget): boolean {
+  return target.safariAuto === true || target.id === SAFARI_AUTO_TARGET_ID;
 }
 
 function isWebKitTarget(target: DevToolsTarget): boolean {
@@ -1408,19 +1141,6 @@ function isSafariBrowser(): boolean {
     /safari/i.test(userAgent) &&
     !/chrome|chromium|crios|fxios|edg/i.test(userAgent)
   );
-}
-
-function webKitSocketStatusMessage(state: WebKitSocketState): string {
-  switch (state) {
-    case "connecting":
-      return "Connecting...";
-    case "reconnecting":
-    case "failed":
-    case "disconnected":
-      return "Connecting...";
-    default:
-      return "";
-  }
 }
 
 function readStoredPanelWidth(): number {
