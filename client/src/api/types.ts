@@ -57,6 +57,8 @@ export interface WebKitTarget {
   id: string;
   appId: string;
   appName?: string | null;
+  appActive?: boolean;
+  pageActive?: boolean;
   pageId: number;
   title?: string | null;
   url?: string | null;

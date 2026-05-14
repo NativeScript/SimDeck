@@ -27,7 +27,8 @@ import { usePanelPresence } from "../../shared/hooks/usePanelPresence";
 
 const DEVTOOLS_TARGET_REFRESH_MS = 750;
 const CHROME_DEVTOOLS_REQUEST_TIMEOUT_MS = 6000;
-const WEBKIT_DEVTOOLS_REQUEST_TIMEOUT_MS = 7000;
+const WEBKIT_DEVTOOLS_REQUEST_TIMEOUT_MS = 6000;
+const DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS = 8000;
 const FOREGROUND_SELECTION_SETTLE_MS = 1800;
 const DEVTOOLS_PANEL_WIDTH_STORAGE_KEY = "xcw-devtools-panel-width";
 const LEGACY_PANEL_WIDTH_STORAGE_KEYS = [
@@ -57,14 +58,17 @@ interface ResizeState {
 
 interface DevToolsTarget {
   appId?: string | null;
+  appActive?: boolean;
   appName?: string | null;
   bundleIdentifier?: string | null;
   frameUrl: string;
   id: string;
   meta: string;
+  pageActive?: boolean;
   processIdentifier?: number | null;
   source: string;
   title: string;
+  url?: string | null;
 }
 
 interface DevToolsDiscovery {
@@ -97,18 +101,23 @@ export function DevToolsPanel({
   const [isLoading, setIsLoading] = useState(false);
   const [isWebKitLoading, setIsWebKitLoading] = useState(false);
   const [error, setError] = useState("");
+  const [frameInstanceKey, setFrameInstanceKey] = useState(0);
   const [frameLoaded, setFrameLoaded] = useState(false);
   const [overviewVisible, setOverviewVisible] = useState(false);
   const [webKitSocketState, setWebKitSocketState] =
     useState<WebKitSocketState>("");
   const discoveryRef = useRef<DevToolsDiscovery | null>(null);
+  const emptyDiscoveryGraceUntilRef = useRef(0);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const loadingTargetsRef = useRef(false);
   const loadingWebKitTargetsRef = useRef(false);
   const panelWidthRef = useRef(panelWidth);
   const requestIdRef = useRef(0);
+  const reconnectFrameTimerRef = useRef<number | null>(null);
   const resizeStateRef = useRef<ResizeState | null>(null);
   const selectedSimulatorUdidRef = useRef<string | null>(null);
+  const stableDiscoveryAtRef = useRef(0);
+  const stableDiscoveryRef = useRef<DevToolsDiscovery | null>(null);
   const overviewPinnedRef = useRef(false);
   const foregroundSelectionPausedUntilRef = useRef(0);
   const foregroundKeyRef = useRef("");
@@ -139,6 +148,14 @@ export function DevToolsPanel({
   const applyDiscovery = useCallback(
     (nextDiscovery: DevToolsDiscovery | null) => {
       discoveryRef.current = nextDiscovery;
+      if (nextDiscovery?.targets.length) {
+        stableDiscoveryRef.current = nextDiscovery;
+        stableDiscoveryAtRef.current = Date.now();
+        emptyDiscoveryGraceUntilRef.current = 0;
+      } else {
+        stableDiscoveryRef.current = null;
+        stableDiscoveryAtRef.current = 0;
+      }
       setDiscovery(nextDiscovery);
     },
     [],
@@ -155,6 +172,7 @@ export function DevToolsPanel({
     }
 
     if (disconnected) {
+      emptyDiscoveryGraceUntilRef.current = 0;
       applyDiscovery(null);
       applySelectedTargetId("");
       setError("");
@@ -164,6 +182,7 @@ export function DevToolsPanel({
     }
 
     if (!selectedSimulator) {
+      emptyDiscoveryGraceUntilRef.current = 0;
       applyDiscovery(null);
       applySelectedTargetId("");
       setError("");
@@ -181,7 +200,7 @@ export function DevToolsPanel({
     }
     const requestId = ++requestIdRef.current;
     setIsLoading(true);
-    setError((current) => (current === NOT_CONNECTED_MESSAGE ? current : ""));
+    setError("");
     try {
       const chromeTargets = requestWithTimeout(
         (signal) =>
@@ -224,6 +243,7 @@ export function DevToolsPanel({
         let currentForegroundKey = foregroundKeyRef.current;
         let warnings: string[] = [];
         let errors: string[] = [];
+        let providerDisconnectedError = false;
 
         if (chromeResult) {
           if (chromeResult.status === "fulfilled") {
@@ -240,11 +260,16 @@ export function DevToolsPanel({
             );
             warnings = warnings.concat(chromeResult.value.warnings);
           } else {
-            const staleChromeTargets = previousTargets.filter(isChromeTarget);
+            const message = errorMessage(chromeResult.reason);
+            providerDisconnectedError ||=
+              isProviderDisconnectedMessage(message);
+            const staleChromeTargets = providerDisconnectedError
+              ? []
+              : previousTargets.filter(isChromeTarget);
             if (staleChromeTargets.length > 0) {
               nextTargets.push(...staleChromeTargets);
             } else {
-              errors = errors.concat(errorMessage(chromeResult.reason));
+              errors = errors.concat(message);
             }
           }
         } else {
@@ -258,41 +283,67 @@ export function DevToolsPanel({
             );
             warnings = warnings.concat(webKitResult.value.warnings);
           } else {
-            const staleWebKitTargets = previousTargets.filter(isWebKitTarget);
-            if (staleWebKitTargets.length > 0) {
-              nextTargets.push(...staleWebKitTargets);
-            } else {
-              errors = errors.concat(errorMessage(webKitResult.reason));
-            }
+            const message = errorMessage(webKitResult.reason);
+            providerDisconnectedError ||=
+              isProviderDisconnectedMessage(message);
+            errors = errors.concat(message);
           }
         } else {
           nextTargets.push(...previousTargets.filter(isWebKitTarget));
         }
 
-        warnings = cleanDevToolsMessages(warnings);
-        errors = cleanDevToolsMessages(errors);
-
-        if (
-          nextTargets.length === 0 &&
-          previousDiscovery &&
-          previousDiscovery.targets.length > 0
-        ) {
-          applyDiscovery({
-            ...previousDiscovery,
-            warnings: mergeWarnings(
-              warnings,
-              cleanDevToolsMessages(previousDiscovery.warnings),
-            ),
-          });
+        if (providerDisconnectedError) {
+          applyDiscovery(null);
+          applySelectedTargetId("");
+          setError(NOT_CONNECTED_MESSAGE);
+          setFrameLoaded(false);
+          setIsLoading(false);
+          setIsWebKitLoading(false);
+          setOverviewVisible(false);
+          setWebKitSocketState("");
           return;
         }
+
+        warnings = cleanDevToolsMessages(warnings);
+        errors = cleanDevToolsMessages(errors);
 
         const nextDiscovery = {
           targets: nextTargets,
           warnings: mergeWarnings(warnings, errors),
         };
+
+        const webKitDiscoveryPending =
+          !webKitResult && shouldLoadWebKit && loadingWebKitTargetsRef.current;
+        const hasEmptyDiscovery =
+          nextTargets.length === 0 && errors.length === 0;
+        if (
+          hasEmptyDiscovery &&
+          selectedSimulator.isBooted &&
+          (webKitDiscoveryPending ||
+            Date.now() < emptyDiscoveryGraceUntilRef.current)
+        ) {
+          setError("");
+          return;
+        }
+
+        if (
+          hasEmptyDiscovery &&
+          selectedSimulator.isBooted &&
+          stableDiscoveryRef.current &&
+          Date.now() - stableDiscoveryAtRef.current <
+            DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS
+        ) {
+          setError("");
+          discoveryRef.current = stableDiscoveryRef.current;
+          setDiscovery(stableDiscoveryRef.current);
+          return;
+        }
+
         applyDiscovery(nextDiscovery);
         const current = selectedTargetIdRef.current;
+        const currentTarget = nextTargets.find(
+          (target) => target.id === current,
+        );
         const pendingForegroundApp = pendingForegroundAppRef.current;
         const pendingForegroundKey = pendingForegroundKeyRef.current;
         const foregroundApp = foregroundAppRef.current;
@@ -306,17 +357,19 @@ export function DevToolsPanel({
             ? highlyCompatibleTargetForForeground(
                 nextTargets,
                 pendingForegroundApp,
+                current,
               )
             : isSafariForegroundApp(foregroundApp)
-              ? highlyCompatibleTargetForForeground(nextTargets, foregroundApp)
+              ? highlyCompatibleTargetForForeground(
+                  nextTargets,
+                  foregroundApp,
+                  current,
+                )
               : null;
         if (compatibleTarget) {
           pendingForegroundKeyRef.current = "";
           pendingForegroundAppRef.current = null;
         }
-        const currentTarget = nextTargets.find(
-          (target) => target.id === current,
-        );
         const nextTargetId =
           compatibleTarget?.id || currentTarget?.id || nextTargets[0]?.id || "";
         if (compatibleTarget && !overviewPinnedRef.current) {
@@ -328,22 +381,35 @@ export function DevToolsPanel({
         }
       };
 
-      const chromeResult = await chromeResultPromise;
-      applyTargetResults({ chromeResult });
-      if (requestId === requestIdRef.current && !webKitResultPromise) {
-        setIsLoading(false);
-      }
-      loadingTargetsRef.current = false;
-
+      const pendingResults: Promise<void>[] = [
+        chromeResultPromise.then((chromeResult) => {
+          applyTargetResults({ chromeResult });
+        }),
+      ];
       if (webKitResultPromise) {
-        const webKitResult = await webKitResultPromise;
-        applyTargetResults({ webKitResult });
+        pendingResults.push(
+          webKitResultPromise.then((webKitResult) => {
+            applyTargetResults({ webKitResult });
+          }),
+        );
       }
+      await Promise.all(pendingResults);
     } catch (targetError) {
       if (requestId !== requestIdRef.current) {
         return;
       }
       const message = errorMessage(targetError);
+      if (isProviderDisconnectedMessage(message)) {
+        applyDiscovery(null);
+        applySelectedTargetId("");
+        setError(NOT_CONNECTED_MESSAGE);
+        setFrameLoaded(false);
+        setIsLoading(false);
+        setIsWebKitLoading(false);
+        setOverviewVisible(false);
+        setWebKitSocketState("");
+        return;
+      }
       const previousDiscovery = discoveryRef.current;
       if (previousDiscovery && previousDiscovery.targets.length > 0) {
         applyDiscovery({
@@ -379,6 +445,8 @@ export function DevToolsPanel({
   useEffect(() => {
     selectedSimulatorUdidRef.current = selectedSimulator?.udid ?? null;
     requestIdRef.current += 1;
+    emptyDiscoveryGraceUntilRef.current =
+      Date.now() + DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS;
     applyDiscovery(null);
     applySelectedTargetId("");
     overviewPinnedRef.current = false;
@@ -396,9 +464,12 @@ export function DevToolsPanel({
 
   useEffect(() => {
     if (!disconnected) {
+      emptyDiscoveryGraceUntilRef.current =
+        Date.now() + DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS;
       return;
     }
     requestIdRef.current += 1;
+    emptyDiscoveryGraceUntilRef.current = 0;
     applyDiscovery(null);
     applySelectedTargetId("");
     setError("");
@@ -423,6 +494,10 @@ export function DevToolsPanel({
   useEffect(() => {
     setFrameLoaded(false);
     setWebKitSocketState("");
+    if (reconnectFrameTimerRef.current != null) {
+      window.clearTimeout(reconnectFrameTimerRef.current);
+      reconnectFrameTimerRef.current = null;
+    }
   }, [frameUrl]);
 
   useEffect(() => {
@@ -453,6 +528,50 @@ export function DevToolsPanel({
     window.addEventListener("message", handleWebKitSocketState);
     return () => window.removeEventListener("message", handleWebKitSocketState);
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (reconnectFrameTimerRef.current != null) {
+        window.clearTimeout(reconnectFrameTimerRef.current);
+        reconnectFrameTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !visible ||
+      overviewVisible ||
+      !selectedTarget ||
+      !isWebKitTarget(selectedTarget)
+    ) {
+      return;
+    }
+    if (
+      webKitSocketState === "reconnecting" ||
+      webKitSocketState === "disconnected" ||
+      webKitSocketState === "failed"
+    ) {
+      void loadTargets();
+      if (reconnectFrameTimerRef.current == null) {
+        reconnectFrameTimerRef.current = window.setTimeout(() => {
+          reconnectFrameTimerRef.current = null;
+          if (selectedTargetIdRef.current !== selectedTarget.id) {
+            return;
+          }
+          setFrameLoaded(false);
+          setWebKitSocketState("");
+          setFrameInstanceKey((current) => current + 1);
+        }, 1500);
+      }
+    }
+  }, [
+    loadTargets,
+    overviewVisible,
+    selectedTarget,
+    visible,
+    webKitSocketState,
+  ]);
 
   useEffect(() => {
     if (overviewRequestKey <= 0) {
@@ -577,6 +696,7 @@ export function DevToolsPanel({
     pendingForegroundKeyRef.current = "";
     pendingForegroundAppRef.current = null;
     applySelectedTargetId(targetId);
+    setFrameInstanceKey((current) => current + 1);
     setOverviewVisible(false);
   }
 
@@ -585,7 +705,13 @@ export function DevToolsPanel({
     setOverviewVisible(true);
   }
 
-  const isDiscoveringTargets = isLoading || isWebKitLoading;
+  const isHoldingEmptyDiscovery =
+    discovery === null &&
+    Boolean(selectedSimulator?.isBooted) &&
+    Date.now() < emptyDiscoveryGraceUntilRef.current;
+  const isDiscoveringTargets =
+    discovery === null &&
+    (isLoading || isWebKitLoading || isHoldingEmptyDiscovery);
   const effectivelyDisconnected =
     disconnected || error === NOT_CONNECTED_MESSAGE;
   const chromeDevToolsBlocked = Boolean(
@@ -603,7 +729,7 @@ export function DevToolsPanel({
         (!selectedSimulator
           ? "No simulator selected."
           : isDiscoveringTargets && targets.length === 0
-            ? "Loading..."
+            ? "Connecting..."
             : targets.length === 0
               ? selectedSimulator.isBooted
                 ? "No DevTools targets. Open Safari, enable inspectable WKWebViews, start Metro, or launch a Chrome remote debugging target."
@@ -612,8 +738,11 @@ export function DevToolsPanel({
   const emptyOverviewMessage = effectivelyDisconnected
     ? NOT_CONNECTED_MESSAGE
     : isDiscoveringTargets
-      ? "Loading..."
+      ? "Connecting..."
       : "No targets";
+  const displayWarnings = (discovery?.warnings ?? []).filter(
+    shouldDisplayDevToolsWarning,
+  );
   const panelStyle = {
     "--webkit-panel-width": `${panelWidth}px`,
   } as CSSProperties;
@@ -663,7 +792,9 @@ export function DevToolsPanel({
           value={selectedTarget?.id ?? ""}
         >
           {targets.length === 0 ? (
-            <option value="">No targets</option>
+            <option value="">
+              {isDiscoveringTargets ? "Connecting..." : "No targets"}
+            </option>
           ) : (
             targets.map((target) => (
               <option key={target.id} value={target.id}>
@@ -675,7 +806,14 @@ export function DevToolsPanel({
         <button
           aria-label="Refresh DevTools Targets"
           className="tbtn icon-btn"
-          onClick={() => void loadTargets()}
+          onClick={() => {
+            emptyDiscoveryGraceUntilRef.current =
+              Date.now() + DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS;
+            setFrameLoaded(false);
+            setWebKitSocketState("");
+            setFrameInstanceKey((current) => current + 1);
+            void loadTargets();
+          }}
           title="Refresh DevTools Targets"
           type="button"
         >
@@ -715,6 +853,7 @@ export function DevToolsPanel({
             <iframe
               allow="clipboard-read; clipboard-write"
               className="webkit-frame"
+              key={`${frameUrl}:${frameInstanceKey}`}
               onLoad={() => setFrameLoaded(true)}
               ref={frameRef}
               src={frameUrl}
@@ -722,7 +861,7 @@ export function DevToolsPanel({
             />
             {!frameLoaded ? (
               <div className="webkit-status" role="status">
-                Loading...
+                Connecting...
               </div>
             ) : webKitConnectionMessage ? (
               <div className="webkit-status" role="status">
@@ -737,9 +876,9 @@ export function DevToolsPanel({
         )}
       </div>
 
-      {discovery?.warnings.length ? (
+      {displayWarnings.length ? (
         <div className="webkit-warnings">
-          {discovery.warnings.map((warning) => (
+          {displayWarnings.map((warning) => (
             <div key={warning}>{warning}</div>
           ))}
         </div>
@@ -808,32 +947,45 @@ function mapChromeTarget(target: ChromeDevToolsTarget): DevToolsTarget {
 function mapWebKitTarget(target: WebKitTarget): DevToolsTarget {
   return {
     appId: target.appId,
+    appActive: target.appActive ?? false,
     appName: target.appName ?? null,
     frameUrl: buildWebKitInspectorFrameUrl(target),
     id: `webkit:${target.id}`,
     meta: target.url ?? "",
+    pageActive: target.pageActive ?? false,
     processIdentifier: webKitTargetProcessIdentifier(target),
     source: webKitTargetKindLabel(target),
     title: webKitTargetLabel(target),
+    url: target.url ?? null,
   };
 }
 
 function highlyCompatibleTargetForForeground(
   targets: DevToolsTarget[],
   foregroundApp: ChromeDevToolsTargetDiscovery["foregroundApp"],
+  currentTargetId = "",
 ): DevToolsTarget | null {
   if (!foregroundApp) {
     return null;
   }
-  return (
-    targets
-      .map((target) => ({
-        score: foregroundCompatibilityScore(target, foregroundApp),
-        target,
-      }))
-      .filter(({ score }) => score >= 85)
-      .sort((left, right) => right.score - left.score)[0]?.target ?? null
+  const scoredTargets = targets
+    .map((target) => ({
+      score: foregroundCompatibilityScore(target, foregroundApp),
+      target,
+    }))
+    .filter(({ score }) => score >= 85)
+    .sort((left, right) => right.score - left.score);
+  const currentTarget = scoredTargets.find(
+    ({ target }) => target.id === currentTargetId,
   );
+  const bestTarget = scoredTargets[0] ?? null;
+  if (!bestTarget) {
+    return null;
+  }
+  if (currentTarget && currentTarget.score >= bestTarget.score) {
+    return currentTarget.target;
+  }
+  return bestTarget.target;
 }
 
 function foregroundCompatibilityScore(
@@ -857,11 +1009,26 @@ function foregroundCompatibilityScore(
     score = Math.max(score, target.source === "React Native Metro" ? 98 : 90);
   }
 
+  if (isWebKitTarget(target) && target.appActive) {
+    score = Math.max(score, 93);
+  }
+
+  if (isWebKitTarget(target) && target.pageActive) {
+    score = Math.max(score, 112);
+  }
+
   if (
     isSafariForeground(foregroundApp) &&
-    (target.source === "Safari" || isWebKitTarget(target))
+    (target.source === "Safari" || (isWebKitTarget(target) && target.appActive))
   ) {
-    score = Math.max(score, target.source === "Safari" ? 96 : 88);
+    score = Math.max(
+      score,
+      target.source === "Safari" && target.pageActive
+        ? 120
+        : target.source === "Safari" && target.appActive
+          ? 97
+          : 90,
+    );
   }
 
   if (
@@ -937,9 +1104,8 @@ function webKitSocketStatusMessage(state: WebKitSocketState): string {
       return "Connecting...";
     case "reconnecting":
     case "failed":
-      return "Reconnecting...";
     case "disconnected":
-      return "Not connected";
+      return "Connecting...";
     default:
       return "";
   }
@@ -1182,9 +1348,24 @@ function isProviderDisconnectedMessage(message: string): boolean {
     lower.includes("failed to fetch") ||
     lower.includes("load failed") ||
     lower.includes("networkerror") ||
-    lower.includes("network error") ||
+    lower.includes("network error")
+  );
+}
+
+function shouldDisplayDevToolsWarning(message: string): boolean {
+  const normalized = message.trim();
+  if (!normalized || normalized === NOT_CONNECTED_MESSAGE) {
+    return false;
+  }
+
+  const lower = normalized.toLowerCase();
+  return !(
     lower.includes("timed out loading chrome devtools targets") ||
-    lower.includes("timed out loading webkit targets")
+    lower.includes("timed out loading webkit targets") ||
+    lower.includes("unable to read webkit packet header") ||
+    lower.includes("unable to write webkit packet") ||
+    lower.includes("retried webkit target discovery") ||
+    lower.includes("webinspectord was settling")
   );
 }
 

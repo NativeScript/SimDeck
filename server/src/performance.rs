@@ -13,7 +13,7 @@ const HISTORY_MAX_SAMPLES: usize = 720;
 const PROCESS_LIST_TIMEOUT: Duration = Duration::from_secs(2);
 const PROCESS_SAMPLE_TIMEOUT: Duration = Duration::from_secs(2);
 const NETWORK_SAMPLE_TIMEOUT: Duration = Duration::from_millis(650);
-const NETWORK_TOTALS_TIMEOUT: Duration = Duration::from_secs(6);
+const NETWORK_TOTALS_TIMEOUT: Duration = Duration::from_millis(650);
 const STACK_SAMPLE_MAX_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Default)]
@@ -542,6 +542,7 @@ fn app_processes_from_ps(
         .into_iter()
         .filter(|process| {
             process.command.contains(udid)
+                && !is_simulator_probe_process(&process.command)
                 && (is_relevant_app_process(&process.command)
                     || foreground_pid == Some(process.pid))
         })
@@ -608,10 +609,12 @@ fn performance_process(
 }
 
 fn is_relevant_app_process(command: &str) -> bool {
-    command.contains(".app/")
-        || command.contains(".appex/")
-        || command.contains("WebContent")
-        || command.contains("UIKitApplication")
+    command.contains(".app/") || command.contains(".appex/") || command.contains("WebContent")
+}
+
+fn is_simulator_probe_process(command: &str) -> bool {
+    let executable = process_name_from_command(command);
+    executable == "simctl" || executable == "xcrun" && command.contains(" simctl ")
 }
 
 fn process_role(command: &str) -> String {
@@ -1052,7 +1055,10 @@ unsafe extern "C" {
 
 #[cfg(test)]
 mod tests {
-    use super::{app_bundle_path_from_command, parse_nettop_network_totals, parse_ps_line};
+    use super::{
+        app_bundle_path_from_command, is_relevant_app_process, is_simulator_probe_process,
+        parse_nettop_network_totals, parse_ps_line,
+    };
 
     #[test]
     fn parse_ps_line_keeps_command_tail() {
@@ -1083,6 +1089,25 @@ mod tests {
                     .to_owned()
             )
         );
+    }
+
+    #[test]
+    fn simulator_probe_processes_are_not_app_processes() {
+        let command = "/usr/bin/xcrun simctl spawn 4889 launchctl print user/501/UIKitApplication:com.apple.mobilesafari[abc]";
+
+        assert!(is_simulator_probe_process(command));
+        assert!(!is_relevant_app_process(command));
+    }
+
+    #[test]
+    fn relevant_app_processes_still_include_apps_extensions_and_web_content() {
+        assert!(is_relevant_app_process("/tmp/Foo.app/Foo --argument value"));
+        assert!(is_relevant_app_process(
+            "/tmp/Foo.appex/FooExtension --argument value"
+        ));
+        assert!(is_relevant_app_process(
+            "/System/Library/Frameworks/WebKit.framework/WebContent"
+        ));
     }
 
     #[test]

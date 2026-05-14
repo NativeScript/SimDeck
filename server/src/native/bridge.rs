@@ -9,7 +9,8 @@ use std::time::Duration;
 
 const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
 const RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV: &str = "SIMDECK_RESTART_ON_CORE_SIMULATOR_MISMATCH";
-const ACCESSIBILITY_SNAPSHOT_MAX_ATTEMPTS: usize = 10;
+const ACCESSIBILITY_POINT_SNAPSHOT_MAX_ATTEMPTS: usize = 1;
+const ACCESSIBILITY_SNAPSHOT_MAX_ATTEMPTS: usize = 4;
 const ACCESSIBILITY_SNAPSHOT_RETRY_DELAY_MS: u64 = 100;
 
 static RECOVERABLE_RESTART_SCHEDULED: AtomicBool = AtomicBool::new(false);
@@ -365,7 +366,12 @@ impl NativeBridge {
     ) -> Result<serde_json::Value, AppError> {
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
         let max_depth = max_depth.unwrap_or(80).min(80);
-        for attempt in 1..=ACCESSIBILITY_SNAPSHOT_MAX_ATTEMPTS {
+        let max_attempts = if point.is_some() || max_depth == 0 {
+            ACCESSIBILITY_POINT_SNAPSHOT_MAX_ATTEMPTS
+        } else {
+            ACCESSIBILITY_SNAPSHOT_MAX_ATTEMPTS
+        };
+        for attempt in 1..=max_attempts {
             let json = match native_accessibility_snapshot_json(&udid, point, max_depth) {
                 Ok(json) => json,
                 Err(error) if is_core_simulator_service_mismatch(&error.to_string()) => {
@@ -376,9 +382,7 @@ impl NativeBridge {
             };
             let snapshot: serde_json::Value =
                 serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))?;
-            if !accessibility_snapshot_is_transient_empty(&snapshot)
-                || attempt == ACCESSIBILITY_SNAPSHOT_MAX_ATTEMPTS
-            {
+            if !accessibility_snapshot_is_transient_empty(&snapshot) || attempt == max_attempts {
                 return Ok(snapshot);
             }
             std::thread::sleep(Duration::from_millis(ACCESSIBILITY_SNAPSHOT_RETRY_DELAY_MS));

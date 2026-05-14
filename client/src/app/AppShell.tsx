@@ -116,6 +116,7 @@ const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const FLUTTER_INSPECTOR_MAX_DEPTH = 48;
 const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
+const NOT_CONNECTED_MESSAGE = "Not connected";
 const LOCAL_STREAM_DEFAULTS: StreamConfig = {
   encoder: "auto",
   fps: 60,
@@ -691,6 +692,16 @@ export function AppShell({
     streamConfigApplyKey,
     streamTransport,
   });
+
+  useEffect(() => {
+    if (
+      streamStatus.state !== "error" ||
+      !isStreamProviderDisconnectError(streamStatus.error)
+    ) {
+      return;
+    }
+    void refreshRef.current();
+  }, [streamStatus.error, streamStatus.state]);
 
   const updateStreamEncoder = useCallback((encoder: StreamEncoder) => {
     streamConfigUserTouchedRef.current = true;
@@ -1434,8 +1445,9 @@ export function AppShell({
     pairingEnabled &&
     listError === AUTH_REQUIRED_MESSAGE &&
     !accessTokenFromLocation();
-  const visibleListError =
-    remoteStream && listError === AUTH_REQUIRED_MESSAGE
+  const visibleListError = providerDisconnected
+    ? NOT_CONNECTED_MESSAGE
+    : remoteStream && listError === AUTH_REQUIRED_MESSAGE
       ? ""
       : selectedSimulator
         ? friendlyClientError(listError)
@@ -1471,11 +1483,13 @@ export function AppShell({
     streamStatusState: streamStatus.state,
   });
   const viewportStatusOverlayLabel =
+    (providerDisconnected ? NOT_CONNECTED_MESSAGE : "") ||
     simulatorStatusOverlayLabel ||
     streamStatusMessage ||
     (browserFramePending ? "Stream connected, browser frame pending" : "") ||
     (selectedSimulator ? visibleListError : "");
   const viewportHasStreamError = Boolean(
+    providerDisconnected ||
     streamStatus.state === "error" ||
     visibleStreamError ||
     (selectedSimulator && visibleListError),
@@ -2436,6 +2450,14 @@ function friendlyStreamError(
   return friendlyClientError(normalized);
 }
 
+function isStreamProviderDisconnectError(message: string | undefined): boolean {
+  const lower = message?.trim().toLowerCase() ?? "";
+  return (
+    lower.includes("websocket stream closed") ||
+    lower.includes("websocket stream failed")
+  );
+}
+
 function streamAgentStatusLabel({
   hasFrame,
   simulator,
@@ -2514,7 +2536,7 @@ function userFacingAccessibilityError(message: string): string {
 
   const lower = normalized.toLowerCase();
   if (isProviderDisconnected(normalized)) {
-    return "Not connected";
+    return NOT_CONNECTED_MESSAGE;
   }
   if (
     lower.includes("no app inspector found") ||

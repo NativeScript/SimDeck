@@ -306,11 +306,11 @@ export function AccessibilityInspector({
             </div>
           ) : error ? (
             <div className="hierarchy-empty error">{error}</div>
-          ) : visibleItems.length === 0 && isLoading ? (
+          ) : visibleItems.length === 0 && isLoading && !source ? (
             <div className="hierarchy-empty">Reading accessibility tree...</div>
           ) : visibleItems.length === 0 ? (
             <div className="hierarchy-empty">
-              No accessibility snapshot yet.
+              {emptyAccessibilityMessage(source)}
             </div>
           ) : (
             visibleItems.map((item) => {
@@ -838,6 +838,15 @@ function sourceLabel(source: AccessibilitySource): string {
     return "Android";
   }
   return source === "in-app-inspector" ? "UIKit" : "Native AX";
+}
+
+function emptyAccessibilityMessage(
+  source: AccessibilityTreeResponse["source"] | "",
+): string {
+  if (source === "native-ax") {
+    return "No native accessibility elements available.";
+  }
+  return "No accessibility snapshot available.";
 }
 
 function objectClassName(value: Record<string, unknown> | null | undefined) {
