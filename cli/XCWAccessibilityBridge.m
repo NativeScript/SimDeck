@@ -1,8 +1,13 @@
 #import "XCWAccessibilityBridge.h"
 
+#import "XCWProcessRunner.h"
+
 #import <AppKit/AppKit.h>
 #import <dlfcn.h>
+#import <float.h>
+#import <libproc.h>
 #import <limits.h>
+#import <math.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 
@@ -20,6 +25,7 @@ static id XCWAXSharedDispatcher = nil;
 typedef id _Nullable (^XCWAXTranslationCallback)(id request);
 
 static id XCWAXObject(id object, const char *selectorName);
+static pid_t XCWAXTranslationPID(id translation);
 
 static BOOL XCWAXDebugEnabled(void) {
     static BOOL enabled = NO;
@@ -425,6 +431,222 @@ static CGRect XCWAXFrame(id object) {
     }
 }
 
+static CGFloat XCWAXFrameArea(CGRect frame) {
+    if (CGRectIsNull(frame) || frame.size.width <= 0 || frame.size.height <= 0) {
+        return 0;
+    }
+    return frame.size.width * frame.size.height;
+}
+
+static NSUInteger XCWAXElementChildCount(id element) {
+    id children = XCWAXObject(element, "accessibilityChildren");
+    return [children isKindOfClass:NSArray.class] ? [(NSArray *)children count] : 0;
+}
+
+static NSString *XCWAXProcessPathForPID(pid_t pid) {
+    if (pid <= 0) {
+        return @"";
+    }
+
+    char path[PROC_PIDPATHINFO_MAXSIZE] = {0};
+    int length = proc_pidpath(pid, path, sizeof(path));
+    if (length <= 0) {
+        return @"";
+    }
+    return [[NSString alloc] initWithBytes:path length:(NSUInteger)length encoding:NSUTF8StringEncoding] ?: @"";
+}
+
+static NSString *XCWAXProcessNameForPID(pid_t pid) {
+    if (pid <= 0) {
+        return @"";
+    }
+
+    char name[PROC_PIDPATHINFO_MAXSIZE] = {0};
+    int length = proc_name(pid, name, sizeof(name));
+    if (length <= 0) {
+        return @"";
+    }
+    return [[NSString alloc] initWithBytes:name length:(NSUInteger)length encoding:NSUTF8StringEncoding] ?: @"";
+}
+
+static BOOL XCWAXPIDLooksLikeWidgetRenderer(pid_t pid) {
+    NSString *processPath = XCWAXProcessPathForPID(pid);
+    if ([processPath.lastPathComponent containsString:@"WidgetRenderer"]) {
+        return YES;
+    }
+    return [XCWAXProcessNameForPID(pid) containsString:@"WidgetRenderer"];
+}
+
+static BOOL XCWAXProcessPathLooksLikeExtension(NSString *path) {
+    NSString *lowercase = path.lowercaseString;
+    return [lowercase containsString:@".appex/"] || [lowercase containsString:@"/plugins/"];
+}
+
+static BOOL XCWAXAXValueLooksEmpty(id value) {
+    if (value == nil || value == NSNull.null) {
+        return YES;
+    }
+    if (![value isKindOfClass:NSString.class]) {
+        return NO;
+    }
+    NSString *trimmed = [(NSString *)value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return trimmed.length == 0;
+}
+
+static NSString *XCWAXRecoveredRootLabelForCandidate(NSDictionary *candidate) {
+    id pathValue = candidate[@"processPath"];
+    NSString *processPath = [pathValue isKindOfClass:NSString.class] ? (NSString *)pathValue : @"";
+    NSString *lastPathComponent = processPath.lastPathComponent;
+    if ([processPath containsString:@"WebContentExtension.appex"] || [lastPathComponent isEqualToString:@"com.apple.WebKit.WebContent"]) {
+        return @"WebKit WebContent";
+    }
+    return nil;
+}
+
+static void XCWAXApplyRecoveredRootMetadata(NSMutableDictionary *root, NSDictionary *candidate) {
+    NSString *label = XCWAXRecoveredRootLabelForCandidate(candidate);
+    if (label.length == 0 || !XCWAXAXValueLooksEmpty(root[@"AXLabel"])) {
+        return;
+    }
+    root[@"AXLabel"] = label;
+}
+
+static NSArray<NSString *> *XCWAXLaunchctlLines(NSString *output) {
+    return [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
+}
+
+static NSString *XCWAXLaunchctlValue(NSString *output, NSString *key) {
+    NSString *prefix = [key stringByAppendingString:@" = "];
+    for (NSString *line in XCWAXLaunchctlLines(output)) {
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (![trimmed hasPrefix:prefix]) {
+            continue;
+        }
+        NSString *value = [[trimmed substringFromIndex:prefix.length] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        return value.length > 0 ? value : nil;
+    }
+    return nil;
+}
+
+static unsigned long long XCWAXLaunchctlUnsignedValue(NSString *output, NSString *key) {
+    return [XCWAXLaunchctlValue(output, key) longLongValue];
+}
+
+static NSDictionary *XCWAXParseUIKitApplicationServiceLine(NSString *line) {
+    NSString *trimmed = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (![trimmed containsString:@"UIKitApplication:"]) {
+        return nil;
+    }
+
+    NSArray<NSString *> *parts = [trimmed componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+    NSMutableArray<NSString *> *tokens = [NSMutableArray array];
+    for (NSString *part in parts) {
+        if (part.length > 0) {
+            [tokens addObject:part];
+        }
+    }
+    if (tokens.count < 3 || ![tokens[1] isEqualToString:@"-"] || ![tokens[2] hasPrefix:@"UIKitApplication:"]) {
+        return nil;
+    }
+
+    pid_t pid = (pid_t)tokens[0].intValue;
+    if (pid <= 0) {
+        return nil;
+    }
+    return @{
+        @"pid": @(pid),
+        @"service": tokens[2],
+    };
+}
+
+static NSUInteger XCWAXUIKitApplicationForegroundScore(NSString *details, unsigned long long *activeCount) {
+    NSString *spawnRole = XCWAXLaunchctlValue(details, @"spawn role") ?: @"";
+    if (activeCount != NULL) {
+        *activeCount = XCWAXLaunchctlUnsignedValue(details, @"active count");
+    }
+    if ([spawnRole containsString:@"ui focal"]) {
+        return 2;
+    }
+    if ([spawnRole containsString:@"ui"]) {
+        return 1;
+    }
+    return 0;
+}
+
+static BOOL XCWAXUIKitApplicationCandidateIsBetter(NSDictionary *candidate, NSDictionary *current) {
+    if (current == nil) {
+        return YES;
+    }
+    NSUInteger candidateScore = [candidate[@"score"] unsignedIntegerValue];
+    NSUInteger currentScore = [current[@"score"] unsignedIntegerValue];
+    if (candidateScore != currentScore) {
+        return candidateScore > currentScore;
+    }
+    unsigned long long candidateActiveCount = [candidate[@"activeCount"] unsignedLongLongValue];
+    unsigned long long currentActiveCount = [current[@"activeCount"] unsignedLongLongValue];
+    if (candidateActiveCount != currentActiveCount) {
+        return candidateActiveCount > currentActiveCount;
+    }
+    return [candidate[@"pid"] intValue] < [current[@"pid"] intValue];
+}
+
+static pid_t XCWAXForegroundUIKitApplicationPID(NSString *udid) {
+    NSError *error = nil;
+    XCWProcessResult *result = [XCWProcessRunner runLaunchPath:@"/usr/bin/xcrun"
+                                                     arguments:@[@"simctl", @"spawn", udid, @"launchctl", @"print", @"user/501"]
+                                                     inputData:nil
+                                                    timeoutSec:2
+                                                         error:&error];
+    if (result == nil || result.terminationStatus != 0) {
+        XCWAXDebugLog(@"foreground UIKit application listing failed: %@", error ?: result.stderrString);
+        return 0;
+    }
+
+    NSDictionary *best = nil;
+    for (NSString *line in XCWAXLaunchctlLines(result.stdoutString)) {
+        NSDictionary *service = XCWAXParseUIKitApplicationServiceLine(line);
+        if (service == nil) {
+            continue;
+        }
+
+        NSString *serviceName = service[@"service"];
+        XCWProcessResult *detailsResult = [XCWProcessRunner runLaunchPath:@"/usr/bin/xcrun"
+                                                                 arguments:@[@"simctl", @"spawn", udid, @"launchctl", @"print", [@"user/501/" stringByAppendingString:serviceName]]
+                                                                 inputData:nil
+                                                                timeoutSec:2
+                                                                     error:nil];
+        if (detailsResult == nil || detailsResult.terminationStatus != 0) {
+            continue;
+        }
+
+        NSString *details = detailsResult.stdoutString;
+        NSString *state = XCWAXLaunchctlValue(details, @"state");
+        if (state != nil && ![state isEqualToString:@"running"]) {
+            continue;
+        }
+        pid_t pid = (pid_t)(XCWAXLaunchctlUnsignedValue(details, @"pid") ?: [service[@"pid"] intValue]);
+        if (pid <= 0) {
+            continue;
+        }
+
+        unsigned long long activeCount = 0;
+        NSUInteger score = XCWAXUIKitApplicationForegroundScore(details, &activeCount);
+        NSDictionary *candidate = @{
+            @"pid": @(pid),
+            @"score": @(score),
+            @"activeCount": @(activeCount),
+            @"service": serviceName,
+        };
+        if (XCWAXUIKitApplicationCandidateIsBetter(candidate, best)) {
+            best = candidate;
+        }
+    }
+
+    pid_t pid = [best[@"pid"] intValue];
+    XCWAXDebugLog(@"foreground UIKit application candidate=%@", best);
+    return pid;
+}
+
 static id XCWAXJSONValue(id value) {
     if (value == nil) {
         return NSNull.null;
@@ -589,6 +811,526 @@ static id XCWAXApplicationTranslationForPID(id translator, pid_t pid, NSString *
     }
 }
 
+static id XCWAXMacPlatformElementFromTranslation(id translator, id translation) {
+    SEL selector = sel_registerName("macPlatformElementFromTranslation:");
+    if (translator == nil || translation == nil || ![translator respondsToSelector:selector]) {
+        return nil;
+    }
+    @try {
+        return ((id(*)(id, SEL, id))objc_msgSend)(translator, selector, translation);
+    } @catch (NSException *exception) {
+        XCWAXDebugLog(@"macPlatformElementFromTranslation threw %@", exception);
+        return nil;
+    }
+}
+
+static NSMutableDictionary *XCWAXRootRecoveryCandidateFromTranslation(id translator, id translation, NSNumber *displayID, NSString *token) {
+    if (translation == nil) {
+        return nil;
+    }
+
+    XCWAXSetBridgeDelegateTokenOnTranslation(translation, token);
+    id element = XCWAXMacPlatformElementFromTranslation(translator, translation);
+    if (element == nil) {
+        return nil;
+    }
+
+    pid_t pid = XCWAXTranslationPID(translation);
+    CGRect frame = XCWAXFrame(element);
+    NSString *processPath = XCWAXProcessPathForPID(pid);
+    return [@{
+        @"translation": translation,
+        @"displayID": displayID,
+        @"pid": @(pid),
+        @"area": @(XCWAXFrameArea(frame)),
+        @"childCount": @(XCWAXElementChildCount(element)),
+        @"hitCount": @0,
+        @"processPath": processPath,
+        @"isExtension": @(XCWAXProcessPathLooksLikeExtension(processPath)),
+    } mutableCopy];
+}
+
+static NSMutableDictionary *XCWAXRootRecoveryCandidate(id translator, pid_t pid, NSNumber *displayID, NSString *token) {
+    id applicationTranslation = XCWAXApplicationTranslationForPID(translator, pid, token);
+    return XCWAXRootRecoveryCandidateFromTranslation(translator, applicationTranslation, displayID, token);
+}
+
+static NSNumber *XCWAXRootRecoveryCandidateKey(NSDictionary *candidate) {
+    pid_t pid = [candidate[@"pid"] intValue];
+    if (pid > 0) {
+        return @(pid);
+    }
+
+    id translation = candidate[@"translation"];
+    uintptr_t pointerValue = (uintptr_t)(__bridge const void *)(translation);
+    return @(-((long long)(pointerValue & 0x7fffffffffffffffULL)));
+}
+
+static BOOL XCWAXRootRecoveryCandidateIsBetter(NSDictionary *candidate, NSDictionary *current) {
+    if (current == nil) {
+        return YES;
+    }
+
+    BOOL candidateExtension = [candidate[@"isExtension"] boolValue];
+    BOOL currentExtension = [current[@"isExtension"] boolValue];
+    if (candidateExtension != currentExtension) {
+        return !candidateExtension;
+    }
+
+    CGFloat candidateArea = [candidate[@"area"] doubleValue];
+    CGFloat currentArea = [current[@"area"] doubleValue];
+    if (candidateArea > currentArea + 1.0) {
+        return YES;
+    }
+    if (currentArea > candidateArea + 1.0) {
+        return NO;
+    }
+
+    NSUInteger candidateHits = [candidate[@"hitCount"] unsignedIntegerValue];
+    NSUInteger currentHits = [current[@"hitCount"] unsignedIntegerValue];
+    if (candidateHits != currentHits) {
+        return candidateHits > currentHits;
+    }
+
+    NSUInteger candidateChildren = [candidate[@"childCount"] unsignedIntegerValue];
+    NSUInteger currentChildren = [current[@"childCount"] unsignedIntegerValue];
+    if (candidateChildren != currentChildren) {
+        return candidateChildren > currentChildren;
+    }
+
+    pid_t candidatePID = [candidate[@"pid"] intValue];
+    pid_t currentPID = [current[@"pid"] intValue];
+    if ((candidatePID > 0) != (currentPID > 0)) {
+        return candidatePID > 0;
+    }
+
+    return candidatePID < currentPID;
+}
+
+static NSMutableDictionary *XCWAXStoreRootRecoveryCandidate(NSMutableDictionary<NSNumber *, NSMutableDictionary *> *candidatesByKey, NSMutableDictionary *candidate) {
+    if (candidate == nil) {
+        return nil;
+    }
+
+    NSNumber *key = XCWAXRootRecoveryCandidateKey(candidate);
+    NSMutableDictionary *current = candidatesByKey[key];
+    if (XCWAXRootRecoveryCandidateIsBetter(candidate, current)) {
+        candidatesByKey[key] = candidate;
+        return candidate;
+    }
+    return current;
+}
+
+static NSArray<NSDictionary *> *XCWAXSortedRootRecoveryCandidates(NSDictionary<NSNumber *, NSMutableDictionary *> *candidatesByPID) {
+    return [candidatesByPID.allValues sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *first, NSDictionary *second) {
+        if (XCWAXRootRecoveryCandidateIsBetter(first, second)) {
+            return NSOrderedAscending;
+        }
+        if (XCWAXRootRecoveryCandidateIsBetter(second, first)) {
+            return NSOrderedDescending;
+        }
+        return NSOrderedSame;
+    }];
+}
+
+static CGFloat XCWAXCGFloatField(NSDictionary *dictionary, NSString *key) {
+    id value = dictionary[key];
+    return [value respondsToSelector:@selector(doubleValue)] ? [value doubleValue] : NAN;
+}
+
+static BOOL XCWAXSerializedFrameIsValid(CGRect frame) {
+    return !CGRectIsNull(frame) && isfinite(frame.origin.x) && isfinite(frame.origin.y) && isfinite(frame.size.width) && isfinite(frame.size.height) && frame.size.width > 0 && frame.size.height > 0;
+}
+
+static CGRect XCWAXSerializedNodeFrame(NSDictionary *node) {
+    id frameValue = node[@"frame"];
+    if (![frameValue isKindOfClass:NSDictionary.class]) {
+        return CGRectNull;
+    }
+
+    NSDictionary *frame = (NSDictionary *)frameValue;
+    CGRect rect = CGRectMake(
+        XCWAXCGFloatField(frame, @"x"),
+        XCWAXCGFloatField(frame, @"y"),
+        XCWAXCGFloatField(frame, @"width"),
+        XCWAXCGFloatField(frame, @"height")
+    );
+    return XCWAXSerializedFrameIsValid(rect) ? rect : CGRectNull;
+}
+
+static NSString *XCWAXSerializedNodeText(NSDictionary *node) {
+    for (NSString *key in @[@"AXLabel", @"title", @"AXValue", @"AXUniqueId"]) {
+        id value = node[key];
+        if (![value isKindOfClass:NSString.class]) {
+            continue;
+        }
+        NSString *trimmed = [(NSString *)value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (trimmed.length > 0) {
+            return trimmed;
+        }
+    }
+    return @"";
+}
+
+static pid_t XCWAXSerializedNodePID(NSDictionary *node) {
+    id value = node[@"pid"];
+    return [value respondsToSelector:@selector(intValue)] ? (pid_t)[value intValue] : 0;
+}
+
+static void XCWAXSetSerializedNodeFrame(NSMutableDictionary *node, CGRect frame) {
+    if (!XCWAXSerializedFrameIsValid(frame)) {
+        return;
+    }
+    node[@"AXFrame"] = NSStringFromRect(frame);
+    node[@"frame"] = @{
+        @"x": @(frame.origin.x),
+        @"y": @(frame.origin.y),
+        @"width": @(frame.size.width),
+        @"height": @(frame.size.height),
+    };
+}
+
+static void XCWAXCollectSerializedFrameAnchors(NSDictionary *node, NSMutableArray<NSDictionary *> *anchors) {
+    NSString *label = XCWAXSerializedNodeText(node);
+    CGRect frame = XCWAXSerializedNodeFrame(node);
+    id roleValue = node[@"role"];
+    BOOL isApplication = [roleValue isKindOfClass:NSString.class] && [(NSString *)roleValue isEqualToString:@"AXApplication"];
+    if (!isApplication && label.length > 0 && XCWAXSerializedFrameIsValid(frame)) {
+        [anchors addObject:@{
+            @"label": label,
+            @"frame": [NSValue valueWithRect:frame],
+        }];
+    }
+
+    id children = node[@"children"];
+    if (![children isKindOfClass:NSArray.class]) {
+        return;
+    }
+    for (NSDictionary *child in (NSArray *)children) {
+        if ([child isKindOfClass:NSDictionary.class]) {
+            XCWAXCollectSerializedFrameAnchors(child, anchors);
+        }
+    }
+}
+
+static double XCWAXWidgetAnchorScore(CGRect localFrame, CGRect anchorFrame) {
+    CGFloat widthRatio = anchorFrame.size.width / localFrame.size.width;
+    CGFloat heightRatio = anchorFrame.size.height / localFrame.size.height;
+    if (!isfinite(widthRatio) || !isfinite(heightRatio) || widthRatio <= 0 || heightRatio <= 0) {
+        return DBL_MAX;
+    }
+    if (widthRatio < 0.35 || heightRatio < 0.35 || widthRatio > 3.0 || heightRatio > 3.0) {
+        return DBL_MAX;
+    }
+    return fabs(log(widthRatio)) + fabs(log(heightRatio));
+}
+
+static BOOL XCWAXFrameContainsPoint(CGRect frame, CGPoint point) {
+    return XCWAXSerializedFrameIsValid(frame) &&
+        point.x >= frame.origin.x &&
+        point.y >= frame.origin.y &&
+        point.x <= frame.origin.x + frame.size.width &&
+        point.y <= frame.origin.y + frame.size.height;
+}
+
+static NSUInteger XCWAXBestWidgetAnchorIndex(NSDictionary *child, NSArray<NSDictionary *> *anchors, NSSet<NSNumber *> *usedIndexes) {
+    NSString *label = XCWAXSerializedNodeText(child);
+    CGRect localFrame = XCWAXSerializedNodeFrame(child);
+    if (label.length == 0 || !XCWAXSerializedFrameIsValid(localFrame)) {
+        return NSNotFound;
+    }
+
+    NSUInteger bestIndex = NSNotFound;
+    double bestScore = DBL_MAX;
+    for (NSUInteger index = 0; index < anchors.count; index++) {
+        if ([usedIndexes containsObject:@(index)]) {
+            continue;
+        }
+        NSDictionary *anchor = anchors[index];
+        if (![anchor[@"label"] isEqualToString:label]) {
+            continue;
+        }
+
+        CGRect anchorFrame = [anchor[@"frame"] rectValue];
+        double score = XCWAXWidgetAnchorScore(localFrame, anchorFrame);
+        if (score < bestScore) {
+            bestScore = score;
+            bestIndex = index;
+        }
+    }
+    return bestScore < 0.9 ? bestIndex : NSNotFound;
+}
+
+static NSUInteger XCWAXBestWidgetAnchorIndexContainingPoint(NSArray<NSDictionary *> *anchors, CGPoint point) {
+    NSUInteger bestIndex = NSNotFound;
+    CGFloat bestArea = CGFLOAT_MAX;
+    for (NSUInteger index = 0; index < anchors.count; index++) {
+        CGRect frame = [anchors[index][@"frame"] rectValue];
+        if (!XCWAXFrameContainsPoint(frame, point)) {
+            continue;
+        }
+        CGFloat area = XCWAXFrameArea(frame);
+        if (area < bestArea) {
+            bestArea = area;
+            bestIndex = index;
+        }
+    }
+    return bestIndex;
+}
+
+static CGRect XCWAXMapFrameFromLocalToScreen(CGRect frame, CGRect sourceFrame, CGRect targetFrame) {
+    if (!XCWAXSerializedFrameIsValid(frame) || !XCWAXSerializedFrameIsValid(sourceFrame) || !XCWAXSerializedFrameIsValid(targetFrame)) {
+        return CGRectNull;
+    }
+
+    CGFloat scaleX = targetFrame.size.width / sourceFrame.size.width;
+    CGFloat scaleY = targetFrame.size.height / sourceFrame.size.height;
+    return CGRectMake(
+        targetFrame.origin.x + ((frame.origin.x - sourceFrame.origin.x) * scaleX),
+        targetFrame.origin.y + ((frame.origin.y - sourceFrame.origin.y) * scaleY),
+        frame.size.width * scaleX,
+        frame.size.height * scaleY
+    );
+}
+
+static void XCWAXMapSerializedNodeFramesFromLocalToScreen(NSMutableDictionary *node, CGRect sourceFrame, CGRect targetFrame) {
+    CGRect frame = XCWAXSerializedNodeFrame(node);
+    if (XCWAXSerializedFrameIsValid(frame)) {
+        XCWAXSetSerializedNodeFrame(node, XCWAXMapFrameFromLocalToScreen(frame, sourceFrame, targetFrame));
+    }
+
+    id children = node[@"children"];
+    if (![children isKindOfClass:NSArray.class]) {
+        return;
+    }
+    for (NSMutableDictionary *child in (NSArray *)children) {
+        if ([child isKindOfClass:NSMutableDictionary.class]) {
+            XCWAXMapSerializedNodeFramesFromLocalToScreen(child, sourceFrame, targetFrame);
+        }
+    }
+}
+
+static CGRect XCWAXUnionSerializedNodeFrames(NSArray *nodes) {
+    CGRect unionFrame = CGRectNull;
+    for (NSDictionary *node in nodes) {
+        if (![node isKindOfClass:NSDictionary.class]) {
+            continue;
+        }
+        CGRect frame = XCWAXSerializedNodeFrame(node);
+        if (!XCWAXSerializedFrameIsValid(frame)) {
+            continue;
+        }
+        unionFrame = CGRectIsNull(unionFrame) ? frame : CGRectUnion(unionFrame, frame);
+    }
+    return unionFrame;
+}
+
+static BOOL XCWAXSerializedRootLooksLikeWidgetRenderer(NSDictionary *root, NSDictionary *candidate) {
+    if ([candidate[@"isExtension"] boolValue]) {
+        return YES;
+    }
+
+    NSString *label = XCWAXSerializedNodeText(root);
+    if ([label containsString:@"WidgetRenderer"]) {
+        return YES;
+    }
+
+    id processPathValue = candidate[@"processPath"];
+    NSString *processPath = [processPathValue isKindOfClass:NSString.class] ? (NSString *)processPathValue : @"";
+    if (processPath.length == 0) {
+        pid_t pid = XCWAXSerializedNodePID(root);
+        if (XCWAXPIDLooksLikeWidgetRenderer(pid)) {
+            return YES;
+        }
+        processPath = XCWAXProcessPathForPID(pid);
+    }
+    return [processPath.lastPathComponent containsString:@"WidgetRenderer"] || XCWAXPIDLooksLikeWidgetRenderer(XCWAXSerializedNodePID(root));
+}
+
+static NSMutableDictionary *XCWAXSerializeTranslationRoot(id translator, id translation, NSString *token, NSUInteger maxDepth) {
+    XCWAXSetBridgeDelegateTokenOnTranslation(translation, token);
+    id element = XCWAXMacPlatformElementFromTranslation(translator, translation);
+    if (element == nil) {
+        return nil;
+    }
+
+    NSHashTable *visited = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+    return XCWAXSerializeElement(element, token, visited, 0, MIN(maxDepth, XCWAXMaxDepth));
+}
+
+static CGRect XCWAXWidgetLocalSourceFrameForAnchor(NSDictionary *widgetRoot, NSString *anchorLabel, CGRect targetFrame) {
+    id children = widgetRoot[@"children"];
+    if (![children isKindOfClass:NSArray.class]) {
+        CGRect rootFrame = XCWAXSerializedNodeFrame(widgetRoot);
+        return XCWAXSerializedFrameIsValid(rootFrame) ? rootFrame : CGRectNull;
+    }
+
+    CGRect fallbackFrame = CGRectNull;
+    double fallbackScore = DBL_MAX;
+    for (NSDictionary *child in (NSArray *)children) {
+        if (![child isKindOfClass:NSDictionary.class]) {
+            continue;
+        }
+
+        CGRect frame = XCWAXSerializedNodeFrame(child);
+        if (!XCWAXSerializedFrameIsValid(frame)) {
+            continue;
+        }
+
+        NSString *label = XCWAXSerializedNodeText(child);
+        if (anchorLabel.length > 0 && [label isEqualToString:anchorLabel]) {
+            return frame;
+        }
+
+        double score = XCWAXWidgetAnchorScore(frame, targetFrame);
+        if (score < fallbackScore) {
+            fallbackScore = score;
+            fallbackFrame = frame;
+        }
+    }
+
+    return XCWAXSerializedFrameIsValid(fallbackFrame) ? fallbackFrame : XCWAXSerializedNodeFrame(widgetRoot);
+}
+
+static void XCWAXNormalizeWidgetRendererRootFrames(NSMutableArray<NSDictionary *> *serializedRootItems) {
+    NSMutableArray<NSDictionary *> *anchors = [NSMutableArray array];
+    for (NSDictionary *item in serializedRootItems) {
+        NSDictionary *candidate = item[@"candidate"];
+        NSDictionary *root = item[@"root"];
+        if (XCWAXSerializedRootLooksLikeWidgetRenderer(root, candidate)) {
+            continue;
+        }
+        if ([root isKindOfClass:NSDictionary.class]) {
+            XCWAXCollectSerializedFrameAnchors(root, anchors);
+        }
+    }
+    if (anchors.count == 0) {
+        return;
+    }
+
+    for (NSDictionary *item in serializedRootItems) {
+        NSDictionary *candidate = item[@"candidate"];
+        NSMutableDictionary *root = item[@"root"];
+        if (![root isKindOfClass:NSMutableDictionary.class] || !XCWAXSerializedRootLooksLikeWidgetRenderer(root, candidate)) {
+            continue;
+        }
+
+        id children = root[@"children"];
+        if (![children isKindOfClass:NSArray.class] || [(NSArray *)children count] == 0) {
+            continue;
+        }
+
+        NSMutableSet<NSNumber *> *usedAnchorIndexes = [NSMutableSet set];
+        NSUInteger mappedCount = 0;
+        for (NSMutableDictionary *child in (NSArray *)children) {
+            if (![child isKindOfClass:NSMutableDictionary.class]) {
+                continue;
+            }
+            CGRect sourceFrame = XCWAXSerializedNodeFrame(child);
+            NSUInteger anchorIndex = XCWAXBestWidgetAnchorIndex(child, anchors, usedAnchorIndexes);
+            if (anchorIndex == NSNotFound || !XCWAXSerializedFrameIsValid(sourceFrame)) {
+                continue;
+            }
+
+            [usedAnchorIndexes addObject:@(anchorIndex)];
+            CGRect targetFrame = [anchors[anchorIndex][@"frame"] rectValue];
+            XCWAXMapSerializedNodeFramesFromLocalToScreen(child, sourceFrame, targetFrame);
+            mappedCount += 1;
+            XCWAXDebugLog(@"normalized widget renderer child %@ from %@ to %@",
+                          XCWAXSerializedNodeText(child),
+                          NSStringFromRect(sourceFrame),
+                          NSStringFromRect(targetFrame));
+        }
+
+        if (mappedCount == 0) {
+            continue;
+        }
+        CGRect unionFrame = XCWAXUnionSerializedNodeFrames(children);
+        if (XCWAXSerializedFrameIsValid(unionFrame)) {
+            XCWAXSetSerializedNodeFrame(root, unionFrame);
+            XCWAXDebugLog(@"normalized widget renderer root %@ to %@", XCWAXSerializedNodeText(root), NSStringFromRect(unionFrame));
+        }
+    }
+}
+
+static void XCWAXNormalizeWidgetRendererPointFrames(NSMutableArray<NSDictionary *> *serializedRootItems, id translator, NSString *udid, NSValue *pointValue, NSString *token) {
+    if (pointValue == nil) {
+        return;
+    }
+
+    CGPoint point = pointValue.pointValue;
+    for (NSDictionary *item in serializedRootItems) {
+        NSDictionary *candidate = item[@"candidate"];
+        NSMutableDictionary *root = item[@"root"];
+        if (![root isKindOfClass:NSMutableDictionary.class]) {
+            continue;
+        }
+
+        pid_t widgetPID = [candidate[@"pid"] intValue];
+        if (widgetPID <= 0) {
+            widgetPID = XCWAXSerializedNodePID(root);
+        }
+        if (widgetPID <= 0 || !XCWAXSerializedRootLooksLikeWidgetRenderer(root, candidate)) {
+            continue;
+        }
+        pid_t foregroundPID = XCWAXForegroundUIKitApplicationPID(udid);
+        NSMutableDictionary<NSNumber *, NSMutableDictionary *> *anchorCandidatesByKey = [NSMutableDictionary dictionary];
+        if (foregroundPID > 0 && foregroundPID != widgetPID) {
+            XCWAXStoreRootRecoveryCandidate(anchorCandidatesByKey, XCWAXRootRecoveryCandidate(translator, foregroundPID, candidate[@"displayID"] ?: @0, token));
+        }
+
+        if (anchorCandidatesByKey.count == 0) {
+            for (NSValue *recoveryPoint in XCWAXRootRecoveryHitTestPoints()) {
+                for (NSNumber *displayID in XCWAXCandidateDisplayIDs()) {
+                    CGPoint hitPoint = recoveryPoint.pointValue;
+                    id hitTranslation = ((id(*)(id, SEL, CGPoint, uint32_t, id))objc_msgSend)(
+                        translator,
+                        sel_registerName("objectAtPoint:displayId:bridgeDelegateToken:"),
+                        hitPoint,
+                        displayID.unsignedIntValue,
+                        token
+                    );
+                    pid_t pid = XCWAXTranslationPID(hitTranslation);
+                    if (pid <= 0 || pid == widgetPID || anchorCandidatesByKey[@(pid)] != nil) {
+                        continue;
+                    }
+                    XCWAXStoreRootRecoveryCandidate(anchorCandidatesByKey, XCWAXRootRecoveryCandidate(translator, pid, displayID, token));
+                }
+            }
+        }
+
+        NSMutableArray<NSDictionary *> *anchors = [NSMutableArray array];
+        for (NSDictionary *anchorCandidate in XCWAXSortedRootRecoveryCandidates(anchorCandidatesByKey)) {
+            NSMutableDictionary *anchorRoot = XCWAXSerializeTranslationRoot(translator, anchorCandidate[@"translation"], token, 4);
+            if (anchorRoot == nil || XCWAXSerializedRootLooksLikeWidgetRenderer(anchorRoot, anchorCandidate)) {
+                continue;
+            }
+            XCWAXCollectSerializedFrameAnchors(anchorRoot, anchors);
+        }
+
+        NSUInteger anchorIndex = XCWAXBestWidgetAnchorIndexContainingPoint(anchors, point);
+        if (anchorIndex == NSNotFound) {
+            continue;
+        }
+
+        CGRect targetFrame = [anchors[anchorIndex][@"frame"] rectValue];
+        NSString *anchorLabel = anchors[anchorIndex][@"label"];
+        NSMutableDictionary *widgetCandidate = XCWAXRootRecoveryCandidate(translator, widgetPID, candidate[@"displayID"] ?: @0, token);
+        NSMutableDictionary *widgetRoot = XCWAXSerializeTranslationRoot(translator, widgetCandidate[@"translation"], token, 2);
+        CGRect sourceFrame = XCWAXWidgetLocalSourceFrameForAnchor(widgetRoot ?: root, anchorLabel, targetFrame);
+        if (!XCWAXSerializedFrameIsValid(sourceFrame)) {
+            continue;
+        }
+
+        XCWAXMapSerializedNodeFramesFromLocalToScreen(root, sourceFrame, targetFrame);
+        XCWAXDebugLog(@"normalized widget point root %@ using anchor %@ source=%@ target=%@",
+                      XCWAXSerializedNodeText(root),
+                      anchorLabel,
+                      NSStringFromRect(sourceFrame),
+                      NSStringFromRect(targetFrame));
+    }
+}
+
 @implementation XCWAccessibilityBridge
 
 + (nullable NSDictionary *)accessibilitySnapshotForSimulatorUDID:(NSString *)udid
@@ -633,6 +1375,7 @@ static id XCWAXApplicationTranslationForPID(id translator, pid_t pid, NSString *
     [XCWAXSharedDispatcher registerDevice:device token:token];
     @try {
         id translation = nil;
+        NSArray<NSDictionary *> *rootCandidates = nil;
         NSNumber *resolvedDisplayID = nil;
         for (NSNumber *displayID in XCWAXCandidateDisplayIDs()) {
             uint32_t display = displayID.unsignedIntValue;
@@ -659,8 +1402,22 @@ static id XCWAXApplicationTranslationForPID(id translator, pid_t pid, NSString *
                 break;
             }
         }
-        if (translation == nil && pointValue == nil) {
-            NSMutableSet<NSNumber *> *attemptedPIDs = [NSMutableSet set];
+        if (pointValue == nil) {
+            NSMutableDictionary<NSNumber *, NSMutableDictionary *> *candidatesByKey = [NSMutableDictionary dictionary];
+            if (translation != nil) {
+                NSMutableDictionary *candidate = XCWAXRootRecoveryCandidateFromTranslation(translator, translation, resolvedDisplayID ?: @0, token);
+                candidate = XCWAXStoreRootRecoveryCandidate(candidatesByKey, candidate);
+                XCWAXDebugLog(@"root recovery frontmost candidate=%@", candidate);
+            }
+
+            pid_t foregroundPID = XCWAXForegroundUIKitApplicationPID(udid);
+            if (foregroundPID > 0) {
+                NSMutableDictionary *candidate = XCWAXRootRecoveryCandidate(translator, foregroundPID, @0, token);
+                if (candidate != nil) {
+                    candidate = XCWAXStoreRootRecoveryCandidate(candidatesByKey, candidate);
+                    XCWAXDebugLog(@"root recovery foreground pid=%d candidate=%@", foregroundPID, candidate);
+                }
+            }
             for (NSValue *recoveryPoint in XCWAXRootRecoveryHitTestPoints()) {
                 for (NSNumber *displayID in XCWAXCandidateDisplayIDs()) {
                     uint32_t display = displayID.unsignedIntValue;
@@ -677,22 +1434,33 @@ static id XCWAXApplicationTranslationForPID(id translator, pid_t pid, NSString *
                     if (pid <= 0) {
                         continue;
                     }
-                    NSNumber *pidNumber = @(pid);
-                    if (![attemptedPIDs containsObject:pidNumber]) {
-                        [attemptedPIDs addObject:pidNumber];
-
-                        id applicationTranslation = XCWAXApplicationTranslationForPID(translator, pid, token);
-                        XCWAXDebugLog(@"root recovery pid=%d application=%@", pid, applicationTranslation);
-                        if (applicationTranslation != nil) {
-                            translation = applicationTranslation;
-                            resolvedDisplayID = displayID;
-                            break;
+                    NSMutableDictionary *candidate = candidatesByKey[@(pid)];
+                    if (candidate == nil) {
+                        candidate = XCWAXRootRecoveryCandidate(translator, pid, displayID, token);
+                        XCWAXDebugLog(@"root recovery pid=%d candidate=%@", pid, candidate);
+                        if (candidate == nil) {
+                            continue;
                         }
+                        candidate = XCWAXStoreRootRecoveryCandidate(candidatesByKey, candidate);
                     }
+                    candidate[@"hitCount"] = @([candidate[@"hitCount"] unsignedIntegerValue] + 1);
                 }
-                if (translation != nil) {
-                    break;
-                }
+            }
+
+            NSArray<NSDictionary *> *candidates = XCWAXSortedRootRecoveryCandidates(candidatesByKey);
+            if (candidates.count > 0) {
+                rootCandidates = candidates;
+                NSDictionary *primaryCandidate = candidates.firstObject;
+                translation = primaryCandidate[@"translation"];
+                resolvedDisplayID = primaryCandidate[@"displayID"];
+                XCWAXDebugLog(@"root recovery selected primary pid=%@ area=%@ children=%@ hits=%@ extension=%@ path=%@ roots=%lu",
+                              primaryCandidate[@"pid"],
+                              primaryCandidate[@"area"],
+                              primaryCandidate[@"childCount"],
+                              primaryCandidate[@"hitCount"],
+                              primaryCandidate[@"isExtension"],
+                              primaryCandidate[@"processPath"],
+                              (unsigned long)candidates.count);
             }
         }
 
@@ -706,21 +1474,49 @@ static id XCWAXApplicationTranslationForPID(id translator, pid_t pid, NSString *
         XCWAXSetBridgeDelegateTokenOnTranslation(translation, token);
         XCWAXDebugLog(@"using accessibility display %@", resolvedDisplayID);
 
-        id element = ((id(*)(id, SEL, id))objc_msgSend)(
-            translator,
-            sel_registerName("macPlatformElementFromTranslation:"),
-            translation
-        );
-        if (element == nil) {
+        NSMutableDictionary *singleRootCandidate = nil;
+        if (rootCandidates == nil) {
+            singleRootCandidate = XCWAXRootRecoveryCandidateFromTranslation(translator, translation, resolvedDisplayID ?: @0, token);
+        }
+        NSArray<NSDictionary *> *rootItems = rootCandidates ?: @[singleRootCandidate ?: @{ @"translation": translation }];
+        NSMutableArray<NSDictionary *> *serializedRootItems = [NSMutableArray arrayWithCapacity:rootItems.count];
+        for (NSDictionary *rootItem in rootItems) {
+            id rootTranslation = rootItem[@"translation"];
+            XCWAXSetBridgeDelegateTokenOnTranslation(rootTranslation, token);
+            id element = XCWAXMacPlatformElementFromTranslation(translator, rootTranslation);
+            if (element == nil) {
+                XCWAXDebugLog(@"skipping accessibility root because translation could not become a platform element: %@", rootTranslation);
+                continue;
+            }
+
+            NSHashTable *visited = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+            NSMutableDictionary *root = XCWAXSerializeElement(element, token, visited, 0, MIN(maxDepth, XCWAXMaxDepth));
+            if (root != nil) {
+                XCWAXApplyRecoveredRootMetadata(root, rootItem);
+                [serializedRootItems addObject:@{
+                    @"root": root,
+                    @"candidate": rootItem,
+                }];
+            }
+        }
+
+        XCWAXNormalizeWidgetRendererRootFrames(serializedRootItems);
+        XCWAXNormalizeWidgetRendererPointFrames(serializedRootItems, translator, udid, pointValue, token);
+
+        NSMutableArray *roots = [NSMutableArray arrayWithCapacity:serializedRootItems.count];
+        for (NSDictionary *item in serializedRootItems) {
+            id root = item[@"root"];
+            if (root != nil) {
+                [roots addObject:root];
+            }
+        }
+
+        if (roots.count == 0) {
             if (error != NULL) {
                 *error = XCWAXError(10, @"Unable to create a macOS accessibility platform element from the simulator translation object.");
             }
             return nil;
         }
-
-        NSHashTable *visited = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
-        NSMutableDictionary *root = XCWAXSerializeElement(element, token, visited, 0, MIN(maxDepth, XCWAXMaxDepth));
-        NSArray *roots = root != nil ? @[root] : @[];
         return @{
             @"roots": roots,
             @"source": @"native-ax",

@@ -13,10 +13,13 @@ import type {
 import { accessTokenFromLocation } from "../../api/client";
 import { apiUrl } from "../../api/config";
 import {
+  fetchAccessibilityPoint,
   fetchChromeDevToolsTargets,
   fetchWebKitTargets,
 } from "../../api/simulators";
 import type {
+  AccessibilityNode,
+  AccessibilityTreeResponse,
   ChromeDevToolsTarget,
   ChromeDevToolsTargetDiscovery,
   SimulatorMetadata,
@@ -25,7 +28,9 @@ import type {
 } from "../../api/types";
 import { usePanelPresence } from "../../shared/hooks/usePanelPresence";
 
-const DEVTOOLS_TARGET_REFRESH_MS = 750;
+const DEVTOOLS_TARGET_REFRESH_MS = 300;
+const SAFARI_ACTIVE_URL_REFRESH_MS = 300;
+const SAFARI_ACTIVE_URL_REQUEST_TIMEOUT_MS = 900;
 const CHROME_DEVTOOLS_REQUEST_TIMEOUT_MS = 6000;
 const WEBKIT_DEVTOOLS_REQUEST_TIMEOUT_MS = 6000;
 const DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS = 8000;
@@ -101,12 +106,15 @@ export function DevToolsPanel({
   const [frameInstanceKey, setFrameInstanceKey] = useState(0);
   const [frameLoaded, setFrameLoaded] = useState(false);
   const [overviewVisible, setOverviewVisible] = useState(false);
+  const [activeWebKitUrlHint, setActiveWebKitUrlHint] = useState("");
   const [webKitSocketState, setWebKitSocketState] =
     useState<WebKitSocketState>("");
+  const activeWebKitUrlHintRef = useRef("");
   const discoveryRef = useRef<DevToolsDiscovery | null>(null);
   const emptyDiscoveryGraceUntilRef = useRef(0);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const loadingTargetsRef = useRef(false);
+  const loadingActiveWebKitUrlRef = useRef(false);
   const loadingWebKitTargetsRef = useRef(false);
   const panelWidthRef = useRef(panelWidth);
   const requestIdRef = useRef(0);
@@ -163,6 +171,14 @@ export function DevToolsPanel({
     setSelectedTargetId(nextTargetId);
   }, []);
 
+  const applyActiveWebKitUrlHint = useCallback((nextHint: string) => {
+    if (activeWebKitUrlHintRef.current === nextHint) {
+      return;
+    }
+    activeWebKitUrlHintRef.current = nextHint;
+    setActiveWebKitUrlHint(nextHint);
+  }, []);
+
   const resetTargetDiscovery = useCallback(
     (options: { holdEmptyGrace?: boolean } = {}) => {
       requestIdRef.current += 1;
@@ -173,6 +189,7 @@ export function DevToolsPanel({
         : 0;
       applyDiscovery(null);
       applySelectedTargetId("");
+      applyActiveWebKitUrlHint("");
       foregroundKeyRef.current = "";
       foregroundAppRef.current = null;
       pendingForegroundKeyRef.current = "";
@@ -184,7 +201,7 @@ export function DevToolsPanel({
       setOverviewVisible(false);
       setWebKitSocketState("");
     },
-    [applyDiscovery, applySelectedTargetId],
+    [applyActiveWebKitUrlHint, applyDiscovery, applySelectedTargetId],
   );
 
   const loadTargets = useCallback(async () => {
@@ -384,9 +401,21 @@ export function DevToolsPanel({
           pendingForegroundKeyRef.current = "";
           pendingForegroundAppRef.current = null;
         }
+        const activeUrlTarget = bestWebKitTargetForUrlHint(
+          nextTargets,
+          activeWebKitUrlHintRef.current,
+          current,
+        );
         const nextTargetId =
-          compatibleTarget?.id || currentTarget?.id || nextTargets[0]?.id || "";
-        if (compatibleTarget && !overviewPinnedRef.current) {
+          activeUrlTarget?.id ||
+          compatibleTarget?.id ||
+          currentTarget?.id ||
+          nextTargets[0]?.id ||
+          "";
+        if (
+          (activeUrlTarget || compatibleTarget) &&
+          !overviewPinnedRef.current
+        ) {
           setOverviewVisible(false);
         }
         applySelectedTargetId(nextTargetId);
@@ -455,6 +484,58 @@ export function DevToolsPanel({
     selectedSimulator?.udid,
   ]);
 
+  const loadActiveSafariUrlHint = useCallback(async () => {
+    if (
+      disconnected ||
+      !visible ||
+      !selectedSimulator?.isBooted ||
+      !selectedSimulator.udid ||
+      loadingActiveWebKitUrlRef.current
+    ) {
+      return;
+    }
+    const currentTargets = discoveryRef.current?.targets ?? [];
+    if (!currentTargets.some((target) => target.source === "Safari")) {
+      return;
+    }
+
+    const probePoints = safariActiveUrlProbePoints(selectedSimulator);
+    if (probePoints.length === 0) {
+      return;
+    }
+
+    loadingActiveWebKitUrlRef.current = true;
+    try {
+      for (const point of probePoints) {
+        const snapshot = await requestWithTimeout(
+          (signal) =>
+            fetchAccessibilityPoint(selectedSimulator.udid, point.x, point.y, {
+              maxDepth: 0,
+              signal,
+            }),
+          SAFARI_ACTIVE_URL_REQUEST_TIMEOUT_MS,
+          "Timed out loading Safari active URL.",
+        );
+        const hint = activeUrlHintFromAccessibilitySnapshot(snapshot);
+        if (hint) {
+          applyActiveWebKitUrlHint(hint);
+          return;
+        }
+      }
+    } catch {
+      // Safari tab matching is opportunistic; target discovery remains usable.
+    } finally {
+      loadingActiveWebKitUrlRef.current = false;
+    }
+  }, [
+    applyActiveWebKitUrlHint,
+    disconnected,
+    selectedSimulator,
+    selectedSimulator?.isBooted,
+    selectedSimulator?.udid,
+    visible,
+  ]);
+
   useEffect(() => {
     selectedSimulatorUdidRef.current = selectedSimulator?.udid ?? null;
     selectedSimulatorBootedRef.current = Boolean(selectedSimulator?.isBooted);
@@ -487,6 +568,33 @@ export function DevToolsPanel({
     }, DEVTOOLS_TARGET_REFRESH_MS);
     return () => window.clearInterval(interval);
   }, [loadTargets, selectedSimulator?.isBooted, visible]);
+
+  useEffect(() => {
+    if (!visible || !selectedSimulator?.isBooted) {
+      return;
+    }
+    void loadActiveSafariUrlHint();
+    const interval = window.setInterval(() => {
+      void loadActiveSafariUrlHint();
+    }, SAFARI_ACTIVE_URL_REFRESH_MS);
+    return () => window.clearInterval(interval);
+  }, [loadActiveSafariUrlHint, selectedSimulator?.isBooted, visible]);
+
+  useEffect(() => {
+    if (!activeWebKitUrlHint || overviewPinnedRef.current) {
+      return;
+    }
+    const target = bestWebKitTargetForUrlHint(
+      discoveryRef.current?.targets ?? [],
+      activeWebKitUrlHint,
+      selectedTargetIdRef.current,
+    );
+    if (!target || target.id === selectedTargetIdRef.current) {
+      return;
+    }
+    applySelectedTargetId(target.id);
+    setOverviewVisible(false);
+  }, [activeWebKitUrlHint, applySelectedTargetId]);
 
   useEffect(() => {
     setFrameLoaded(false);
@@ -973,6 +1081,67 @@ function highlyCompatibleTargetForForeground(
   return bestTarget.target;
 }
 
+function bestWebKitTargetForUrlHint(
+  targets: DevToolsTarget[],
+  urlHint: string,
+  currentTargetId = "",
+): DevToolsTarget | null {
+  const hint = urlHint.trim();
+  if (!hint) {
+    return null;
+  }
+  const scoredTargets = targets
+    .filter(isWebKitTarget)
+    .map((target) => ({
+      score: safariActiveUrlMatchScore(hint, target),
+      target,
+    }))
+    .filter(({ score }) => score > 0)
+    .sort((left, right) => right.score - left.score);
+  const bestTarget = scoredTargets[0] ?? null;
+  if (!bestTarget) {
+    return null;
+  }
+  const currentTarget = scoredTargets.find(
+    ({ target }) => target.id === currentTargetId,
+  );
+  if (currentTarget && currentTarget.score >= bestTarget.score) {
+    return currentTarget.target;
+  }
+  return bestTarget.target;
+}
+
+function safariActiveUrlMatchScore(
+  urlHint: string,
+  target: DevToolsTarget,
+): number {
+  const targetUrl = target.url?.trim() ?? "";
+  if (!targetUrl) {
+    return 0;
+  }
+  const hintKey = normalizedUrlKey(urlHint);
+  const targetKey = normalizedUrlKey(targetUrl);
+  if (!hintKey || !targetKey) {
+    return 0;
+  }
+  if (hintKey === targetKey) {
+    return 100;
+  }
+
+  const hintHost = normalizedUrlHost(hintKey);
+  const targetHost = normalizedUrlHost(targetKey);
+  if (hintHost && hintHost === targetHost) {
+    return 90;
+  }
+  if (
+    targetKey.includes(hintKey) ||
+    (targetHost && hintKey.includes(targetHost))
+  ) {
+    return 80;
+  }
+  return 0;
+}
+
 function foregroundCompatibilityScore(
   target: DevToolsTarget,
   foregroundApp: NonNullable<ChromeDevToolsTargetDiscovery["foregroundApp"]>,
@@ -1084,6 +1253,136 @@ function isSafariForeground(
     foregroundApp.bundleIdentifier === "com.apple.mobilesafari" ||
     foregroundApp.appName === "Safari" ||
     foregroundApp.appName === "MobileSafari"
+  );
+}
+
+function safariActiveUrlProbePoints(
+  simulator: SimulatorMetadata,
+): { x: number; y: number }[] {
+  const { width, height } = logicalScreenSizeFromSimulator(simulator);
+  const centerX = Math.max(width * 0.5, 1);
+  return [
+    { x: centerX, y: Math.max(height - 54, 1) },
+    { x: centerX, y: Math.min(92, Math.max(height * 0.18, 1)) },
+  ];
+}
+
+function logicalScreenSizeFromSimulator(simulator: SimulatorMetadata): {
+  width: number;
+  height: number;
+} {
+  const displayWidth = simulator.privateDisplay?.displayWidth ?? 0;
+  const displayHeight = simulator.privateDisplay?.displayHeight ?? 0;
+  const inferred = logicalScreenSizeFromDisplayPixels(
+    displayWidth,
+    displayHeight,
+  );
+  return inferred ?? { width: 402, height: 874 };
+}
+
+function logicalScreenSizeFromDisplayPixels(
+  width: number,
+  height: number,
+): { width: number; height: number } | null {
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return null;
+  }
+  const shortEdge = Math.min(width, height);
+  const longEdge = Math.max(width, height);
+  const scale =
+    shortEdge <= 1320 && longEdge >= 1800
+      ? 3
+      : shortEdge >= 700 && longEdge >= 1000
+        ? 2
+        : 1;
+  return { width: width / scale, height: height / scale };
+}
+
+function activeUrlHintFromAccessibilitySnapshot(
+  snapshot: AccessibilityTreeResponse,
+): string {
+  for (const root of snapshot.roots ?? []) {
+    const hint = activeUrlHintFromAccessibilityNode(root);
+    if (hint) {
+      return hint;
+    }
+  }
+  return "";
+}
+
+function activeUrlHintFromAccessibilityNode(node: AccessibilityNode): string {
+  const values = node as AccessibilityNode & Record<string, unknown>;
+  for (const key of [
+    "AXValue",
+    "value",
+    "url",
+    "AXLabel",
+    "label",
+    "title",
+    "name",
+  ]) {
+    const hint = sanitizeActiveUrlHint(values[key]);
+    if (hint) {
+      return hint;
+    }
+  }
+  for (const child of node.children ?? []) {
+    const hint = activeUrlHintFromAccessibilityNode(child);
+    if (hint) {
+      return hint;
+    }
+  }
+  return "";
+}
+
+function sanitizeActiveUrlHint(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const cleaned = value
+    .replace(/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    .trim();
+  if (!cleaned || cleaned.toLowerCase() === "address") {
+    return "";
+  }
+  const lower = cleaned.toLowerCase();
+  return lower.startsWith("http://") ||
+    lower.startsWith("https://") ||
+    lower.startsWith("file://") ||
+    cleaned.includes(".")
+    ? cleaned
+    : "";
+}
+
+function normalizedUrlKey(value: string): string {
+  let key = value
+    .trim()
+    .replace(/^"|"$/g, "")
+    .replace(/\/+$/g, "")
+    .toLowerCase();
+  for (const prefix of ["https://", "http://", "file://"]) {
+    if (key.startsWith(prefix)) {
+      key = key.slice(prefix.length);
+      break;
+    }
+  }
+  if (key.startsWith("www.")) {
+    key = key.slice(4);
+  }
+  return key.replace(/\/+$/g, "");
+}
+
+function normalizedUrlHost(value: string): string {
+  return (
+    normalizedUrlKey(value)
+      .split(/[/?#]/, 1)[0]
+      ?.replace(/^www\./, "")
+      .trim() ?? ""
   );
 }
 
