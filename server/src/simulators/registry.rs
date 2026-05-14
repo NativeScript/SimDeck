@@ -106,6 +106,10 @@ impl<T: Clone + Send + 'static> SessionRegistry<T> {
         })
     }
 
+    pub fn get(&self, udid: &str) -> Option<T> {
+        self.store.get(udid)
+    }
+
     pub async fn get_or_create_async(&self, udid: &str) -> Result<T, AppError> {
         let registry = self.clone();
         let udid_owned = udid.to_owned();

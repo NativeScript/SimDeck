@@ -1372,8 +1372,45 @@ async fn record_client_stream_stats(
         ));
     }
 
+    apply_stream_client_foreground_from_stats(&state, &payload);
     state.metrics.record_client_stream_stats(payload);
     Ok(json(json_value!({ "ok": true })))
+}
+
+pub(crate) fn apply_stream_client_foreground_from_stats(
+    state: &AppState,
+    stats: &ClientStreamStats,
+) {
+    let Some(foreground) = client_stats_foreground(stats) else {
+        return;
+    };
+    let Some(udid) = stats
+        .udid
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let client_id = stats.client_id.trim();
+    if client_id.is_empty() {
+        return;
+    }
+    let (any_foreground, changed) = state.stream_clients.record(udid, client_id, foreground);
+    if changed {
+        if let Some(session) = state.registry.get(udid) {
+            session.set_client_foreground(any_foreground);
+        }
+    }
+}
+
+fn client_stats_foreground(stats: &ClientStreamStats) -> Option<bool> {
+    if stats.kind != "page" {
+        return None;
+    }
+    let visible = stats.visibility_state.as_deref() == Some("visible");
+    let focused = stats.focused?;
+    Some(visible && focused)
 }
 
 async fn native_inspector_connect(
@@ -2558,6 +2595,7 @@ fn handle_h264_socket_message(
     match message {
         H264SocketMessage::ClientStats { stats } => {
             if !stats.client_id.trim().is_empty() && !stats.kind.trim().is_empty() {
+                apply_stream_client_foreground_from_stats(state, &stats);
                 state.metrics.record_client_stream_stats(*stats);
             }
         }
@@ -6048,9 +6086,9 @@ async fn accessibility_snapshot(
 mod tests {
     use super::{
         accessibility_point_snapshot, attach_tree_metadata, available_sources_for_snapshot,
-        best_inspector_session, compact_accessibility_snapshot, element_matches_selector,
-        first_matching_element, inspector_available_sources, inspector_metadata,
-        inspector_session_from_published, inspector_session_score,
+        best_inspector_session, client_stats_foreground, compact_accessibility_snapshot,
+        element_matches_selector, first_matching_element, inspector_available_sources,
+        inspector_metadata, inspector_session_from_published, inspector_session_score,
         is_inspector_agent_transport_path, normalize_inspector_node,
         normalize_screen_point_from_snapshot, normalized_gesture_coordinates,
         parse_lsof_tcp_listener, parse_ui_application_service_line, resolved_stream_quality_limits,
@@ -6062,6 +6100,7 @@ mod tests {
         SOURCE_NATIVE_SCRIPT, SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
     };
     use crate::inspector::PublishedInspector;
+    use crate::metrics::counters::ClientStreamStats;
     use crate::transport::packet::FramePacket;
     use bytes::Bytes;
     use serde_json::{json, Value};
@@ -6099,6 +6138,45 @@ mod tests {
         assert_eq!(registry.record("udid", "hidden", false), (true, false));
         assert_eq!(registry.remove("udid", "visible"), (false, true));
         assert_eq!(registry.remove("udid", "hidden"), (false, false));
+    }
+
+    #[test]
+    fn client_stats_foreground_requires_visible_and_focused_page() {
+        let page_stats =
+            |visibility_state: Option<&str>, focused: Option<bool>| ClientStreamStats {
+                client_id: "client".to_owned(),
+                kind: "page".to_owned(),
+                visibility_state: visibility_state.map(ToOwned::to_owned),
+                focused,
+                ..Default::default()
+            };
+
+        assert_eq!(
+            client_stats_foreground(&page_stats(Some("visible"), Some(true))),
+            Some(true)
+        );
+        assert_eq!(
+            client_stats_foreground(&page_stats(Some("visible"), Some(false))),
+            Some(false)
+        );
+        assert_eq!(
+            client_stats_foreground(&page_stats(Some("hidden"), Some(true))),
+            Some(false)
+        );
+        assert_eq!(
+            client_stats_foreground(&page_stats(Some("visible"), None)),
+            None
+        );
+        assert_eq!(
+            client_stats_foreground(&ClientStreamStats {
+                client_id: "client".to_owned(),
+                kind: "webrtc".to_owned(),
+                focused: Some(true),
+                visibility_state: Some("visible".to_owned()),
+                ..Default::default()
+            }),
+            None
+        );
     }
 
     #[test]
