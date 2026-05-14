@@ -2254,7 +2254,7 @@ fn uploaded_app_file_name(headers: &HeaderMap) -> Result<String, AppError> {
 
 fn sanitize_upload_file_name(raw_name: &str) -> String {
     let candidate = raw_name
-        .rsplit(|ch| ch == '/' || ch == '\\')
+        .rsplit(['/', '\\'])
         .next()
         .unwrap_or(raw_name)
         .trim();
