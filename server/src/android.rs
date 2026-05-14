@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -76,6 +76,13 @@ pub struct AndroidDevice {
     pub serial: Option<String>,
     pub is_booted: bool,
     pub grpc_port: u16,
+}
+
+#[derive(Clone, Debug)]
+pub struct AndroidEmulatorSpec {
+    pub name: String,
+    pub device_profile_identifier: String,
+    pub system_image_identifier: String,
 }
 
 #[derive(Debug)]
@@ -242,6 +249,68 @@ impl AndroidBridge {
             .into_iter()
             .map(|device| self.device_value(device))
             .collect()
+    }
+
+    pub fn creation_options(&self) -> Result<Value, AppError> {
+        if !self.avdmanager_path().exists() || !self.sdkmanager_path().exists() {
+            return Ok(json!({
+                "deviceTypes": [],
+                "systemImages": [],
+                "unavailableReason": format!(
+                    "Android SDK command line tools were not found under {}.",
+                    sdk_root().display()
+                ),
+            }));
+        }
+
+        let device_output = self.run_avdmanager(["list", "device"])?;
+        let system_image_output = self.run_sdkmanager(["--list_installed"])?;
+        Ok(json!({
+            "deviceTypes": parse_avdmanager_devices(&device_output),
+            "systemImages": parse_installed_system_images(&system_image_output),
+        }))
+    }
+
+    pub fn create_emulator(&self, spec: AndroidEmulatorSpec) -> Result<Value, AppError> {
+        validate_avd_name(&spec.name)?;
+        if spec.device_profile_identifier.trim().is_empty() {
+            return Err(AppError::bad_request(
+                "Android emulator creation requires `deviceTypeIdentifier`.",
+            ));
+        }
+        if spec.system_image_identifier.trim().is_empty() {
+            return Err(AppError::bad_request(
+                "Android emulator creation requires `runtimeIdentifier`.",
+            ));
+        }
+        if self
+            .run_emulator(["-list-avds"])?
+            .lines()
+            .map(str::trim)
+            .any(|avd_name| avd_name == spec.name)
+        {
+            return Err(AppError::bad_request(format!(
+                "Android emulator `{}` already exists.",
+                spec.name
+            )));
+        }
+
+        self.run_avdmanager_with_stdin(
+            [
+                "create",
+                "avd",
+                "--name",
+                &spec.name,
+                "--package",
+                &spec.system_image_identifier,
+                "--device",
+                &spec.device_profile_identifier,
+            ],
+            "no\n",
+        )?;
+        Ok(json!({
+            "udid": id_for_avd(&spec.name),
+        }))
     }
 
     pub fn boot(&self, id: &str) -> Result<bool, AppError> {
@@ -1038,12 +1107,36 @@ impl AndroidBridge {
         run_command_text(self.emulator_path(), args)
     }
 
+    fn run_avdmanager<const N: usize>(&self, args: [&str; N]) -> Result<String, AppError> {
+        run_command_text(self.avdmanager_path(), args)
+    }
+
+    fn run_avdmanager_with_stdin<const N: usize>(
+        &self,
+        args: [&str; N],
+        stdin: &str,
+    ) -> Result<String, AppError> {
+        run_command_text_with_stdin(self.avdmanager_path(), args, stdin)
+    }
+
+    fn run_sdkmanager<const N: usize>(&self, args: [&str; N]) -> Result<String, AppError> {
+        run_command_text(self.sdkmanager_path(), args)
+    }
+
     fn adb_path(&self) -> PathBuf {
         sdk_root().join("platform-tools/adb")
     }
 
     fn emulator_path(&self) -> PathBuf {
         sdk_root().join("emulator/emulator")
+    }
+
+    fn avdmanager_path(&self) -> PathBuf {
+        android_cmdline_tool_path("avdmanager")
+    }
+
+    fn sdkmanager_path(&self) -> PathBuf {
+        android_cmdline_tool_path("sdkmanager")
     }
 
     fn avd_dir(&self, avd_name: &str) -> PathBuf {
@@ -1230,6 +1323,16 @@ fn run_command_text<const N: usize>(program: PathBuf, args: [&str; N]) -> Result
         .map_err(|error| AppError::native(format!("Command returned non-UTF8 output: {error}")))
 }
 
+fn run_command_text_with_stdin<const N: usize>(
+    program: PathBuf,
+    args: [&str; N],
+    stdin: &str,
+) -> Result<String, AppError> {
+    let output = run_command_with_stdin(program, args, Some(stdin.as_bytes()))?;
+    String::from_utf8(output)
+        .map_err(|error| AppError::native(format!("Command returned non-UTF8 output: {error}")))
+}
+
 fn run_command_bytes<const N: usize>(
     program: PathBuf,
     args: [&str; N],
@@ -1238,6 +1341,14 @@ fn run_command_bytes<const N: usize>(
 }
 
 fn run_command<const N: usize>(program: PathBuf, args: [&str; N]) -> Result<Vec<u8>, AppError> {
+    run_command_with_stdin(program, args, None)
+}
+
+fn run_command_with_stdin<const N: usize>(
+    program: PathBuf,
+    args: [&str; N],
+    stdin_input: Option<&[u8]>,
+) -> Result<Vec<u8>, AppError> {
     if !program.exists() {
         return Err(AppError::native(format!(
             "Android SDK binary not found at {}.",
@@ -1249,12 +1360,28 @@ fn run_command<const N: usize>(program: PathBuf, args: [&str; N]) -> Result<Vec<
         .env("ANDROID_HOME", sdk_root())
         .env("ANDROID_SDK_ROOT", sdk_root())
         .env("JAVA_HOME", java_home())
+        .stdin(if stdin_input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| {
             AppError::native(format!("Unable to run {}: {error}", program.display()))
         })?;
+    if let Some(input) = stdin_input {
+        let mut stdin = child.stdin.take().ok_or_else(|| {
+            AppError::native(format!("Unable to open stdin for {}.", program.display()))
+        })?;
+        stdin.write_all(input).map_err(|error| {
+            AppError::native(format!(
+                "Unable to write stdin for {}: {error}",
+                program.display()
+            ))
+        })?;
+    }
     let stdout = child.stdout.take().ok_or_else(|| {
         AppError::native(format!(
             "Unable to capture stdout from {}.",
@@ -1319,6 +1446,125 @@ fn run_command<const N: usize>(program: PathBuf, args: [&str; N]) -> Result<Vec<
     )))
 }
 
+fn parse_avdmanager_devices(output: &str) -> Vec<Value> {
+    let mut devices = Vec::new();
+    let mut identifier = String::new();
+    let mut name = String::new();
+    let mut oem = String::new();
+    let mut tag = String::new();
+
+    for line in output.lines().map(str::trim) {
+        if let Some(rest) = line.strip_prefix("id:") {
+            if !identifier.is_empty() && !name.is_empty() {
+                devices.push(android_device_type_value(&identifier, &name, &oem, &tag));
+            }
+            identifier = parse_quoted_identifier(rest).unwrap_or_else(|| rest.trim().to_owned());
+            name.clear();
+            oem.clear();
+            tag.clear();
+        } else if let Some(rest) = line.strip_prefix("Name:") {
+            name = rest.trim().to_owned();
+        } else if let Some(rest) = line.strip_prefix("OEM :") {
+            oem = rest.trim().to_owned();
+        } else if let Some(rest) = line.strip_prefix("Tag :") {
+            tag = rest.trim().to_owned();
+        } else if line.starts_with("----") && !identifier.is_empty() && !name.is_empty() {
+            devices.push(android_device_type_value(&identifier, &name, &oem, &tag));
+            identifier.clear();
+            name.clear();
+            oem.clear();
+            tag.clear();
+        }
+    }
+
+    if !identifier.is_empty() && !name.is_empty() {
+        devices.push(android_device_type_value(&identifier, &name, &oem, &tag));
+    }
+    devices
+}
+
+fn android_device_type_value(identifier: &str, name: &str, oem: &str, tag: &str) -> Value {
+    json!({
+        "identifier": identifier,
+        "name": name,
+        "oem": empty_to_null(oem),
+        "tag": empty_to_null(tag),
+    })
+}
+
+fn parse_quoted_identifier(input: &str) -> Option<String> {
+    let start = input.find('"')?;
+    let rest = &input[start + 1..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_owned())
+}
+
+fn parse_installed_system_images(output: &str) -> Vec<Value> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("system-images;"))
+        .filter_map(|line| {
+            let columns = line.split('|').map(str::trim).collect::<Vec<_>>();
+            let identifier = *columns.first()?;
+            let description = columns.get(2).copied().unwrap_or(identifier);
+            let parts = identifier.split(';').collect::<Vec<_>>();
+            let api_level = parts
+                .get(1)
+                .and_then(|value| value.strip_prefix("android-"))
+                .and_then(|value| value.parse::<u32>().ok());
+            let tag = parts.get(2).copied().unwrap_or("");
+            let abi = parts.get(3).copied().unwrap_or("");
+            Some(json!({
+                "identifier": identifier,
+                "name": android_system_image_name(description, api_level, tag, abi),
+                "description": description,
+                "apiLevel": api_level,
+                "tag": tag,
+                "abi": abi,
+            }))
+        })
+        .collect()
+}
+
+fn android_system_image_name(
+    description: &str,
+    api_level: Option<u32>,
+    tag: &str,
+    abi: &str,
+) -> String {
+    let api = api_level
+        .map(|level| format!("API {level}"))
+        .unwrap_or_else(|| "Android".to_owned());
+    if description.is_empty() {
+        return format!("{api} {tag} {abi}").trim().to_owned();
+    }
+    format!("{description} ({api})")
+}
+
+fn empty_to_null(value: &str) -> Value {
+    if value.is_empty() {
+        Value::Null
+    } else {
+        Value::String(value.to_owned())
+    }
+}
+
+fn validate_avd_name(name: &str) -> Result<(), AppError> {
+    if name.is_empty() {
+        return Err(AppError::bad_request("Request body must include `name`."));
+    }
+    if !name
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.'))
+    {
+        return Err(AppError::bad_request(
+            "Android emulator names may only contain letters, numbers, dots, dashes, and underscores.",
+        ));
+    }
+    Ok(())
+}
+
 fn read_command_stream(mut stream: impl Read) -> std::io::Result<Vec<u8>> {
     let mut buffer = Vec::new();
     stream.read_to_end(&mut buffer)?;
@@ -1372,6 +1618,31 @@ fn sdk_root() -> PathBuf {
         .map(PathBuf::from)
         .filter(|path| path.exists())
         .unwrap_or_else(|| home_dir().join("Library/Android/sdk"))
+}
+
+fn android_cmdline_tool_path(name: &str) -> PathBuf {
+    let root = sdk_root();
+    let latest = root.join("cmdline-tools/latest/bin").join(name);
+    if latest.exists() {
+        return latest;
+    }
+    let cmdline_tools = root.join("cmdline-tools");
+    if let Ok(entries) = std::fs::read_dir(&cmdline_tools) {
+        let mut candidates = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path().join("bin").join(name))
+            .filter(|path| path.exists())
+            .collect::<Vec<_>>();
+        candidates.sort();
+        if let Some(path) = candidates.pop() {
+            return path;
+        }
+    }
+    let legacy = root.join("tools/bin").join(name);
+    if legacy.exists() {
+        return legacy;
+    }
+    latest
 }
 
 fn java_home() -> OsString {

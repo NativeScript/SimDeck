@@ -35,6 +35,16 @@ unsafe extern "C" {
     pub fn xcw_native_run_main_loop_slice(duration_seconds: f64);
 
     pub fn xcw_native_list_simulators(error_message: *mut *mut c_char) -> *mut c_char;
+    pub fn xcw_native_simulator_creation_options(error_message: *mut *mut c_char) -> *mut c_char;
+    pub fn xcw_native_create_simulator(
+        name: *const c_char,
+        device_type_identifier: *const c_char,
+        runtime_identifier: *const c_char,
+        paired_watch_name: *const c_char,
+        paired_watch_device_type_identifier: *const c_char,
+        paired_watch_runtime_identifier: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> *mut c_char;
     pub fn xcw_native_boot_simulator(udid: *const c_char, error_message: *mut *mut c_char) -> bool;
     pub fn xcw_native_shutdown_simulator(
         udid: *const c_char,
