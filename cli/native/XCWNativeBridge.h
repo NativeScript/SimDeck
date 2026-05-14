@@ -34,6 +34,14 @@ void xcw_native_initialize_app(void);
 void xcw_native_run_main_loop_slice(double duration_seconds);
 
 char * _Nullable xcw_native_list_simulators(char * _Nullable * _Nullable error_message);
+char * _Nullable xcw_native_simulator_creation_options(char * _Nullable * _Nullable error_message);
+char * _Nullable xcw_native_create_simulator(const char * _Nonnull name,
+                                             const char * _Nonnull device_type_identifier,
+                                             const char * _Nullable runtime_identifier,
+                                             const char * _Nullable paired_watch_name,
+                                             const char * _Nullable paired_watch_device_type_identifier,
+                                             const char * _Nullable paired_watch_runtime_identifier,
+                                             char * _Nullable * _Nullable error_message);
 bool xcw_native_boot_simulator(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 bool xcw_native_shutdown_simulator(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);
 bool xcw_native_toggle_appearance(const char * _Nonnull udid, char * _Nullable * _Nullable error_message);

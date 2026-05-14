@@ -53,6 +53,80 @@ export interface SimulatorsResponse {
   simulators: SimulatorMetadata[];
 }
 
+export interface SimulatorDeviceTypeOption {
+  identifier: string;
+  name: string;
+  productFamily?: string;
+  modelIdentifier?: string;
+  minRuntimeVersion?: number;
+  minRuntimeVersionString?: string;
+  maxRuntimeVersion?: number;
+  maxRuntimeVersionString?: string;
+  supportedRuntimeIdentifiers?: string[];
+}
+
+export interface SimulatorRuntimeOption {
+  identifier: string;
+  name: string;
+  platform?: string;
+  version?: string;
+  buildVersion?: string;
+  isAvailable?: boolean;
+  supportedDeviceTypeIdentifiers?: string[];
+}
+
+export interface AndroidEmulatorDeviceTypeOption {
+  identifier: string;
+  name: string;
+  oem?: string | null;
+  tag?: string | null;
+}
+
+export interface AndroidEmulatorSystemImageOption {
+  identifier: string;
+  name: string;
+  description?: string;
+  apiLevel?: number | null;
+  tag?: string;
+  abi?: string;
+}
+
+export interface AndroidEmulatorCreateOptions {
+  deviceTypes: AndroidEmulatorDeviceTypeOption[];
+  systemImages: AndroidEmulatorSystemImageOption[];
+  unavailableReason?: string;
+}
+
+export interface SimulatorCreateOptionsResponse {
+  deviceTypes: SimulatorDeviceTypeOption[];
+  runtimes: SimulatorRuntimeOption[];
+  android?: AndroidEmulatorCreateOptions;
+}
+
+export interface CreatePairedWatchRequest {
+  name: string;
+  deviceTypeIdentifier: string;
+  runtimeIdentifier?: string;
+}
+
+export interface CreateSimulatorRequest {
+  platform?: "ios" | "android" | string;
+  name: string;
+  deviceTypeIdentifier: string;
+  runtimeIdentifier?: string;
+  pairedWatch?: CreatePairedWatchRequest;
+}
+
+export interface CreateSimulatorResponse {
+  ok: boolean;
+  created: {
+    udid: string;
+    pairedWatchUDID?: string;
+  };
+  simulator: SimulatorMetadata;
+  pairedWatchSimulator?: SimulatorMetadata | null;
+}
+
 export interface WebKitTarget {
   id: string;
   appId: string;

@@ -74,6 +74,7 @@ import type {
   ViewMode,
 } from "../features/viewport/types";
 import { useViewportLayout } from "../features/viewport/useViewportLayout";
+import { NewSimulatorModal } from "../features/simulators/NewSimulatorModal";
 import {
   buildShellRotationTransform,
   clampPan,
@@ -388,6 +389,7 @@ export function AppShell({
     initialUiState.bundleIDValue ?? "com.apple.Preferences",
   );
   const [menuOpen, setMenuOpen] = useState(false);
+  const [newSimulatorOpen, setNewSimulatorOpen] = useState(false);
   const [localError, setLocalError] = useState("");
   const [failedStreamUDIDs, setFailedStreamUDIDs] = useState<Set<string>>(
     () => new Set(),
@@ -2194,6 +2196,20 @@ export function AppShell({
     }
   }
 
+  function handleSimulatorCreated(response: {
+    simulator: SimulatorMetadata;
+    pairedWatchSimulator?: SimulatorMetadata | null;
+  }) {
+    updateSimulator(response.simulator);
+    if (response.pairedWatchSimulator) {
+      updateSimulator(response.pairedWatchSimulator);
+    }
+    setSelectedUDID(response.simulator.udid);
+    setNewSimulatorOpen(false);
+    setLocalError("");
+    void refresh();
+  }
+
   async function submitPairing(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const code = pairingCode.trim();
@@ -2303,6 +2319,10 @@ export function AppShell({
           }
         }}
         onOpenBundlePrompt={promptForBundleID}
+        onOpenNewSimulator={() => {
+          setMenuOpen(false);
+          setNewSimulatorOpen(true);
+        }}
         onOpenUrlPrompt={promptForURL}
         onRotateRight={() => {
           if (!selectedSimulator) {
@@ -2386,6 +2406,12 @@ export function AppShell({
         )}
         touchOverlayVisible={touchOverlayVisible}
         devToolsVisible={devToolsVisible}
+      />
+      <NewSimulatorModal
+        onClose={() => setNewSimulatorOpen(false)}
+        onCreated={handleSimulatorCreated}
+        open={newSimulatorOpen && !hideSimulatorSelection}
+        selectedSimulator={selectedSimulator}
       />
       <SimulatorViewport
         accessibilityHoveredId={accessibilityHoveredId}

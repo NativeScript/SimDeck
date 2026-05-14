@@ -35,6 +35,7 @@ interface ToolbarProps {
   onHome: () => void;
   onOpenAppSwitcher: () => void;
   onOpenBundlePrompt: () => void;
+  onOpenNewSimulator: () => void;
   onOpenUrlPrompt: () => void;
   onRotateRight: () => void;
   onShutdown: () => void;
@@ -80,6 +81,7 @@ export function Toolbar({
   onHome,
   onOpenAppSwitcher,
   onOpenBundlePrompt,
+  onOpenNewSimulator,
   onOpenUrlPrompt,
   onRotateRight,
   onShutdown,
@@ -149,6 +151,7 @@ export function Toolbar({
           onHome={onHome}
           onOpenAppSwitcher={onOpenAppSwitcher}
           onOpenBundlePrompt={onOpenBundlePrompt}
+          onOpenNewSimulator={onOpenNewSimulator}
           onOpenUrlPrompt={onOpenUrlPrompt}
           onRotateRight={onRotateRight}
           onShutdown={onShutdown}

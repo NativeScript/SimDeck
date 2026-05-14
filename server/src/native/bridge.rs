@@ -2,7 +2,7 @@ use crate::error::AppError;
 use crate::native::ffi;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -40,6 +40,13 @@ pub struct Simulator {
     pub runtime_identifier: serde_json::Value,
     #[serde(rename = "runtimeName")]
     pub runtime_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativePairedWatchSpec {
+    pub name: String,
+    pub device_type_identifier: String,
+    pub runtime_identifier: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +181,48 @@ impl NativeBridge {
         let payload: SimulatorsEnvelope =
             serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))?;
         Ok(payload.simulators)
+    }
+
+    pub fn simulator_creation_options(&self) -> Result<serde_json::Value, AppError> {
+        let json = unsafe {
+            let mut error = ptr::null_mut();
+            let raw = ffi::xcw_native_simulator_creation_options(&mut error);
+            string_from_raw(raw, error)?
+        };
+        serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))
+    }
+
+    pub fn create_simulator(
+        &self,
+        name: &str,
+        device_type_identifier: &str,
+        runtime_identifier: Option<&str>,
+        paired_watch: Option<&NativePairedWatchSpec>,
+    ) -> Result<serde_json::Value, AppError> {
+        let name = CString::new(name).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let device_type_identifier = CString::new(device_type_identifier)
+            .map_err(|e| AppError::bad_request(e.to_string()))?;
+        let runtime_identifier = optional_c_string(runtime_identifier)?;
+        let paired_watch_name = optional_c_string(paired_watch.map(|watch| watch.name.as_str()))?;
+        let paired_watch_device_type_identifier =
+            optional_c_string(paired_watch.map(|watch| watch.device_type_identifier.as_str()))?;
+        let paired_watch_runtime_identifier =
+            optional_c_string(paired_watch.and_then(|watch| watch.runtime_identifier.as_deref()))?;
+
+        let json = unsafe {
+            let mut error = ptr::null_mut();
+            let raw = ffi::xcw_native_create_simulator(
+                name.as_ptr(),
+                device_type_identifier.as_ptr(),
+                optional_c_ptr(&runtime_identifier),
+                optional_c_ptr(&paired_watch_name),
+                optional_c_ptr(&paired_watch_device_type_identifier),
+                optional_c_ptr(&paired_watch_runtime_identifier),
+                &mut error,
+            );
+            string_from_raw(raw, error)?
+        };
+        serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))
     }
 
     pub fn boot_simulator(&self, udid: &str) -> Result<(), AppError> {
@@ -596,6 +645,16 @@ impl NativeBridge {
             Ok(NativeSession { handle })
         }
     }
+}
+
+fn optional_c_string(value: Option<&str>) -> Result<Option<CString>, AppError> {
+    value
+        .map(|value| CString::new(value).map_err(|e| AppError::bad_request(e.to_string())))
+        .transpose()
+}
+
+fn optional_c_ptr(value: &Option<CString>) -> *const c_char {
+    value.as_ref().map_or(ptr::null(), |value| value.as_ptr())
 }
 
 pub fn log_entry_matches(entry: &LogEntry, filters: &LogFilters) -> bool {

@@ -52,6 +52,8 @@ See [Health & Metrics](/api/health) for details.
 | Method | Path                                       | Purpose                                   |
 | ------ | ------------------------------------------ | ----------------------------------------- |
 | `GET`  | `/api/simulators`                          | List iOS Simulators and Android emulators |
+| `POST` | `/api/simulators`                          | Create an iOS Simulator                   |
+| `GET`  | `/api/simulators/create-options`           | List device types and runtimes for create |
 | `GET`  | `/api/simulators/{udid}/state`             | Get one device state                      |
 | `POST` | `/api/simulators/{udid}/boot`              | Boot a simulator or emulator              |
 | `POST` | `/api/simulators/{udid}/shutdown`          | Shut it down                              |
@@ -59,6 +61,22 @@ See [Health & Metrics](/api/health) for details.
 | `POST` | `/api/simulators/{udid}/toggle-appearance` | Toggle light/dark appearance              |
 
 Device IDs come from `/api/simulators`. Android IDs use the `android:` prefix.
+
+Create requests use CoreSimulator device type and runtime identifiers from
+`/api/simulators/create-options`:
+
+```json
+{
+  "name": "iPhone Air",
+  "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-Air",
+  "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
+  "pairedWatch": {
+    "name": "Apple Watch Series 11 (46mm)",
+    "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-11-46mm",
+    "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.watchOS-26-4"
+  }
+}
+```
 
 ## Apps
 

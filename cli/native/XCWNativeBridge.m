@@ -367,6 +367,44 @@ char *xcw_native_list_simulators(char **error_message) {
     }
 }
 
+char *xcw_native_simulator_creation_options(char **error_message) {
+    @autoreleasepool {
+        XCWSimctl *simctl = [[XCWSimctl alloc] init];
+        NSError *error = nil;
+        NSDictionary *options = [simctl simulatorCreationOptionsWithError:&error];
+        if (options == nil) {
+            XCWSetErrorMessage(error_message, error);
+            return NULL;
+        }
+        return XCWJSONStringFromObject(options, error_message);
+    }
+}
+
+char *xcw_native_create_simulator(const char *name,
+                                  const char *device_type_identifier,
+                                  const char *runtime_identifier,
+                                  const char *paired_watch_name,
+                                  const char *paired_watch_device_type_identifier,
+                                  const char *paired_watch_runtime_identifier,
+                                  char **error_message) {
+    @autoreleasepool {
+        XCWSimctl *simctl = [[XCWSimctl alloc] init];
+        NSError *error = nil;
+        NSDictionary *result = [simctl createSimulatorWithName:XCWStringFromCString(name)
+                                          deviceTypeIdentifier:XCWStringFromCString(device_type_identifier)
+                                             runtimeIdentifier:runtime_identifier == NULL ? nil : XCWStringFromCString(runtime_identifier)
+                                               pairedWatchName:paired_watch_name == NULL ? nil : XCWStringFromCString(paired_watch_name)
+                               pairedWatchDeviceTypeIdentifier:paired_watch_device_type_identifier == NULL ? nil : XCWStringFromCString(paired_watch_device_type_identifier)
+                                  pairedWatchRuntimeIdentifier:paired_watch_runtime_identifier == NULL ? nil : XCWStringFromCString(paired_watch_runtime_identifier)
+                                                         error:&error];
+        if (result == nil) {
+            XCWSetErrorMessage(error_message, error);
+            return NULL;
+        }
+        return XCWJSONStringFromObject(result, error_message);
+    }
+}
+
 bool xcw_native_boot_simulator(const char *udid, char **error_message) {
     @autoreleasepool {
         return XCWPerformSimctlAction(error_message, ^BOOL(XCWSimctl *simctl, NSError **error) {

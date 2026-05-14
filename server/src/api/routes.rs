@@ -1,4 +1,4 @@
-use crate::android::{self, AndroidBridge};
+use crate::android::{self, AndroidBridge, AndroidEmulatorSpec};
 use crate::api::json::json;
 use crate::auth;
 use crate::config::Config;
@@ -7,7 +7,7 @@ use crate::error::AppError;
 use crate::inspector::{InspectorHub, PublishedInspector};
 use crate::logs::LogRegistry;
 use crate::metrics::counters::{ClientStreamStats, Metrics};
-use crate::native::bridge::{LogFilters, NativeBridge};
+use crate::native::bridge::{LogFilters, NativeBridge, NativePairedWatchSpec};
 use crate::performance::{
     sample_stack, DisplaySignal, ForegroundProcess, PerformanceQuery, PerformanceRegistry,
 };
@@ -182,6 +182,24 @@ struct UninstallPayload {
 #[derive(Deserialize)]
 struct PasteboardPayload {
     text: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateSimulatorPayload {
+    platform: Option<String>,
+    name: String,
+    device_type_identifier: String,
+    runtime_identifier: Option<String>,
+    paired_watch: Option<CreatePairedWatchPayload>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatePairedWatchPayload {
+    name: String,
+    device_type_identifier: String,
+    runtime_identifier: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -668,7 +686,14 @@ pub fn router(state: AppState) -> Router {
             "/webkit-inspector-ui/{*path}",
             get(webkit_inspector_ui_file),
         )
-        .route("/api/simulators", get(list_simulators))
+        .route(
+            "/api/simulators",
+            get(list_simulators).post(create_simulator),
+        )
+        .route(
+            "/api/simulators/create-options",
+            get(simulator_create_options),
+        )
         .route("/api/simulators/{udid}/state", get(simulator_state))
         .route("/api/simulators/{udid}/processes", get(simulator_processes))
         .route(
@@ -1658,6 +1683,144 @@ async fn list_simulators(State(state): State<AppState>) -> Result<Json<Value>, A
     let simulators = all_device_values(state.clone(), false).await?;
     Ok(json(json_value!({
         "simulators": simulators,
+    })))
+}
+
+async fn simulator_create_options(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    let mut options =
+        run_bridge_action(state.clone(), |bridge| bridge.simulator_creation_options()).await?;
+    let android_options =
+        match run_android_action(state, |android| android.creation_options()).await {
+            Ok(options) => options,
+            Err(error) => json_value!({
+                "deviceTypes": [],
+                "systemImages": [],
+                "unavailableReason": error.to_string(),
+            }),
+        };
+    if let Some(map) = options.as_object_mut() {
+        map.insert("android".to_owned(), android_options);
+    }
+    Ok(json(options))
+}
+
+async fn create_simulator(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateSimulatorPayload>,
+) -> Result<Json<Value>, AppError> {
+    let platform = payload.platform.as_deref().map(str::trim).unwrap_or("ios");
+    let name = payload.name.trim().to_owned();
+    let device_type_identifier = payload.device_type_identifier.trim().to_owned();
+    if name.is_empty() {
+        return Err(AppError::bad_request("Request body must include `name`."));
+    }
+    if device_type_identifier.is_empty() {
+        return Err(AppError::bad_request(
+            "Request body must include `deviceTypeIdentifier`.",
+        ));
+    }
+
+    let runtime_identifier = trimmed_optional_string(payload.runtime_identifier);
+    if platform.eq_ignore_ascii_case("android") {
+        let system_image_identifier = runtime_identifier.ok_or_else(|| {
+            AppError::bad_request("Android emulator creation requires `runtimeIdentifier`.")
+        })?;
+        if payload.paired_watch.is_some() {
+            return Err(AppError::bad_request(
+                "Android emulator creation does not support `pairedWatch`.",
+            ));
+        }
+        let spec = AndroidEmulatorSpec {
+            name,
+            device_profile_identifier: device_type_identifier,
+            system_image_identifier,
+        };
+        let created =
+            run_android_action(state.clone(), move |android| android.create_emulator(spec)).await?;
+        let udid = created
+            .get("udid")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::internal("Android create did not return an emulator ID."))?
+            .to_owned();
+        let devices = all_device_values(state, true).await?;
+        let simulator = devices
+            .iter()
+            .find(|entry| entry.get("udid").and_then(Value::as_str) == Some(udid.as_str()))
+            .cloned()
+            .ok_or_else(|| {
+                AppError::not_found(format!("Created emulator {udid} was not found."))
+            })?;
+        return Ok(json(json_value!({
+            "ok": true,
+            "created": created,
+            "simulator": simulator,
+            "pairedWatchSimulator": null,
+        })));
+    }
+
+    let paired_watch = payload
+        .paired_watch
+        .map(|watch| {
+            let watch_name = watch.name.trim().to_owned();
+            let watch_device_type_identifier = watch.device_type_identifier.trim().to_owned();
+            if watch_name.is_empty() {
+                return Err(AppError::bad_request(
+                    "Paired watch creation requires `pairedWatch.name`.",
+                ));
+            }
+            if watch_device_type_identifier.is_empty() {
+                return Err(AppError::bad_request(
+                    "Paired watch creation requires `pairedWatch.deviceTypeIdentifier`.",
+                ));
+            }
+            Ok(NativePairedWatchSpec {
+                name: watch_name,
+                device_type_identifier: watch_device_type_identifier,
+                runtime_identifier: trimmed_optional_string(watch.runtime_identifier),
+            })
+        })
+        .transpose()?;
+    let action_name = name.clone();
+    let action_device_type_identifier = device_type_identifier.clone();
+    let action_runtime_identifier = runtime_identifier.clone();
+    let action_paired_watch = paired_watch.clone();
+    let created = run_bridge_action(state.clone(), move |bridge| {
+        bridge.create_simulator(
+            &action_name,
+            &action_device_type_identifier,
+            action_runtime_identifier.as_deref(),
+            action_paired_watch.as_ref(),
+        )
+    })
+    .await?;
+
+    let udid = created
+        .get("udid")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::internal("Native create did not return a simulator UDID."))?
+        .to_owned();
+    let paired_watch_udid = created
+        .get("pairedWatchUDID")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let devices = all_device_values(state, true).await?;
+    let simulator = devices
+        .iter()
+        .find(|entry| entry.get("udid").and_then(Value::as_str) == Some(udid.as_str()))
+        .cloned()
+        .ok_or_else(|| AppError::not_found(format!("Created simulator {udid} was not found.")))?;
+    let paired_watch_simulator = paired_watch_udid.as_deref().and_then(|watch_udid| {
+        devices
+            .iter()
+            .find(|entry| entry.get("udid").and_then(Value::as_str) == Some(watch_udid))
+            .cloned()
+    });
+
+    Ok(json(json_value!({
+        "ok": true,
+        "created": created,
+        "simulator": simulator,
+        "pairedWatchSimulator": paired_watch_simulator,
     })))
 }
 
@@ -6203,6 +6366,12 @@ fn first_non_empty_string(values: impl IntoIterator<Item = Option<String>>) -> S
         .map(|value| value.trim().to_owned())
         .find(|value| !value.is_empty())
         .unwrap_or_default()
+}
+
+fn trimmed_optional_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn split_filter_values(value: Option<&str>) -> Vec<String> {

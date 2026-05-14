@@ -79,6 +79,28 @@ char *xcw_native_list_simulators(char **error_message) {
   return xcw_strdup("{\"simulators\":[]}");
 }
 
+char *xcw_native_simulator_creation_options(char **error_message) {
+  (void)error_message;
+  return xcw_strdup("{\"deviceTypes\":[],\"runtimes\":[]}");
+}
+
+char *xcw_native_create_simulator(const char *name,
+                                  const char *device_type_identifier,
+                                  const char *runtime_identifier,
+                                  const char *paired_watch_name,
+                                  const char *paired_watch_device_type_identifier,
+                                  const char *paired_watch_runtime_identifier,
+                                  char **error_message) {
+  (void)name;
+  (void)device_type_identifier;
+  (void)runtime_identifier;
+  (void)paired_watch_name;
+  (void)paired_watch_device_type_identifier;
+  (void)paired_watch_runtime_identifier;
+  xcw_unsupported(error_message);
+  return NULL;
+}
+
 bool xcw_native_boot_simulator(const char *udid, char **error_message) {
   (void)udid;
   return xcw_unsupported(error_message);

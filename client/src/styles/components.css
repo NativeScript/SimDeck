@@ -333,6 +333,10 @@
   padding: 4px;
 }
 
+.menu-actions-compact {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
 .menu-section {
   display: flex;
   flex: 0 0 auto;
@@ -450,6 +454,9 @@
 }
 
 .menu-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 8px 10px;
   border: none;
@@ -458,6 +465,7 @@
   color: var(--text);
   text-align: left;
   font-size: 12px;
+  font-weight: 600;
   transition: background 100ms;
 }
 
@@ -465,8 +473,428 @@
   background: var(--surface-hover);
 }
 
+.menu-action svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.menu-primary-action {
+  color: var(--text);
+}
+
 .mobile-menu-action {
   display: none;
+}
+
+.new-sim-overlay {
+  --new-sim-overlay-bg: rgba(0, 0, 0, 0.34);
+  --new-sim-window-bg: #1f1f20;
+  --new-sim-titlebar-bg: #1f1f20;
+  --new-sim-window-border: #3f3f42;
+  --new-sim-titlebar-border: #2a2a2c;
+  --new-sim-panel-bg: #202021;
+  --new-sim-panel-border: #151516;
+  --new-sim-control-bg: #303033;
+  --new-sim-control-border: #3a3a3d;
+  --new-sim-input-bg: #202021;
+  --new-sim-button-bg: #303033;
+  --new-sim-button-hover-bg: #3a3a3d;
+  --new-sim-text: #e1e1e3;
+  --new-sim-title-text: #aaaaae;
+  --new-sim-muted-text: #aaaaae;
+  --new-sim-disabled-text: #747477;
+  --new-sim-focus: #4c92ff;
+  --new-sim-error-text: #ff7575;
+  --new-sim-checkbox-bg: #2b2b2d;
+  --new-sim-checkbox-border: #77777b;
+  --new-sim-checkbox-checked: #0a84ff;
+  --new-sim-window-shadow:
+    0 34px 90px rgba(0, 0, 0, 0.52),
+    0 12px 32px rgba(0, 0, 0, 0.34);
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--new-sim-overlay-bg);
+}
+
+.new-sim-window {
+  width: min(740px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid var(--new-sim-window-border);
+  border-radius: 14px;
+  background: var(--new-sim-window-bg);
+  box-shadow: var(--new-sim-window-shadow);
+  color: var(--new-sim-text);
+  color-scheme: dark;
+}
+
+.new-sim-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  height: 42px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--new-sim-titlebar-border);
+  background: var(--new-sim-titlebar-bg);
+}
+
+.new-sim-titlebar h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--new-sim-title-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-sim-window-controls {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 0 0 auto;
+}
+
+.new-sim-window-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #545456;
+}
+
+.new-sim-window-dot.close {
+  background: #ff5f57;
+}
+
+.new-sim-window-dot.minimize {
+  background: #ffbd2e;
+}
+
+.new-sim-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 26px 22px;
+}
+
+.new-sim-body h3 {
+  margin: 0 0 12px;
+  color: var(--new-sim-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.new-sim-platform-switcher {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 190px;
+  height: 28px;
+  margin: 0 auto 14px;
+  padding: 2px;
+  border: 1px solid var(--new-sim-control-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--new-sim-control-bg) 72%, transparent);
+}
+
+.new-sim-platform-switcher button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  appearance: none;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--new-sim-muted-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.new-sim-platform-switcher button.active {
+  background: var(--new-sim-button-bg);
+  color: var(--new-sim-text);
+  box-shadow: none;
+}
+
+.new-sim-fieldset {
+  display: grid;
+  align-content: center;
+  height: 200px;
+  margin: 0;
+  padding: 28px clamp(16px, 12vw, 148px);
+  border: 1px solid var(--new-sim-panel-border);
+  background: var(--new-sim-panel-bg);
+}
+
+.new-sim-fieldset:disabled {
+  opacity: 0.72;
+}
+
+.new-sim-field {
+  display: grid;
+  grid-template-columns: minmax(130px, 166px) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  margin: 5px 0;
+}
+
+.new-sim-field span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--new-sim-text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-sim-field input,
+.new-sim-field select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--new-sim-control-border);
+  border-radius: 6px;
+  background: var(--new-sim-control-bg);
+  color: var(--new-sim-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+}
+
+.new-sim-field input {
+  background: var(--new-sim-input-bg);
+}
+
+.new-sim-field input:focus,
+.new-sim-field select:focus {
+  border-color: var(--new-sim-focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--new-sim-focus) 28%, transparent);
+}
+
+.new-sim-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 11px 0 0;
+  padding-left: 178px;
+  color: var(--new-sim-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.new-sim-checkbox input {
+  display: grid;
+  place-content: center;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  appearance: none;
+  border: 1px solid var(--new-sim-checkbox-border);
+  border-radius: 4px;
+  background: var(--new-sim-checkbox-bg);
+  color: #ffffff;
+}
+
+.new-sim-checkbox input::after {
+  width: 4px;
+  height: 8px;
+  margin-top: -1px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  content: "";
+  transform: rotate(45deg) scale(0);
+  transform-origin: center;
+}
+
+.new-sim-checkbox input:checked {
+  border-color: var(--new-sim-checkbox-checked);
+  background: var(--new-sim-checkbox-checked);
+}
+
+.new-sim-checkbox input:checked::after {
+  transform: rotate(45deg) scale(1);
+}
+
+.new-sim-checkbox input:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--new-sim-focus) 42%, transparent);
+  outline-offset: 2px;
+}
+
+.new-sim-status,
+.new-sim-error {
+  margin: 0;
+  color: var(--new-sim-muted-text);
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.new-sim-error {
+  margin-top: 10px;
+  color: var(--new-sim-error-text);
+}
+
+.new-sim-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 26px 24px;
+}
+
+.new-sim-action-spacer {
+  flex: 1 1 auto;
+}
+
+.new-sim-button {
+  min-width: 82px;
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--new-sim-button-bg);
+  color: var(--new-sim-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.new-sim-button:hover:not(:disabled) {
+  background: var(--new-sim-button-hover-bg);
+}
+
+.new-sim-button:disabled {
+  color: var(--new-sim-disabled-text);
+  cursor: default;
+  opacity: 0.62;
+}
+
+@media (prefers-color-scheme: light) {
+  .new-sim-overlay {
+    --new-sim-overlay-bg: rgba(0, 0, 0, 0.18);
+    --new-sim-window-bg: #ececee;
+    --new-sim-titlebar-bg: #f3f3f4;
+    --new-sim-window-border: #b7b7bb;
+    --new-sim-titlebar-border: #d7d7da;
+    --new-sim-panel-bg: #f7f7f8;
+    --new-sim-panel-border: #cfcfd3;
+    --new-sim-control-bg: #ffffff;
+    --new-sim-control-border: #c9c9ce;
+    --new-sim-input-bg: #ffffff;
+    --new-sim-button-bg: #e1e1e4;
+    --new-sim-button-hover-bg: #d6d6da;
+    --new-sim-text: #242426;
+    --new-sim-title-text: #58585c;
+    --new-sim-muted-text: #6f6f73;
+    --new-sim-disabled-text: #9a9a9f;
+    --new-sim-focus: #0066d9;
+    --new-sim-error-text: #c8232b;
+    --new-sim-checkbox-bg: #ffffff;
+    --new-sim-checkbox-border: #8e8e93;
+    --new-sim-checkbox-checked: #007aff;
+    --new-sim-window-shadow:
+      0 30px 80px rgba(0, 0, 0, 0.24),
+      0 10px 28px rgba(0, 0, 0, 0.16);
+  }
+
+  .new-sim-window {
+    color-scheme: light;
+  }
+
+  .new-sim-window-dot {
+    background: #d0d0d3;
+  }
+}
+
+@media (max-width: 720px) {
+  .new-sim-overlay {
+    padding: 12px;
+  }
+
+  .new-sim-window {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .new-sim-titlebar {
+    gap: 12px;
+    height: 42px;
+    padding: 0 14px;
+  }
+
+  .new-sim-window-controls {
+    gap: 8px;
+  }
+
+  .new-sim-window-dot {
+    width: 12px;
+    height: 12px;
+  }
+
+  .new-sim-body {
+    padding: 20px 16px 18px;
+  }
+
+  .new-sim-platform-switcher {
+    width: 100%;
+  }
+
+  .new-sim-fieldset {
+    height: 296px;
+    padding: 18px 14px;
+  }
+
+  .new-sim-field {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    margin: 10px 0;
+  }
+
+  .new-sim-field span {
+    font-size: 13px;
+    text-align: left;
+  }
+
+  .new-sim-checkbox {
+    padding-left: 0;
+    font-size: 13px;
+  }
+
+  .new-sim-actions {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 0 16px 16px;
+  }
+
+  .new-sim-action-spacer {
+    display: none;
+  }
+
+  .new-sim-button {
+    flex: 1 1 120px;
+    min-width: 0;
+  }
 }
 
 .sim-item {

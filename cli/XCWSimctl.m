@@ -9,11 +9,16 @@ static NSString * const XCWSimctlErrorDomain = @"SimDeck.Simctl";
 
 @interface XCWSimctl ()
 
+- (nullable NSString *)createSingleSimulatorWithName:(NSString *)name
+                                deviceTypeIdentifier:(NSString *)deviceTypeIdentifier
+                                   runtimeIdentifier:(nullable NSString *)runtimeIdentifier
+                                               error:(NSError * _Nullable __autoreleasing *)error;
 + (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
                                    error:(NSError * _Nullable __autoreleasing *)error;
 + (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
                               timeoutSec:(NSTimeInterval)timeoutSec
                                    error:(NSError * _Nullable __autoreleasing *)error;
++ (nullable NSDictionary *)listJSONPayloadWithError:(NSError * _Nullable __autoreleasing *)error;
 
 @end
 
@@ -32,6 +37,10 @@ static NSArray *XCWArrayPayload(id payload, NSString *nestedKey) {
 
 static NSString *XCWStringValue(id value) {
     return [value isKindOfClass:[NSString class]] ? value : @"";
+}
+
+static NSNumber *XCWNumberValue(id value) {
+    return [value isKindOfClass:[NSNumber class]] ? value : nil;
 }
 
 static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeIdentifier) {
@@ -64,22 +73,8 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 @implementation XCWSimctl
 
 - (nullable NSArray<NSDictionary *> *)listSimulatorsWithError:(NSError * _Nullable __autoreleasing *)error {
-    XCWProcessResult *result = [self.class runSimctl:@[@"list", @"--json"] error:error];
-    if (result == nil) {
-        return nil;
-    }
-    if (result.terminationStatus != 0) {
-        if (error != NULL) {
-            *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"simctl list failed" code:1];
-        }
-        return nil;
-    }
-
-    NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:result.stdoutData options:0 error:error];
-    if (![payload isKindOfClass:[NSDictionary class]]) {
-        if (error != NULL && *error == nil) {
-            *error = [self.class errorWithDescription:@"Unable to parse simctl JSON output." code:2];
-        }
+    NSDictionary *payload = [self.class listJSONPayloadWithError:error];
+    if (payload == nil) {
         return nil;
     }
 
@@ -166,6 +161,230 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
     }];
 
     return flattened;
+}
+
+- (nullable NSDictionary *)simulatorCreationOptionsWithError:(NSError * _Nullable __autoreleasing *)error {
+    NSDictionary *payload = [self.class listJSONPayloadWithError:error];
+    if (payload == nil) {
+        return nil;
+    }
+
+    NSArray *runtimeArray = XCWArrayPayload(payload[@"runtimes"], @"runtimes");
+    NSMutableArray<NSDictionary *> *runtimes = [NSMutableArray array];
+    NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *runtimeIdentifiersByDeviceType = [NSMutableDictionary dictionary];
+
+    for (NSDictionary *runtime in runtimeArray) {
+        if (![runtime isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+
+        NSString *identifier = XCWStringValue(runtime[@"identifier"]);
+        if (identifier.length == 0) {
+            continue;
+        }
+
+        BOOL isAvailable = [runtime[@"isAvailable"] respondsToSelector:@selector(boolValue)] ? [runtime[@"isAvailable"] boolValue] : YES;
+        if (!isAvailable) {
+            continue;
+        }
+
+        NSMutableArray<NSString *> *supportedDeviceTypeIdentifiers = [NSMutableArray array];
+        NSArray *supportedDeviceTypes = XCWArrayPayload(runtime[@"supportedDeviceTypes"], @"supportedDeviceTypes");
+        for (NSDictionary *deviceType in supportedDeviceTypes) {
+            if (![deviceType isKindOfClass:[NSDictionary class]]) {
+                continue;
+            }
+            NSString *deviceTypeIdentifier = XCWStringValue(deviceType[@"identifier"]);
+            if (deviceTypeIdentifier.length == 0) {
+                continue;
+            }
+            [supportedDeviceTypeIdentifiers addObject:deviceTypeIdentifier];
+            NSMutableArray<NSString *> *runtimeIdentifiers = runtimeIdentifiersByDeviceType[deviceTypeIdentifier];
+            if (runtimeIdentifiers == nil) {
+                runtimeIdentifiers = [NSMutableArray array];
+                runtimeIdentifiersByDeviceType[deviceTypeIdentifier] = runtimeIdentifiers;
+            }
+            [runtimeIdentifiers addObject:identifier];
+        }
+
+        NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+        entry[@"identifier"] = identifier;
+        entry[@"name"] = XCWRuntimeDisplayName(runtime, identifier);
+        entry[@"isAvailable"] = @YES;
+        entry[@"supportedDeviceTypeIdentifiers"] = supportedDeviceTypeIdentifiers;
+
+        NSString *platform = XCWStringValue(runtime[@"platform"]);
+        if (platform.length > 0) {
+            entry[@"platform"] = platform;
+        }
+        NSString *version = XCWStringValue(runtime[@"version"]);
+        if (version.length > 0) {
+            entry[@"version"] = version;
+        }
+        NSString *buildVersion = XCWStringValue(runtime[@"buildversion"]);
+        if (buildVersion.length > 0) {
+            entry[@"buildVersion"] = buildVersion;
+        }
+
+        [runtimes addObject:entry];
+    }
+
+    NSArray *deviceTypesArray = XCWArrayPayload(payload[@"devicetypes"], @"devicetypes");
+    NSMutableArray<NSDictionary *> *deviceTypes = [NSMutableArray array];
+    for (NSDictionary *deviceType in deviceTypesArray) {
+        if (![deviceType isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+
+        NSString *identifier = XCWStringValue(deviceType[@"identifier"]);
+        if (identifier.length == 0) {
+            continue;
+        }
+        NSArray<NSString *> *supportedRuntimeIdentifiers = runtimeIdentifiersByDeviceType[identifier];
+        if (supportedRuntimeIdentifiers.count == 0) {
+            continue;
+        }
+
+        NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+        entry[@"identifier"] = identifier;
+        NSString *name = XCWStringValue(deviceType[@"name"]);
+        entry[@"name"] = name.length > 0 ? name : identifier;
+        entry[@"supportedRuntimeIdentifiers"] = supportedRuntimeIdentifiers;
+
+        NSString *productFamily = XCWStringValue(deviceType[@"productFamily"]);
+        if (productFamily.length > 0) {
+            entry[@"productFamily"] = productFamily;
+        }
+        NSString *modelIdentifier = XCWStringValue(deviceType[@"modelIdentifier"]);
+        if (modelIdentifier.length > 0) {
+            entry[@"modelIdentifier"] = modelIdentifier;
+        }
+        NSString *minRuntimeVersionString = XCWStringValue(deviceType[@"minRuntimeVersionString"]);
+        if (minRuntimeVersionString.length > 0) {
+            entry[@"minRuntimeVersionString"] = minRuntimeVersionString;
+        }
+        NSString *maxRuntimeVersionString = XCWStringValue(deviceType[@"maxRuntimeVersionString"]);
+        if (maxRuntimeVersionString.length > 0) {
+            entry[@"maxRuntimeVersionString"] = maxRuntimeVersionString;
+        }
+        NSNumber *minRuntimeVersion = XCWNumberValue(deviceType[@"minRuntimeVersion"]);
+        if (minRuntimeVersion != nil) {
+            entry[@"minRuntimeVersion"] = minRuntimeVersion;
+        }
+        NSNumber *maxRuntimeVersion = XCWNumberValue(deviceType[@"maxRuntimeVersion"]);
+        if (maxRuntimeVersion != nil) {
+            entry[@"maxRuntimeVersion"] = maxRuntimeVersion;
+        }
+
+        [deviceTypes addObject:entry];
+    }
+
+    return @{
+        @"deviceTypes": deviceTypes,
+        @"runtimes": runtimes,
+    };
+}
+
+- (nullable NSDictionary *)createSimulatorWithName:(NSString *)name
+                              deviceTypeIdentifier:(NSString *)deviceTypeIdentifier
+                                 runtimeIdentifier:(nullable NSString *)runtimeIdentifier
+                                   pairedWatchName:(nullable NSString *)pairedWatchName
+                   pairedWatchDeviceTypeIdentifier:(nullable NSString *)pairedWatchDeviceTypeIdentifier
+                      pairedWatchRuntimeIdentifier:(nullable NSString *)pairedWatchRuntimeIdentifier
+                                             error:(NSError * _Nullable __autoreleasing *)error {
+    NSString *primaryUDID = [self createSingleSimulatorWithName:name
+                                           deviceTypeIdentifier:deviceTypeIdentifier
+                                              runtimeIdentifier:runtimeIdentifier
+                                                          error:error];
+    if (primaryUDID.length == 0) {
+        return nil;
+    }
+
+    NSMutableDictionary *result = [@{
+        @"udid": primaryUDID,
+    } mutableCopy];
+
+    NSString *watchName = [pairedWatchName stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *watchDeviceTypeIdentifier = [pairedWatchDeviceTypeIdentifier stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (watchName.length == 0 && watchDeviceTypeIdentifier.length == 0) {
+        return result;
+    }
+    if (watchName.length == 0 || watchDeviceTypeIdentifier.length == 0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:@"Paired watch creation requires both a watch name and device type." code:23];
+        }
+        return nil;
+    }
+
+    NSString *watchUDID = [self createSingleSimulatorWithName:watchName
+                                         deviceTypeIdentifier:watchDeviceTypeIdentifier
+                                            runtimeIdentifier:pairedWatchRuntimeIdentifier
+                                                        error:error];
+    if (watchUDID.length == 0) {
+        return nil;
+    }
+
+    XCWProcessResult *pairResult = [self.class runSimctl:@[@"pair", watchUDID, primaryUDID]
+                                             timeoutSec:120
+                                                  error:error];
+    if (pairResult == nil) {
+        return nil;
+    }
+    if (pairResult.terminationStatus != 0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:pairResult.stderrString.length > 0 ? pairResult.stderrString : @"Unable to pair watch simulator." code:24];
+        }
+        return nil;
+    }
+
+    result[@"pairedWatchUDID"] = watchUDID;
+    return result;
+}
+
+- (nullable NSString *)createSingleSimulatorWithName:(NSString *)name
+                                deviceTypeIdentifier:(NSString *)deviceTypeIdentifier
+                                   runtimeIdentifier:(nullable NSString *)runtimeIdentifier
+                                               error:(NSError * _Nullable __autoreleasing *)error {
+    NSString *trimmedName = [name stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *trimmedDeviceTypeIdentifier = [deviceTypeIdentifier stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *trimmedRuntimeIdentifier = [runtimeIdentifier stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (trimmedName.length == 0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:@"Simulator name is required." code:19];
+        }
+        return nil;
+    }
+    if (trimmedDeviceTypeIdentifier.length == 0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:@"Device type identifier is required." code:20];
+        }
+        return nil;
+    }
+
+    NSMutableArray<NSString *> *arguments = [@[@"create", trimmedName, trimmedDeviceTypeIdentifier] mutableCopy];
+    if (trimmedRuntimeIdentifier.length > 0) {
+        [arguments addObject:trimmedRuntimeIdentifier];
+    }
+
+    XCWProcessResult *result = [self.class runSimctl:arguments timeoutSec:120 error:error];
+    if (result == nil) {
+        return nil;
+    }
+    if (result.terminationStatus != 0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"Unable to create simulator." code:21];
+        }
+        return nil;
+    }
+
+    NSString *udid = [result.stdoutString stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (udid.length == 0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:@"simctl create did not return a simulator UDID." code:22];
+        }
+        return nil;
+    }
+    return udid;
 }
 
 - (nullable NSDictionary *)simulatorWithUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
@@ -445,6 +664,28 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 + (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
                                    error:(NSError * _Nullable __autoreleasing *)error {
     return [self runSimctl:arguments timeoutSec:0 error:error];
+}
+
++ (nullable NSDictionary *)listJSONPayloadWithError:(NSError * _Nullable __autoreleasing *)error {
+    XCWProcessResult *result = [self runSimctl:@[@"list", @"--json"] error:error];
+    if (result == nil) {
+        return nil;
+    }
+    if (result.terminationStatus != 0) {
+        if (error != NULL) {
+            *error = [self errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"simctl list failed" code:1];
+        }
+        return nil;
+    }
+
+    NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:result.stdoutData options:0 error:error];
+    if (![payload isKindOfClass:[NSDictionary class]]) {
+        if (error != NULL && *error == nil) {
+            *error = [self errorWithDescription:@"Unable to parse simctl JSON output." code:2];
+        }
+        return nil;
+    }
+    return payload;
 }
 
 + (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
