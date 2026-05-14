@@ -35,7 +35,7 @@ fn main() {
     ];
 
     let mut build = cc::Build::new();
-    let x264_flags = pkg_config_flags("x264");
+    let x264_flags = pkg_config_flags("x264", true);
     build
         .files(files.iter())
         .include(&cli)
@@ -44,7 +44,7 @@ fn main() {
         .flag("-fmodules")
         .flag("-Wall")
         .flag("-Wextra");
-    apply_pkg_config_flags(&mut build, &x264_flags);
+    apply_pkg_config_compile_flags(&mut build, &x264_flags);
 
     for file in &files {
         println!("cargo:rerun-if-changed={}", file.display());
@@ -87,6 +87,7 @@ fn main() {
     );
 
     build.compile("xcw_native_bridge");
+    emit_pkg_config_link_flags(&x264_flags);
 
     for framework in [
         "Foundation",
@@ -104,10 +105,15 @@ fn main() {
     }
 }
 
-fn pkg_config_flags(package: &str) -> Vec<String> {
+fn pkg_config_flags(package: &str, static_link: bool) -> Vec<String> {
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    let mut args = vec!["--cflags", "--libs"];
+    if static_link {
+        args.push("--static");
+    }
+    args.push(package);
     let output = Command::new("pkg-config")
-        .args(["--cflags", "--libs", package])
+        .args(args)
         .output()
         .unwrap_or_else(|error| panic!("unable to run pkg-config for {package}: {error}"));
     if !output.status.success() {
@@ -120,16 +126,40 @@ fn pkg_config_flags(package: &str) -> Vec<String> {
         .collect()
 }
 
-fn apply_pkg_config_flags(build: &mut cc::Build, flags: &[String]) {
+fn apply_pkg_config_compile_flags(build: &mut cc::Build, flags: &[String]) {
     for flag in flags {
         if let Some(path) = flag.strip_prefix("-I") {
             build.include(path);
-        } else if let Some(path) = flag.strip_prefix("-L") {
-            println!("cargo:rustc-link-search=native={path}");
-        } else if let Some(lib) = flag.strip_prefix("-l") {
-            println!("cargo:rustc-link-lib={lib}");
-        } else {
+        } else if !flag.starts_with("-L") && !flag.starts_with("-l") {
             build.flag(flag);
         }
     }
+}
+
+fn emit_pkg_config_link_flags(flags: &[String]) {
+    let mut link_paths = Vec::new();
+    for flag in flags {
+        if let Some(path) = flag.strip_prefix("-L") {
+            link_paths.push(PathBuf::from(path));
+            println!("cargo:rustc-link-search=native={path}");
+        } else if let Some(lib) = flag.strip_prefix("-l") {
+            if lib == "x264" {
+                if let Some(archive) = static_archive_for_lib(lib, &link_paths) {
+                    println!("cargo:rustc-link-arg=-Wl,-force_load,{}", archive.display());
+                } else {
+                    println!("cargo:rustc-link-lib=static={lib}");
+                }
+            } else {
+                println!("cargo:rustc-link-lib={lib}");
+            }
+        }
+    }
+}
+
+fn static_archive_for_lib(lib: &str, link_paths: &[PathBuf]) -> Option<PathBuf> {
+    let archive_name = format!("lib{lib}.a");
+    link_paths
+        .iter()
+        .map(|path| path.join(&archive_name))
+        .find(|path| path.is_file())
 }
