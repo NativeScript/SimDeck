@@ -40,6 +40,7 @@ Android emulator IDs are prefixed with `android:`.
 
 ```sh
 simdeck install <udid> /path/to/App.app
+simdeck install <udid> /path/to/App.ipa
 simdeck launch <udid> com.example.App
 simdeck open-url <udid> myapp://debug
 ```

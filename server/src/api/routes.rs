@@ -19,7 +19,7 @@ use crate::transport::webrtc::AndroidWebRtcSource;
 use crate::webkit;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, Path, Query, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, Method, Request, StatusCode, Uri};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -58,6 +58,8 @@ const CHROME_DEVTOOLS_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(1);
 const FOREGROUND_APP_CACHE_TTL: Duration = Duration::from_secs(3);
 const FOREGROUND_APP_STALE_TTL: Duration = Duration::from_secs(30);
 const SAFARI_ACTIVE_TAB_HINT_TIMEOUT: Duration = Duration::from_millis(750);
+const APP_UPLOAD_FILE_NAME_HEADER: &str = "x-simdeck-filename";
+const MAX_APP_UPLOAD_BYTES: usize = 1024 * 1024 * 1024;
 
 static FOREGROUND_APP_CACHE: OnceLock<StdMutex<HashMap<String, CachedForegroundApp>>> =
     OnceLock::new();
@@ -712,6 +714,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/shutdown", post(shutdown_simulator))
         .route("/api/simulators/{udid}/erase", post(erase_simulator))
         .route("/api/simulators/{udid}/install", post(install_app))
+        .route(
+            "/api/simulators/{udid}/install-upload",
+            post(upload_install_app).layer(DefaultBodyLimit::max(MAX_APP_UPLOAD_BYTES)),
+        )
         .route("/api/simulators/{udid}/uninstall", post(uninstall_app))
         .route(
             "/api/simulators/{udid}/pasteboard",
@@ -2178,20 +2184,164 @@ async fn install_app(
             "Request body must include `appPath`.",
         ));
     }
+    install_app_path(state, udid, payload.app_path).await?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
+async fn upload_install_app(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<Value>, AppError> {
+    if body.is_empty() {
+        return Err(AppError::bad_request("Uploaded app file is empty."));
+    }
+    let file_name = uploaded_app_file_name(&headers)?;
+    let app_kind = uploaded_app_kind(&file_name)?;
+    validate_uploaded_app_target(&udid, app_kind)?;
+    let upload_path = write_uploaded_app_file(&file_name, &body).await?;
+    let app_path = upload_path.to_string_lossy().to_string();
+    let install_result = install_app_path(state, udid.clone(), app_path).await;
+    let _ = tokio::fs::remove_file(&upload_path).await;
+    install_result?;
+    Ok(json(json_value!({
+        "ok": true,
+        "udid": udid,
+        "action": "install",
+        "fileName": file_name,
+    })))
+}
+
+async fn install_app_path(state: AppState, udid: String, app_path: String) -> Result<(), AppError> {
     if android::is_android_id(&udid) {
         let action_udid = udid.clone();
+        let action_path = app_path.clone();
         run_android_action(state, move |android| {
-            android.install_app(&action_udid, &payload.app_path)
+            android.install_app(&action_udid, &action_path)
         })
         .await?;
-        return Ok(json(json_value!({ "ok": true })));
+        return Ok(());
     }
     let action_udid = udid.clone();
+    let action_path = app_path.clone();
     run_bridge_action(state, move |bridge| {
-        bridge.install_app(&action_udid, &payload.app_path)
+        bridge.install_app(&action_udid, &action_path)
     })
     .await?;
-    Ok(json(json_value!({ "ok": true })))
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UploadedAppKind {
+    Apk,
+    Ipa,
+}
+
+fn uploaded_app_file_name(headers: &HeaderMap) -> Result<String, AppError> {
+    let raw_name = headers
+        .get(APP_UPLOAD_FILE_NAME_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("app-upload");
+    let file_name = sanitize_upload_file_name(raw_name);
+    if file_name.is_empty() {
+        return Err(AppError::bad_request(
+            "Uploaded app must include a valid file name.",
+        ));
+    }
+    Ok(file_name)
+}
+
+fn sanitize_upload_file_name(raw_name: &str) -> String {
+    let candidate = raw_name
+        .rsplit(|ch| ch == '/' || ch == '\\')
+        .next()
+        .unwrap_or(raw_name)
+        .trim();
+    let mut sanitized = String::with_capacity(candidate.len().min(160));
+    for ch in candidate.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            sanitized.push(ch);
+        } else if ch.is_ascii_whitespace() {
+            sanitized.push('-');
+        }
+    }
+    while sanitized.starts_with('.') {
+        sanitized.remove(0);
+    }
+    while sanitized.contains("..") {
+        sanitized = sanitized.replace("..", ".");
+    }
+    if sanitized.len() > 160 {
+        let extension = std::path::Path::new(&sanitized)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(ToOwned::to_owned);
+        sanitized.truncate(140);
+        if let Some(extension) = extension {
+            let suffix = format!(".{extension}");
+            if !sanitized.ends_with(&suffix) {
+                sanitized.push_str(&suffix);
+            }
+        }
+    }
+    sanitized
+}
+
+fn uploaded_app_kind(file_name: &str) -> Result<UploadedAppKind, AppError> {
+    let extension = std::path::Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "apk" => Ok(UploadedAppKind::Apk),
+        "ipa" => Ok(UploadedAppKind::Ipa),
+        _ => Err(AppError::bad_request(
+            "Drop an `.ipa` for iOS simulators or an `.apk` for Android emulators.",
+        )),
+    }
+}
+
+fn validate_uploaded_app_target(udid: &str, app_kind: UploadedAppKind) -> Result<(), AppError> {
+    match (android::is_android_id(udid), app_kind) {
+        (true, UploadedAppKind::Apk) | (false, UploadedAppKind::Ipa) => Ok(()),
+        (true, UploadedAppKind::Ipa) => Err(AppError::bad_request(
+            "Android emulators can only install `.apk` uploads.",
+        )),
+        (false, UploadedAppKind::Apk) => Err(AppError::bad_request(
+            "iOS simulators can only install `.ipa` uploads.",
+        )),
+    }
+}
+
+async fn write_uploaded_app_file(
+    file_name: &str,
+    body: &Bytes,
+) -> Result<std::path::PathBuf, AppError> {
+    let upload_dir = env::temp_dir().join("simdeck").join("uploads");
+    tokio::fs::create_dir_all(&upload_dir)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "Unable to create upload directory {}: {error}",
+                upload_dir.display()
+            ))
+        })?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_nanos();
+    let path = upload_dir.join(format!("{}-{}-{file_name}", std::process::id(), timestamp));
+    tokio::fs::write(&path, body.as_ref())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "Unable to save uploaded app {}: {error}",
+                path.display()
+            ))
+        })?;
+    Ok(path)
 }
 
 async fn uninstall_app(

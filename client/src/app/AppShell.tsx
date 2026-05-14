@@ -28,6 +28,7 @@ import {
   simulatorControlSocketUrl,
   shutdownSimulator,
   toggleAppearance,
+  uploadSimulatorApp,
   type ControlMessage,
 } from "../api/controls";
 import {
@@ -331,6 +332,11 @@ type SimulatorTransition = {
   udid: string;
 };
 
+type AppInstallState = {
+  fileName?: string;
+  phase: "dragging" | "installing" | "installed";
+};
+
 export interface AppShellProps {
   apiRoot?: string;
   fixedSimulatorUDID?: string | null;
@@ -399,6 +405,8 @@ export function AppShell({
   const [pairingBusy, setPairingBusy] = useState(false);
   const [simulatorTransition, setSimulatorTransition] =
     useState<SimulatorTransition | null>(null);
+  const [appInstallState, setAppInstallState] =
+    useState<AppInstallState | null>(null);
   const [rotationQuarterTurns, setRotationQuarterTurns] = useState(
     initialViewportState.rotationQuarterTurns,
   );
@@ -456,6 +464,9 @@ export function AppShell({
     useState<SimulatorStateResponse | null>(null);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const appInstallInputRef = useRef<HTMLInputElement | null>(null);
+  const appInstallDragDepthRef = useRef(0);
+  const appInstallStatusTimeoutRef = useRef(0);
   const outerCanvasRef = useRef<HTMLDivElement | null>(null);
   const streamCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [outerCanvasElement, setOuterCanvasElement] =
@@ -853,6 +864,18 @@ export function AppShell({
   }, [pan]);
 
   const isBooted = Boolean(selectedSimulator?.isBooted);
+  const isInstallingApp = appInstallState?.phase === "installing";
+  const canInstallApp = Boolean(
+    selectedSimulator?.isBooted && !isInstallingApp,
+  );
+  const appInstallAccept = isAndroidViewport ? ".apk" : ".ipa";
+  const appInstallOverlayLabel = appInstallState
+    ? appInstallStatusLabel(
+        appInstallState,
+        selectedSimulator,
+        isAndroidViewport,
+      )
+    : "";
   const autoViewportOffsetY =
     viewMode === "manual" ? 0 : -zoomDockReservedHeight / 2;
   const screenAspect = screenAspectRatio(effectiveDeviceNaturalSize);
@@ -1487,6 +1510,9 @@ export function AppShell({
       }
       if (touchIndicatorTimeoutRef.current) {
         clearTimeout(touchIndicatorTimeoutRef.current);
+      }
+      if (appInstallStatusTimeoutRef.current) {
+        clearTimeout(appInstallStatusTimeoutRef.current);
       }
     };
   }, []);
@@ -2210,6 +2236,152 @@ export function AppShell({
     void refresh();
   }
 
+  function openInstallAppPicker() {
+    if (!selectedSimulator) {
+      setLocalError("Select a simulator before installing an app.");
+      return;
+    }
+    if (!selectedSimulator.isBooted) {
+      setLocalError("Boot the selected simulator before installing an app.");
+      return;
+    }
+    appInstallInputRef.current?.click();
+  }
+
+  function handleInstallInputChange(
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) {
+      return;
+    }
+    void installAppFile(file, selectedSimulator);
+  }
+
+  function handleAppInstallDragEnter(event: React.DragEvent<HTMLElement>) {
+    if (!dragEventHasFiles(event.dataTransfer)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    appInstallDragDepthRef.current += 1;
+    if (appInstallState?.phase !== "installing") {
+      setAppInstallState({ phase: "dragging" });
+    }
+  }
+
+  function handleAppInstallDragOver(event: React.DragEvent<HTMLElement>) {
+    if (!dragEventHasFiles(event.dataTransfer)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = canInstallApp ? "copy" : "none";
+  }
+
+  function handleAppInstallDragLeave(event: React.DragEvent<HTMLElement>) {
+    if (!dragEventHasFiles(event.dataTransfer)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    appInstallDragDepthRef.current = Math.max(
+      0,
+      appInstallDragDepthRef.current - 1,
+    );
+    if (appInstallDragDepthRef.current === 0) {
+      setAppInstallState((current) =>
+        current?.phase === "dragging" ? null : current,
+      );
+    }
+  }
+
+  function handleAppInstallDrop(event: React.DragEvent<HTMLElement>) {
+    if (!dragEventHasFiles(event.dataTransfer)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    appInstallDragDepthRef.current = 0;
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length !== 1) {
+      setAppInstallState(null);
+      setLocalError("Drop one `.ipa` or `.apk` file at a time.");
+      return;
+    }
+    void installAppFile(files[0], selectedSimulator);
+  }
+
+  async function installAppFile(
+    file: File,
+    simulator: SimulatorMetadata | null,
+  ) {
+    if (appInstallState?.phase === "installing") {
+      setLocalError("Wait for the current app install to finish.");
+      return;
+    }
+    if (!simulator) {
+      setAppInstallState(null);
+      setLocalError("Select a simulator before installing an app.");
+      return;
+    }
+    if (!simulator.isBooted) {
+      setAppInstallState(null);
+      setLocalError("Boot the selected simulator before installing an app.");
+      return;
+    }
+
+    const appKind = installableAppKind(file.name);
+    const simulatorIsAndroid = isAndroidSimulator(simulator);
+    if (!appKind) {
+      setAppInstallState(null);
+      setLocalError(
+        simulatorIsAndroid
+          ? "Drop an `.apk` file for Android emulators."
+          : "Drop an `.ipa` file for iOS simulators.",
+      );
+      return;
+    }
+    if (simulatorIsAndroid && appKind !== "apk") {
+      setAppInstallState(null);
+      setLocalError("Android emulators can only install `.apk` files.");
+      return;
+    }
+    if (!simulatorIsAndroid && appKind !== "ipa") {
+      setAppInstallState(null);
+      setLocalError("iOS simulators can only install `.ipa` files.");
+      return;
+    }
+
+    const fileName = file.name || "app";
+    setLocalError("");
+    setAppInstallState({ fileName, phase: "installing" });
+    try {
+      await uploadSimulatorApp(simulator.udid, file);
+      setAppInstallState({ fileName, phase: "installed" });
+      clearAppInstallStatusLater(fileName);
+      await refresh();
+    } catch (error) {
+      setAppInstallState(null);
+      setLocalError(error instanceof Error ? error.message : "Install failed.");
+    }
+  }
+
+  function clearAppInstallStatusLater(fileName: string) {
+    if (appInstallStatusTimeoutRef.current) {
+      window.clearTimeout(appInstallStatusTimeoutRef.current);
+    }
+    appInstallStatusTimeoutRef.current = window.setTimeout(() => {
+      appInstallStatusTimeoutRef.current = 0;
+      setAppInstallState((current) =>
+        current?.phase === "installed" && current.fileName === fileName
+          ? null
+          : current,
+      );
+    }, 1800);
+  }
+
   async function submitPairing(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const code = pairingCode.trim();
@@ -2262,7 +2434,17 @@ export function AppShell({
           </form>
         </div>
       ) : null}
+      <input
+        accept={appInstallAccept}
+        aria-hidden="true"
+        onChange={handleInstallInputChange}
+        ref={appInstallInputRef}
+        style={{ display: "none" }}
+        tabIndex={-1}
+        type="file"
+      />
       <Toolbar
+        canInstallApp={canInstallApp}
         closeMenu={() => setMenuOpen(false)}
         debugVisible={debugVisible}
         error={toolbarError}
@@ -2305,6 +2487,7 @@ export function AppShell({
             void runAction(() => pressHome(selectedSimulator.udid), false);
           }
         }}
+        onInstallAppPrompt={openInstallAppPicker}
         onOpenAppSwitcher={() => {
           if (!selectedSimulator) {
             return;
@@ -2415,6 +2598,7 @@ export function AppShell({
       />
       <SimulatorViewport
         accessibilityHoveredId={accessibilityHoveredId}
+        appInstallOverlayLabel={appInstallOverlayLabel}
         accessibilityPanel={
           <AccessibilityInspector
             availableSources={accessibilityAvailableSources}
@@ -2470,6 +2654,12 @@ export function AppShell({
         isLoading={isLoading}
         isStreamError={viewportHasStreamError}
         isPanning={pointerInput.isPanning}
+        isAppInstallDragging={appInstallState?.phase === "dragging"}
+        isAppInstalling={appInstallState?.phase === "installing"}
+        onAppInstallDragEnter={handleAppInstallDragEnter}
+        onAppInstallDragLeave={handleAppInstallDragLeave}
+        onAppInstallDragOver={handleAppInstallDragOver}
+        onAppInstallDrop={handleAppInstallDrop}
         onChromeButtonEvent={sendHardwareButtonEvent}
         onPanPointerMove={pointerInput.handlePanPointerMove}
         onPanPointerUp={pointerInput.handlePanPointerUp}
@@ -2851,6 +3041,42 @@ function isAndroidSimulator(simulator: SimulatorMetadata | null): boolean {
     simulator?.deviceTypeIdentifier === "android-emulator" ||
     simulator?.udid.startsWith("android:"),
   );
+}
+
+function dragEventHasFiles(dataTransfer: DataTransfer): boolean {
+  return Array.from(dataTransfer.types).includes("Files");
+}
+
+function installableAppKind(fileName: string): "apk" | "ipa" | null {
+  const lower = fileName.trim().toLowerCase();
+  if (lower.endsWith(".apk")) {
+    return "apk";
+  }
+  if (lower.endsWith(".ipa")) {
+    return "ipa";
+  }
+  return null;
+}
+
+function appInstallStatusLabel(
+  state: AppInstallState,
+  simulator: SimulatorMetadata | null,
+  android: boolean,
+): string {
+  const expected = android ? "APK" : "IPA";
+  if (state.phase === "dragging") {
+    if (!simulator) {
+      return "Select a simulator before installing";
+    }
+    if (!simulator.isBooted) {
+      return "Boot selected simulator before installing";
+    }
+    return `Drop ${expected} to install on ${simulator.name}`;
+  }
+  if (state.phase === "installing") {
+    return `Installing ${state.fileName ?? expected}...`;
+  }
+  return `Installed ${state.fileName ?? expected}`;
 }
 
 function streamConfigsEqual(left: StreamConfig, right: StreamConfig): boolean {
