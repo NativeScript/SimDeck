@@ -483,6 +483,16 @@
   color: var(--text);
 }
 
+.menu-action:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.55;
+}
+
+.menu-action:disabled:hover {
+  background: transparent;
+}
+
 .mobile-menu-action {
   display: none;
 }
@@ -2636,6 +2646,34 @@
 
 .canvas-loading p {
   margin: 0;
+}
+
+.app-install-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 13;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  background: color-mix(in srgb, var(--canvas-bg) 68%, transparent);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-align: center;
+  pointer-events: none;
+}
+
+.app-install-overlay.dragging {
+  background: color-mix(in srgb, var(--accent) 16%, var(--canvas-bg));
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: -10px;
+}
+
+.app-install-overlay.installing {
+  background: color-mix(in srgb, var(--canvas-bg) 76%, transparent);
 }
 
 .loading-spinner {

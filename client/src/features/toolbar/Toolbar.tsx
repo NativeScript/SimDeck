@@ -29,10 +29,12 @@ interface ToolbarProps {
   hierarchyVisible: boolean;
   hideSimulatorSelection?: boolean;
   isLoading: boolean;
+  canInstallApp: boolean;
   onBoot: () => void;
   onChangeSearch: (value: string) => void;
   onDismissKeyboard: () => void;
   onHome: () => void;
+  onInstallAppPrompt: () => void;
   onOpenAppSwitcher: () => void;
   onOpenBundlePrompt: () => void;
   onOpenNewSimulator: () => void;
@@ -73,12 +75,14 @@ export function Toolbar({
   hierarchyVisible,
   hideSimulatorSelection = false,
   isLoading,
+  canInstallApp,
   menuOpen,
   menuRef,
   onBoot,
   onChangeSearch,
   onDismissKeyboard,
   onHome,
+  onInstallAppPrompt,
   onOpenAppSwitcher,
   onOpenBundlePrompt,
   onOpenNewSimulator,
@@ -149,6 +153,7 @@ export function Toolbar({
           onCloseMenu={closeMenu}
           onDismissKeyboard={onDismissKeyboard}
           onHome={onHome}
+          onInstallAppPrompt={onInstallAppPrompt}
           onOpenAppSwitcher={onOpenAppSwitcher}
           onOpenBundlePrompt={onOpenBundlePrompt}
           onOpenNewSimulator={onOpenNewSimulator}
@@ -169,6 +174,7 @@ export function Toolbar({
           setSelectedUDID={setSelectedUDID}
           showBootButton={showBootButton}
           showStopButton={showStopButton}
+          canInstallApp={canInstallApp}
           streamConfig={streamConfig}
           streamTransport={streamTransport}
           touchOverlayVisible={touchOverlayVisible}

@@ -46,6 +46,7 @@ simdeck shutdown <UDID>
 simdeck erase <UDID>
 simdeck core-simulator restart
 simdeck install <UDID> /path/to/App.app
+simdeck install <UDID> /path/to/App.ipa
 simdeck install android:<AVD_NAME> /path/to/app.apk
 simdeck launch <UDID> com.example.App
 simdeck uninstall <UDID> com.example.App

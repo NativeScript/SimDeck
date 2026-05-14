@@ -5,6 +5,10 @@
 #import "XCWPrivateSimulatorBooter.h"
 #import "XCWProcessRunner.h"
 
+#import <errno.h>
+#import <stdlib.h>
+#import <string.h>
+
 static NSString * const XCWSimctlErrorDomain = @"SimDeck.Simctl";
 
 @interface XCWSimctl ()
@@ -19,6 +23,9 @@ static NSString * const XCWSimctlErrorDomain = @"SimDeck.Simctl";
                               timeoutSec:(NSTimeInterval)timeoutSec
                                    error:(NSError * _Nullable __autoreleasing *)error;
 + (nullable NSDictionary *)listJSONPayloadWithError:(NSError * _Nullable __autoreleasing *)error;
++ (NSError *)errorWithDescription:(NSString *)description code:(NSInteger)code;
+- (BOOL)installAppBundleAtPath:(NSString *)appPath simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error;
+- (BOOL)installIPAAtPath:(NSString *)ipaPath simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error;
 
 @end
 
@@ -41,6 +48,70 @@ static NSString *XCWStringValue(id value) {
 
 static NSNumber *XCWNumberValue(id value) {
     return [value isKindOfClass:[NSNumber class]] ? value : nil;
+}
+
+static NSString * _Nullable XCWCreateTemporaryDirectory(NSString *prefix, NSError * _Nullable __autoreleasing *error) {
+    NSString *templatePath = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-XXXXXX", prefix]];
+    char *directoryTemplate = strdup(templatePath.fileSystemRepresentation);
+    if (directoryTemplate == NULL) {
+        if (error != NULL) {
+            *error = [XCWSimctl errorWithDescription:@"Failed to allocate temporary IPA extraction path." code:15];
+        }
+        return nil;
+    }
+
+    char *createdPath = mkdtemp(directoryTemplate);
+    if (createdPath == NULL) {
+        if (error != NULL) {
+            *error = [XCWSimctl errorWithDescription:[NSString stringWithFormat:@"Failed to create temporary IPA extraction directory: %s", strerror(errno)] code:15];
+        }
+        free(directoryTemplate);
+        return nil;
+    }
+
+    NSString *path = [[NSFileManager defaultManager] stringWithFileSystemRepresentation:createdPath
+                                                                                 length:strlen(createdPath)];
+    free(directoryTemplate);
+    return path;
+}
+
+static NSString * _Nullable XCWAppBundlePathInExtractedIPA(NSString *extractedPath, NSError * _Nullable __autoreleasing *error) {
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    NSString *payloadPath = [extractedPath stringByAppendingPathComponent:@"Payload"];
+    BOOL isDirectory = NO;
+    if (![fileManager fileExistsAtPath:payloadPath isDirectory:&isDirectory] || !isDirectory) {
+        if (error != NULL) {
+            *error = [XCWSimctl errorWithDescription:@"IPA archive did not contain a Payload directory." code:15];
+        }
+        return nil;
+    }
+
+    NSArray<NSString *> *entries = [fileManager contentsOfDirectoryAtPath:payloadPath error:error];
+    if (entries == nil) {
+        return nil;
+    }
+
+    NSMutableArray<NSString *> *appPaths = [NSMutableArray array];
+    for (NSString *entry in entries) {
+        if ([entry.pathExtension caseInsensitiveCompare:@"app"] != NSOrderedSame) {
+            continue;
+        }
+        NSString *candidatePath = [payloadPath stringByAppendingPathComponent:entry];
+        BOOL candidateIsDirectory = NO;
+        if ([fileManager fileExistsAtPath:candidatePath isDirectory:&candidateIsDirectory] && candidateIsDirectory) {
+            [appPaths addObject:candidatePath];
+        }
+    }
+
+    if (appPaths.count == 0) {
+        if (error != NULL) {
+            *error = [XCWSimctl errorWithDescription:@"IPA archive did not contain a Payload/*.app bundle." code:15];
+        }
+        return nil;
+    }
+
+    [appPaths sortUsingSelector:@selector(localizedStandardCompare:)];
+    return appPaths.firstObject;
 }
 
 static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeIdentifier) {
@@ -591,6 +662,54 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 }
 
 - (BOOL)installAppAtPath:(NSString *)appPath simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
+    NSString *extension = appPath.pathExtension.lowercaseString;
+    if ([extension isEqualToString:@"ipa"]) {
+        return [self installIPAAtPath:appPath simulatorUDID:udid error:error];
+    }
+    if (![extension isEqualToString:@"app"]) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:@"iOS simulator install expects an `.app` bundle or `.ipa` archive." code:15];
+        }
+        return NO;
+    }
+    return [self installAppBundleAtPath:appPath simulatorUDID:udid error:error];
+}
+
+- (BOOL)installIPAAtPath:(NSString *)ipaPath simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
+    NSString *extractedPath = XCWCreateTemporaryDirectory(@"simdeck-ipa", error);
+    if (extractedPath == nil) {
+        return NO;
+    }
+
+    XCWProcessResult *extractResult = [XCWProcessRunner runLaunchPath:@"/usr/bin/ditto"
+                                                            arguments:@[@"-x", @"-k", ipaPath, extractedPath]
+                                                            inputData:nil
+                                                           timeoutSec:180
+                                                                error:error];
+    if (extractResult == nil) {
+        [[NSFileManager defaultManager] removeItemAtPath:extractedPath error:nil];
+        return NO;
+    }
+    if (extractResult.terminationStatus != 0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:extractResult.stderrString.length > 0 ? extractResult.stderrString : @"Unable to extract IPA archive." code:15];
+        }
+        [[NSFileManager defaultManager] removeItemAtPath:extractedPath error:nil];
+        return NO;
+    }
+
+    NSString *appBundlePath = XCWAppBundlePathInExtractedIPA(extractedPath, error);
+    if (appBundlePath == nil) {
+        [[NSFileManager defaultManager] removeItemAtPath:extractedPath error:nil];
+        return NO;
+    }
+
+    BOOL ok = [self installAppBundleAtPath:appBundlePath simulatorUDID:udid error:error];
+    [[NSFileManager defaultManager] removeItemAtPath:extractedPath error:nil];
+    return ok;
+}
+
+- (BOOL)installAppBundleAtPath:(NSString *)appPath simulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
     XCWProcessResult *result = [self.class runSimctl:@[@"install", udid, appPath] error:error];
     if (result == nil) {
         return NO;

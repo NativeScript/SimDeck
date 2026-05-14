@@ -11,6 +11,7 @@ import type { TouchIndicator, ViewMode } from "./types";
 
 interface SimulatorViewportProps {
   accessibilityHoveredId: string | null;
+  appInstallOverlayLabel: string;
   debugPanel: ReactNode;
   accessibilityPanel: ReactNode;
   accessibilityPickerActive: boolean;
@@ -30,6 +31,12 @@ interface SimulatorViewportProps {
   isLoading: boolean;
   isStreamError: boolean;
   isPanning: boolean;
+  isAppInstallDragging: boolean;
+  isAppInstalling: boolean;
+  onAppInstallDragEnter: (event: React.DragEvent<HTMLElement>) => void;
+  onAppInstallDragLeave: (event: React.DragEvent<HTMLElement>) => void;
+  onAppInstallDragOver: (event: React.DragEvent<HTMLElement>) => void;
+  onAppInstallDrop: (event: React.DragEvent<HTMLElement>) => void;
   onChromeButtonEvent: (
     button: string,
     phase: "down" | "up",
@@ -74,6 +81,7 @@ interface SimulatorViewportProps {
 
 export function SimulatorViewport({
   accessibilityHoveredId,
+  appInstallOverlayLabel,
   accessibilityPanel,
   accessibilityPickerActive,
   accessibilityRoots,
@@ -93,6 +101,12 @@ export function SimulatorViewport({
   isLoading,
   isStreamError,
   isPanning,
+  isAppInstallDragging,
+  isAppInstalling,
+  onAppInstallDragEnter,
+  onAppInstallDragLeave,
+  onAppInstallDragOver,
+  onAppInstallDrop,
   onChromeButtonEvent,
   chromeButtonUrl,
   onPanPointerMove,
@@ -152,6 +166,10 @@ export function SimulatorViewport({
       <div
         className={`canvas ${effectiveZoom > fitScale + 0.001 ? "pan-enabled" : ""} ${isPanning ? "panning" : ""}`}
         onContextMenu={(event) => event.preventDefault()}
+        onDragEnter={onAppInstallDragEnter}
+        onDragLeave={onAppInstallDragLeave}
+        onDragOver={onAppInstallDragOver}
+        onDrop={onAppInstallDrop}
         onPointerCancel={onPanPointerUp}
         onPointerDown={(event) => {
           if (event.target !== event.currentTarget) {
@@ -229,6 +247,20 @@ export function SimulatorViewport({
             role="status"
           >
             <span className="loading-spinner" aria-hidden="true" />
+          </div>
+        ) : null}
+        {appInstallOverlayLabel ? (
+          <div
+            aria-live="polite"
+            className={`app-install-overlay ${
+              isAppInstallDragging ? "dragging" : ""
+            } ${isAppInstalling ? "installing" : ""}`}
+            role="status"
+          >
+            {isAppInstalling ? (
+              <span className="loading-spinner" aria-hidden="true" />
+            ) : null}
+            <span>{appInstallOverlayLabel}</span>
           </div>
         ) : null}
         {debugPanel ? <div className="debug-overlay">{debugPanel}</div> : null}

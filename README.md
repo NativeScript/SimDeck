@@ -121,6 +121,7 @@ simdeck boot <udid>
 simdeck shutdown <udid>
 simdeck erase <udid>
 simdeck install <udid> /path/to/App.app
+simdeck install <udid> /path/to/App.ipa
 simdeck install android:<avd-name> /path/to/app.apk
 simdeck uninstall <udid> com.example.App
 simdeck open-url <udid> https://example.com

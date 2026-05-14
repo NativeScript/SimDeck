@@ -43,6 +43,7 @@ inventory, including paths and display metadata.
 
 ```sh
 simdeck install <udid> /path/to/App.app
+simdeck install <udid> /path/to/App.ipa
 simdeck install android:<avd-name> /path/to/app.apk
 simdeck uninstall <udid> com.example.App
 simdeck launch <udid> com.example.App

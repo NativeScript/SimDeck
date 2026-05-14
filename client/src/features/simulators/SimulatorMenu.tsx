@@ -19,6 +19,7 @@ interface SimulatorMenuProps {
   filteredSimulators: SimulatorMetadata[];
   hideSimulatorSelection?: boolean;
   isLoading: boolean;
+  canInstallApp: boolean;
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
   onBoot: () => void;
@@ -26,6 +27,7 @@ interface SimulatorMenuProps {
   onCloseMenu: () => void;
   onDismissKeyboard: () => void;
   onHome: () => void;
+  onInstallAppPrompt: () => void;
   onOpenAppSwitcher: () => void;
   onOpenBundlePrompt: () => void;
   onOpenNewSimulator: () => void;
@@ -56,6 +58,7 @@ export function SimulatorMenu({
   filteredSimulators,
   hideSimulatorSelection = false,
   isLoading,
+  canInstallApp,
   menuOpen,
   menuRef,
   onBoot,
@@ -63,6 +66,7 @@ export function SimulatorMenu({
   onCloseMenu,
   onDismissKeyboard,
   onHome,
+  onInstallAppPrompt,
   onOpenAppSwitcher,
   onOpenBundlePrompt,
   onOpenNewSimulator,
@@ -262,6 +266,16 @@ export function SimulatorMenu({
                 ) : null}
                 <button className="menu-action" onClick={onOpenUrlPrompt}>
                   Open URL…
+                </button>
+                <button
+                  className="menu-action"
+                  disabled={!canInstallApp}
+                  onClick={() => {
+                    onInstallAppPrompt();
+                    onCloseMenu();
+                  }}
+                >
+                  Install App…
                 </button>
                 <button className="menu-action" onClick={onOpenBundlePrompt}>
                   Launch Bundle…

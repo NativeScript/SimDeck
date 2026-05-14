@@ -199,6 +199,13 @@ export interface SimulatorResponse {
   simulator: SimulatorMetadata;
 }
 
+export interface InstallUploadResponse {
+  action: "install";
+  fileName: string;
+  ok: boolean;
+  udid: string;
+}
+
 export interface SimulatorForegroundApp {
   appName?: string | null;
   bundleIdentifier?: string | null;

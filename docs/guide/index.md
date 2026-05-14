@@ -27,6 +27,7 @@ Open the local URL, pick a device, and use the toolbar or CLI commands:
 simdeck list
 simdeck boot <udid>
 simdeck install <udid> /path/to/App.app
+simdeck install <udid> /path/to/App.ipa
 simdeck launch <udid> com.example.App
 simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
 simdeck describe <udid> --format agent --max-depth 3

@@ -33,6 +33,7 @@ SIMDECK_SERVER_URL=http://127.0.0.1:4310 simdeck list
 simdeck list
 simdeck boot <udid>
 simdeck install <udid> /path/to/App.app
+simdeck install <udid> /path/to/App.ipa
 simdeck launch <udid> com.example.App
 simdeck open-url <udid> https://example.com
 simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
