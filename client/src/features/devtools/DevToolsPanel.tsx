@@ -34,6 +34,8 @@ const SAFARI_ACTIVE_URL_REQUEST_TIMEOUT_MS = 1800;
 const CHROME_DEVTOOLS_REQUEST_TIMEOUT_MS = 6000;
 const WEBKIT_DEVTOOLS_REQUEST_TIMEOUT_MS = 6000;
 const DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS = 8000;
+const WEBKIT_FRAME_HEALTH_REMOUNT_COOLDOWN_MS = 4000;
+const WEBKIT_FRAME_HEALTH_MAX_REMOUNTS = 3;
 const SAFARI_AUTO_TARGET_ID = "webkit:safari:auto";
 const DEVTOOLS_PANEL_WIDTH_STORAGE_KEY = "xcw-devtools-panel-width";
 const LEGACY_PANEL_WIDTH_STORAGE_KEYS = [
@@ -98,6 +100,36 @@ export interface DevToolsTargetSelection {
   targetId: string;
 }
 
+export type WebKitFrameHealthState =
+  | ""
+  | "loading"
+  | "connecting"
+  | "connected"
+  | "ready"
+  | "stalled"
+  | "disconnected"
+  | "failed";
+
+interface WebKitFrameHealth {
+  hasElementsTree?: boolean;
+  reason?: string;
+  state: WebKitFrameHealthState;
+}
+
+export interface WebKitFrameRecoveryState {
+  frameUrl: string;
+  lastRemountAt: number;
+  remountCount: number;
+}
+
+export interface WebKitFrameHealthRecoveryInput {
+  cooldownMs?: number;
+  maxRemounts?: number;
+  now: number;
+  recovery: WebKitFrameRecoveryState;
+  state: WebKitFrameHealthState;
+}
+
 type ChromeDiscoveryResult =
   PromiseSettledResult<ChromeDevToolsTargetDiscovery>;
 type WebKitDiscoveryResult = PromiseSettledResult<WebKitTargetDiscovery>;
@@ -116,11 +148,19 @@ export function DevToolsPanel({
   const [isWebKitLoading, setIsWebKitLoading] = useState(false);
   const [error, setError] = useState("");
   const [frameInstanceKey, setFrameInstanceKey] = useState(0);
+  const [frameHealth, setFrameHealth] = useState<WebKitFrameHealth>({
+    state: "",
+  });
   const [frameLoaded, setFrameLoaded] = useState(false);
   const [overviewVisible, setOverviewVisible] = useState(false);
   const discoveryRef = useRef<DevToolsDiscovery | null>(null);
   const emptyDiscoveryGraceUntilRef = useRef(0);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const frameRecoveryRef = useRef<WebKitFrameRecoveryState>({
+    frameUrl: "",
+    lastRemountAt: 0,
+    remountCount: 0,
+  });
   const activeWebKitUrlHintRef = useRef("");
   const loadingActiveWebKitUrlRef = useRef(false);
   const loadingTargetsRef = useRef(false);
@@ -216,6 +256,7 @@ export function DevToolsPanel({
       pendingForegroundAppRef.current = null;
       manualTargetSelectionRef.current = false;
       setError("");
+      setFrameHealth({ state: "" });
       setFrameLoaded(false);
       setIsLoading(false);
       setIsWebKitLoading(false);
@@ -351,6 +392,7 @@ export function DevToolsPanel({
           applySelectedTargetId("");
           manualTargetSelectionRef.current = false;
           setError(NOT_CONNECTED_MESSAGE);
+          setFrameHealth({ state: "" });
           setFrameLoaded(false);
           setIsLoading(false);
           setIsWebKitLoading(false);
@@ -443,6 +485,7 @@ export function DevToolsPanel({
         applySelectedTargetId("");
         manualTargetSelectionRef.current = false;
         setError(NOT_CONNECTED_MESSAGE);
+        setFrameHealth({ state: "" });
         setFrameLoaded(false);
         setIsLoading(false);
         setIsWebKitLoading(false);
@@ -586,8 +629,101 @@ export function DevToolsPanel({
   }, [visible]);
 
   useEffect(() => {
+    frameRecoveryRef.current = {
+      frameUrl,
+      lastRemountAt: 0,
+      remountCount: 0,
+    };
+    setFrameHealth({ state: frameUrl ? "loading" : "" });
     setFrameLoaded(false);
   }, [frameUrl]);
+
+  const remountWebKitFrameForHealth = useCallback(
+    (state: WebKitFrameHealthState, reason = "") => {
+      if (
+        !visible ||
+        overviewVisible ||
+        !frameUrl ||
+        !selectedTarget ||
+        !isWebKitTarget(selectedTarget)
+      ) {
+        return;
+      }
+
+      if (frameRecoveryRef.current.frameUrl !== frameUrl) {
+        frameRecoveryRef.current = {
+          frameUrl,
+          lastRemountAt: 0,
+          remountCount: 0,
+        };
+      }
+
+      if (
+        !shouldRemountWebKitFrameForHealth({
+          now: Date.now(),
+          recovery: frameRecoveryRef.current,
+          state,
+        })
+      ) {
+        return;
+      }
+
+      frameRecoveryRef.current = {
+        ...frameRecoveryRef.current,
+        lastRemountAt: Date.now(),
+        remountCount: frameRecoveryRef.current.remountCount + 1,
+      };
+      setFrameHealth({ reason: reason || state, state: "connecting" });
+      setFrameLoaded(false);
+      setFrameInstanceKey((current) => current + 1);
+    },
+    [frameUrl, overviewVisible, selectedTarget, visible],
+  );
+
+  useEffect(() => {
+    function handleWebKitFrameMessage(event: MessageEvent) {
+      const frameWindow = frameRef.current?.contentWindow;
+      if (!frameWindow || event.source !== frameWindow) {
+        return;
+      }
+
+      const data = event.data;
+      if (!isRecord(data)) {
+        return;
+      }
+
+      if (data.type === "simdeck:webkit-inspector:health") {
+        const nextHealth = webKitHealthFromMessage(data);
+        if (!nextHealth) {
+          return;
+        }
+        setFrameHealth(nextHealth);
+        if (nextHealth.state === "ready") {
+          setFrameLoaded(true);
+        } else {
+          remountWebKitFrameForHealth(nextHealth.state, nextHealth.reason);
+        }
+        return;
+      }
+
+      if (data.type === "simdeck:webkit-inspector:socket") {
+        const socketState = webKitHealthStateFromSocketState(data.state);
+        if (!socketState) {
+          return;
+        }
+        setFrameHealth((current) =>
+          current.state === "ready" && socketState === "connected"
+            ? current
+            : { reason: "socket", state: socketState },
+        );
+        remountWebKitFrameForHealth(socketState, "socket");
+      }
+    }
+
+    window.addEventListener("message", handleWebKitFrameMessage);
+    return () =>
+      window.removeEventListener("message", handleWebKitFrameMessage);
+  }, [remountWebKitFrameForHealth]);
 
   useEffect(() => {
     function handlePointerMove(event: PointerEvent) {
@@ -701,6 +837,8 @@ export function DevToolsPanel({
     pendingForegroundKeyRef.current = "";
     pendingForegroundAppRef.current = null;
     applySelectedTargetId(targetId);
+    setFrameHealth({ state: "loading" });
+    setFrameLoaded(false);
     setFrameInstanceKey((current) => current + 1);
     setOverviewVisible(false);
   }
@@ -748,6 +886,7 @@ export function DevToolsPanel({
     : isDiscoveringTargets
       ? "Connecting..."
       : "No targets";
+  const frameStatusMessage = webKitFrameStatusMessage(frameHealth);
   const displayWarnings = selectedSimulator?.isBooted
     ? (discovery?.warnings ?? []).filter(shouldDisplayDevToolsWarning)
     : [];
@@ -820,6 +959,7 @@ export function DevToolsPanel({
             pendingForegroundAppRef.current = null;
             emptyDiscoveryGraceUntilRef.current =
               Date.now() + DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS;
+            setFrameHealth({ state: "loading" });
             setFrameLoaded(false);
             setFrameInstanceKey((current) => current + 1);
             void loadTargets();
@@ -864,14 +1004,19 @@ export function DevToolsPanel({
               allow="clipboard-read; clipboard-write"
               className="webkit-frame"
               key={`${frameUrl}:${frameInstanceKey}`}
-              onLoad={() => setFrameLoaded(true)}
+              onLoad={() => {
+                setFrameLoaded(true);
+                setFrameHealth((current) =>
+                  current.state ? current : { state: "loading" },
+                );
+              }}
               ref={frameRef}
               src={frameUrl}
               title="DevTools"
             />
             {!frameLoaded ? (
               <div className="webkit-status" role="status">
-                Connecting...
+                {frameStatusMessage}
               </div>
             ) : null}
           </>
@@ -1419,6 +1564,93 @@ function isSafariBrowser(): boolean {
     /safari/i.test(userAgent) &&
     !/chrome|chromium|crios|fxios|edg/i.test(userAgent)
   );
+}
+
+export function shouldRemountWebKitFrameForHealth({
+  cooldownMs = WEBKIT_FRAME_HEALTH_REMOUNT_COOLDOWN_MS,
+  maxRemounts = WEBKIT_FRAME_HEALTH_MAX_REMOUNTS,
+  now,
+  recovery,
+  state,
+}: WebKitFrameHealthRecoveryInput): boolean {
+  if (state !== "stalled" && state !== "failed") {
+    return false;
+  }
+  if (recovery.remountCount >= maxRemounts) {
+    return false;
+  }
+  if (recovery.lastRemountAt > 0 && now - recovery.lastRemountAt < cooldownMs) {
+    return false;
+  }
+  return true;
+}
+
+function webKitHealthFromMessage(
+  data: Record<string, unknown>,
+): WebKitFrameHealth | null {
+  const state = webKitHealthStateFromValue(data.state);
+  if (!state) {
+    return null;
+  }
+  return {
+    hasElementsTree:
+      typeof data.hasElementsTree === "boolean"
+        ? data.hasElementsTree
+        : undefined,
+    reason: typeof data.reason === "string" ? data.reason : undefined,
+    state,
+  };
+}
+
+function webKitHealthStateFromSocketState(
+  state: unknown,
+): WebKitFrameHealthState | null {
+  const normalized = webKitHealthStateFromValue(state);
+  return normalized === "ready" || normalized === "stalled" ? null : normalized;
+}
+
+function webKitHealthStateFromValue(
+  state: unknown,
+): WebKitFrameHealthState | null {
+  if (typeof state !== "string") {
+    return null;
+  }
+  if (state === "reconnecting") {
+    return "connecting";
+  }
+  return isWebKitFrameHealthState(state) ? state : null;
+}
+
+function isWebKitFrameHealthState(
+  state: string,
+): state is WebKitFrameHealthState {
+  return [
+    "",
+    "loading",
+    "connecting",
+    "connected",
+    "ready",
+    "stalled",
+    "disconnected",
+    "failed",
+  ].includes(state);
+}
+
+function webKitFrameStatusMessage(health: WebKitFrameHealth): string {
+  if (health.state === "stalled") {
+    return "Reconnecting DevTools...";
+  }
+  if (health.state === "failed" || health.state === "disconnected") {
+    return "Reconnecting DevTools...";
+  }
+  if (health.state === "connected") {
+    return "Loading Web Inspector...";
+  }
+  return "Connecting...";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object");
 }
 
 function readStoredPanelWidth(): number {

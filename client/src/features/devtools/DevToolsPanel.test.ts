@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveDevToolsTargetSelection,
+  shouldRemountWebKitFrameForHealth,
   withSafariAutoTarget,
   type DevToolsTarget,
 } from "./DevToolsPanel";
@@ -160,5 +161,63 @@ describe("resolveDevToolsTargetSelection", () => {
       shouldClearPendingForeground: false,
       targetId: first.id,
     });
+  });
+});
+
+describe("shouldRemountWebKitFrameForHealth", () => {
+  it("remounts stalled WebKit frames within the retry budget", () => {
+    expect(
+      shouldRemountWebKitFrameForHealth({
+        now: 10_000,
+        recovery: {
+          frameUrl: "/webkit/target/1",
+          lastRemountAt: 0,
+          remountCount: 0,
+        },
+        state: "stalled",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not remount healthy or cooling-down frames", () => {
+    expect(
+      shouldRemountWebKitFrameForHealth({
+        now: 10_000,
+        recovery: {
+          frameUrl: "/webkit/target/1",
+          lastRemountAt: 0,
+          remountCount: 0,
+        },
+        state: "ready",
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldRemountWebKitFrameForHealth({
+        cooldownMs: 4_000,
+        now: 12_000,
+        recovery: {
+          frameUrl: "/webkit/target/1",
+          lastRemountAt: 10_000,
+          remountCount: 1,
+        },
+        state: "stalled",
+      }),
+    ).toBe(false);
+  });
+
+  it("stops remounting once the retry budget is exhausted", () => {
+    expect(
+      shouldRemountWebKitFrameForHealth({
+        maxRemounts: 3,
+        now: 20_000,
+        recovery: {
+          frameUrl: "/webkit/target/1",
+          lastRemountAt: 10_000,
+          remountCount: 3,
+        },
+        state: "failed",
+      }),
+    ).toBe(false);
   });
 });

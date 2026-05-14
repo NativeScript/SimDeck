@@ -1336,6 +1336,8 @@ fn browser_frontend_host_script() -> &'static str {
     }
 
     function dispatchBackendMessage(message) {
+        backendMessageCount += 1;
+        lastBackendMessageAt = Date.now();
         if (window.InspectorBackend && typeof InspectorBackend.dispatch === "function") {
             InspectorBackend.dispatch(message);
             return;
@@ -1405,6 +1407,17 @@ fn browser_frontend_host_script() -> &'static str {
     }
 
     const pendingMessages = [];
+    const HEALTH_CHECK_INTERVAL_MS = 1000;
+    const HEALTH_BACKEND_GRACE_MS = 4500;
+    const HEALTH_ELEMENTS_GRACE_MS = 9000;
+    let backendMessageCount = 0;
+    let frontendMessageCount = 0;
+    let connectedAt = 0;
+    let frontendLoadedAt = 0;
+    let healthTimer = 0;
+    let lastBackendMessageAt = 0;
+    let lastFrontendMessageAt = 0;
+    let lastHealthSignature = "";
     let reconnectDelay = 500;
     let reconnectTimer = 0;
     let socket = null;
@@ -1416,6 +1429,123 @@ fn browser_frontend_host_script() -> &'static str {
             type: "simdeck:webkit-inspector:socket",
             state,
         }, "*");
+    }
+
+    function collectionHasItems(collection) {
+        if (!collection)
+            return false;
+        if (typeof collection.size === "number")
+            return collection.size > 0;
+        if (typeof collection.length === "number")
+            return collection.length > 0;
+        if (typeof collection[Symbol.iterator] !== "function")
+            return false;
+        for (const _item of collection)
+            return true;
+        return false;
+    }
+
+    function inspectorHasDocumentModel() {
+        const domManager = window.WI?.domManager;
+        if (!domManager)
+            return false;
+        return Boolean(domManager.document && typeof domManager.document !== "function") ||
+            collectionHasItems(domManager.documents) ||
+            collectionHasItems(domManager._documents) ||
+            collectionHasItems(domManager._idToDOMNode) ||
+            collectionHasItems(domManager._nodeIdToDOMNode);
+    }
+
+    function inspectorElementsTreeText() {
+        const selectors = [
+            ".dom-tree-outline",
+            ".dom-tree",
+            ".tree-outline",
+            ".tree-outline.dom",
+            ".content-view.dom",
+            ".content-view.elements",
+            "[class*=\"dom-tree\"]",
+        ];
+        return selectors
+            .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+            .filter((element) => {
+                const style = window.getComputedStyle(element);
+                return style.display !== "none" &&
+                    style.visibility !== "hidden" &&
+                    element.getClientRects().length > 0;
+            })
+            .map((element) => element.textContent || "")
+            .join("\n");
+    }
+
+    function inspectorHasElementsTree() {
+        const text = inspectorElementsTreeText();
+        return /(<\s*(html|head|body|doctype)\b|\bhtml\b|\bbody\b)/i.test(text);
+    }
+
+    function notifyHealth(state, reason) {
+        if (window.parent === window)
+            return;
+        const now = Date.now();
+        const payload = {
+            type: "simdeck:webkit-inspector:health",
+            state,
+            reason,
+            backendMessageCount,
+            frontendMessageCount,
+            connectedMs: connectedAt ? now - connectedAt : 0,
+            loadedMs: frontendLoadedAt ? now - frontendLoadedAt : 0,
+            lastBackendMessageAgeMs: lastBackendMessageAt ? now - lastBackendMessageAt : null,
+            lastFrontendMessageAgeMs: lastFrontendMessageAt ? now - lastFrontendMessageAt : null,
+            hasDocumentModel: inspectorHasDocumentModel(),
+            hasElementsTree: inspectorHasElementsTree(),
+            hasInspectorRuntime: Boolean(window.WI),
+        };
+        const signature = JSON.stringify([
+            payload.state,
+            payload.reason,
+            payload.hasElementsTree,
+            payload.hasInspectorRuntime,
+            Math.min(payload.backendMessageCount, 10),
+            Math.min(payload.frontendMessageCount, 10),
+        ]);
+        if (signature === lastHealthSignature)
+            return;
+        lastHealthSignature = signature;
+        window.parent.postMessage(payload, "*");
+    }
+
+    function reportHealth(reason) {
+        const now = Date.now();
+        if (inspectorHasElementsTree()) {
+            notifyHealth("ready", reason || "elements-tree");
+            return;
+        }
+        if (socket && socket.readyState === WebSocket.CONNECTING) {
+            notifyHealth("connecting", reason || "socket-connecting");
+            return;
+        }
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            const age = now - connectedAt;
+            if (backendMessageCount === 0 && age > HEALTH_BACKEND_GRACE_MS) {
+                notifyHealth("stalled", "no-backend-messages");
+                return;
+            }
+            if (frontendLoadedAt && now - Math.max(frontendLoadedAt, connectedAt) > HEALTH_ELEMENTS_GRACE_MS) {
+                notifyHealth("stalled", "no-elements-tree");
+                return;
+            }
+            notifyHealth("connected", reason || "socket-open");
+            return;
+        }
+        notifyHealth(socket ? "connecting" : "disconnected", reason || "socket-missing");
+    }
+
+    function startHealthMonitor(reason) {
+        if (!healthTimer) {
+            healthTimer = setInterval(() => reportHealth("interval"), HEALTH_CHECK_INTERVAL_MS);
+        }
+        reportHealth(reason);
     }
 
     function clearReconnectTimer() {
@@ -1461,8 +1591,10 @@ fn browser_frontend_host_script() -> &'static str {
         nextSocket.addEventListener("open", () => {
             if (socket !== nextSocket)
                 return;
+            connectedAt = Date.now();
             reconnectDelay = 500;
             notifySocketState("connected");
+            startHealthMonitor("socket-open");
             while (pendingMessages.length)
                 nextSocket.send(pendingMessages.shift());
         });
@@ -1470,11 +1602,14 @@ fn browser_frontend_host_script() -> &'static str {
             if (socket !== nextSocket)
                 return;
             socket = null;
+            notifyHealth("disconnected", "socket-close");
             scheduleReconnect();
         });
         nextSocket.addEventListener("error", (event) => {
-            if (socket === nextSocket)
+            if (socket === nextSocket) {
                 notifySocketState("failed");
+                notifyHealth("failed", "socket-error");
+            }
             console.error("SimDeck WebKit Inspector socket error", event);
         });
     }
@@ -1546,11 +1681,13 @@ fn browser_frontend_host_script() -> &'static str {
             connectSocket();
         },
         loaded() {
+            frontendLoadedAt = Date.now();
             if (window.WI && typeof WI.updateVisibilityState === "function")
                 WI.updateVisibilityState(true);
             installCSSCompatibilityFallbacks();
             installNetworkManagerCompatibilityFallbacks();
             flushBackendQueue();
+            startHealthMonitor("frontend-loaded");
         },
         closeWindow() {},
         reopen() { window.location.reload(); },
@@ -1596,6 +1733,8 @@ fn browser_frontend_host_script() -> &'static str {
             event.target?.dispatchEvent(new MouseEvent("contextmenu", event));
         },
         sendMessageToBackend(message) {
+            frontendMessageCount += 1;
+            lastFrontendMessageAt = Date.now();
             if (maybeHandleUnsupportedFrontendCommand(message))
                 return;
             if (socket && socket.readyState === WebSocket.OPEN) {
@@ -1815,6 +1954,8 @@ mod tests {
         assert!(strings_index < shim_index);
         assert!(shim_index < main_index);
         assert!(injected.contains("simdeck:webkit-inspector:socket"));
+        assert!(injected.contains("simdeck:webkit-inspector:health"));
+        assert!(injected.contains("HEALTH_ELEMENTS_GRACE_MS"));
         assert!(injected.contains("notifySocketState(\"reconnecting\")"));
         assert!(injected.contains("Page.setShowRulers"));
         assert!(injected.contains("maybeHandleUnsupportedFrontendCommand(message)"));
