@@ -6,26 +6,28 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::process::Command;
+use tokio::sync::{Notify, RwLock};
 use tokio::time::{sleep, timeout, Instant};
 use tracing::{debug, warn};
 
 const WEBINSPECTORD_SOCKET_NAME: &str = "com.apple.webinspectord_sim.socket";
 const WEBKIT_PACKET_MAX_LEN: usize = 64 * 1024 * 1024;
-const WEBKIT_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(5000);
-const WEBKIT_DISCOVERY_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(1600);
-const WEBKIT_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_millis(400);
-const WEBKIT_DISCOVERY_CACHE_TTL: Duration = Duration::from_secs(120);
+const WEBKIT_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(2200);
+const WEBKIT_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const WEBKIT_SOCKET_ACTIVATION_DELAY: Duration = Duration::from_millis(200);
+const WEBKIT_TARGET_ATTACH_TIMEOUT: Duration = Duration::from_millis(2200);
 const WEBKIT_IO_TIMEOUT: Duration = Duration::from_secs(4);
+const WEBKIT_SOCKET_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
+const WEBKIT_DISCOVERY_RECONNECT_DELAY: Duration = Duration::from_millis(500);
 
 static WEBKIT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-static WEBKIT_DISCOVERY_CACHE: OnceLock<Mutex<HashMap<String, CachedWebKitDiscovery>>> =
+static WEBKIT_DISCOVERY_MONITORS: OnceLock<Mutex<HashMap<String, Arc<WebKitDiscoveryMonitor>>>> =
     OnceLock::new();
 
 #[derive(Clone, Debug, Serialize)]
@@ -34,6 +36,8 @@ pub struct WebKitTarget {
     pub id: String,
     pub app_id: String,
     pub app_name: Option<String>,
+    pub app_active: bool,
+    pub page_active: bool,
     pub page_id: u64,
     pub title: Option<String>,
     pub url: Option<String>,
@@ -51,32 +55,12 @@ pub struct WebKitTargetDiscovery {
     pub warnings: Vec<String>,
 }
 
-pub fn synthetic_safari_target(
-    udid: &str,
-    http_origin: &str,
-    process_identifier: i64,
-) -> WebKitTarget {
-    webkit_target(
-        udid,
-        http_origin,
-        WebKitPage {
-            app_id: format!("PID:{process_identifier}"),
-            page_id: 1,
-            title: Some("Safari".to_owned()),
-            url: None,
-        },
-        Some(&WebKitApplication {
-            id: format!("PID:{process_identifier}"),
-            name: Some("Safari".to_owned()),
-            is_proxy: false,
-        }),
-    )
-}
-
 #[derive(Clone, Debug)]
 struct WebKitApplication {
     id: String,
     name: Option<String>,
+    bundle_identifier: Option<String>,
+    active: bool,
     is_proxy: bool,
 }
 
@@ -86,6 +70,7 @@ struct WebKitPage {
     page_id: u64,
     title: Option<String>,
     url: Option<String>,
+    connection_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -99,276 +84,346 @@ struct LsofProcess {
     sockets: Vec<String>,
 }
 
-#[derive(Clone)]
-struct CachedWebKitDiscovery {
-    discovery: WebKitTargetDiscovery,
-    cached_at: SystemTime,
+#[derive(Clone, Default)]
+struct WebKitDiscoveryState {
+    socket_path: Option<String>,
+    applications: BTreeMap<String, WebKitApplication>,
+    pages: BTreeMap<(String, u64), WebKitPage>,
+    warnings: Vec<String>,
+}
+
+struct WebKitDiscoveryMonitor {
+    udid: String,
+    running: AtomicBool,
+    state: RwLock<WebKitDiscoveryState>,
+    notify: Notify,
 }
 
 pub async fn discover_targets(
     udid: &str,
     http_origin: Option<&str>,
 ) -> Result<WebKitTargetDiscovery, AppError> {
-    let socket = match discover_webinspector_socket(udid).await? {
-        Some(socket) => socket,
-        None => {
-            return Ok(WebKitTargetDiscovery {
-                udid: udid.to_owned(),
-                socket_path: None,
-                targets: Vec::new(),
-                warnings: vec![format!(
-                    "No WebKit Remote Inspector socket was found for simulator {udid}. Boot the simulator and open an inspectable Safari page or WKWebView."
-                )],
-            });
-        }
-    };
-
-    if let Some(cached) = cached_webkit_discovery(udid, Some(socket.path.clone()), Vec::new()) {
-        return Ok(cached);
-    }
+    let monitor = webkit_discovery_monitor(udid);
+    monitor.clone().ensure_started();
 
     let deadline = Instant::now() + WEBKIT_DISCOVERY_TIMEOUT;
-    let mut attempts = 0usize;
-    let mut last_discovery: Option<WebKitTargetDiscovery> = None;
-    let mut accumulated_warnings = Vec::new();
     loop {
-        attempts += 1;
-        match discover_targets_once(udid, http_origin, &socket).await {
-            Ok(discovery) if !discovery.targets.is_empty() => {
-                cache_webkit_discovery(&discovery);
-                return Ok(discovery);
-            }
-            Ok(discovery) => {
-                for warning in &discovery.warnings {
-                    push_unique_warning(&mut accumulated_warnings, warning);
-                }
-                last_discovery = Some(discovery);
-            }
-            Err(error) => {
-                push_unique_warning(&mut accumulated_warnings, error.to_string());
-            }
+        let discovery = monitor.discovery(http_origin).await;
+        if !discovery.targets.is_empty() || Instant::now() >= deadline {
+            return Ok(discovery);
         }
 
-        if Instant::now() >= deadline {
-            break;
-        }
-        sleep(Duration::from_millis(250)).await;
-    }
-
-    let mut discovery = last_discovery.unwrap_or_else(|| WebKitTargetDiscovery {
-        udid: udid.to_owned(),
-        socket_path: Some(socket.path.clone()),
-        targets: Vec::new(),
-        warnings: Vec::new(),
-    });
-    discovery.warnings = accumulated_warnings;
-    if attempts > 1 {
-        push_unique_warning(
-            &mut discovery.warnings,
-            format!("Retried WebKit target discovery {attempts} times while simulator webinspectord was settling."),
-        );
-    }
-
-    if let Some(cached) = cached_webkit_discovery(
-        udid,
-        discovery.socket_path.clone(),
-        discovery.warnings.clone(),
-    ) {
-        return Ok(cached);
-    }
-
-    Ok(discovery)
-}
-
-async fn discover_targets_once(
-    udid: &str,
-    http_origin: Option<&str>,
-    socket: &WebKitSocket,
-) -> Result<WebKitTargetDiscovery, AppError> {
-    let mut stream = timeout(WEBKIT_IO_TIMEOUT, UnixStream::connect(&socket.path))
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Ok(discovery);
+        };
+        if timeout(
+            remaining.min(Duration::from_millis(250)),
+            monitor.notify.notified(),
+        )
         .await
-        .map_err(|_| AppError::native("Timed out connecting to simulator webinspectord."))?
-        .map_err(|error| {
-            AppError::native(format!(
-                "Unable to connect to simulator webinspectord at {}: {error}",
-                socket.path
-            ))
-        })?;
+        .is_err()
+        {
+            continue;
+        }
+    }
+}
 
-    let connection_id = new_remote_inspector_id();
-    send_rpc(
-        &mut stream,
-        "_rpc_reportIdentifier:",
-        rpc_args(&connection_id),
-    )
-    .await?;
+fn webkit_discovery_monitor(udid: &str) -> Arc<WebKitDiscoveryMonitor> {
+    let monitors = WEBKIT_DISCOVERY_MONITORS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut monitors = monitors
+        .lock()
+        .expect("WebKit discovery monitor lock poisoned");
+    monitors
+        .entry(udid.to_owned())
+        .or_insert_with(|| Arc::new(WebKitDiscoveryMonitor::new(udid.to_owned())))
+        .clone()
+}
 
-    let deadline = Instant::now() + WEBKIT_DISCOVERY_ATTEMPT_TIMEOUT;
-    let mut next_listing_refresh = Instant::now() + WEBKIT_DISCOVERY_REFRESH_INTERVAL;
-    let mut applications: BTreeMap<String, WebKitApplication> = BTreeMap::new();
-    let mut requested_listings: HashSet<String> = HashSet::new();
-    let mut pages: BTreeMap<(String, u64), WebKitPage> = BTreeMap::new();
-    let mut warnings = Vec::new();
-
-    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
-        let read_timeout = remaining.min(Duration::from_millis(250));
-        let packet = match timeout(read_timeout, read_packet(&mut stream)).await {
-            Ok(Ok(packet)) => packet,
-            Ok(Err(error)) => {
-                warnings.push(error.to_string());
-                break;
-            }
-            Err(_) if !pages.is_empty() => break,
-            Err(_) if Instant::now() < deadline => {
-                if Instant::now() >= next_listing_refresh {
-                    for app_id in applications.keys() {
-                        send_forward_get_listing(&mut stream, &connection_id, app_id).await?;
-                    }
-                    next_listing_refresh = Instant::now() + WEBKIT_DISCOVERY_REFRESH_INTERVAL;
-                }
-                continue;
-            }
-            Err(_) => break,
-        };
-
-        let message = match parse_rpc_message(&packet) {
-            Ok(message) => message,
-            Err(error) => {
-                warnings.push(error.to_string());
-                continue;
-            }
-        };
-        debug!(
-            selector = %message.selector,
-            "Received WebKit discovery selector"
-        );
-
-        match message.selector.as_str() {
-            "_rpc_reportConnectedApplicationList:" => {
-                for app in parse_application_list(&message.args) {
-                    if requested_listings.insert(app.id.clone()) {
-                        send_forward_get_listing(&mut stream, &connection_id, &app.id).await?;
-                    }
-                    applications.insert(app.id.clone(), app);
-                }
-            }
-            "_rpc_applicationConnected:" => {
-                if let Some(app) = parse_application(&message.args) {
-                    if requested_listings.insert(app.id.clone()) {
-                        send_forward_get_listing(&mut stream, &connection_id, &app.id).await?;
-                    }
-                    applications.insert(app.id.clone(), app);
-                }
-            }
-            "_rpc_applicationUpdated:" => {
-                if let Some(app_id) = string_value(&message.args, "WIRApplicationIdentifierKey") {
-                    if requested_listings.insert(app_id.clone()) {
-                        send_forward_get_listing(&mut stream, &connection_id, &app_id).await?;
-                    }
-                    applications
-                        .entry(app_id.clone())
-                        .or_insert(WebKitApplication {
-                            id: app_id,
-                            name: string_value(&message.args, "WIRApplicationNameKey"),
-                            is_proxy: bool_value(&message.args, "WIRIsApplicationProxyKey")
-                                .unwrap_or(false),
-                        });
-                }
-            }
-            "_rpc_applicationSentListing:" => {
-                for page in parse_page_listing(&message.args) {
-                    pages.insert((page.app_id.clone(), page.page_id), page);
-                }
-            }
-            "_rpc_applicationDisconnected:" => {
-                if let Some(app) = parse_application(&message.args) {
-                    applications.remove(&app.id);
-                    pages.retain(|(app_id, _), _| app_id != &app.id);
-                }
-            }
-            "_rpc_reportSetup:"
-            | "_rpc_reportConnectedDriverList:"
-            | "_rpc_reportCurrentState:" => {}
-            selector => debug!("Ignoring WebKit inspector discovery selector {selector}."),
+impl WebKitDiscoveryMonitor {
+    fn new(udid: String) -> Self {
+        Self {
+            udid,
+            running: AtomicBool::new(false),
+            state: RwLock::new(WebKitDiscoveryState::default()),
+            notify: Notify::new(),
         }
     }
 
-    let origin = http_origin.unwrap_or("");
-    let mut targets = pages
-        .into_values()
-        .map(|page| {
-            let app = applications.get(&page.app_id);
-            webkit_target(udid, origin, page, app)
-        })
-        .collect::<Vec<_>>();
-    targets.sort_by(|lhs, rhs| {
-        lhs.app_name
-            .cmp(&rhs.app_name)
-            .then(lhs.title.cmp(&rhs.title))
-            .then(lhs.url.cmp(&rhs.url))
-            .then(lhs.page_id.cmp(&rhs.page_id))
-    });
+    fn ensure_started(self: Arc<Self>) {
+        if self.running.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        tokio::spawn(async move {
+            self.run().await;
+        });
+    }
 
-    let discovery = WebKitTargetDiscovery {
-        udid: udid.to_owned(),
-        socket_path: Some(socket.path.clone()),
-        targets,
-        warnings,
-    };
+    async fn discovery(&self, http_origin: Option<&str>) -> WebKitTargetDiscovery {
+        let state = self.state.read().await.clone();
+        self.discovery_from_state(state, http_origin)
+    }
 
-    Ok(discovery)
+    fn discovery_from_state(
+        &self,
+        state: WebKitDiscoveryState,
+        http_origin: Option<&str>,
+    ) -> WebKitTargetDiscovery {
+        let origin = http_origin.unwrap_or("");
+        let mut targets = state
+            .pages
+            .into_values()
+            .filter(|page| !is_incomplete_or_transient_page(page))
+            .map(|page| {
+                let app = state.applications.get(&page.app_id);
+                webkit_target(&self.udid, origin, page, app)
+            })
+            .collect::<Vec<_>>();
+        targets.retain(is_inspectable_webkit_target);
+        targets.sort_by(|lhs, rhs| {
+            lhs.app_name
+                .cmp(&rhs.app_name)
+                .then(lhs.title.cmp(&rhs.title))
+                .then(lhs.url.cmp(&rhs.url))
+                .then(lhs.page_id.cmp(&rhs.page_id))
+        });
+
+        WebKitTargetDiscovery {
+            udid: self.udid.clone(),
+            socket_path: state.socket_path,
+            targets,
+            warnings: state.warnings,
+        }
+    }
+
+    async fn run(self: Arc<Self>) {
+        loop {
+            match discover_webinspector_socket(&self.udid).await {
+                Ok(Some(socket)) => {
+                    self.set_socket_state(Some(socket.path.clone()), Vec::new())
+                        .await;
+                    if let Err(error) = self.run_connection(socket).await {
+                        debug!(
+                            "WebKit discovery connection ended for {}: {error}",
+                            self.udid
+                        );
+                    }
+                }
+                Ok(None) => {
+                    self.set_socket_state(
+                        None,
+                        vec![format!(
+                            "No WebKit Remote Inspector socket was found for simulator {}. Boot the simulator and open an inspectable Safari page or WKWebView.",
+                            self.udid
+                        )],
+                    )
+                    .await;
+                }
+                Err(error) => {
+                    self.set_socket_state(None, vec![error.to_string()]).await;
+                }
+            }
+            sleep(WEBKIT_DISCOVERY_RECONNECT_DELAY).await;
+        }
+    }
+
+    async fn set_socket_state(&self, socket_path: Option<String>, warnings: Vec<String>) {
+        let mut state = self.state.write().await;
+        state.socket_path = socket_path;
+        state.warnings = warnings;
+        if state.socket_path.is_none() {
+            state.applications.clear();
+            state.pages.clear();
+        }
+        drop(state);
+        self.notify.notify_waiters();
+    }
+
+    async fn publish_listing(
+        &self,
+        socket_path: &str,
+        applications: &BTreeMap<String, WebKitApplication>,
+        pages: &BTreeMap<(String, u64), WebKitPage>,
+    ) {
+        let mut state = self.state.write().await;
+        state.socket_path = Some(socket_path.to_owned());
+        state.applications = applications.clone();
+        state.pages = pages.clone();
+        state.warnings.clear();
+        drop(state);
+        self.notify.notify_waiters();
+    }
+
+    async fn run_connection(&self, socket: WebKitSocket) -> Result<(), AppError> {
+        let mut stream = timeout(WEBKIT_IO_TIMEOUT, UnixStream::connect(&socket.path))
+            .await
+            .map_err(|_| AppError::native("Timed out connecting to simulator webinspectord."))?
+            .map_err(|error| {
+                AppError::native(format!(
+                    "Unable to connect to simulator webinspectord at {}: {error}",
+                    socket.path
+                ))
+            })?;
+
+        let connection_id = new_remote_inspector_id();
+        send_rpc(
+            &mut stream,
+            "_rpc_reportIdentifier:",
+            rpc_args(&connection_id),
+        )
+        .await?;
+        sleep(WEBKIT_SOCKET_ACTIVATION_DELAY).await;
+        send_get_connected_applications(&mut stream, &connection_id).await?;
+
+        let mut next_listing_refresh = Instant::now() + WEBKIT_DISCOVERY_REFRESH_INTERVAL;
+        let mut applications: BTreeMap<String, WebKitApplication> = BTreeMap::new();
+        let mut requested_listings: HashSet<String> = HashSet::new();
+        let mut pages: BTreeMap<(String, u64), WebKitPage> = BTreeMap::new();
+
+        loop {
+            let read_timeout = Duration::from_millis(500);
+            let packet = match timeout(read_timeout, read_packet(&mut stream)).await {
+                Ok(Ok(packet)) => packet,
+                Ok(Err(error)) => return Err(error),
+                Err(_) => {
+                    if Instant::now() >= next_listing_refresh {
+                        send_get_connected_applications(&mut stream, &connection_id).await?;
+                        for app_id in applications.keys() {
+                            send_forward_get_listing(&mut stream, &connection_id, app_id).await?;
+                        }
+                        next_listing_refresh = Instant::now() + WEBKIT_DISCOVERY_REFRESH_INTERVAL;
+                    }
+                    continue;
+                }
+            };
+
+            let message = match parse_rpc_message(&packet) {
+                Ok(message) => message,
+                Err(error) => {
+                    debug!("Ignoring malformed WebKit discovery packet: {error}");
+                    continue;
+                }
+            };
+            debug!(
+                selector = %message.selector,
+                "Received WebKit discovery selector"
+            );
+
+            match message.selector.as_str() {
+                "_rpc_reportConnectedApplicationList:" => {
+                    let live_apps = parse_application_list(&message.args);
+                    let live_ids = live_apps
+                        .iter()
+                        .map(|app| app.id.clone())
+                        .collect::<HashSet<_>>();
+                    applications.retain(|app_id, _| live_ids.contains(app_id));
+                    pages.retain(|(app_id, _), _| live_ids.contains(app_id));
+                    requested_listings.retain(|app_id| live_ids.contains(app_id));
+                    for app in live_apps {
+                        if requested_listings.insert(app.id.clone()) {
+                            send_forward_get_listing(&mut stream, &connection_id, &app.id).await?;
+                        }
+                        applications.insert(app.id.clone(), app);
+                    }
+                    self.publish_listing(&socket.path, &applications, &pages)
+                        .await;
+                }
+                "_rpc_applicationConnected:" => {
+                    if let Some(app) = parse_application(&message.args) {
+                        if requested_listings.insert(app.id.clone()) {
+                            send_forward_get_listing(&mut stream, &connection_id, &app.id).await?;
+                        }
+                        applications.insert(app.id.clone(), app);
+                        self.publish_listing(&socket.path, &applications, &pages)
+                            .await;
+                    }
+                }
+                "_rpc_applicationUpdated:" => {
+                    if let Some(app_id) = string_value(&message.args, "WIRApplicationIdentifierKey")
+                    {
+                        if requested_listings.insert(app_id.clone()) {
+                            send_forward_get_listing(&mut stream, &connection_id, &app_id).await?;
+                        }
+                        let app = applications
+                            .entry(app_id.clone())
+                            .or_insert(WebKitApplication {
+                                id: app_id,
+                                name: None,
+                                bundle_identifier: None,
+                                active: false,
+                                is_proxy: false,
+                            });
+                        if let Some(name) = string_value(&message.args, "WIRApplicationNameKey") {
+                            app.name = Some(name);
+                        }
+                        if let Some(bundle_identifier) =
+                            string_value(&message.args, "WIRApplicationBundleIdentifierKey")
+                        {
+                            app.bundle_identifier = Some(bundle_identifier);
+                        }
+                        if let Some(active) =
+                            integer_value(&message.args, "WIRIsApplicationActiveKey")
+                        {
+                            app.active = active > 0;
+                        }
+                        if let Some(is_proxy) =
+                            bool_value(&message.args, "WIRIsApplicationProxyKey")
+                        {
+                            app.is_proxy = is_proxy;
+                        }
+                        self.publish_listing(&socket.path, &applications, &pages)
+                            .await;
+                    }
+                }
+                "_rpc_applicationSentListing:" => {
+                    apply_page_listing(&mut pages, &message.args);
+                    self.publish_listing(&socket.path, &applications, &pages)
+                        .await;
+                }
+                "_rpc_applicationDisconnected:" => {
+                    if let Some(app) = parse_application(&message.args) {
+                        applications.remove(&app.id);
+                        requested_listings.remove(&app.id);
+                        pages.retain(|(app_id, _), _| app_id != &app.id);
+                        self.publish_listing(&socket.path, &applications, &pages)
+                            .await;
+                    }
+                }
+                "_rpc_reportSetup:" => {
+                    send_get_connected_applications(&mut stream, &connection_id).await?;
+                }
+                "_rpc_reportConnectedDriverList:" | "_rpc_reportCurrentState:" => {}
+                selector => debug!("Ignoring WebKit inspector discovery selector {selector}."),
+            }
+        }
+    }
 }
 
-fn cache_webkit_discovery(discovery: &WebKitTargetDiscovery) {
-    if discovery.targets.is_empty() {
-        return;
+fn is_incomplete_or_transient_page(page: &WebKitPage) -> bool {
+    let url = page.url.as_deref().map(str::trim).unwrap_or_default();
+    if url.is_empty() {
+        return true;
     }
-    let cache = WEBKIT_DISCOVERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let Ok(mut cache) = cache.lock() else {
-        return;
-    };
-    cache.insert(
-        discovery.udid.clone(),
-        CachedWebKitDiscovery {
-            discovery: discovery.clone(),
-            cached_at: SystemTime::now(),
-        },
-    );
+    url == "about:blank"
+        && page
+            .title
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
 }
 
-fn cached_webkit_discovery(
-    udid: &str,
-    socket_path: Option<String>,
-    warnings: Vec<String>,
-) -> Option<WebKitTargetDiscovery> {
-    let cache = WEBKIT_DISCOVERY_CACHE.get()?;
-    let Ok(cache) = cache.lock() else {
-        return None;
-    };
-    let cached = cache.get(udid)?;
-    if cached.discovery.targets.is_empty()
-        || cached.cached_at.elapsed().ok()? > WEBKIT_DISCOVERY_CACHE_TTL
-    {
-        return None;
+fn is_inspectable_webkit_target(target: &WebKitTarget) -> bool {
+    let url = target.url.as_deref().map(str::trim).unwrap_or_default();
+    if url.is_empty() {
+        return false;
     }
-
-    let mut discovery = cached.discovery.clone();
-    if socket_path.is_some() {
-        discovery.socket_path = socket_path;
-    }
-    discovery.warnings = warnings;
-    for warning in &cached.discovery.warnings {
-        push_unique_warning(&mut discovery.warnings, warning);
-    }
-    Some(discovery)
-}
-
-fn push_unique_warning(warnings: &mut Vec<String>, warning: impl AsRef<str>) {
-    let warning = warning.as_ref();
-    if warnings.iter().any(|existing| existing == warning) {
-        return;
-    }
-    warnings.push(warning.to_owned());
+    !(url == "about:blank"
+        && target
+            .title
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty())
 }
 
 pub async fn attach_websocket(udid: String, target_id: String, socket: WebSocket) {
@@ -399,7 +454,7 @@ async fn attach_websocket_inner(
         })?;
 
     let connection_id = new_remote_inspector_id();
-    let sender_id = new_remote_inspector_id();
+    let sender_id = connection_id.clone();
     let (mut inspector_reader, mut inspector_writer) = stream.into_split();
     send_rpc(
         &mut inspector_writer,
@@ -408,6 +463,30 @@ async fn attach_websocket_inner(
     )
     .await?;
     sleep(WEBKIT_SOCKET_ACTIVATION_DELAY).await;
+    prepare_webkit_target_for_attach(
+        &mut inspector_reader,
+        &mut inspector_writer,
+        &connection_id,
+        &app_id,
+        page_id,
+    )
+    .await?;
+    send_forward_indicate_webview(
+        &mut inspector_writer,
+        &connection_id,
+        &app_id,
+        page_id,
+        true,
+    )
+    .await?;
+    send_forward_indicate_webview(
+        &mut inspector_writer,
+        &connection_id,
+        &app_id,
+        page_id,
+        false,
+    )
+    .await?;
     send_forward_socket_setup(
         &mut inspector_writer,
         &connection_id,
@@ -416,8 +495,16 @@ async fn attach_websocket_inner(
         &sender_id,
     )
     .await?;
+    let initial_messages =
+        wait_for_webkit_socket_setup(&mut inspector_reader, &app_id, page_id, &sender_id).await?;
 
     let (mut client_writer, mut client_reader) = socket.split();
+    for message in initial_messages {
+        client_writer
+            .send(Message::Text(message.into()))
+            .await
+            .map_err(|error| AppError::internal(format!("WebSocket send failed: {error}")))?;
+    }
     let mut closed_cleanly = false;
     loop {
         tokio::select! {
@@ -488,11 +575,166 @@ async fn attach_websocket_inner(
     Ok(())
 }
 
+async fn prepare_webkit_target_for_attach<R, W>(
+    inspector_reader: &mut R,
+    inspector_writer: &mut W,
+    connection_id: &str,
+    app_id: &str,
+    page_id: u64,
+) -> Result<(), AppError>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    send_forward_get_listing(inspector_writer, connection_id, app_id).await?;
+    let deadline = Instant::now() + WEBKIT_TARGET_ATTACH_TIMEOUT;
+    let mut released_connections = HashSet::new();
+
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(AppError::native(format!(
+                "Timed out preparing WebKit target {app_id}/{page_id} for inspection."
+            )));
+        };
+        let packet = timeout(
+            remaining.min(Duration::from_millis(500)),
+            read_packet(inspector_reader),
+        )
+        .await;
+        let packet = match packet {
+            Ok(Ok(packet)) => packet,
+            Ok(Err(error)) => return Err(error),
+            Err(_) => continue,
+        };
+
+        let message = parse_rpc_message(&packet)?;
+        match message.selector.as_str() {
+            "_rpc_applicationSentListing:" => {
+                if string_value(&message.args, "WIRApplicationIdentifierKey").as_deref()
+                    != Some(app_id)
+                {
+                    continue;
+                }
+
+                let Some(page) = parse_page_listing(&message.args)
+                    .into_iter()
+                    .find(|page| page.page_id == page_id)
+                else {
+                    return Err(AppError::not_found(format!(
+                        "WebKit target {app_id}/{page_id} is no longer available."
+                    )));
+                };
+
+                let Some(existing_connection_id) = page.connection_id else {
+                    return Ok(());
+                };
+                if existing_connection_id == connection_id {
+                    return Ok(());
+                }
+                if !released_connections.insert(existing_connection_id.clone()) {
+                    send_forward_get_listing(inspector_writer, connection_id, app_id).await?;
+                    continue;
+                }
+
+                debug!(
+                    app_id,
+                    page_id,
+                    existing_connection_id,
+                    "Releasing stale WebKit inspector target owner"
+                );
+                send_forward_did_close(
+                    inspector_writer,
+                    &existing_connection_id,
+                    app_id,
+                    page_id,
+                    &existing_connection_id,
+                )
+                .await?;
+                send_forward_get_listing(inspector_writer, connection_id, app_id).await?;
+            }
+            "_rpc_applicationDisconnected:" => {
+                if string_value(&message.args, "WIRApplicationIdentifierKey").as_deref()
+                    == Some(app_id)
+                {
+                    return Err(AppError::not_found(format!(
+                        "WebKit application {app_id} disconnected before inspection could start."
+                    )));
+                }
+            }
+            "_rpc_reportSetup:" => {
+                send_get_connected_applications(inspector_writer, connection_id).await?;
+                send_forward_get_listing(inspector_writer, connection_id, app_id).await?;
+            }
+            "_rpc_reportCurrentState:"
+            | "_rpc_reportConnectedApplicationList:"
+            | "_rpc_reportConnectedDriverList:"
+            | "_rpc_applicationUpdated:" => {}
+            selector => debug!("Ignoring WebKit inspector attach preflight selector {selector}."),
+        }
+    }
+}
+
+async fn wait_for_webkit_socket_setup<R>(
+    inspector_reader: &mut R,
+    app_id: &str,
+    page_id: u64,
+    sender_id: &str,
+) -> Result<Vec<String>, AppError>
+where
+    R: AsyncRead + Unpin,
+{
+    let deadline = Instant::now() + WEBKIT_TARGET_ATTACH_TIMEOUT;
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(AppError::native(format!(
+                "WebKit target {app_id}/{page_id} did not acknowledge inspector socket setup."
+            )));
+        };
+        let packet = timeout(
+            remaining.min(Duration::from_millis(500)),
+            read_packet(inspector_reader),
+        )
+        .await;
+        let packet = match packet {
+            Ok(Ok(packet)) => packet,
+            Ok(Err(error)) => return Err(error),
+            Err(_) => continue,
+        };
+
+        let message = parse_rpc_message(&packet)?;
+        match message.selector.as_str() {
+            "_rpc_applicationSentData:" => {
+                if string_value(&message.args, "WIRDestinationKey").as_deref() == Some(sender_id) {
+                    if let Some(data) = data_value(&message.args, "WIRMessageDataKey") {
+                        return Ok(vec![String::from_utf8(data).unwrap_or_default()]);
+                    }
+                }
+            }
+            "_rpc_applicationDisconnected:" => {
+                if string_value(&message.args, "WIRApplicationIdentifierKey").as_deref()
+                    == Some(app_id)
+                {
+                    return Err(AppError::not_found(format!(
+                        "WebKit application {app_id} disconnected before inspection could start."
+                    )));
+                }
+            }
+            "_rpc_applicationSentListing:"
+            | "_rpc_applicationUpdated:"
+            | "_rpc_reportSetup:"
+            | "_rpc_reportCurrentState:"
+            | "_rpc_reportConnectedApplicationList:"
+            | "_rpc_reportConnectedDriverList:" => {}
+            selector => debug!("Ignoring WebKit inspector setup selector {selector}."),
+        }
+    }
+}
+
 async fn discover_webinspector_socket(udid: &str) -> Result<Option<WebKitSocket>, AppError> {
     let output = timeout(
-        Duration::from_secs(2),
+        WEBKIT_SOCKET_DISCOVERY_TIMEOUT,
         Command::new("/usr/sbin/lsof")
-            .args(["-nP", "-c", "webinspectord", "-F", "pn"])
+            .args(["-nP", "-U", "-F", "pn"])
             .output(),
     )
     .await
@@ -509,7 +751,8 @@ async fn discover_webinspector_socket(udid: &str) -> Result<Option<WebKitSocket>
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut processes: HashMap<String, LsofProcess> = HashMap::new();
-    let udid_marker = format!("/Devices/{udid}/");
+    let device_marker = format!("/Devices/{udid}/");
+    let launchd_marker = format!("CoreSimulator.SimDevice.{udid}/");
     let mut current_pid: Option<String> = None;
     for line in stdout.lines() {
         if let Some(pid) = line.strip_prefix('p') {
@@ -524,7 +767,7 @@ async fn discover_webinspector_socket(udid: &str) -> Result<Option<WebKitSocket>
             continue;
         };
         let process = processes.entry(pid.clone()).or_default();
-        if name.contains(&udid_marker) {
+        if name.contains(&device_marker) || name.contains(&launchd_marker) {
             process.belongs_to_udid = true;
         }
         if name.ends_with(WEBINSPECTORD_SOCKET_NAME) {
@@ -552,7 +795,7 @@ async fn discover_launchd_webinspector_socket(
     udid: &str,
 ) -> Result<Option<WebKitSocket>, AppError> {
     let output = match timeout(
-        Duration::from_secs(2),
+        WEBKIT_SOCKET_DISCOVERY_TIMEOUT,
         Command::new("xcrun")
             .args([
                 "simctl",
@@ -619,6 +862,38 @@ async fn send_forward_get_listing<W: AsyncWrite + Unpin>(
         Value::String(app_id.to_owned()),
     );
     send_rpc(writer, "_rpc_forwardGetListing:", args).await
+}
+
+async fn send_get_connected_applications<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    connection_id: &str,
+) -> Result<(), AppError> {
+    send_rpc(
+        writer,
+        "_rpc_getConnectedApplications:",
+        rpc_args(connection_id),
+    )
+    .await
+}
+
+async fn send_forward_indicate_webview<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    connection_id: &str,
+    app_id: &str,
+    page_id: u64,
+    enabled: bool,
+) -> Result<(), AppError> {
+    let mut args = rpc_args(connection_id);
+    args.insert(
+        "WIRApplicationIdentifierKey".to_owned(),
+        Value::String(app_id.to_owned()),
+    );
+    args.insert(
+        "WIRPageIdentifierKey".to_owned(),
+        Value::Integer(page_id.into()),
+    );
+    args.insert("WIRIndicateEnabledKey".to_owned(), Value::Boolean(enabled));
+    send_rpc(writer, "_rpc_forwardIndicateWebView:", args).await
 }
 
 async fn send_forward_socket_setup<W: AsyncWrite + Unpin>(
@@ -770,9 +1045,18 @@ fn parse_application_list(args: &Dictionary) -> Vec<WebKitApplication> {
         return Vec::new();
     };
 
-    apps.values()
-        .filter_map(Value::as_dictionary)
-        .filter_map(parse_application)
+    apps.iter()
+        .filter_map(|(app_id, value)| {
+            let app = value.as_dictionary()?;
+            Some(WebKitApplication {
+                id: string_value(app, "WIRApplicationIdentifierKey")
+                    .unwrap_or_else(|| app_id.clone()),
+                name: string_value(app, "WIRApplicationNameKey"),
+                bundle_identifier: string_value(app, "WIRApplicationBundleIdentifierKey"),
+                active: integer_value(app, "WIRIsApplicationActiveKey").unwrap_or(0) > 0,
+                is_proxy: bool_value(app, "WIRIsApplicationProxyKey").unwrap_or(false),
+            })
+        })
         .collect()
 }
 
@@ -781,6 +1065,8 @@ fn parse_application(args: &Dictionary) -> Option<WebKitApplication> {
     Some(WebKitApplication {
         id,
         name: string_value(args, "WIRApplicationNameKey"),
+        bundle_identifier: string_value(args, "WIRApplicationBundleIdentifierKey"),
+        active: integer_value(args, "WIRIsApplicationActiveKey").unwrap_or(0) > 0,
         is_proxy: bool_value(args, "WIRIsApplicationProxyKey").unwrap_or(false),
     })
 }
@@ -794,18 +1080,29 @@ fn parse_page_listing(args: &Dictionary) -> Vec<WebKitPage> {
     };
 
     listing
-        .values()
-        .filter_map(Value::as_dictionary)
-        .filter_map(|page| {
-            let page_id = integer_value(page, "WIRPageIdentifierKey")?;
+        .iter()
+        .filter_map(|(page_key, value)| {
+            let page = value.as_dictionary()?;
+            let page_id = integer_value(page, "WIRPageIdentifierKey")
+                .or_else(|| page_key.parse::<u64>().ok())?;
             Some(WebKitPage {
                 app_id: app_id.clone(),
                 page_id,
                 title: string_value(page, "WIRTitleKey"),
                 url: string_value(page, "WIRURLKey"),
+                connection_id: string_value(page, "WIRConnectionIdentifierKey"),
             })
         })
         .collect()
+}
+
+fn apply_page_listing(pages: &mut BTreeMap<(String, u64), WebKitPage>, listing_args: &Dictionary) {
+    if let Some(app_id) = string_value(listing_args, "WIRApplicationIdentifierKey") {
+        pages.retain(|(page_app_id, _), _| page_app_id != &app_id);
+    }
+    for page in parse_page_listing(listing_args) {
+        pages.insert((page.app_id.clone(), page.page_id), page);
+    }
 }
 
 fn rpc_args(connection_id: &str) -> Dictionary {
@@ -833,10 +1130,15 @@ fn webkit_target(
             .trim_start_matches("wss://")
     );
     let app_name = app.and_then(|app| app.name.clone());
+    let app_active = app.map(|app| app.active).unwrap_or(false);
     let normalized_app_id = page.app_id.to_ascii_lowercase();
     let normalized_app_name = app_name.as_deref().map(str::to_ascii_lowercase);
+    let normalized_bundle_id = app
+        .and_then(|app| app.bundle_identifier.as_deref())
+        .map(str::to_ascii_lowercase);
     let kind = if normalized_app_id.contains("mobilesafari")
         || normalized_app_name.as_deref() == Some("safari")
+        || normalized_bundle_id.as_deref() == Some("com.apple.mobilesafari")
     {
         "safari-page"
     } else if app.is_some_and(|app| app.is_proxy) {
@@ -850,6 +1152,8 @@ fn webkit_target(
         id,
         app_id: page.app_id,
         app_name,
+        app_active,
+        page_active: false,
         page_id: page.page_id,
         title: page.title,
         url: page.url,
@@ -951,12 +1255,14 @@ pub fn webkit_inspector_ui_root() -> Option<PathBuf> {
 
 pub fn inject_frontend_host(main_html: &str) -> String {
     let localized_strings = r#"<script src="en.lproj/localizedStrings.js"></script>"#;
+    let localized_string_fixups =
+        r#"<script>localizedStrings["Refresh layers"] ||= "Refresh layers";</script>"#;
     let compatibility_style = format!("<style>{}</style>", browser_frontend_compatibility_css());
     let shim = format!("<script>{}</script>", browser_frontend_host_script());
     main_html.replacen(
         "<script src=\"Main.js\"></script>",
         &format!(
-            "{localized_strings}\n    {compatibility_style}\n    {shim}\n    <script src=\"Main.js\"></script>"
+            "{localized_strings}\n    {localized_string_fixups}\n    {compatibility_style}\n    {shim}\n    <script src=\"Main.js\"></script>"
         ),
         1,
     )
@@ -1044,6 +1350,45 @@ fn browser_frontend_host_script() -> &'static str {
             dispatchBackendMessage(message);
     }
 
+    function installCSSCompatibilityFallbacks() {
+        const cssManager = window.WI?.cssManager;
+        if (!cssManager || cssManager.propertyNameCompletions || !window.WI?.CSSPropertyNameCompletions)
+            return;
+
+        const propertyMap = window.WI.CSSKeywordCompletions?._propertyKeywordMap || {};
+        const propertyNames = new Set(Object.keys(propertyMap));
+        for (const name of [
+            "background",
+            "color",
+            "display",
+            "font-family",
+            "height",
+            "margin",
+            "width",
+        ])
+            propertyNames.add(name);
+
+        cssManager._propertyNameCompletions = new WI.CSSPropertyNameCompletions(
+            Array.from(propertyNames, (name) => ({ name }))
+        );
+    }
+
+    function installNetworkManagerCompatibilityFallbacks() {
+        const prototype = window.WI?.NetworkManager?.prototype;
+        if (!prototype || prototype.__simdeckMainFrameResourceTreePatch)
+            return;
+        const original = prototype._processMainFrameResourceTreePayload;
+        if (typeof original !== "function")
+            return;
+
+        prototype.__simdeckMainFrameResourceTreePatch = true;
+        prototype._processMainFrameResourceTreePayload = function (error, mainFramePayload) {
+            if (this._transitioningPageTarget && !this._mainFrame)
+                this._transitioningPageTarget = false;
+            return original.call(this, error, mainFramePayload);
+        };
+    }
+
     function copyText(text) {
         if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(text).catch(() => {});
@@ -1064,6 +1409,15 @@ fn browser_frontend_host_script() -> &'static str {
     let reconnectTimer = 0;
     let socket = null;
 
+    function notifySocketState(state) {
+        if (window.parent === window)
+            return;
+        window.parent.postMessage({
+            type: "simdeck:webkit-inspector:socket",
+            state,
+        }, "*");
+    }
+
     function clearReconnectTimer() {
         if (!reconnectTimer)
             return;
@@ -1072,8 +1426,13 @@ fn browser_frontend_host_script() -> &'static str {
     }
 
     function scheduleReconnect() {
-        if (reconnectTimer || !websocketUrl())
+        if (reconnectTimer)
             return;
+        if (!websocketUrl()) {
+            notifySocketState("disconnected");
+            return;
+        }
+        notifySocketState("reconnecting");
         const delay = reconnectDelay;
         reconnectDelay = Math.min(Math.ceil(reconnectDelay * 1.5), 3000);
         reconnectTimer = setTimeout(() => {
@@ -1095,6 +1454,7 @@ fn browser_frontend_host_script() -> &'static str {
         if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING))
             return;
         clearReconnectTimer();
+        notifySocketState("connecting");
         const nextSocket = new WebSocket(url);
         socket = nextSocket;
         nextSocket.addEventListener("message", (event) => dispatchBackendMessage(event.data));
@@ -1102,6 +1462,7 @@ fn browser_frontend_host_script() -> &'static str {
             if (socket !== nextSocket)
                 return;
             reconnectDelay = 500;
+            notifySocketState("connected");
             while (pendingMessages.length)
                 nextSocket.send(pendingMessages.shift());
         });
@@ -1111,7 +1472,53 @@ fn browser_frontend_host_script() -> &'static str {
             socket = null;
             scheduleReconnect();
         });
-        nextSocket.addEventListener("error", (event) => console.error("SimDeck WebKit Inspector socket error", event));
+        nextSocket.addEventListener("error", (event) => {
+            if (socket === nextSocket)
+                notifySocketState("failed");
+            console.error("SimDeck WebKit Inspector socket error", event);
+        });
+    }
+
+    const unsupportedOptionalTargetCommands = new Set([
+        "Page.setShowRulers",
+    ]);
+
+    function maybeHandleUnsupportedFrontendCommand(message) {
+        let payload;
+        try {
+            payload = JSON.parse(message);
+        } catch {
+            return false;
+        }
+
+        if (unsupportedOptionalTargetCommands.has(payload.method)) {
+            dispatchBackendMessage(JSON.stringify({ id: payload.id, result: {} }));
+            return true;
+        }
+
+        if (payload.method !== "Target.sendMessageToTarget" || !payload.params)
+            return false;
+        const targetId = payload.params.targetId;
+        if (!targetId || typeof payload.params.message !== "string")
+            return false;
+
+        let targetPayload;
+        try {
+            targetPayload = JSON.parse(payload.params.message);
+        } catch {
+            return false;
+        }
+        if (!unsupportedOptionalTargetCommands.has(targetPayload.method))
+            return false;
+
+        dispatchBackendMessage(JSON.stringify({
+            method: "Target.dispatchMessageFromTarget",
+            params: {
+                targetId,
+                message: JSON.stringify({ id: targetPayload.id, result: {} }),
+            },
+        }));
+        return true;
     }
 
     window.InspectorFrontendHost = {
@@ -1134,13 +1541,15 @@ fn browser_frontend_host_script() -> &'static str {
         platformVersionName: "",
         supportsDiagnosticLogging: false,
         supportsWebExtensions: false,
-        localizedStringsURL: "en.lproj/localizedStrings.js",
+        localizedStringsURL: null,
         connect() {
             connectSocket();
         },
         loaded() {
             if (window.WI && typeof WI.updateVisibilityState === "function")
                 WI.updateVisibilityState(true);
+            installCSSCompatibilityFallbacks();
+            installNetworkManagerCompatibilityFallbacks();
             flushBackendQueue();
         },
         closeWindow() {},
@@ -1187,6 +1596,8 @@ fn browser_frontend_host_script() -> &'static str {
             event.target?.dispatchEvent(new MouseEvent("contextmenu", event));
         },
         sendMessageToBackend(message) {
+            if (maybeHandleUnsupportedFrontendCommand(message))
+                return;
             if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(message);
             } else {
@@ -1257,6 +1668,143 @@ mod tests {
     }
 
     #[test]
+    fn parses_webkit_listing_ids_from_dictionary_keys() {
+        let mut app = Dictionary::new();
+        app.insert(
+            "WIRApplicationNameKey".to_owned(),
+            Value::String("Safari".to_owned()),
+        );
+        app.insert(
+            "WIRApplicationBundleIdentifierKey".to_owned(),
+            Value::String("com.apple.mobilesafari".to_owned()),
+        );
+        app.insert(
+            "WIRIsApplicationActiveKey".to_owned(),
+            Value::Integer(2.into()),
+        );
+        let mut app_dictionary = Dictionary::new();
+        app_dictionary.insert("PID:42".to_owned(), Value::Dictionary(app));
+        let mut app_args = Dictionary::new();
+        app_args.insert(
+            "WIRApplicationDictionaryKey".to_owned(),
+            Value::Dictionary(app_dictionary),
+        );
+
+        let applications = parse_application_list(&app_args);
+        assert_eq!(applications.len(), 1);
+        assert_eq!(applications[0].id, "PID:42");
+        assert_eq!(applications[0].name.as_deref(), Some("Safari"));
+        assert_eq!(
+            applications[0].bundle_identifier.as_deref(),
+            Some("com.apple.mobilesafari")
+        );
+        assert!(applications[0].active);
+
+        let mut page = Dictionary::new();
+        page.insert(
+            "WIRTitleKey".to_owned(),
+            Value::String("Example Domain".to_owned()),
+        );
+        page.insert(
+            "WIRURLKey".to_owned(),
+            Value::String("https://example.com/".to_owned()),
+        );
+        page.insert(
+            "WIRConnectionIdentifierKey".to_owned(),
+            Value::String("existing-connection".to_owned()),
+        );
+        let mut listing = Dictionary::new();
+        listing.insert("7".to_owned(), Value::Dictionary(page));
+        let mut page_args = Dictionary::new();
+        page_args.insert(
+            "WIRApplicationIdentifierKey".to_owned(),
+            Value::String("PID:42".to_owned()),
+        );
+        page_args.insert("WIRListingKey".to_owned(), Value::Dictionary(listing));
+
+        let pages = parse_page_listing(&page_args);
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].app_id, "PID:42");
+        assert_eq!(pages[0].page_id, 7);
+        assert_eq!(pages[0].url.as_deref(), Some("https://example.com/"));
+        assert_eq!(
+            pages[0].connection_id.as_deref(),
+            Some("existing-connection")
+        );
+    }
+
+    #[test]
+    fn page_listing_replaces_previous_pages_for_application() {
+        let mut pages = BTreeMap::new();
+        pages.insert(
+            ("PID:42".to_owned(), 1),
+            WebKitPage {
+                app_id: "PID:42".to_owned(),
+                page_id: 1,
+                title: Some("Old Example".to_owned()),
+                url: Some("https://example.com/old".to_owned()),
+                connection_id: None,
+            },
+        );
+        pages.insert(
+            ("PID:99".to_owned(), 1),
+            WebKitPage {
+                app_id: "PID:99".to_owned(),
+                page_id: 1,
+                title: Some("Other App".to_owned()),
+                url: Some("https://other.example/".to_owned()),
+                connection_id: None,
+            },
+        );
+
+        let mut page = Dictionary::new();
+        page.insert(
+            "WIRTitleKey".to_owned(),
+            Value::String("Example Domain".to_owned()),
+        );
+        page.insert(
+            "WIRURLKey".to_owned(),
+            Value::String("https://example.com/".to_owned()),
+        );
+        let mut listing = Dictionary::new();
+        listing.insert("2".to_owned(), Value::Dictionary(page));
+        let mut listing_args = Dictionary::new();
+        listing_args.insert(
+            "WIRApplicationIdentifierKey".to_owned(),
+            Value::String("PID:42".to_owned()),
+        );
+        listing_args.insert("WIRListingKey".to_owned(), Value::Dictionary(listing));
+
+        apply_page_listing(&mut pages, &listing_args);
+
+        assert!(!pages.contains_key(&("PID:42".to_owned(), 1)));
+        assert!(pages.contains_key(&("PID:42".to_owned(), 2)));
+        assert!(pages.contains_key(&("PID:99".to_owned(), 1)));
+    }
+
+    #[test]
+    fn webkit_target_uses_application_activity_and_bundle_kind() {
+        let app = WebKitApplication {
+            id: "PID:42".to_owned(),
+            name: None,
+            bundle_identifier: Some("com.apple.mobilesafari".to_owned()),
+            active: true,
+            is_proxy: false,
+        };
+        let page = WebKitPage {
+            app_id: app.id.clone(),
+            page_id: 7,
+            title: Some("Example Domain".to_owned()),
+            url: Some("https://example.com/".to_owned()),
+            connection_id: None,
+        };
+
+        let target = webkit_target("UDID", "http://127.0.0.1:4311", page, Some(&app));
+        assert_eq!(target.kind, "safari-page");
+        assert!(target.app_active);
+    }
+
+    #[test]
     fn inject_frontend_host_precedes_main_script() {
         let html = r#"<script src="CodeMirror.js"></script>
     <script src="Main.js"></script>"#;
@@ -1266,6 +1814,93 @@ mod tests {
         let main_index = injected.find(r#"<script src="Main.js"></script>"#).unwrap();
         assert!(strings_index < shim_index);
         assert!(shim_index < main_index);
+        assert!(injected.contains("simdeck:webkit-inspector:socket"));
+        assert!(injected.contains("notifySocketState(\"reconnecting\")"));
+        assert!(injected.contains("Page.setShowRulers"));
+        assert!(injected.contains("maybeHandleUnsupportedFrontendCommand(message)"));
+        assert!(injected.contains("installNetworkManagerCompatibilityFallbacks()"));
+    }
+
+    #[test]
+    fn webkit_attach_uses_page_activation_before_socket_setup() {
+        let source = include_str!("webkit.rs");
+        let preflight_index = source
+            .find("prepare_webkit_target_for_attach(")
+            .expect("attach should preflight target ownership before socket setup");
+        let indicate_index = source
+            .find("send_forward_indicate_webview(")
+            .expect("attach should indicate the WebView before socket setup");
+        let setup_index = source
+            .find("send_forward_socket_setup(")
+            .expect("attach should still set up the forwarding socket");
+        assert!(preflight_index < setup_index);
+        assert!(indicate_index < setup_index);
+        assert!(source.contains("_rpc_forwardIndicateWebView:"));
+        assert!(source.contains("Releasing stale WebKit inspector target owner"));
+    }
+
+    #[test]
+    fn webkit_discovery_requests_connected_applications() {
+        let source = include_str!("webkit.rs");
+        let identifier_index = source
+            .find("\"_rpc_reportIdentifier:\"")
+            .expect("discovery should report a WebKit connection identifier");
+        let connected_applications_index = source
+            .find("send_get_connected_applications(")
+            .expect("discovery should explicitly request connected applications");
+        assert!(identifier_index < connected_applications_index);
+        assert!(source.contains("_rpc_getConnectedApplications:"));
+    }
+
+    #[test]
+    fn incomplete_and_transient_pages_are_not_advertised() {
+        let incomplete_page = WebKitPage {
+            app_id: "PID:1".to_owned(),
+            page_id: 1,
+            title: Some("Safari".to_owned()),
+            url: None,
+            connection_id: None,
+        };
+        let blank_page = WebKitPage {
+            app_id: "PID:1".to_owned(),
+            page_id: 1,
+            title: None,
+            url: Some("about:blank".to_owned()),
+            connection_id: None,
+        };
+        let titled_blank_page = WebKitPage {
+            app_id: "PID:1".to_owned(),
+            page_id: 1,
+            title: Some("Blank".to_owned()),
+            url: Some("about:blank".to_owned()),
+            connection_id: None,
+        };
+        let real_page = WebKitPage {
+            app_id: "PID:1".to_owned(),
+            page_id: 1,
+            title: Some("SimDeck".to_owned()),
+            url: Some("https://simdeck.nativescript.org/".to_owned()),
+            connection_id: None,
+        };
+
+        assert!(is_incomplete_or_transient_page(&incomplete_page));
+        assert!(is_incomplete_or_transient_page(&blank_page));
+        assert!(!is_incomplete_or_transient_page(&titled_blank_page));
+        assert!(!is_incomplete_or_transient_page(&real_page));
+
+        assert!(!is_inspectable_webkit_target(&WebKitTarget {
+            id: "target".to_owned(),
+            app_id: "PID:1".to_owned(),
+            app_name: Some("Safari".to_owned()),
+            app_active: true,
+            page_active: false,
+            page_id: 1,
+            title: Some("Safari".to_owned()),
+            url: None,
+            kind: "safari-page".to_owned(),
+            inspector_url: "/inspector".to_owned(),
+            web_socket_url: "/socket".to_owned(),
+        }));
     }
 
     #[test]
@@ -1282,6 +1917,16 @@ mod tests {
                 "/private/var/tmp/com.apple.launchd.test/other.socket"
             ),
             None
+        );
+    }
+
+    #[test]
+    fn simulator_launchd_socket_marker_matches_udid() {
+        let udid = "2B3B4CA8-6F57-44D8-8AAE-1394456282B7";
+        let launchd_marker = format!("CoreSimulator.SimDevice.{udid}/");
+        assert!(
+            "/private/var/tmp/com.apple.CoreSimulator.SimDevice.2B3B4CA8-6F57-44D8-8AAE-1394456282B7/syslogsock"
+                .contains(&launchd_marker)
         );
     }
 }

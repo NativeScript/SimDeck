@@ -116,6 +116,7 @@ const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const FLUTTER_INSPECTOR_MAX_DEPTH = 48;
 const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
+const NOT_CONNECTED_MESSAGE = "Not connected";
 const LOCAL_STREAM_DEFAULTS: StreamConfig = {
   encoder: "auto",
   fps: 60,
@@ -367,6 +368,7 @@ export function AppShell({
     refresh,
     simulators,
   } = useSimulatorList({ remote: remoteStream });
+  const providerDisconnected = isProviderDisconnected(listError);
   const [debugVisible, setDebugVisible] = useState(() =>
     readStoredFlag(DEBUG_VISIBLE_STORAGE_KEY),
   );
@@ -690,6 +692,16 @@ export function AppShell({
     streamConfigApplyKey,
     streamTransport,
   });
+
+  useEffect(() => {
+    if (
+      streamStatus.state !== "error" ||
+      !isStreamProviderDisconnectError(streamStatus.error)
+    ) {
+      return;
+    }
+    void refreshRef.current();
+  }, [streamStatus.error, streamStatus.state]);
 
   const updateStreamEncoder = useCallback((encoder: StreamEncoder) => {
     streamConfigUserTouchedRef.current = true;
@@ -1019,6 +1031,17 @@ export function AppShell({
       return;
     }
 
+    if (providerDisconnected) {
+      setAccessibilityRoots([]);
+      setAccessibilitySelectedId("");
+      setAccessibilityHoveredId(null);
+      setAccessibilityAvailableSources([]);
+      setAccessibilitySource("");
+      setAccessibilityError("Not connected");
+      setAccessibilityLoading(false);
+      return;
+    }
+
     if (!selectedSimulator?.isBooted) {
       setAccessibilityRoots([]);
       setAccessibilitySelectedId("");
@@ -1034,7 +1057,9 @@ export function AppShell({
     accessibilityRequestIdRef.current = requestId;
     accessibilityLoadingRef.current = true;
     setAccessibilityLoading(true);
-    setAccessibilityError("");
+    setAccessibilityError((current) =>
+      current === "Not connected" ? current : "",
+    );
 
     try {
       const snapshot = await fetchAccessibilityTree(
@@ -1098,7 +1123,7 @@ export function AppShell({
         setAccessibilityLoading(false);
       }
     }
-  }, [accessibilityPreferredSource, selectedSimulator]);
+  }, [accessibilityPreferredSource, providerDisconnected, selectedSimulator]);
 
   const changeAccessibilitySource = useCallback(
     (source: AccessibilitySource) => {
@@ -1420,8 +1445,9 @@ export function AppShell({
     pairingEnabled &&
     listError === AUTH_REQUIRED_MESSAGE &&
     !accessTokenFromLocation();
-  const visibleListError =
-    remoteStream && listError === AUTH_REQUIRED_MESSAGE
+  const visibleListError = providerDisconnected
+    ? NOT_CONNECTED_MESSAGE
+    : remoteStream && listError === AUTH_REQUIRED_MESSAGE
       ? ""
       : selectedSimulator
         ? friendlyClientError(listError)
@@ -1457,11 +1483,13 @@ export function AppShell({
     streamStatusState: streamStatus.state,
   });
   const viewportStatusOverlayLabel =
+    (providerDisconnected ? NOT_CONNECTED_MESSAGE : "") ||
     simulatorStatusOverlayLabel ||
     streamStatusMessage ||
     (browserFramePending ? "Stream connected, browser frame pending" : "") ||
     (selectedSimulator ? visibleListError : "");
   const viewportHasStreamError = Boolean(
+    providerDisconnected ||
     streamStatus.state === "error" ||
     visibleStreamError ||
     (selectedSimulator && visibleListError),
@@ -2191,6 +2219,7 @@ export function AppShell({
         accessibilityPanel={
           <AccessibilityInspector
             availableSources={accessibilityAvailableSources}
+            disconnected={providerDisconnected}
             error={accessibilityError}
             isLoading={accessibilityLoading}
             onHover={setAccessibilityHoveredId}
@@ -2291,6 +2320,7 @@ export function AppShell({
         viewMode={viewMode}
         devtoolsPanel={
           <DevToolsPanel
+            disconnected={providerDisconnected}
             onClose={() => setDevToolsVisible(false)}
             overviewRequestKey={devToolsOverviewRequestKey}
             selectedSimulator={selectedSimulator}
@@ -2420,6 +2450,14 @@ function friendlyStreamError(
   return friendlyClientError(normalized);
 }
 
+function isStreamProviderDisconnectError(message: string | undefined): boolean {
+  const lower = message?.trim().toLowerCase() ?? "";
+  return (
+    lower.includes("websocket stream closed") ||
+    lower.includes("websocket stream failed")
+  );
+}
+
 function streamAgentStatusLabel({
   hasFrame,
   simulator,
@@ -2497,6 +2535,9 @@ function userFacingAccessibilityError(message: string): string {
   }
 
   const lower = normalized.toLowerCase();
+  if (isProviderDisconnected(normalized)) {
+    return NOT_CONNECTED_MESSAGE;
+  }
   if (
     lower.includes("no app inspector found") ||
     lower.includes("no connected websocket inspector found") ||
@@ -2508,6 +2549,20 @@ function userFacingAccessibilityError(message: string): string {
   }
 
   return normalized;
+}
+
+function isProviderDisconnected(message: string): boolean {
+  const lower = message.trim().toLowerCase();
+  if (!lower || lower === AUTH_REQUIRED_MESSAGE.toLowerCase()) {
+    return false;
+  }
+  return (
+    lower.includes("failed to fetch") ||
+    lower.includes("load failed") ||
+    lower.includes("networkerror") ||
+    lower.includes("network error") ||
+    lower.includes("timed out waiting for provider")
+  );
 }
 
 function mergeStreamQualityResponse(

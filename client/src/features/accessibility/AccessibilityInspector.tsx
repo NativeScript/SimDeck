@@ -26,6 +26,7 @@ import { usePanelPresence } from "../../shared/hooks/usePanelPresence";
 
 interface AccessibilityInspectorProps {
   availableSources: AccessibilitySource[];
+  disconnected: boolean;
   error: string;
   isLoading: boolean;
   onHover: (id: string | null) => void;
@@ -44,6 +45,7 @@ type InspectorTab = "console" | "inspector" | "performance";
 
 export function AccessibilityInspector({
   availableSources,
+  disconnected,
   error,
   isLoading,
   onHover,
@@ -210,6 +212,7 @@ export function AccessibilityInspector({
     ? findAccessibilityItem(tree, selectedId)
     : null;
   const sourceOptions = hierarchySourceOptions(availableSources, source);
+  const effectivelyDisconnected = disconnected || error === "Not connected";
 
   return (
     <aside
@@ -256,7 +259,11 @@ export function AccessibilityInspector({
           <PerformanceIcon />
         </button>
       </div>
-      {activeTab === "console" ? (
+      {effectivelyDisconnected ? (
+        <div className="hierarchy-tree">
+          <div className="hierarchy-empty">Not connected</div>
+        </div>
+      ) : activeTab === "console" ? (
         <ConsolePanel
           accessibilityRoots={roots}
           selectedSimulator={selectedSimulator}
@@ -299,11 +306,11 @@ export function AccessibilityInspector({
             </div>
           ) : error ? (
             <div className="hierarchy-empty error">{error}</div>
-          ) : visibleItems.length === 0 && isLoading ? (
+          ) : visibleItems.length === 0 && isLoading && !source ? (
             <div className="hierarchy-empty">Reading accessibility tree...</div>
           ) : visibleItems.length === 0 ? (
             <div className="hierarchy-empty">
-              No accessibility snapshot yet.
+              {emptyAccessibilityMessage(source)}
             </div>
           ) : (
             visibleItems.map((item) => {
@@ -831,6 +838,15 @@ function sourceLabel(source: AccessibilitySource): string {
     return "Android";
   }
   return source === "in-app-inspector" ? "UIKit" : "Native AX";
+}
+
+function emptyAccessibilityMessage(
+  source: AccessibilityTreeResponse["source"] | "",
+): string {
+  if (source === "native-ax") {
+    return "No native accessibility elements available.";
+  }
+  return "No accessibility snapshot available.";
 }
 
 function objectClassName(value: Record<string, unknown> | null | undefined) {

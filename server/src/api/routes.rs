@@ -26,7 +26,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use bytes::{Bytes, BytesMut};
-use futures::{SinkExt, StreamExt};
+use futures::{future::join_all, SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Map;
 use serde_json::{json as json_value, Value};
@@ -54,6 +54,13 @@ const H264_WS_FLAG_CONFIG: u8 = 1 << 1;
 const H264_WS_SEND_TIMEOUT: Duration = Duration::from_secs(2);
 const H264_WS_KEYFRAME_WAIT_TIMEOUT: Duration = Duration::from_secs(3);
 const STREAM_CLIENT_FOREGROUND_TTL: Duration = Duration::from_secs(30);
+const CHROME_DEVTOOLS_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(1);
+const FOREGROUND_APP_CACHE_TTL: Duration = Duration::from_secs(3);
+const FOREGROUND_APP_STALE_TTL: Duration = Duration::from_secs(30);
+const SAFARI_ACTIVE_TAB_HINT_TIMEOUT: Duration = Duration::from_millis(750);
+
+static FOREGROUND_APP_CACHE: OnceLock<StdMutex<HashMap<String, CachedForegroundApp>>> =
+    OnceLock::new();
 
 #[derive(Clone)]
 pub struct AppState {
@@ -66,6 +73,12 @@ pub struct AppState {
     pub stream_clients: StreamClientForegroundRegistry,
     pub simulator_inventory: SimulatorInventoryCache,
     pub android: AndroidBridge,
+}
+
+#[derive(Clone)]
+struct CachedForegroundApp {
+    cached_at: Instant,
+    foreground_app: devtools::ForegroundApp,
 }
 
 #[derive(Clone, Default)]
@@ -892,24 +905,16 @@ async fn webkit_targets(
 ) -> Result<Json<webkit::WebKitTargetDiscovery>, AppError> {
     let origin = request_origin(&headers);
     let mut discovery = webkit::discover_targets(&udid, origin.as_deref()).await?;
-    if discovery.targets.is_empty() {
-        if let Some(foreground_app) = foreground_app_metadata(&state, &udid).await.ok().flatten() {
-            let foreground_name = foreground_app.app_name.as_deref().unwrap_or_default();
-            let foreground_bundle = foreground_app
-                .bundle_identifier
-                .as_deref()
-                .unwrap_or_default();
-            if foreground_name == "MobileSafari"
-                || foreground_name == "Safari"
-                || foreground_bundle == "com.apple.mobilesafari"
-            {
-                discovery.targets.push(webkit::synthetic_safari_target(
-                    &udid,
-                    origin.as_deref().unwrap_or(""),
-                    foreground_app.process_identifier,
-                ));
-                discovery.warnings.clear();
-            }
+    let foreground_app = foreground_app_for_simulator(&state, &udid)
+        .await
+        .ok()
+        .flatten();
+    if foreground_app
+        .as_ref()
+        .is_some_and(is_safari_foreground_app)
+    {
+        if let Some(active_url_hint) = safari_active_url_hint(&state, &udid).await {
+            mark_safari_active_webkit_target(&mut discovery.targets, &active_url_hint);
         }
     }
     Ok(Json(discovery))
@@ -922,6 +927,181 @@ async fn webkit_target_socket(
     ws.on_upgrade(move |socket| webkit::attach_websocket(udid, target_id, socket))
 }
 
+async fn safari_active_url_hint(state: &AppState, udid: &str) -> Option<String> {
+    let probe_points = safari_active_url_probe_points(state.clone(), udid.to_owned()).await;
+    for point in probe_points {
+        let Ok(Ok(snapshot)) = timeout(
+            SAFARI_ACTIVE_TAB_HINT_TIMEOUT,
+            accessibility_snapshot(state.clone(), udid.to_owned(), Some(point), Some(0)),
+        )
+        .await
+        else {
+            continue;
+        };
+        if let Some(hint) = active_url_hint_from_accessibility_snapshot(&snapshot) {
+            return Some(hint);
+        }
+    }
+    None
+}
+
+async fn safari_active_url_probe_points(state: AppState, udid: String) -> Vec<(f64, f64)> {
+    let profile = run_bridge_action(state, move |bridge| bridge.chrome_profile(&udid)).await;
+    let (screen_width, screen_height) = profile
+        .map(|profile| (profile.screen_width, profile.screen_height))
+        .unwrap_or((402.0, 874.0));
+    let center_x = (screen_width * 0.5).max(1.0);
+    let bottom_address_y = (screen_height - 54.0).clamp(1.0, screen_height.max(1.0));
+    let bottom_title_y = (screen_height - 28.0).clamp(1.0, screen_height.max(1.0));
+    let top_address_y = 92.0_f64.min((screen_height * 0.18).max(1.0));
+    vec![
+        (center_x, bottom_address_y),
+        (center_x, bottom_title_y),
+        (center_x, top_address_y),
+    ]
+}
+
+fn active_url_hint_from_accessibility_snapshot(snapshot: &Value) -> Option<String> {
+    let roots = snapshot.get("roots").and_then(Value::as_array)?;
+    roots
+        .iter()
+        .find_map(active_url_hint_from_accessibility_node)
+}
+
+fn active_url_hint_from_accessibility_node(node: &Value) -> Option<String> {
+    for key in [
+        "AXValue", "value", "url", "AXLabel", "label", "title", "name",
+    ] {
+        if let Some(hint) = node
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(sanitize_active_url_hint)
+        {
+            return Some(hint);
+        }
+    }
+    node.get("children")
+        .and_then(Value::as_array)
+        .and_then(|children| {
+            children
+                .iter()
+                .find_map(active_url_hint_from_accessibility_node)
+        })
+}
+
+fn sanitize_active_url_hint(value: &str) -> Option<String> {
+    let cleaned = value
+        .chars()
+        .filter(|character| {
+            !character.is_control()
+                && !matches!(
+                    *character,
+                    '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+                )
+        })
+        .collect::<String>()
+        .trim()
+        .to_owned();
+    if cleaned.is_empty() || cleaned.eq_ignore_ascii_case("address") {
+        return None;
+    }
+    let lower = cleaned.to_ascii_lowercase();
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("file://")
+        || cleaned.contains('.')
+    {
+        return Some(cleaned);
+    }
+    None
+}
+
+fn mark_safari_active_webkit_target(targets: &mut [webkit::WebKitTarget], url_hint: &str) {
+    let Some((active_index, _score)) = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, target)| target.kind == "safari-page")
+        .filter_map(|(index, target)| {
+            let score = safari_active_url_match_score(url_hint, target);
+            (score > 0).then_some((index, score))
+        })
+        .max_by_key(|(_, score)| *score)
+    else {
+        return;
+    };
+
+    for (index, target) in targets.iter_mut().enumerate() {
+        target.page_active = index == active_index;
+    }
+    targets.sort_by(|lhs, rhs| {
+        rhs.page_active
+            .cmp(&lhs.page_active)
+            .then(lhs.app_name.cmp(&rhs.app_name))
+            .then(lhs.title.cmp(&rhs.title))
+            .then(lhs.url.cmp(&rhs.url))
+            .then(lhs.page_id.cmp(&rhs.page_id))
+    });
+}
+
+fn safari_active_url_match_score(url_hint: &str, target: &webkit::WebKitTarget) -> u8 {
+    let Some(target_url) = target.url.as_deref() else {
+        return 0;
+    };
+    let hint_key = normalized_url_key(url_hint);
+    let target_key = normalized_url_key(target_url);
+    if hint_key.is_empty() || target_key.is_empty() {
+        return 0;
+    }
+    if hint_key == target_key {
+        return 100;
+    }
+
+    let hint_host = normalized_url_host(&hint_key);
+    let target_host = normalized_url_host(&target_key);
+    if !hint_host.is_empty() && hint_host == target_host {
+        return 90;
+    }
+    if target_key.contains(&hint_key)
+        || (!target_host.is_empty() && hint_key.contains(&target_host))
+    {
+        return 80;
+    }
+    0
+}
+
+fn normalized_url_key(value: &str) -> String {
+    let mut key = value
+        .trim()
+        .trim_matches('"')
+        .trim_end_matches('/')
+        .to_ascii_lowercase();
+    for prefix in ["https://", "http://", "file://"] {
+        if let Some(stripped) = key.strip_prefix(prefix) {
+            key = stripped.to_owned();
+            break;
+        }
+    }
+    if let Some(stripped) = key.strip_prefix("www.") {
+        key = stripped.to_owned();
+    }
+    key.trim_end_matches('/').to_owned()
+}
+
+fn normalized_url_host(value: &str) -> String {
+    normalized_url_key(value)
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim_start_matches("www.")
+        .to_owned()
+}
+
+fn is_safari_foreground_app(foreground: &devtools::ForegroundApp) -> bool {
+    foreground.bundle_identifier.as_deref() == Some("com.apple.mobilesafari")
+        || foreground.app_name.as_deref() == Some("Safari")
+        || foreground.app_name.as_deref() == Some("MobileSafari")
+}
+
 async fn chrome_devtools_targets(
     State(state): State<AppState>,
     Path(udid): Path<String>,
@@ -929,8 +1109,10 @@ async fn chrome_devtools_targets(
 ) -> Result<Json<devtools::ChromeDevToolsTargetDiscovery>, AppError> {
     let origin = request_origin(&headers);
     let mut warnings = Vec::new();
-    let mut inspector_warnings = Vec::new();
-    let foreground_app = foreground_app_metadata(&state, &udid).await.ok().flatten();
+    let foreground_app = foreground_app_for_simulator(&state, &udid)
+        .await
+        .ok()
+        .flatten();
     let simulator = match list_simulators_cached(state.clone(), false).await {
         Ok(simulators) => simulators
             .into_iter()
@@ -942,45 +1124,27 @@ async fn chrome_devtools_targets(
             None
         }
     };
-    let mut sessions = match inspector_sessions_for_udid(&state, &udid).await {
-        Ok(sessions) => sessions,
-        Err(error) => {
-            inspector_warnings.push(error);
-            Vec::new()
+    let (mut external_targets, external_warnings) = match timeout(
+        CHROME_DEVTOOLS_DISCOVERY_TIMEOUT,
+        devtools::discover_external_devtools_targets(
+            &udid,
+            origin.as_deref(),
+            simulator.as_ref().map(|simulator| simulator.name.as_str()),
+            simulator
+                .as_ref()
+                .map(|simulator| simulator.device_type_name.as_str()),
+        ),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            warnings.push("Timed out loading Chrome DevTools targets.".to_owned());
+            (Vec::new(), Vec::new())
         }
     };
-    if sessions.is_empty() {
-        match inspector_session_for_state(&state, &udid).await {
-            Ok(session) => sessions.push(session),
-            Err(error) => inspector_warnings.push(error),
-        }
-    }
-    let mut targets: Vec<devtools::ChromeDevToolsTarget> = sessions
-        .iter()
-        .map(|session| {
-            let source = chrome_devtools_source_for_session(session);
-            devtools::build_target(
-                &udid,
-                origin.as_deref(),
-                &session.info,
-                session.process_identifier,
-                source,
-            )
-        })
-        .collect();
-    let (mut external_targets, external_warnings) = devtools::discover_external_devtools_targets(
-        &udid,
-        origin.as_deref(),
-        simulator.as_ref().map(|simulator| simulator.name.as_str()),
-        simulator
-            .as_ref()
-            .map(|simulator| simulator.device_type_name.as_str()),
-    )
-    .await;
+    let mut targets = Vec::new();
     targets.append(&mut external_targets);
-    if targets.is_empty() {
-        warnings.extend(inspector_warnings);
-    }
     warnings.extend(external_warnings);
     Ok(Json(devtools::ChromeDevToolsTargetDiscovery {
         udid,
@@ -1034,7 +1198,8 @@ async fn chrome_devtools_socket_session(
         .and_then(|value| value.parse::<i64>().ok())
         .ok_or_else(|| "Invalid Chrome DevTools target id.".to_owned())?;
     let session = inspector_session_for_process(state, udid, process_identifier).await?;
-    let source = chrome_devtools_source_for_session(&session);
+    let source = chrome_devtools_source_for_session(&session)
+        .ok_or_else(|| "This app inspector does not expose a Chrome DevTools target.".to_owned())?;
     let target = devtools::build_target(
         udid,
         None,
@@ -1053,29 +1218,22 @@ async fn chrome_devtools_socket_session(
     Ok((runtime, query))
 }
 
-fn chrome_devtools_source_for_session(session: &InspectorSession) -> &str {
+fn chrome_devtools_source_for_session(session: &InspectorSession) -> Option<&str> {
     if session
         .available_sources
         .iter()
         .any(|source| source == SOURCE_REACT_NATIVE)
     {
-        return SOURCE_REACT_NATIVE;
+        return Some(SOURCE_REACT_NATIVE);
     }
     if session
         .available_sources
         .iter()
         .any(|source| source == SOURCE_NATIVE_SCRIPT)
     {
-        return SOURCE_NATIVE_SCRIPT;
+        return Some(SOURCE_NATIVE_SCRIPT);
     }
-    if session
-        .available_sources
-        .iter()
-        .any(|source| source == SOURCE_SWIFTUI)
-    {
-        return SOURCE_SWIFTUI;
-    }
-    SOURCE_UIKIT
+    None
 }
 
 async fn chrome_devtools_ui_redirect() -> Redirect {
@@ -1543,7 +1701,10 @@ async fn simulator_state(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let foreground_app = if is_booted && !android::is_android_id(&udid) {
-        foreground_app_metadata(&state, &udid).await.ok().flatten()
+        foreground_app_for_simulator(&state, &udid)
+            .await
+            .ok()
+            .flatten()
     } else {
         None
     };
@@ -1664,10 +1825,10 @@ async fn sample_process_stack(
 }
 
 async fn performance_foreground_process(state: &AppState, udid: &str) -> Option<ForegroundProcess> {
-    let foreground = match foreground_app_metadata(state, udid).await {
-        Ok(Some(foreground)) => Some(foreground),
-        _ => foreground_app_from_launchctl(udid).await.ok().flatten(),
-    };
+    let foreground = foreground_app_for_simulator(state, udid)
+        .await
+        .ok()
+        .flatten();
     foreground.map(|foreground| ForegroundProcess {
         process_identifier: foreground.process_identifier,
         bundle_identifier: foreground.bundle_identifier,
@@ -4562,10 +4723,11 @@ async fn inspector_session_for_state(
     state: &AppState,
     udid: &str,
 ) -> Result<InspectorSession, String> {
-    let frontmost_pid = frontmost_process_identifier(state, udid)
+    let frontmost_pid = foreground_app_for_simulator(state, udid)
         .await
         .ok()
-        .flatten();
+        .flatten()
+        .map(|foreground| foreground.process_identifier);
     let connected_error = match connected_inspector_session(state, udid, frontmost_pid).await {
         Ok(session) => return Ok(session),
         Err(error) => error,
@@ -4705,64 +4867,6 @@ fn inspector_session_from_published(inspector: PublishedInspector) -> InspectorS
         info: inspector.info,
         process_identifier: inspector.process_identifier,
     }
-}
-
-async fn inspector_sessions_for_udid(
-    state: &AppState,
-    udid: &str,
-) -> Result<Vec<InspectorSession>, String> {
-    let mut probed_inspectors = Vec::new();
-    let mut candidates = Vec::new();
-    for inspector in state.inspectors.connected().await {
-        if inspector_process_belongs_to_udid(udid, inspector.process_identifier).await? {
-            candidates.push(InspectorSession {
-                transport: InspectorSessionTransport::Connected,
-                available_sources: inspector_available_sources(&inspector.info),
-                info: inspector.info,
-                process_identifier: inspector.process_identifier,
-            });
-            continue;
-        }
-
-        probed_inspectors.push(format!("process {}", inspector.process_identifier));
-    }
-
-    for inspector in state.inspectors.published_inspectors().await {
-        if !inspector_process_belongs_to_udid(udid, inspector.process_identifier).await? {
-            probed_inspectors.push(format!("registry process {}", inspector.process_identifier));
-            continue;
-        }
-        if candidates.iter().any(|session: &InspectorSession| {
-            session.process_identifier == inspector.process_identifier
-        }) {
-            continue;
-        }
-        let session = inspector_session_from_published(inspector);
-        if query_inspector_session(state, &session, "Runtime.ping", Value::Null)
-            .await
-            .is_err()
-        {
-            probed_inspectors.push(format!(
-                "unreachable registry process {}",
-                session.process_identifier
-            ));
-            continue;
-        }
-        candidates.push(session);
-    }
-
-    if candidates.is_empty() {
-        if probed_inspectors.is_empty() {
-            return Err(format!("No app inspector found for simulator {udid}."));
-        }
-        return Err(format!(
-            "No app inspector matched simulator {udid}. Found inspectors for {}.",
-            probed_inspectors.join(", ")
-        ));
-    }
-
-    candidates.sort_by_key(inspector_session_score);
-    Ok(candidates)
 }
 
 async fn inspector_session(
@@ -4922,12 +5026,78 @@ async fn frontmost_process_identifier(state: &AppState, udid: &str) -> Result<Op
     let snapshot = accessibility_snapshot(state.clone(), udid.to_owned(), None, Some(0))
         .await
         .map_err(|error| error.to_string())?;
-    Ok(snapshot
-        .get("roots")
+    if let Some(process_identifier) = process_identifier_from_accessibility_snapshot(&snapshot) {
+        return Ok(Some(process_identifier));
+    }
+    frontmost_process_identifier_from_points(state, udid).await
+}
+
+async fn frontmost_process_identifier_from_points(
+    state: &AppState,
+    udid: &str,
+) -> Result<Option<i64>, String> {
+    let probe_points = foreground_process_probe_points(state.clone(), udid.to_owned()).await;
+    let mut last_error: Option<String> = None;
+    for point in probe_points {
+        match timeout(
+            SAFARI_ACTIVE_TAB_HINT_TIMEOUT,
+            accessibility_snapshot(state.clone(), udid.to_owned(), Some(point), Some(0)),
+        )
+        .await
+        {
+            Ok(Ok(snapshot)) => {
+                if let Some(process_identifier) =
+                    process_identifier_from_accessibility_snapshot(&snapshot)
+                {
+                    return Ok(Some(process_identifier));
+                }
+            }
+            Ok(Err(error)) => last_error = Some(error.to_string()),
+            Err(_) => {}
+        }
+    }
+    if let Some(error) = last_error {
+        Err(error)
+    } else {
+        Ok(None)
+    }
+}
+
+async fn foreground_process_probe_points(state: AppState, udid: String) -> Vec<(f64, f64)> {
+    let profile = run_bridge_action(state, move |bridge| bridge.chrome_profile(&udid)).await;
+    let (screen_width, screen_height) = profile
+        .map(|profile| (profile.screen_width, profile.screen_height))
+        .unwrap_or((402.0, 874.0));
+    let center_x = (screen_width * 0.5).max(1.0);
+    let center_y = (screen_height * 0.5).clamp(1.0, screen_height.max(1.0));
+    let bottom_address_y = (screen_height - 54.0).clamp(1.0, screen_height.max(1.0));
+    let bottom_title_y = (screen_height - 28.0).clamp(1.0, screen_height.max(1.0));
+    vec![
+        (center_x, bottom_address_y),
+        (center_x, bottom_title_y),
+        (center_x, 92.0_f64.min((screen_height * 0.18).max(1.0))),
+        (center_x, center_y),
+    ]
+}
+
+fn process_identifier_from_accessibility_snapshot(snapshot: &Value) -> Option<i64> {
+    let roots = snapshot.get("roots").and_then(Value::as_array)?;
+    roots
+        .iter()
+        .find_map(process_identifier_from_accessibility_node)
+}
+
+fn process_identifier_from_accessibility_node(node: &Value) -> Option<i64> {
+    if let Some(process_identifier) = node.get("pid").and_then(Value::as_i64) {
+        return Some(process_identifier);
+    }
+    node.get("children")
         .and_then(Value::as_array)
-        .and_then(|roots| roots.first())
-        .and_then(|root| root.get("pid"))
-        .and_then(Value::as_i64))
+        .and_then(|children| {
+            children
+                .iter()
+                .find_map(process_identifier_from_accessibility_node)
+        })
 }
 
 async fn foreground_app_metadata(
@@ -4938,6 +5108,9 @@ async fn foreground_app_metadata(
         return Ok(None);
     };
     let command = process_command(process_identifier).await?;
+    if command.contains(".appex/") || command.contains("WebContent") {
+        return Ok(None);
+    }
     let app_path = app_bundle_path_from_command(&command);
     let bundle_identifier = match app_path.as_deref() {
         Some(path) => app_bundle_identifier(path).await.ok().flatten(),
@@ -4957,6 +5130,67 @@ async fn foreground_app_metadata(
         bundle_identifier,
         app_name,
     }))
+}
+
+async fn foreground_app_for_simulator(
+    state: &AppState,
+    udid: &str,
+) -> Result<Option<devtools::ForegroundApp>, String> {
+    if let Some(foreground) = cached_foreground_app(udid) {
+        return Ok(Some(foreground));
+    }
+
+    let mut last_error: Option<String> = None;
+    match foreground_app_metadata(state, udid).await {
+        Ok(Some(foreground)) => {
+            cache_foreground_app(udid, &foreground);
+            return Ok(Some(foreground));
+        }
+        Ok(None) => {}
+        Err(error) => last_error = Some(error),
+    }
+
+    match foreground_app_from_launchctl(udid).await {
+        Ok(Some(foreground)) => {
+            cache_foreground_app(udid, &foreground);
+            Ok(Some(foreground))
+        }
+        Ok(None) => Ok(stale_cached_foreground_app(udid)),
+        Err(error) => stale_cached_foreground_app(udid)
+            .map(Some)
+            .ok_or_else(|| last_error.unwrap_or(error)),
+    }
+}
+
+fn cache_foreground_app(udid: &str, foreground_app: &devtools::ForegroundApp) {
+    let cache = FOREGROUND_APP_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
+    let Ok(mut cache) = cache.lock() else {
+        return;
+    };
+    cache.insert(
+        udid.to_owned(),
+        CachedForegroundApp {
+            cached_at: Instant::now(),
+            foreground_app: foreground_app.clone(),
+        },
+    );
+}
+
+fn cached_foreground_app(udid: &str) -> Option<devtools::ForegroundApp> {
+    cached_foreground_app_with_ttl(udid, FOREGROUND_APP_CACHE_TTL)
+}
+
+fn stale_cached_foreground_app(udid: &str) -> Option<devtools::ForegroundApp> {
+    cached_foreground_app_with_ttl(udid, FOREGROUND_APP_STALE_TTL)
+}
+
+fn cached_foreground_app_with_ttl(udid: &str, ttl: Duration) -> Option<devtools::ForegroundApp> {
+    let cache = FOREGROUND_APP_CACHE.get()?;
+    let Ok(cache) = cache.lock() else {
+        return None;
+    };
+    let cached = cache.get(udid)?;
+    (cached.cached_at.elapsed() <= ttl).then(|| cached.foreground_app.clone())
 }
 
 #[derive(Clone, Debug)]
@@ -4979,8 +5213,22 @@ async fn foreground_app_from_launchctl(
 ) -> Result<Option<devtools::ForegroundApp>, String> {
     let services = simulator_ui_application_services(udid).await?;
     let mut best: Option<UIKitApplicationServiceDetails> = None;
-    for service in services {
-        let Some(details) = ui_application_service_details(udid, &service).await? else {
+    let detail_results = join_all(
+        services
+            .iter()
+            .map(|service| ui_application_service_details(udid, service)),
+    )
+    .await;
+    let mut skipped_details = 0_u32;
+    for result in detail_results {
+        let Some(details) = (match result {
+            Ok(details) => details,
+            Err(error) => {
+                skipped_details += 1;
+                tracing::debug!("Skipping UIKit application foreground candidate: {error}");
+                None
+            }
+        }) else {
             continue;
         };
         let details_score = ui_application_foreground_score(&details);
@@ -4991,6 +5239,14 @@ async fn foreground_app_from_launchctl(
         if details_score > best_score {
             best = Some(details);
         }
+    }
+
+    if skipped_details > 0
+        && best
+            .as_ref()
+            .is_some_and(|details| ui_application_foreground_score(details) < (2, 3))
+    {
+        return Ok(None);
     }
 
     Ok(best.map(|details| devtools::ForegroundApp {
@@ -5004,7 +5260,7 @@ async fn simulator_ui_application_services(
     udid: &str,
 ) -> Result<Vec<UIKitApplicationService>, String> {
     let output = timeout(
-        Duration::from_secs(2),
+        Duration::from_secs(3),
         Command::new("xcrun")
             .args(["simctl", "spawn", udid, "launchctl", "print", "user/501"])
             .output(),
@@ -5042,7 +5298,7 @@ async fn ui_application_service_details(
     service: &UIKitApplicationService,
 ) -> Result<Option<UIKitApplicationServiceDetails>, String> {
     let output = timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(3),
         Command::new("xcrun")
             .args([
                 "simctl",
@@ -6083,13 +6339,16 @@ async fn accessibility_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{
-        accessibility_point_snapshot, attach_tree_metadata, available_sources_for_snapshot,
-        best_inspector_session, client_stats_foreground, compact_accessibility_snapshot,
-        element_matches_selector, first_matching_element, inspector_available_sources,
-        inspector_metadata, inspector_session_from_published, inspector_session_score,
-        is_inspector_agent_transport_path, normalize_inspector_node,
+        accessibility_point_snapshot, active_url_hint_from_accessibility_snapshot,
+        attach_tree_metadata, available_sources_for_snapshot, best_inspector_session,
+        chrome_devtools_source_for_session, client_stats_foreground,
+        compact_accessibility_snapshot, element_matches_selector, first_matching_element,
+        inspector_available_sources, inspector_metadata, inspector_session_from_published,
+        inspector_session_score, is_inspector_agent_transport_path,
+        mark_safari_active_webkit_target, normalize_inspector_node,
         normalize_screen_point_from_snapshot, normalized_gesture_coordinates,
-        parse_lsof_tcp_listener, parse_ui_application_service_line, resolved_stream_quality_limits,
+        parse_lsof_tcp_listener, parse_ui_application_service_line,
+        process_identifier_from_accessibility_snapshot, resolved_stream_quality_limits,
         split_filter_values, stream_quality_profile, suppress_native_ax_translation_error,
         tap_point_from_snapshot, trim_tree_depth, ui_application_foreground_score,
         AccessibilityHierarchySource, ElementSelectorPayload, InspectorSession,
@@ -6126,6 +6385,76 @@ mod tests {
                 }]
             }]
         })
+    }
+
+    fn webkit_target(title: &str, url: &str, page_id: u64) -> crate::webkit::WebKitTarget {
+        crate::webkit::WebKitTarget {
+            id: format!("target-{page_id}"),
+            app_id: "com.apple.mobilesafari".to_owned(),
+            app_name: Some("Safari".to_owned()),
+            app_active: true,
+            page_active: false,
+            page_id,
+            title: Some(title.to_owned()),
+            url: Some(url.to_owned()),
+            kind: "safari-page".to_owned(),
+            inspector_url: format!("/webkit/{page_id}"),
+            web_socket_url: format!("ws://localhost/{page_id}"),
+        }
+    }
+
+    #[test]
+    fn active_safari_url_hint_reads_bidi_stripped_ax_value() {
+        let snapshot = json!({
+            "roots": [{
+                "type": "TextField",
+                "AXLabel": "Address",
+                "AXValue": "\u{200e}webkit.org",
+                "children": []
+            }]
+        });
+
+        assert_eq!(
+            active_url_hint_from_accessibility_snapshot(&snapshot),
+            Some("webkit.org".to_owned())
+        );
+    }
+
+    #[test]
+    fn accessibility_snapshot_pid_search_reads_nested_point_results() {
+        let snapshot = json!({
+            "roots": [{
+                "type": "Window",
+                "children": [{
+                    "type": "TextField",
+                    "pid": 24218,
+                    "children": []
+                }]
+            }]
+        });
+
+        assert_eq!(
+            process_identifier_from_accessibility_snapshot(&snapshot),
+            Some(24218)
+        );
+    }
+
+    #[test]
+    fn mark_safari_active_webkit_target_promotes_matching_tab() {
+        let mut targets = vec![
+            webkit_target("Example Domain", "https://example.com/", 2),
+            webkit_target("WebKit", "https://webkit.org/", 8),
+            webkit_target("SimDeck", "https://simdeck.nativescript.org/", 1),
+        ];
+
+        mark_safari_active_webkit_target(&mut targets, "webkit.org");
+
+        assert_eq!(
+            targets.first().and_then(|target| target.url.as_deref()),
+            Some("https://webkit.org/")
+        );
+        assert!(targets[0].page_active);
+        assert!(targets.iter().skip(1).all(|target| !target.page_active));
     }
 
     #[test]
@@ -6312,6 +6641,38 @@ mod tests {
                 SOURCE_UIKIT.to_owned()
             ]
         );
+    }
+
+    #[test]
+    fn chrome_devtools_source_only_allows_cdp_capable_app_inspectors() {
+        let react_native = InspectorSession {
+            transport: InspectorSessionTransport::Connected,
+            available_sources: vec![SOURCE_REACT_NATIVE.to_owned(), SOURCE_SWIFTUI.to_owned()],
+            info: json!({}),
+            process_identifier: 1,
+        };
+        let native_script = InspectorSession {
+            transport: InspectorSessionTransport::Connected,
+            available_sources: vec![SOURCE_NATIVE_SCRIPT.to_owned()],
+            info: json!({}),
+            process_identifier: 2,
+        };
+        let swiftui = InspectorSession {
+            transport: InspectorSessionTransport::Connected,
+            available_sources: vec![SOURCE_SWIFTUI.to_owned(), SOURCE_UIKIT.to_owned()],
+            info: json!({}),
+            process_identifier: 3,
+        };
+
+        assert_eq!(
+            chrome_devtools_source_for_session(&react_native),
+            Some(SOURCE_REACT_NATIVE)
+        );
+        assert_eq!(
+            chrome_devtools_source_for_session(&native_script),
+            Some(SOURCE_NATIVE_SCRIPT)
+        );
+        assert_eq!(chrome_devtools_source_for_session(&swiftui), None);
     }
 
     #[test]

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties, PointerEvent } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+import type { CSSProperties, ChangeEvent, PointerEvent } from "react";
 
 import {
   fetchSimulatorPerformance,
@@ -97,14 +97,36 @@ export function PerformancePanel({
     visible,
   ]);
 
+  const processes = performance?.processes ?? [];
+  const selectedPidValue = selectedPid ?? performance?.selectedPid ?? null;
+  const selectedPidInList =
+    selectedPidValue == null ||
+    processes.some((process) => process.pid === selectedPidValue);
   const current = performance?.current ?? null;
   const selectedProcess = useMemo(
-    () =>
-      performance?.processes.find(
-        (process) => process.pid === (selectedPid ?? performance.selectedPid),
-      ) ?? null,
-    [performance, selectedPid],
+    () => processes.find((process) => process.pid === selectedPidValue) ?? null,
+    [processes, selectedPidValue],
   );
+
+  function selectProcess(event: ChangeEvent<HTMLSelectElement>) {
+    const nextPid = Number(event.currentTarget.value);
+    if (!Number.isInteger(nextPid)) {
+      return;
+    }
+    setFollowForeground(false);
+    setSelectedPid(nextPid);
+    setSample(null);
+  }
+
+  function followFrontmostProcess() {
+    setFollowForeground(true);
+    setSelectedPid(
+      performance?.foregroundProcess?.processIdentifier ??
+        performance?.selectedPid ??
+        null,
+    );
+    setSample(null);
+  }
 
   async function runSample() {
     const pid = selectedPid ?? performance?.selectedPid ?? null;
@@ -133,27 +155,36 @@ export function PerformancePanel({
 
   return (
     <div className="performance-panel">
-      <div className="performance-process-list">
-        {performance?.processes.length ? (
-          performance.processes.map((process) => (
-            <ProcessButton
-              key={process.pid}
-              onSelect={() => {
-                setSelectedPid(process.pid);
-                setFollowForeground(process.isForeground);
-                setSample(null);
-              }}
-              process={process}
-              selected={
-                process.pid === (selectedPid ?? performance.selectedPid)
-              }
-            />
-          ))
-        ) : (
-          <div className="performance-empty compact">
-            {error || "Waiting for an app process."}
-          </div>
-        )}
+      <div className="performance-target-bar">
+        <div className="performance-process-select-wrap">
+          <select
+            aria-label="Performance process"
+            className="performance-process-select"
+            disabled={!processes.length}
+            onChange={selectProcess}
+            value={selectedPidValue == null ? "" : String(selectedPidValue)}
+          >
+            {processes.length ? null : (
+              <option value="">Waiting for an app process</option>
+            )}
+            {selectedPidValue != null && !selectedPidInList ? (
+              <option value={selectedPidValue}>PID {selectedPidValue}</option>
+            ) : null}
+            {processes.map((process) => (
+              <option key={process.pid} value={process.pid}>
+                {processOptionLabel(process)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button
+          className={`performance-follow-button ${followForeground ? "active" : ""}`}
+          disabled={!performance?.foregroundProcess}
+          onClick={followFrontmostProcess}
+          type="button"
+        >
+          Follow Frontmost
+        </button>
       </div>
 
       {error && performance?.processes.length ? (
@@ -295,34 +326,22 @@ export function PerformancePanel({
             )}
           </section>
         </>
-      ) : null}
+      ) : (
+        <div className="performance-empty compact">
+          {error || "Collecting performance metrics."}
+        </div>
+      )}
     </div>
   );
 }
 
-function ProcessButton({
-  onSelect,
-  process,
-  selected,
-}: {
-  onSelect: () => void;
-  process: PerformanceProcess;
-  selected: boolean;
-}) {
-  return (
-    <button
-      className={`performance-process ${selected ? "selected" : ""}`}
-      onClick={onSelect}
-      title={process.command}
-      type="button"
-    >
-      <span className="performance-process-name">{process.process}</span>
-      <span className="performance-process-meta">
-        {process.pid} / {process.role}
-        {process.isForeground ? " / frontmost" : ""}
-      </span>
-    </button>
-  );
+function processOptionLabel(process: PerformanceProcess): string {
+  const name = process.appName || process.process;
+  const parts = [`${name} (${process.pid})`, process.role];
+  if (process.isForeground) {
+    parts.push("frontmost");
+  }
+  return parts.join(" / ");
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -345,6 +364,7 @@ function Timeline({
   value: (sample: PerformanceSample) => number;
   valueLabel: (value: number | null | undefined) => string;
 }) {
+  const gradientId = useId().replace(/:/g, "");
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const values = samples.map(value);
   const latest = values.at(-1) ?? 0;
@@ -353,9 +373,13 @@ function Timeline({
     x: values.length <= 1 ? 0 : (index / (values.length - 1)) * 100,
     y: 42 - (Math.max(0, item) / max) * 36,
   }));
-  const points = coordinates
-    .map((point) => `${round(point.x)},${round(point.y)}`)
+  const linePath = coordinates
+    .map(
+      (point, index) =>
+        `${index === 0 ? "M" : "L"} ${round(point.x)} ${round(point.y)}`,
+    )
     .join(" ");
+  const areaPath = linePath ? `${linePath} L 100 42 L 0 42 Z` : "";
   const activeIndex =
     hoverIndex == null || hoverIndex >= samples.length ? null : hoverIndex;
   const activePoint = activeIndex == null ? null : coordinates[activeIndex];
@@ -385,8 +409,32 @@ function Timeline({
         preserveAspectRatio="none"
         viewBox="0 0 100 44"
       >
-        <line x1="0" x2="100" y1="42" y2="42" />
-        {points ? <polyline points={points} /> : null}
+        <defs>
+          <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.26" />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        {[6, 18, 30, 42].map((y) => (
+          <line
+            className="performance-chart-grid"
+            key={y}
+            x1="0"
+            x2="100"
+            y1={y}
+            y2={y}
+          />
+        ))}
+        {areaPath ? (
+          <path
+            className="performance-chart-area"
+            d={areaPath}
+            fill={`url(#${gradientId})`}
+          />
+        ) : null}
+        {linePath ? (
+          <path className="performance-chart-line" d={linePath} />
+        ) : null}
         {activePoint ? (
           <>
             <line
@@ -456,13 +504,13 @@ function formatRate(value: number | null | undefined): string {
 
 function hangLabel(state: string): string {
   if (state === "busy") {
-    return "Busy";
+    return "Potential hang";
   }
   if (state === "quiet") {
-    return "Quiet";
+    return "No frame updates";
   }
   if (state === "responsive") {
-    return "Responsive";
+    return "Rendering OK";
   }
   return "Unknown";
 }
