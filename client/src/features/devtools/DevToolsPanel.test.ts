@@ -64,6 +64,26 @@ describe("resolveDevToolsTargetSelection", () => {
     });
   });
 
+  it("uses the active Safari URL hint before falling back to newest page", () => {
+    const newest = safariTarget("webkit:newest", "https://apple.com/ca/", {
+      pageId: 14,
+    });
+    const active = safariTarget("webkit:active", "https://example.com/", {
+      pageId: 2,
+    });
+
+    const targets = withSafariAutoTarget([newest, active], "\u200eexample.com");
+
+    expect(targets[0]).toMatchObject({
+      frameUrl: active.frameUrl,
+      id: "webkit:safari:auto",
+      meta: active.url,
+      pageActive: true,
+      safariAuto: true,
+      title: "Auto",
+    });
+  });
+
   it("uses Safari auto when Safari is foreground and selection is automatic", () => {
     const inactive = safariTarget("webkit:old", "https://old.example/");
     const active = safariTarget("webkit:active", "https://active.example/", {

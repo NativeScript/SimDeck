@@ -573,6 +573,15 @@ static NSUInteger XCWAXUIKitApplicationForegroundScore(NSString *details, unsign
     return 0;
 }
 
+static BOOL XCWAXUIKitServiceLooksDecisive(NSString *serviceName) {
+    if (serviceName.length == 0) {
+        return YES;
+    }
+    return [serviceName rangeOfString:@"ViewService"].location == NSNotFound &&
+           [serviceName rangeOfString:@"WidgetRenderer"].location == NSNotFound &&
+           [serviceName rangeOfString:@".appex"].location == NSNotFound;
+}
+
 static BOOL XCWAXUIKitApplicationCandidateIsBetter(NSDictionary *candidate, NSDictionary *current) {
     if (current == nil) {
         return YES;
@@ -595,15 +604,20 @@ static pid_t XCWAXForegroundUIKitApplicationPID(NSString *udid) {
     XCWProcessResult *result = [XCWProcessRunner runLaunchPath:@"/usr/bin/xcrun"
                                                      arguments:@[@"simctl", @"spawn", udid, @"launchctl", @"print", @"user/501"]
                                                      inputData:nil
-                                                    timeoutSec:2
+                                                    timeoutSec:1
                                                          error:&error];
     if (result == nil || result.terminationStatus != 0) {
         XCWAXDebugLog(@"foreground UIKit application listing failed: %@", error ?: result.stderrString);
         return 0;
     }
 
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:1.0];
     NSDictionary *best = nil;
     for (NSString *line in XCWAXLaunchctlLines(result.stdoutString)) {
+        NSTimeInterval remaining = [deadline timeIntervalSinceNow];
+        if (remaining <= 0) {
+            break;
+        }
         NSDictionary *service = XCWAXParseUIKitApplicationServiceLine(line);
         if (service == nil) {
             continue;
@@ -613,7 +627,7 @@ static pid_t XCWAXForegroundUIKitApplicationPID(NSString *udid) {
         XCWProcessResult *detailsResult = [XCWProcessRunner runLaunchPath:@"/usr/bin/xcrun"
                                                                  arguments:@[@"simctl", @"spawn", udid, @"launchctl", @"print", [@"user/501/" stringByAppendingString:serviceName]]
                                                                  inputData:nil
-                                                                timeoutSec:2
+                                                                timeoutSec:MAX(0.1, remaining)
                                                                      error:nil];
         if (detailsResult == nil || detailsResult.terminationStatus != 0) {
             continue;
@@ -639,6 +653,9 @@ static pid_t XCWAXForegroundUIKitApplicationPID(NSString *udid) {
         };
         if (XCWAXUIKitApplicationCandidateIsBetter(candidate, best)) {
             best = candidate;
+        }
+        if (score >= 2 && XCWAXUIKitServiceLooksDecisive(serviceName)) {
+            break;
         }
     }
 
@@ -729,8 +746,8 @@ static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, N
 
 static NSArray<NSValue *> *XCWAXRootRecoveryHitTestPoints(void) {
     NSMutableArray<NSValue *> *points = [NSMutableArray array];
-    NSArray<NSNumber *> *xValues = @[@40, @120, @220, @340, @420];
-    NSArray<NSNumber *> *yValues = @[@120, @220, @360, @520, @700, @840];
+    NSArray<NSNumber *> *xValues = @[@80, @220, @360];
+    NSArray<NSNumber *> *yValues = @[@120, @280, @480, @700, @840];
     for (NSNumber *yValue in yValues) {
         for (NSNumber *xValue in xValues) {
             [points addObject:[NSValue valueWithPoint:CGPointMake(xValue.doubleValue, yValue.doubleValue)]];

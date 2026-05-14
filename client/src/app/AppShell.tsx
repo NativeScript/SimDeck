@@ -1241,7 +1241,6 @@ export function AppShell({
       return;
     }
 
-    void loadAccessibilityTree();
     const refreshMs =
       accessibilityPreferredSource === "react-native" ||
       accessibilitySource === "react-native"
@@ -1250,10 +1249,26 @@ export function AppShell({
             accessibilitySource === "flutter"
           ? FLUTTER_ACCESSIBILITY_REFRESH_MS
           : ACCESSIBILITY_REFRESH_MS;
-    const interval = window.setInterval(() => {
-      void loadAccessibilityTree();
-    }, refreshMs);
-    return () => window.clearInterval(interval);
+    let disposed = false;
+    let timeout: number | null = null;
+    const refreshLoop = async () => {
+      const startedAt = Date.now();
+      await loadAccessibilityTree();
+      if (disposed) {
+        return;
+      }
+      timeout = window.setTimeout(
+        refreshLoop,
+        Math.max(0, refreshMs - (Date.now() - startedAt)),
+      );
+    };
+    void refreshLoop();
+    return () => {
+      disposed = true;
+      if (timeout != null) {
+        window.clearTimeout(timeout);
+      }
+    };
   }, [
     accessibilityPreferredSource,
     accessibilitySource,
