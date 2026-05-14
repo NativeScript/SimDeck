@@ -5,6 +5,14 @@ NS_ASSUME_NONNULL_BEGIN
 @interface XCWSimctl : NSObject
 
 - (nullable NSArray<NSDictionary *> *)listSimulatorsWithError:(NSError * _Nullable * _Nullable)error;
+- (nullable NSDictionary *)simulatorCreationOptionsWithError:(NSError * _Nullable * _Nullable)error;
+- (nullable NSDictionary *)createSimulatorWithName:(NSString *)name
+                              deviceTypeIdentifier:(NSString *)deviceTypeIdentifier
+                                 runtimeIdentifier:(nullable NSString *)runtimeIdentifier
+                                   pairedWatchName:(nullable NSString *)pairedWatchName
+                   pairedWatchDeviceTypeIdentifier:(nullable NSString *)pairedWatchDeviceTypeIdentifier
+                      pairedWatchRuntimeIdentifier:(nullable NSString *)pairedWatchRuntimeIdentifier
+                                             error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)bootSimulatorWithUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)shutdownSimulatorWithUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)toggleAppearanceForSimulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;

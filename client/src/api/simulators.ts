@@ -4,9 +4,12 @@ import type {
   AccessibilityTreeResponse,
   ChromeDevToolsTargetDiscovery,
   ChromeProfile,
+  CreateSimulatorRequest,
+  CreateSimulatorResponse,
   InspectorRequestResponse,
   SimulatorPerformanceResponse,
   SimulatorLogsResponse,
+  SimulatorCreateOptionsResponse,
   SimulatorMetadata,
   SimulatorProcessListResponse,
   SimulatorStateResponse,
@@ -20,6 +23,24 @@ export async function listSimulators(
 ): Promise<SimulatorMetadata[]> {
   const data = await apiRequest<SimulatorsResponse>("/api/simulators", options);
   return data.simulators ?? [];
+}
+
+export async function fetchSimulatorCreateOptions(
+  options: RequestInit = {},
+): Promise<SimulatorCreateOptionsResponse> {
+  return apiRequest<SimulatorCreateOptionsResponse>(
+    "/api/simulators/create-options",
+    options,
+  );
+}
+
+export async function createSimulator(
+  payload: CreateSimulatorRequest,
+): Promise<CreateSimulatorResponse> {
+  return apiRequest<CreateSimulatorResponse>("/api/simulators", {
+    body: JSON.stringify(payload),
+    method: "POST",
+  });
 }
 
 export async function fetchChromeProfile(udid: string): Promise<ChromeProfile> {

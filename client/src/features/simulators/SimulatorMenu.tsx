@@ -1,4 +1,7 @@
-import { MixerHorizontalIcon as MenuIcon } from "@radix-ui/react-icons";
+import {
+  MixerHorizontalIcon as MenuIcon,
+  PlusIcon,
+} from "@radix-ui/react-icons";
 import type { RefObject } from "react";
 
 import type { SimulatorMetadata } from "../../api/types";
@@ -25,6 +28,7 @@ interface SimulatorMenuProps {
   onHome: () => void;
   onOpenAppSwitcher: () => void;
   onOpenBundlePrompt: () => void;
+  onOpenNewSimulator: () => void;
   onOpenUrlPrompt: () => void;
   onRotateRight: () => void;
   onShutdown: () => void;
@@ -61,6 +65,7 @@ export function SimulatorMenu({
   onHome,
   onOpenAppSwitcher,
   onOpenBundlePrompt,
+  onOpenNewSimulator,
   onOpenUrlPrompt,
   onRotateRight,
   onShutdown,
@@ -126,6 +131,19 @@ export function SimulatorMenu({
                 placeholder="Search simulators..."
                 value={search}
               />
+              <div className="menu-actions menu-actions-compact">
+                <button
+                  className="menu-action menu-primary-action"
+                  onClick={() => {
+                    onOpenNewSimulator();
+                    onCloseMenu();
+                  }}
+                  type="button"
+                >
+                  <PlusIcon />
+                  New Simulator
+                </button>
+              </div>
               <div className="sim-list">
                 {isLoading ? <p className="list-empty">Loading...</p> : null}
                 {!isLoading && filteredSimulators.length === 0 ? (
