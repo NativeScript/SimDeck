@@ -29,6 +29,20 @@ describe("viewportMath", () => {
     expect(clamped.y).toBeGreaterThan(-500);
   });
 
+  it("centers pan in the visible area when bottom controls reserve canvas space", () => {
+    const clamped = clampPan(
+      { x: 0, y: 0 },
+      0.5,
+      { width: 600, height: 800 },
+      { width: 300, height: 600 },
+      null,
+      0,
+      120,
+    );
+
+    expect(clamped).toEqual({ x: 0, y: -60 });
+  });
+
   it("fits device aspect inside chrome screen rect", () => {
     const rect = computeChromeScreenRect(
       {

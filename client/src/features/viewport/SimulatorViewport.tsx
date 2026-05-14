@@ -21,7 +21,6 @@ interface SimulatorViewportProps {
   chromeRequired: boolean;
   chromeScreenStyle: CSSProperties | null;
   chromeUrl: string;
-  browserFramePending: boolean;
   deviceFrameStyle: CSSProperties;
   devicePresentationStyle: CSSProperties;
   deviceTransform: string;
@@ -38,7 +37,6 @@ interface SimulatorViewportProps {
     usage?: number,
   ) => void;
   chromeButtonUrl: (button: string, pressed?: boolean) => string;
-  onChromeLoad: () => void;
   onPanPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
   onPanPointerUp: () => void;
   onPickerHover: (id: string | null) => void;
@@ -86,7 +84,6 @@ export function SimulatorViewport({
   chromeRequired,
   chromeScreenStyle,
   chromeUrl,
-  browserFramePending,
   deviceFrameStyle,
   devicePresentationStyle,
   deviceTransform,
@@ -98,7 +95,6 @@ export function SimulatorViewport({
   isPanning,
   onChromeButtonEvent,
   chromeButtonUrl,
-  onChromeLoad,
   onPanPointerMove,
   onPanPointerUp,
   onPickerHover,
@@ -134,14 +130,14 @@ export function SimulatorViewport({
   zoomAnimating,
 }: SimulatorViewportProps) {
   const showDeviceLoading = Boolean(
-    selectedSimulator?.isBooted &&
+    selectedSimulator &&
     !hasFrame &&
     !isStreamError &&
     chromeRequired &&
     !chromeLoaded,
   );
   const hideDeviceWhileLoading = Boolean(
-    selectedSimulator?.isBooted && chromeRequired && !chromeLoaded,
+    selectedSimulator && chromeRequired && !chromeLoaded,
   );
   const showScreenLoading = Boolean(
     selectedSimulator?.isBooted &&
@@ -171,6 +167,7 @@ export function SimulatorViewport({
         {selectedSimulator ? (
           <div
             className={`device-anchor ${zoomAnimating ? "animated" : ""} ${hideDeviceWhileLoading ? "device-anchor-loading" : ""}`}
+            key={selectedSimulator.udid}
             style={{ transform: deviceTransform }}
           >
             <div className="device-frame" style={deviceFrameStyle}>
@@ -187,13 +184,11 @@ export function SimulatorViewport({
                   chromeScreenStyle={chromeScreenStyle}
                   chromeUrl={chromeUrl}
                   chromeButtonUrl={chromeButtonUrl}
-                  browserFramePending={browserFramePending}
                   hasFrame={hasFrame}
                   isBooted={selectedSimulator.isBooted}
                   isLoadingStream={showScreenLoading}
                   isStreamError={isStreamError}
                   onChromeButtonEvent={onChromeButtonEvent}
-                  onChromeLoad={onChromeLoad}
                   onPanPointerCancel={onPanPointerUp}
                   onPanPointerMove={onPanPointerMove}
                   onPanPointerUp={onPanPointerUp}

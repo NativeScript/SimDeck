@@ -1,4 +1,10 @@
-import { startTransition, useEffect, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { listSimulators } from "../../api/simulators";
 import type { SimulatorMetadata } from "../../api/types";
@@ -69,6 +75,25 @@ export function useSimulatorList({
     await loadSimulators();
   }
 
+  const updateSimulator = useCallback((nextSimulator: SimulatorMetadata) => {
+    startTransition(() =>
+      setSimulators((current) => {
+        let replaced = false;
+        const nextSimulators = current.map((simulator) => {
+          if (simulator.udid !== nextSimulator.udid) {
+            return simulator;
+          }
+          replaced = true;
+          return {
+            ...simulator,
+            ...nextSimulator,
+          };
+        });
+        return replaced ? nextSimulators : [nextSimulator, ...current];
+      }),
+    );
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     let timeoutId = 0;
@@ -118,5 +143,6 @@ export function useSimulatorList({
     isLoading,
     refresh,
     simulators,
+    updateSimulator,
   };
 }

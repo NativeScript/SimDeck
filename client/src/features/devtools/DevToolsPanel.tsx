@@ -29,7 +29,6 @@ const DEVTOOLS_TARGET_REFRESH_MS = 750;
 const CHROME_DEVTOOLS_REQUEST_TIMEOUT_MS = 6000;
 const WEBKIT_DEVTOOLS_REQUEST_TIMEOUT_MS = 6000;
 const DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS = 8000;
-const FOREGROUND_SELECTION_SETTLE_MS = 1800;
 const DEVTOOLS_PANEL_WIDTH_STORAGE_KEY = "xcw-devtools-panel-width";
 const LEGACY_PANEL_WIDTH_STORAGE_KEYS = [
   "xcw-chrome-devtools-panel-width",
@@ -44,7 +43,6 @@ const NOT_CONNECTED_MESSAGE = "Not connected";
 interface DevToolsPanelProps {
   disconnected: boolean;
   onClose: () => void;
-  overviewRequestKey: number;
   selectedSimulator: SimulatorMetadata | null;
   visible: boolean;
 }
@@ -90,7 +88,6 @@ type WebKitSocketState =
 export function DevToolsPanel({
   disconnected,
   onClose,
-  overviewRequestKey,
   selectedSimulator,
   visible,
 }: DevToolsPanelProps) {
@@ -115,11 +112,11 @@ export function DevToolsPanel({
   const requestIdRef = useRef(0);
   const reconnectFrameTimerRef = useRef<number | null>(null);
   const resizeStateRef = useRef<ResizeState | null>(null);
+  const selectedSimulatorBootedRef = useRef(false);
   const selectedSimulatorUdidRef = useRef<string | null>(null);
   const stableDiscoveryAtRef = useRef(0);
   const stableDiscoveryRef = useRef<DevToolsDiscovery | null>(null);
   const overviewPinnedRef = useRef(false);
-  const foregroundSelectionPausedUntilRef = useRef(0);
   const foregroundKeyRef = useRef("");
   const foregroundAppRef =
     useRef<ChromeDevToolsTargetDiscovery["foregroundApp"]>(null);
@@ -166,28 +163,47 @@ export function DevToolsPanel({
     setSelectedTargetId(nextTargetId);
   }, []);
 
-  const loadTargets = useCallback(async () => {
-    if (loadingTargetsRef.current) {
-      return;
-    }
-
-    if (disconnected) {
-      emptyDiscoveryGraceUntilRef.current = 0;
+  const resetTargetDiscovery = useCallback(
+    (options: { holdEmptyGrace?: boolean } = {}) => {
+      requestIdRef.current += 1;
+      loadingTargetsRef.current = false;
+      loadingWebKitTargetsRef.current = false;
+      emptyDiscoveryGraceUntilRef.current = options.holdEmptyGrace
+        ? Date.now() + DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS
+        : 0;
       applyDiscovery(null);
       applySelectedTargetId("");
+      foregroundKeyRef.current = "";
+      foregroundAppRef.current = null;
+      pendingForegroundKeyRef.current = "";
+      pendingForegroundAppRef.current = null;
       setError("");
+      setFrameLoaded(false);
       setIsLoading(false);
       setIsWebKitLoading(false);
+      setOverviewVisible(false);
+      setWebKitSocketState("");
+    },
+    [applyDiscovery, applySelectedTargetId],
+  );
+
+  const loadTargets = useCallback(async () => {
+    if (disconnected) {
+      resetTargetDiscovery();
       return;
     }
 
     if (!selectedSimulator) {
-      emptyDiscoveryGraceUntilRef.current = 0;
-      applyDiscovery(null);
-      applySelectedTargetId("");
-      setError("");
-      setIsLoading(false);
-      setIsWebKitLoading(false);
+      resetTargetDiscovery();
+      return;
+    }
+
+    if (!selectedSimulator.isBooted) {
+      resetTargetDiscovery();
+      return;
+    }
+
+    if (loadingTargetsRef.current) {
       return;
     }
 
@@ -231,7 +247,8 @@ export function DevToolsPanel({
           requestId !== requestIdRef.current &&
           !(
             isBackgroundWebKitResult &&
-            selectedSimulatorUdidRef.current === selectedSimulator.udid
+            selectedSimulatorUdidRef.current === selectedSimulator.udid &&
+            selectedSimulatorBootedRef.current
           )
         ) {
           return;
@@ -347,13 +364,10 @@ export function DevToolsPanel({
         const pendingForegroundApp = pendingForegroundAppRef.current;
         const pendingForegroundKey = pendingForegroundKeyRef.current;
         const foregroundApp = foregroundAppRef.current;
-        const foregroundSelectionPaused =
-          Date.now() < foregroundSelectionPausedUntilRef.current;
-        const compatibleTarget = foregroundSelectionPaused
-          ? null
-          : pendingForegroundApp &&
-              pendingForegroundKey &&
-              pendingForegroundKey === currentForegroundKey
+        const compatibleTarget =
+          pendingForegroundApp &&
+          pendingForegroundKey &&
+          pendingForegroundKey === currentForegroundKey
             ? highlyCompatibleTargetForForeground(
                 nextTargets,
                 pendingForegroundApp,
@@ -435,32 +449,24 @@ export function DevToolsPanel({
       }
     }
   }, [
-    applyDiscovery,
-    applySelectedTargetId,
     disconnected,
+    resetTargetDiscovery,
     selectedSimulator?.isBooted,
     selectedSimulator?.udid,
   ]);
 
   useEffect(() => {
     selectedSimulatorUdidRef.current = selectedSimulator?.udid ?? null;
-    requestIdRef.current += 1;
-    emptyDiscoveryGraceUntilRef.current =
-      Date.now() + DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS;
-    applyDiscovery(null);
-    applySelectedTargetId("");
+    selectedSimulatorBootedRef.current = Boolean(selectedSimulator?.isBooted);
     overviewPinnedRef.current = false;
-    foregroundKeyRef.current = "";
-    foregroundAppRef.current = null;
-    pendingForegroundKeyRef.current = "";
-    pendingForegroundAppRef.current = null;
-    setError("");
-    setFrameLoaded(false);
-    setIsLoading(false);
-    setIsWebKitLoading(false);
-    setOverviewVisible(false);
-    setWebKitSocketState("");
-  }, [applyDiscovery, applySelectedTargetId, selectedSimulator?.udid]);
+    resetTargetDiscovery({
+      holdEmptyGrace: Boolean(selectedSimulator?.isBooted),
+    });
+  }, [
+    resetTargetDiscovery,
+    selectedSimulator?.isBooted,
+    selectedSimulator?.udid,
+  ]);
 
   useEffect(() => {
     if (!disconnected) {
@@ -468,20 +474,11 @@ export function DevToolsPanel({
         Date.now() + DEVTOOLS_EMPTY_DISCOVERY_GRACE_MS;
       return;
     }
-    requestIdRef.current += 1;
-    emptyDiscoveryGraceUntilRef.current = 0;
-    applyDiscovery(null);
-    applySelectedTargetId("");
-    setError("");
-    setFrameLoaded(false);
-    setIsLoading(false);
-    setIsWebKitLoading(false);
-    setOverviewVisible(false);
-    setWebKitSocketState("");
-  }, [applyDiscovery, applySelectedTargetId, disconnected]);
+    resetTargetDiscovery();
+  }, [disconnected, resetTargetDiscovery]);
 
   useEffect(() => {
-    if (!visible) {
+    if (!visible || !selectedSimulator?.isBooted) {
       return;
     }
     void loadTargets();
@@ -489,7 +486,7 @@ export function DevToolsPanel({
       void loadTargets();
     }, DEVTOOLS_TARGET_REFRESH_MS);
     return () => window.clearInterval(interval);
-  }, [loadTargets, visible]);
+  }, [loadTargets, selectedSimulator?.isBooted, visible]);
 
   useEffect(() => {
     setFrameLoaded(false);
@@ -572,18 +569,6 @@ export function DevToolsPanel({
     visible,
     webKitSocketState,
   ]);
-
-  useEffect(() => {
-    if (overviewRequestKey <= 0) {
-      return;
-    }
-    foregroundSelectionPausedUntilRef.current =
-      Date.now() + FOREGROUND_SELECTION_SETTLE_MS;
-    pendingForegroundKeyRef.current = "";
-    pendingForegroundAppRef.current = null;
-    overviewPinnedRef.current = false;
-    setOverviewVisible(true);
-  }, [overviewRequestKey]);
 
   useEffect(() => {
     function handlePointerMove(event: PointerEvent) {
@@ -740,9 +725,9 @@ export function DevToolsPanel({
     : isDiscoveringTargets
       ? "Connecting..."
       : "No targets";
-  const displayWarnings = (discovery?.warnings ?? []).filter(
-    shouldDisplayDevToolsWarning,
-  );
+  const displayWarnings = selectedSimulator?.isBooted
+    ? (discovery?.warnings ?? []).filter(shouldDisplayDevToolsWarning)
+    : [];
   const panelStyle = {
     "--webkit-panel-width": `${panelWidth}px`,
   } as CSSProperties;
@@ -996,6 +981,9 @@ function foregroundCompatibilityScore(
   const foregroundBundle = foregroundApp.bundleIdentifier?.trim() ?? "";
   const foregroundAppName = foregroundApp.appName?.trim() ?? "";
   const foregroundPid = foregroundApp.processIdentifier;
+  const webKitMatchesForeground =
+    isWebKitTarget(target) &&
+    webKitTargetMatchesForegroundApp(target, foregroundApp);
 
   if (
     Number.isFinite(foregroundPid) &&
@@ -1009,11 +997,11 @@ function foregroundCompatibilityScore(
     score = Math.max(score, target.source === "React Native Metro" ? 98 : 90);
   }
 
-  if (isWebKitTarget(target) && target.appActive) {
+  if (webKitMatchesForeground && target.appActive) {
     score = Math.max(score, 93);
   }
 
-  if (isWebKitTarget(target) && target.pageActive) {
+  if (webKitMatchesForeground && target.pageActive) {
     score = Math.max(score, 112);
   }
 
@@ -1041,6 +1029,31 @@ function foregroundCompatibilityScore(
   }
 
   return score;
+}
+
+function webKitTargetMatchesForegroundApp(
+  target: DevToolsTarget,
+  foregroundApp: NonNullable<ChromeDevToolsTargetDiscovery["foregroundApp"]>,
+): boolean {
+  const foregroundPid = foregroundApp.processIdentifier;
+  if (
+    Number.isFinite(foregroundPid) &&
+    foregroundPid > 0 &&
+    target.processIdentifier === foregroundPid
+  ) {
+    return true;
+  }
+
+  if (isSafariForeground(foregroundApp) && target.source === "Safari") {
+    return true;
+  }
+
+  const foregroundAppName = foregroundApp.appName?.trim();
+  return Boolean(
+    foregroundAppName &&
+    (target.appName === foregroundAppName ||
+      target.title.startsWith(`${foregroundAppName}:`)),
+  );
 }
 
 function foregroundAppKey(

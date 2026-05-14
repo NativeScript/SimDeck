@@ -2,6 +2,7 @@
 
 #import <AppKit/AppKit.h>
 #import <dlfcn.h>
+#import <limits.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 
@@ -13,13 +14,94 @@ static NSObject *XCWAXDeviceCacheLock = nil;
 static id XCWAXCachedServiceContext = nil;
 static id XCWAXCachedDeviceSet = nil;
 static NSMutableDictionary<NSString *, id> *XCWAXCachedDevicesByUDID = nil;
+static id XCWAXSharedTranslator = nil;
+static id XCWAXSharedDispatcher = nil;
 
 typedef id _Nullable (^XCWAXTranslationCallback)(id request);
+
+static id XCWAXObject(id object, const char *selectorName);
+
+static BOOL XCWAXDebugEnabled(void) {
+    static BOOL enabled = NO;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        enabled = [NSProcessInfo.processInfo.environment[@"SIMDECK_AX_DEBUG"] boolValue];
+    });
+    return enabled;
+}
+
+static void XCWAXDebugLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
+static void XCWAXDebugLog(NSString *format, ...) {
+    if (!XCWAXDebugEnabled()) {
+        return;
+    }
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    fprintf(stderr, "[simdeck-ax] %s\n", message.UTF8String);
+}
 
 static NSError *XCWAXError(NSInteger code, NSString *description) {
     return [NSError errorWithDomain:XCWAccessibilityBridgeErrorDomain
                                code:code
                            userInfo:@{ NSLocalizedDescriptionKey: description }];
+}
+
+static NSString *XCWAXActiveDeveloperDirectory(void) {
+    const char *developerDir = getenv("DEVELOPER_DIR");
+    if (developerDir != NULL && developerDir[0] != '\0') {
+        return [NSString stringWithUTF8String:developerDir];
+    }
+
+    FILE *pipe = popen("/usr/bin/xcode-select -p 2>/dev/null", "r");
+    if (pipe != NULL) {
+        char buffer[PATH_MAX] = {0};
+        if (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+            NSString *selected = [[NSString stringWithUTF8String:buffer] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+            pclose(pipe);
+            if (selected.length > 0) {
+                return selected;
+            }
+        } else {
+            pclose(pipe);
+        }
+    }
+
+    return @"/Applications/Xcode.app/Contents/Developer";
+}
+
+static NSArray *XCWAXFlattenCoreSimulatorDevices(id devicesPayload) {
+    if ([devicesPayload isKindOfClass:NSArray.class]) {
+        return devicesPayload;
+    }
+    if ([devicesPayload isKindOfClass:NSSet.class]) {
+        return [devicesPayload allObjects];
+    }
+    if ([devicesPayload isKindOfClass:NSDictionary.class]) {
+        NSMutableArray *devices = [NSMutableArray array];
+        for (id value in [(NSDictionary *)devicesPayload allValues]) {
+            [devices addObjectsFromArray:XCWAXFlattenCoreSimulatorDevices(value)];
+        }
+        return devices;
+    }
+    return @[];
+}
+
+static NSArray *XCWAXDevicesForDeviceSet(id deviceSet) {
+    SEL availableSelector = sel_registerName("availableDevices");
+    if ([deviceSet respondsToSelector:availableSelector]) {
+        NSArray *availableDevices = XCWAXFlattenCoreSimulatorDevices(((id(*)(id, SEL))objc_msgSend)(deviceSet, availableSelector));
+        if (availableDevices.count > 0) {
+            return availableDevices;
+        }
+    }
+
+    SEL devicesSelector = sel_registerName("devices");
+    if ([deviceSet respondsToSelector:devicesSelector]) {
+        return XCWAXFlattenCoreSimulatorDevices(((id(*)(id, SEL))objc_msgSend)(deviceSet, devicesSelector));
+    }
+    return @[];
 }
 
 static BOOL XCWAXLoadPrivateFrameworks(NSError **error) {
@@ -77,18 +159,31 @@ static id XCWAXDeviceForUDID(NSString *udid, NSError **error) {
 
     @synchronized (XCWAXDeviceCacheLock) {
         if (XCWAXCachedDeviceSet == nil) {
+            NSString *developerDir = XCWAXActiveDeveloperDirectory();
             NSError *serviceError = nil;
-            id contextAlloc = ((id(*)(id, SEL))objc_msgSend)(serviceContextClass, sel_registerName("alloc"));
-            XCWAXCachedServiceContext = ((id(*)(id, SEL, id, long long, NSError **))objc_msgSend)(
-                contextAlloc,
-                sel_registerName("initWithDeveloperDir:connectionType:error:"),
-                nil,
-                0LL,
-                &serviceError
-            );
+            SEL sharedSelector = sel_registerName("sharedServiceContextForDeveloperDir:error:");
+            if ([serviceContextClass respondsToSelector:sharedSelector]) {
+                XCWAXCachedServiceContext = ((id(*)(id, SEL, id, NSError **))objc_msgSend)(
+                    serviceContextClass,
+                    sharedSelector,
+                    developerDir,
+                    &serviceError
+                );
+            }
+            if (XCWAXCachedServiceContext == nil) {
+                serviceError = nil;
+                id contextAlloc = ((id(*)(id, SEL))objc_msgSend)(serviceContextClass, sel_registerName("alloc"));
+                XCWAXCachedServiceContext = ((id(*)(id, SEL, id, long long, NSError **))objc_msgSend)(
+                    contextAlloc,
+                    sel_registerName("initWithDeveloperDir:connectionType:error:"),
+                    developerDir,
+                    0LL,
+                    &serviceError
+                );
+            }
             if (XCWAXCachedServiceContext == nil) {
                 if (error != NULL) {
-                    *error = serviceError ?: XCWAXError(4, @"Unable to create a CoreSimulator service context.");
+                    *error = serviceError ?: XCWAXError(4, [NSString stringWithFormat:@"Unable to create a CoreSimulator service context for %@.", developerDir]);
                 }
                 return nil;
             }
@@ -108,7 +203,7 @@ static id XCWAXDeviceForUDID(NSString *udid, NSError **error) {
             }
         }
 
-        NSArray *devices = ((id(*)(id, SEL))objc_msgSend)(XCWAXCachedDeviceSet, sel_registerName("devices"));
+        NSArray *devices = XCWAXDevicesForDeviceSet(XCWAXCachedDeviceSet);
         for (id candidate in devices) {
             NSString *candidateUDID = XCWAXUDIDString(candidate);
             if (candidateUDID.length > 0) {
@@ -133,6 +228,16 @@ static long long XCWAXDeviceState(id device) {
         return -1;
     }
     return ((long long(*)(id, SEL))objc_msgSend)(device, sel_registerName("state"));
+}
+
+static NSString *XCWAXAccessibilityToken(void) {
+    NSString *fallback = NSUUID.UUID.UUIDString;
+    XCWAXDebugLog(@"using generated accessibility token %@", fallback);
+    return fallback;
+}
+
+static NSArray<NSNumber *> *XCWAXCandidateDisplayIDs(void) {
+    return @[@0, @1, @2];
 }
 
 @interface XCWAccessibilityTranslationDispatcher : NSObject
@@ -175,6 +280,7 @@ static long long XCWAXDeviceState(id device) {
 - (XCWAXTranslationCallback)accessibilityTranslationDelegateBridgeCallbackWithToken:(NSString *)token {
     __weak typeof(self) weakSelf = self;
     return ^id(id request) {
+        XCWAXDebugLog(@"callback token=%@ request=%@", token, request);
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (strongSelf == nil) {
             return nil;
@@ -207,6 +313,7 @@ static long long XCWAXDeviceState(id device) {
             completion
         );
         dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)));
+        XCWAXDebugLog(@"callback token=%@ response=%@", token, response);
         return response;
     };
 }
@@ -228,7 +335,68 @@ static id XCWAXObject(id object, const char *selectorName) {
     if (object == nil || ![object respondsToSelector:selector]) {
         return nil;
     }
-    return ((id(*)(id, SEL))objc_msgSend)(object, selector);
+    @try {
+        return ((id(*)(id, SEL))objc_msgSend)(object, selector);
+    } @catch (NSException *exception) {
+        XCWAXDebugLog(@"selector %s threw %@", selectorName, exception);
+        return nil;
+    }
+}
+
+static id XCWAXTranslator(NSError **error) {
+    Class translatorClass = NSClassFromString(@"AXPTranslator");
+    if (translatorClass == Nil) {
+        if (error != NULL) {
+            *error = XCWAXError(11, @"AccessibilityPlatformTranslation did not expose AXPTranslator.");
+        }
+        return nil;
+    }
+
+    static dispatch_once_t onceToken;
+    static NSError *translatorError = nil;
+    dispatch_once(&onceToken, ^{
+        XCWAXSharedTranslator = [translatorClass respondsToSelector:sel_registerName("sharedInstance")]
+            ? ((id(*)(id, SEL))objc_msgSend)(translatorClass, sel_registerName("sharedInstance"))
+            : nil;
+        if (XCWAXSharedTranslator == nil) {
+            translatorError = XCWAXError(8, @"AccessibilityPlatformTranslation did not expose AXPTranslator.sharedInstance.");
+            return;
+        }
+
+        XCWAXSharedDispatcher = [[XCWAccessibilityTranslationDispatcher alloc] initWithTranslator:XCWAXSharedTranslator];
+        if ([XCWAXSharedTranslator respondsToSelector:sel_registerName("setBridgeTokenDelegate:")]) {
+            ((void(*)(id, SEL, id))objc_msgSend)(XCWAXSharedTranslator, sel_registerName("setBridgeTokenDelegate:"), XCWAXSharedDispatcher);
+        } else {
+            translatorError = XCWAXError(12, @"AXPTranslator did not expose setBridgeTokenDelegate:.");
+        }
+    });
+
+    if (translatorError != nil) {
+        if (error != NULL) {
+            *error = translatorError;
+        }
+        return nil;
+    }
+    return XCWAXSharedTranslator;
+}
+
+static void XCWAXEnableTranslator(id translator) {
+    id platformTranslator = XCWAXObject(translator, "platformTranslator");
+    for (id candidate in @[translator ?: NSNull.null, platformTranslator ?: NSNull.null]) {
+        if (candidate == NSNull.null) {
+            continue;
+        }
+        @try {
+            if ([candidate respondsToSelector:sel_registerName("setAccessibilityEnabled:")]) {
+                ((void(*)(id, SEL, BOOL))objc_msgSend)(candidate, sel_registerName("setAccessibilityEnabled:"), YES);
+            }
+            if (candidate == platformTranslator && [candidate respondsToSelector:sel_registerName("enableAccessibility")]) {
+                ((void(*)(id, SEL))objc_msgSend)(candidate, sel_registerName("enableAccessibility"));
+            }
+        } @catch (NSException *exception) {
+            XCWAXDebugLog(@"enableAccessibility threw for %@: %@", candidate, exception);
+        }
+    }
 }
 
 static BOOL XCWAXBool(id object, const char *selectorName) {
@@ -236,7 +404,12 @@ static BOOL XCWAXBool(id object, const char *selectorName) {
     if (object == nil || ![object respondsToSelector:selector]) {
         return NO;
     }
-    return ((BOOL(*)(id, SEL))objc_msgSend)(object, selector);
+    @try {
+        return ((BOOL(*)(id, SEL))objc_msgSend)(object, selector);
+    } @catch (NSException *exception) {
+        XCWAXDebugLog(@"selector %s threw %@", selectorName, exception);
+        return NO;
+    }
 }
 
 static CGRect XCWAXFrame(id object) {
@@ -244,7 +417,12 @@ static CGRect XCWAXFrame(id object) {
     if (object == nil || ![object respondsToSelector:selector]) {
         return CGRectZero;
     }
-    return ((CGRect(*)(id, SEL))objc_msgSend)(object, selector);
+    @try {
+        return ((CGRect(*)(id, SEL))objc_msgSend)(object, selector);
+    } @catch (NSException *exception) {
+        XCWAXDebugLog(@"accessibilityFrame threw %@", exception);
+        return CGRectZero;
+    }
 }
 
 static id XCWAXJSONValue(id value) {
@@ -327,6 +505,26 @@ static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, N
     return values;
 }
 
+static NSArray<NSValue *> *XCWAXFallbackHitTestPoints(void) {
+    NSMutableArray<NSValue *> *points = [NSMutableArray array];
+    NSArray<NSNumber *> *xValues = @[@24, @100, @220, @340, @420];
+    NSArray<NSNumber *> *yValues = @[@80, @150, @220, @300, @380, @460, @540, @620, @700, @780, @860, @930];
+    for (NSNumber *yValue in yValues) {
+        for (NSNumber *xValue in xValues) {
+            [points addObject:[NSValue valueWithPoint:CGPointMake(xValue.doubleValue, yValue.doubleValue)]];
+        }
+    }
+    return points;
+}
+
+static NSString *XCWAXElementIdentity(NSDictionary *element) {
+    id identifier = element[@"AXUniqueId"];
+    id label = element[@"AXLabel"];
+    id role = element[@"role"];
+    id frame = element[@"AXFrame"];
+    return [@[role ?: @"", identifier ?: @"", label ?: @"", frame ?: @""] componentsJoinedByString:@"|"];
+}
+
 @implementation XCWAccessibilityBridge
 
 + (nullable NSDictionary *)accessibilitySnapshotForSimulatorUDID:(NSString *)udid
@@ -353,45 +551,102 @@ static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, N
         return nil;
     }
 
-    Class translatorClass = NSClassFromString(@"AXPTranslator");
-    id translator = [translatorClass respondsToSelector:sel_registerName("sharedInstance")]
-        ? ((id(*)(id, SEL))objc_msgSend)(translatorClass, sel_registerName("sharedInstance"))
-        : nil;
+    NSError *translatorError = nil;
+    id translator = XCWAXTranslator(&translatorError);
     if (translator == nil) {
         if (error != NULL) {
-            *error = XCWAXError(8, @"AccessibilityPlatformTranslation did not expose AXPTranslator.sharedInstance.");
+            *error = translatorError;
         }
         return nil;
     }
+    XCWAXEnableTranslator(translator);
+    XCWAXDebugLog(@"translator=%@ accessibilityEnabled=%@ supportsDelegateTokens=%@",
+                  translator,
+                  [translator respondsToSelector:sel_registerName("accessibilityEnabled")] ? @(((BOOL(*)(id, SEL))objc_msgSend)(translator, sel_registerName("accessibilityEnabled"))) : @"unknown",
+                  [translator respondsToSelector:sel_registerName("supportsDelegateTokens")] ? @(((BOOL(*)(id, SEL))objc_msgSend)(translator, sel_registerName("supportsDelegateTokens"))) : @"unknown");
 
-    XCWAccessibilityTranslationDispatcher *dispatcher = [[XCWAccessibilityTranslationDispatcher alloc] initWithTranslator:translator];
-    if ([translator respondsToSelector:sel_registerName("setBridgeTokenDelegate:")]) {
-        ((void(*)(id, SEL, id))objc_msgSend)(translator, sel_registerName("setBridgeTokenDelegate:"), dispatcher);
-    }
-
-    NSString *token = NSUUID.UUID.UUIDString;
-    [dispatcher registerDevice:device token:token];
+    NSString *token = XCWAXAccessibilityToken();
+    [XCWAXSharedDispatcher registerDevice:device token:token];
     @try {
         id translation = nil;
-        if (pointValue != nil) {
-            CGPoint point = pointValue.pointValue;
-            translation = ((id(*)(id, SEL, CGPoint, int, id))objc_msgSend)(
-                translator,
-                sel_registerName("objectAtPoint:displayId:bridgeDelegateToken:"),
-                point,
-                0,
-                token
-            );
-        } else {
-            translation = ((id(*)(id, SEL, int, id))objc_msgSend)(
-                translator,
-                sel_registerName("frontmostApplicationWithDisplayId:bridgeDelegateToken:"),
-                0,
-                token
-            );
+        NSNumber *resolvedDisplayID = nil;
+        for (NSNumber *displayID in XCWAXCandidateDisplayIDs()) {
+            uint32_t display = displayID.unsignedIntValue;
+            if (pointValue != nil) {
+                CGPoint point = pointValue.pointValue;
+                translation = ((id(*)(id, SEL, CGPoint, uint32_t, id))objc_msgSend)(
+                    translator,
+                    sel_registerName("objectAtPoint:displayId:bridgeDelegateToken:"),
+                    point,
+                    display,
+                    token
+                );
+            } else {
+                translation = ((id(*)(id, SEL, uint32_t, id))objc_msgSend)(
+                    translator,
+                    sel_registerName("frontmostApplicationWithDisplayId:bridgeDelegateToken:"),
+                    display,
+                    token
+                );
+            }
+            XCWAXDebugLog(@"translation lookup display=%@ result=%@", displayID, translation);
+            if (translation != nil) {
+                resolvedDisplayID = displayID;
+                break;
+            }
+        }
+        if (translation == nil && pointValue == nil) {
+            NSMutableArray *fallbackRoots = [NSMutableArray array];
+            NSMutableSet<NSString *> *seenElements = [NSMutableSet set];
+            for (NSValue *fallbackPoint in XCWAXFallbackHitTestPoints()) {
+                for (NSNumber *displayID in XCWAXCandidateDisplayIDs()) {
+                    uint32_t display = displayID.unsignedIntValue;
+                    CGPoint point = fallbackPoint.pointValue;
+                    id fallbackTranslation = ((id(*)(id, SEL, CGPoint, uint32_t, id))objc_msgSend)(
+                        translator,
+                        sel_registerName("objectAtPoint:displayId:bridgeDelegateToken:"),
+                        point,
+                        display,
+                        token
+                    );
+                    XCWAXDebugLog(@"fallback translation lookup point=%@ display=%@ result=%@", fallbackPoint, displayID, fallbackTranslation);
+                    if (fallbackTranslation == nil) {
+                        continue;
+                    }
+                    if ([fallbackTranslation respondsToSelector:sel_registerName("setBridgeDelegateToken:")]) {
+                        ((void(*)(id, SEL, id))objc_msgSend)(fallbackTranslation, sel_registerName("setBridgeDelegateToken:"), token);
+                    }
+                    id fallbackElement = ((id(*)(id, SEL, id))objc_msgSend)(
+                        translator,
+                        sel_registerName("macPlatformElementFromTranslation:"),
+                        fallbackTranslation
+                    );
+                    NSHashTable *visited = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+                    NSMutableDictionary *root = XCWAXSerializeElement(fallbackElement, token, visited, 0, MIN(maxDepth, XCWAXMaxDepth));
+                    NSString *identity = root != nil ? XCWAXElementIdentity(root) : @"";
+                    if (identity.length > 0 && ![seenElements containsObject:identity]) {
+                        [seenElements addObject:identity];
+                        [fallbackRoots addObject:root];
+                    }
+                }
+            }
+            if (fallbackRoots.count > 0) {
+                NSArray *rootsWithChildren = [fallbackRoots filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *root, NSDictionary *bindings) {
+                    (void)bindings;
+                    NSArray *children = [root[@"children"] isKindOfClass:NSArray.class] ? root[@"children"] : @[];
+                    return children.count > 0;
+                }]];
+                NSArray *roots = rootsWithChildren.count > 0 ? rootsWithChildren : fallbackRoots;
+                XCWAXDebugLog(@"frontmost lookup failed; returning %lu sampled fallback elements", (unsigned long)roots.count);
+                return @{
+                    @"roots": roots,
+                    @"source": @"native-ax",
+                };
+            }
         }
 
         if (translation == nil) {
+            XCWAXDebugLog(@"translation lookup returned nil point=%@", pointValue);
             if (error != NULL) {
                 *error = XCWAXError(9, @"No translation object returned for simulator. The point may be invalid or hidden by a fullscreen dialog.");
             }
@@ -400,6 +655,7 @@ static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, N
         if ([translation respondsToSelector:sel_registerName("setBridgeDelegateToken:")]) {
             ((void(*)(id, SEL, id))objc_msgSend)(translation, sel_registerName("setBridgeDelegateToken:"), token);
         }
+        XCWAXDebugLog(@"using accessibility display %@", resolvedDisplayID);
 
         id element = ((id(*)(id, SEL, id))objc_msgSend)(
             translator,
@@ -421,7 +677,7 @@ static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, N
             @"source": @"native-ax",
         };
     } @finally {
-        [dispatcher unregisterToken:token];
+        [XCWAXSharedDispatcher unregisterToken:token];
     }
 }
 

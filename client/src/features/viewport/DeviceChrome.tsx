@@ -19,7 +19,6 @@ interface DeviceChromeProps {
   chromeScreenStyle: CSSProperties | null;
   chromeUrl: string;
   chromeButtonUrl: (button: string, pressed?: boolean) => string;
-  browserFramePending: boolean;
   hasFrame: boolean;
   isBooted: boolean;
   isLoadingStream: boolean;
@@ -30,7 +29,6 @@ interface DeviceChromeProps {
     usagePage?: number,
     usage?: number,
   ) => void;
-  onChromeLoad: () => void;
   onPanPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
   onPanPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
   onPanPointerUp: () => void;
@@ -66,13 +64,11 @@ export function DeviceChrome({
   chromeScreenStyle,
   chromeUrl,
   chromeButtonUrl,
-  browserFramePending,
   hasFrame,
   isBooted,
   isLoadingStream,
   isStreamError,
   onChromeButtonEvent,
-  onChromeLoad,
   onPanPointerCancel,
   onPanPointerMove,
   onPanPointerUp,
@@ -119,7 +115,6 @@ export function DeviceChrome({
           aria-hidden="true"
           className="device-chrome"
           draggable={false}
-          onLoad={onChromeLoad}
           src={chromeUrl}
         />
         <ChromeButtonOverlay
@@ -134,7 +129,6 @@ export function DeviceChrome({
           accessibilityRoots={accessibilityRoots}
           accessibilitySelectedId={accessibilitySelectedId}
           chromeScreenStyle={chromeScreenStyle}
-          browserFramePending={browserFramePending}
           hasFrame={hasFrame}
           isBooted={isBooted}
           isLoadingStream={isLoadingStream}
@@ -179,7 +173,6 @@ export function DeviceChrome({
           aspectRatio: screenAspect,
           ...(chromeScreenStyle ?? {}),
         }}
-        browserFramePending={browserFramePending}
         hasFrame={hasFrame}
         isBooted={isBooted}
         isLoadingStream={isLoadingStream}
@@ -429,7 +422,6 @@ interface ScreenLayerProps {
   accessibilityRoots: AccessibilityNode[];
   accessibilitySelectedId: string;
   chromeScreenStyle: CSSProperties | null;
-  browserFramePending: boolean;
   hasFrame: boolean;
   isBooted: boolean;
   isLoadingStream: boolean;
@@ -460,7 +452,6 @@ function ScreenLayer({
   accessibilityRoots,
   accessibilitySelectedId,
   chromeScreenStyle,
-  browserFramePending,
   hasFrame,
   isBooted,
   isLoadingStream,
@@ -575,11 +566,7 @@ function ScreenLayer({
       !isStreamError &&
       !isLoadingStream &&
       !statusOverlayLabel ? (
-        <div className="screen-overlay">
-          {browserFramePending
-            ? "Stream connected, browser frame pending"
-            : "Waiting for first frame..."}
-        </div>
+        <div className="screen-overlay">Waiting for first frame...</div>
       ) : null}
       {!isBooted && !statusOverlayLabel ? (
         <div className="screen-overlay">Boot simulator to start streaming</div>

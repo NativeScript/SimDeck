@@ -3323,6 +3323,16 @@ async fn chrome_profile(
     Ok(json(json_value!(profile)))
 }
 
+fn chrome_asset_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
+    headers.insert(
+        header::CACHE_CONTROL,
+        "private, max-age=86400".parse().unwrap(),
+    );
+    headers
+}
+
 async fn chrome_png(
     State(state): State<AppState>,
     Path(udid): Path<String>,
@@ -3342,12 +3352,7 @@ async fn chrome_png(
         bridge.chrome_png_with_buttons(&udid, include_buttons)
     })
     .await?;
-    let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
-    headers.insert(
-        header::CACHE_CONTROL,
-        "no-cache, no-store, must-revalidate".parse().unwrap(),
-    );
+    let headers = chrome_asset_headers();
     Ok((StatusCode::OK, headers, png))
 }
 
@@ -3391,12 +3396,7 @@ async fn chrome_button_png(
         })
         .await?
     };
-    let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
-    headers.insert(
-        header::CACHE_CONTROL,
-        "no-cache, no-store, must-revalidate".parse().unwrap(),
-    );
+    let headers = chrome_asset_headers();
     Ok((StatusCode::OK, headers, png))
 }
 
@@ -3410,12 +3410,7 @@ async fn screen_mask_png(
         ));
     }
     let png = run_bridge_action(state, move |bridge| bridge.screen_mask_png(&udid)).await?;
-    let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
-    headers.insert(
-        header::CACHE_CONTROL,
-        "no-cache, no-store, must-revalidate".parse().unwrap(),
-    );
+    let headers = chrome_asset_headers();
     Ok((StatusCode::OK, headers, png))
 }
 

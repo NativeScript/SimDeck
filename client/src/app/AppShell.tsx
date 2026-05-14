@@ -158,7 +158,7 @@ interface StreamQualityResponse {
 
 function buildChromeUrl(
   udid: string,
-  stamp: number,
+  stamp: string,
   includeButtons = true,
 ): string {
   return buildAuthenticatedAssetUrl(
@@ -172,7 +172,7 @@ function buildChromeButtonUrl(
   udid: string,
   button: string,
   pressed: boolean,
-  stamp: number,
+  stamp: string,
 ): string {
   return buildAuthenticatedAssetUrl(
     `/api/simulators/${udid}/chrome-button/${encodeURIComponent(button)}.png`,
@@ -181,7 +181,7 @@ function buildChromeButtonUrl(
   );
 }
 
-function buildScreenMaskUrl(udid: string, stamp: number): string {
+function buildScreenMaskUrl(udid: string, stamp: string): string {
   return buildAuthenticatedAssetUrl(
     `/api/simulators/${udid}/screen-mask.png`,
     stamp,
@@ -190,7 +190,7 @@ function buildScreenMaskUrl(udid: string, stamp: number): string {
 
 function buildAuthenticatedAssetUrl(
   path: string,
-  stamp: number,
+  stamp: string,
   params?: Record<string, string>,
 ): string {
   const url = new URL(apiUrl(path), window.location.href);
@@ -367,6 +367,7 @@ export function AppShell({
     isLoading,
     refresh,
     simulators,
+    updateSimulator,
   } = useSimulatorList({ remote: remoteStream });
   const providerDisconnected = isProviderDisconnected(listError);
   const [debugVisible, setDebugVisible] = useState(() =>
@@ -378,8 +379,6 @@ export function AppShell({
   const [devToolsVisible, setDevToolsVisible] = useState(() =>
     readStoredFlag(DEVTOOLS_VISIBLE_STORAGE_KEY, false),
   );
-  const [devToolsOverviewRequestKey, setDevToolsOverviewRequestKey] =
-    useState(0);
   const [selectedUDID, setSelectedUDID] = useState(initialSelectedUDID ?? "");
   const [search, setSearch] = useState("");
   const openURLValueRef = useRef(
@@ -467,6 +466,11 @@ export function AppShell({
   const zoomAnimationTimeoutRef = useRef<number>(0);
   const touchIndicatorTimeoutRef = useRef<number>(0);
   const gestureStartZoomRef = useRef(1);
+  const effectiveZoomRef = useRef(initialViewportState.zoom ?? 1);
+  const panRef = useRef<Point>(initialViewportState.pan);
+  const applyZoomAtClientPointRef = useRef<
+    (nextScale: number, clientX: number, clientY: number) => void
+  >(() => {});
   const accessibilityRequestIdRef = useRef(0);
   const accessibilityLoadingRef = useRef(false);
   const streamConfigRequestIdRef = useRef(0);
@@ -838,6 +842,14 @@ export function AppShell({
     zoom,
   });
 
+  useEffect(() => {
+    effectiveZoomRef.current = effectiveZoom;
+  }, [effectiveZoom]);
+
+  useEffect(() => {
+    panRef.current = pan;
+  }, [pan]);
+
   const isBooted = Boolean(selectedSimulator?.isBooted);
   const autoViewportOffsetY =
     viewMode === "manual" ? 0 : -zoomDockReservedHeight / 2;
@@ -852,10 +864,21 @@ export function AppShell({
         button.name.toLowerCase() === "digital-crown",
     ),
   );
+  const chromeAssetStamp = [
+    selectedSimulator?.deviceTypeIdentifier,
+    selectedSimulator?.deviceTypeName,
+    selectedSimulator?.runtimeIdentifier,
+    selectedSimulator?.runtimeName,
+    selectedSimulator?.udid,
+    chromeHasInteractiveButtons ? "buttons" : "no-buttons",
+    chromeHasCrown ? "crown" : "no-crown",
+  ]
+    .filter(Boolean)
+    .join(":");
   const chromeUrl = selectedSimulator
     ? buildChromeUrl(
         selectedSimulator.udid,
-        streamStamp,
+        chromeAssetStamp,
         !chromeHasInteractiveButtons || chromeHasCrown,
       )
     : "";
@@ -866,15 +889,41 @@ export function AppShell({
             selectedSimulator.udid,
             button,
             pressed,
-            streamStamp,
+            chromeAssetStamp,
           )
         : "",
-    [selectedSimulator?.udid, streamStamp],
+    [chromeAssetStamp, selectedSimulator?.udid],
   );
   const chromeUsesAsset = Boolean(viewportChromeProfile && chromeUrl);
   const chromeRequired = Boolean(
     (shouldRenderChrome && !chromeProfileReady) || chromeUsesAsset,
   );
+  const chromeAssetUrls = useMemo(() => {
+    if (!chromeRequired || !selectedSimulator || !viewportChromeProfile) {
+      return [];
+    }
+    const urls = new Set<string>();
+    if (chromeUrl) {
+      urls.add(chromeUrl);
+    }
+    if (viewportChromeProfile.hasScreenMask) {
+      urls.add(buildScreenMaskUrl(selectedSimulator.udid, chromeAssetStamp));
+    }
+    for (const button of viewportChromeProfile.buttons ?? []) {
+      urls.add(chromeButtonUrl(button.name, false));
+      if (button.imageDownName) {
+        urls.add(chromeButtonUrl(button.name, true));
+      }
+    }
+    return [...urls].filter(Boolean);
+  }, [
+    chromeButtonUrl,
+    chromeRequired,
+    chromeUrl,
+    chromeAssetStamp,
+    selectedSimulator?.udid,
+    viewportChromeProfile,
+  ]);
   const simulatorRotationQuarterTurns =
     normalizeSimulatorRotationQuarterTurns(selectedSimulator);
 
@@ -1003,12 +1052,31 @@ export function AppShell({
       selectedSimulator.udid,
       { forceFit: shouldForceInitialFitMode() },
     );
+    const keepCenteredViewportMode =
+      viewMode === "fit" ||
+      viewMode === "center" ||
+      (viewMode === "manual" && zoom != null && Math.abs(zoom - 1) < 0.001);
     setStreamStamp(Date.now());
     setChromeProfile(null);
     setChromeProfileReady(false);
-    setViewMode(nextViewportState.viewMode);
-    setZoom(nextViewportState.zoom);
-    setPan(nextViewportState.pan);
+    setViewMode(
+      keepCenteredViewportMode ? viewMode : nextViewportState.viewMode,
+    );
+    setZoom(
+      keepCenteredViewportMode
+        ? viewMode === "manual"
+          ? 1
+          : null
+        : nextViewportState.zoom,
+    );
+    setPan(
+      keepCenteredViewportMode
+        ? {
+            x: 0,
+            y: viewMode === "manual" ? -zoomDockReservedHeight / 2 : 0,
+          }
+        : nextViewportState.pan,
+    );
     setRotationQuarterTurns(nextViewportState.rotationQuarterTurns);
     setLocalError("");
     setAccessibilityRoots([]);
@@ -1244,8 +1312,58 @@ export function AppShell({
   }, [androidViewportSizeKey, isAndroidViewport]);
 
   useEffect(() => {
-    setChromeLoaded(!chromeRequired);
-  }, [chromeRequired, chromeUrl]);
+    if (!chromeRequired) {
+      setChromeLoaded(true);
+      return;
+    }
+    if (chromeAssetUrls.length === 0) {
+      setChromeLoaded(false);
+      return;
+    }
+
+    let cancelled = false;
+    let remaining = chromeAssetUrls.length;
+
+    setChromeLoaded(false);
+
+    function markComplete() {
+      if (cancelled) {
+        return;
+      }
+      remaining -= 1;
+      if (remaining <= 0) {
+        setChromeLoaded(true);
+      }
+    }
+
+    const images = chromeAssetUrls.map((url) => {
+      const image = new Image();
+      let completed = false;
+      const completeImage = () => {
+        if (completed) {
+          return;
+        }
+        completed = true;
+        markComplete();
+      };
+      image.decoding = "async";
+      image.onload = completeImage;
+      image.onerror = completeImage;
+      image.src = url;
+      if (image.complete) {
+        window.setTimeout(completeImage, 0);
+      }
+      return image;
+    });
+
+    return () => {
+      cancelled = true;
+      images.forEach((image) => {
+        image.onload = null;
+        image.onerror = null;
+      });
+    };
+  }, [chromeAssetUrls, chromeRequired]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1344,6 +1462,7 @@ export function AppShell({
         effectiveDeviceNaturalSize,
         viewportChromeProfile,
         rotationQuarterTurns,
+        viewMode === "manual" ? zoomDockReservedHeight : 0,
       );
       return nextPan.x === currentPan.x && nextPan.y === currentPan.y
         ? currentPan
@@ -1355,6 +1474,8 @@ export function AppShell({
     effectiveZoom,
     rotationQuarterTurns,
     viewportChromeProfile,
+    viewMode,
+    zoomDockReservedHeight,
   ]);
 
   useEffect(() => {
@@ -1436,6 +1557,7 @@ export function AppShell({
     onTouchPreview: showTouchIndicator,
     onMultiTouchPreview: showTouchIndicators,
     pan,
+    reservedBottomInset: zoomDockReservedHeight,
     rotationQuarterTurns,
     setPan,
   });
@@ -1463,17 +1585,6 @@ export function AppShell({
       ? `${visibleStreamError} ${streamStatus.detail}`
       : visibleStreamError
     : "";
-  const serverFrameSequence =
-    selectedSimulatorState?.frameSequence ??
-    selectedSimulator?.privateDisplay?.frameSequence ??
-    0;
-  const browserFramePending = Boolean(
-    selectedSimulator?.isBooted &&
-    serverFrameSequence > 0 &&
-    !hasFrame &&
-    streamStatus.state !== "error" &&
-    !visibleStreamError,
-  );
   const streamStatusLabel = streamAgentStatusLabel({
     hasFrame,
     simulator: selectedSimulator,
@@ -1486,7 +1597,6 @@ export function AppShell({
     (providerDisconnected ? NOT_CONNECTED_MESSAGE : "") ||
     simulatorStatusOverlayLabel ||
     streamStatusMessage ||
-    (browserFramePending ? "Stream connected, browser frame pending" : "") ||
     (selectedSimulator ? visibleListError : "");
   const viewportHasStreamError = Boolean(
     providerDisconnected ||
@@ -1517,14 +1627,14 @@ export function AppShell({
             ? {
                 maskImage: `url("${buildScreenMaskUrl(
                   selectedSimulator.udid,
-                  streamStamp,
+                  chromeAssetStamp,
                 )}")`,
                 maskMode: "alpha",
                 maskRepeat: "no-repeat",
                 maskSize: "100% 100%",
                 WebkitMaskImage: `url("${buildScreenMaskUrl(
                   selectedSimulator.udid,
-                  streamStamp,
+                  chromeAssetStamp,
                 )}")`,
                 WebkitMaskRepeat: "no-repeat",
                 WebkitMaskSize: "100% 100%",
@@ -1590,6 +1700,60 @@ export function AppShell({
         actionError instanceof Error ? actionError.message : "Request failed.",
       );
       return false;
+    }
+  }
+
+  function selectedStateFromSimulator(
+    simulator: SimulatorMetadata,
+    current: SimulatorStateResponse | null,
+  ): SimulatorStateResponse {
+    const display = simulator.privateDisplay;
+    return {
+      booted: simulator.isBooted,
+      displayReady: display?.displayReady ?? false,
+      displayStatus:
+        display?.displayStatus ??
+        (simulator.isBooted ? "Waiting for display" : "Boot required"),
+      foregroundApp:
+        current?.udid === simulator.udid ? current.foregroundApp : null,
+      frameSequence: display?.frameSequence ?? 0,
+      lastFrameAgeMs:
+        current?.udid === simulator.udid ? current.lastFrameAgeMs : null,
+      lastFrameAt: display?.lastFrameAt ?? 0,
+      simulator,
+      udid: simulator.udid,
+    };
+  }
+
+  async function runSimulatorLifecycleAction(
+    kind: SimulatorTransition["kind"],
+    udid: string,
+    action: () => Promise<SimulatorMetadata | null>,
+  ) {
+    setSimulatorTransition({ kind, udid });
+    setLocalError("");
+    try {
+      const simulator = await action();
+      if (simulator) {
+        updateSimulator(simulator);
+        setSelectedSimulatorState((current) =>
+          current?.udid === simulator.udid ||
+          baseSelectedSimulator?.udid === simulator.udid
+            ? selectedStateFromSimulator(simulator, current)
+            : current,
+        );
+      }
+      setSimulatorTransition((current) =>
+        current?.udid === udid && current.kind === kind ? null : current,
+      );
+      void refresh();
+    } catch (actionError) {
+      setLocalError(
+        actionError instanceof Error ? actionError.message : "Request failed.",
+      );
+      setSimulatorTransition((current) =>
+        current?.udid === udid && current.kind === kind ? null : current,
+      );
     }
   }
 
@@ -1727,23 +1891,31 @@ export function AppShell({
     }, ZOOM_ANIMATION_MS);
   }
 
-  function applyZoom(nextScale: number, nextPan = pan, animate = true) {
+  function applyZoom(nextScale: number, nextPan?: Point, animate = true) {
+    const panForClamp =
+      nextPan ??
+      {
+        x: panRef.current.x,
+        y: panRef.current.y + autoViewportOffsetY,
+      };
     const clampedScale = clampZoom(nextScale, fitScale);
+    const clampedPan = clampPan(
+      panForClamp,
+      clampedScale,
+      canvasSize,
+      effectiveDeviceNaturalSize,
+      viewportChromeProfile,
+      rotationQuarterTurns,
+      zoomDockReservedHeight,
+    );
+    effectiveZoomRef.current = clampedScale;
+    panRef.current = clampedPan;
     if (animate) {
       beginZoomAnimation();
     }
     setViewMode("manual");
     setZoom(clampedScale);
-    setPan(
-      clampPan(
-        nextPan,
-        clampedScale,
-        canvasSize,
-        effectiveDeviceNaturalSize,
-        viewportChromeProfile,
-        rotationQuarterTurns,
-      ),
-    );
+    setPan(clampedPan);
   }
 
   function applyZoomAtClientPoint(
@@ -1753,19 +1925,28 @@ export function AppShell({
   ) {
     const canvasRect = outerCanvasRef.current?.getBoundingClientRect();
     if (!canvasRect) {
-      applyZoom(nextScale, pan, false);
+      applyZoom(
+        nextScale,
+        {
+          x: panRef.current.x,
+          y: panRef.current.y + autoViewportOffsetY,
+        },
+        false,
+      );
       return;
     }
 
+    const currentZoom = effectiveZoomRef.current;
+    const currentPan = panRef.current;
     const clampedScale = clampZoom(nextScale, fitScale);
-    const ratio = clampedScale / Math.max(effectiveZoom, 0.001);
+    const ratio = clampedScale / Math.max(currentZoom, 0.001);
     const cursor = {
       x: clientX - (canvasRect.left + canvasRect.width / 2),
       y: clientY - (canvasRect.top + canvasRect.height / 2),
     };
     const currentVisualPan = {
-      x: pan.x,
-      y: pan.y + autoViewportOffsetY,
+      x: currentPan.x,
+      y: currentPan.y + autoViewportOffsetY,
     };
     const nextVisualPan = {
       x: cursor.x - (cursor.x - currentVisualPan.x) * ratio,
@@ -1775,11 +1956,15 @@ export function AppShell({
       clampedScale,
       {
         x: nextVisualPan.x,
-        y: nextVisualPan.y - autoViewportOffsetY,
+        y: nextVisualPan.y,
       },
       false,
     );
   }
+
+  useEffect(() => {
+    applyZoomAtClientPointRef.current = applyZoomAtClientPoint;
+  });
 
   function handleViewportWheel(event: React.WheelEvent<HTMLElement>) {
     if (!selectedSimulator) {
@@ -1813,13 +1998,14 @@ export function AppShell({
       clampPan(
         {
           x: currentPan.x - deltaX,
-          y: currentPan.y - deltaY,
+          y: currentPan.y + autoViewportOffsetY - deltaY,
         },
         effectiveZoom,
         canvasSize,
         effectiveDeviceNaturalSize,
         viewportChromeProfile,
         rotationQuarterTurns,
+        zoomDockReservedHeight,
       ),
     );
   }
@@ -1867,14 +2053,14 @@ export function AppShell({
 
     function handleGestureStart(event: Event) {
       event.preventDefault();
-      gestureStartZoomRef.current = effectiveZoom;
+      gestureStartZoomRef.current = effectiveZoomRef.current;
     }
 
     function handleGestureChange(event: Event) {
       event.preventDefault();
       const gestureEvent = event as WebKitGestureEvent;
       const bounds = canvasElement.getBoundingClientRect();
-      applyZoomAtClientPoint(
+      applyZoomAtClientPointRef.current(
         gestureStartZoomRef.current * (gestureEvent.scale ?? 1),
         gestureEvent.clientX ?? bounds.left + bounds.width / 2,
         gestureEvent.clientY ?? bounds.top + bounds.height / 2,
@@ -1891,7 +2077,7 @@ export function AppShell({
       canvasElement.removeEventListener("gesturestart", handleGestureStart);
       canvasElement.removeEventListener("gesturechange", handleGestureChange);
     };
-  }, [applyZoomAtClientPoint, effectiveZoom, outerCanvasElement]);
+  }, [outerCanvasElement]);
 
   function promptForURL() {
     if (!selectedSimulator) {
@@ -2077,14 +2263,9 @@ export function AppShell({
             return;
           }
           const udid = selectedSimulator.udid;
-          setSimulatorTransition({ kind: "boot", udid });
-          void runAction(() => bootSimulator(udid)).then((ok) => {
-            if (!ok) {
-              setSimulatorTransition((current) =>
-                current?.udid === udid ? null : current,
-              );
-            }
-          });
+          void runSimulatorLifecycleAction("boot", udid, () =>
+            bootSimulator(udid),
+          );
         }}
         onChangeSearch={setSearch}
         onDismissKeyboard={() => {
@@ -2104,7 +2285,6 @@ export function AppShell({
           if (!selectedSimulator) {
             return;
           }
-          setDevToolsOverviewRequestKey((current) => current + 1);
           setAccessibilitySelectedId("");
           setAccessibilityHoveredId(null);
           if (!sendControl(selectedSimulator.udid, { type: "home" })) {
@@ -2159,14 +2339,9 @@ export function AppShell({
             return;
           }
           const udid = selectedSimulator.udid;
-          setSimulatorTransition({ kind: "shutdown", udid });
-          void runAction(() => shutdownSimulator(udid)).then((ok) => {
-            if (!ok) {
-              setSimulatorTransition((current) =>
-                current?.udid === udid ? null : current,
-              );
-            }
-          });
+          void runSimulatorLifecycleAction("shutdown", udid, () =>
+            shutdownSimulator(udid),
+          );
         }}
         onToggleAppearance={() => {
           if (!selectedSimulator) {
@@ -2249,7 +2424,6 @@ export function AppShell({
         chromeScreenStyle={viewportScreenStyle}
         chromeUrl={chromeUrl}
         chromeButtonUrl={chromeButtonUrl}
-        browserFramePending={browserFramePending}
         debugPanel={
           debugVisible ? (
             <DebugPanel
@@ -2272,7 +2446,6 @@ export function AppShell({
         isLoading={isLoading}
         isStreamError={viewportHasStreamError}
         isPanning={pointerInput.isPanning}
-        onChromeLoad={() => setChromeLoaded(true)}
         onChromeButtonEvent={sendHardwareButtonEvent}
         onPanPointerMove={pointerInput.handlePanPointerMove}
         onPanPointerUp={pointerInput.handlePanPointerUp}
@@ -2289,7 +2462,9 @@ export function AppShell({
         onScreenPointerUp={pointerInput.handleScreenPointerUp}
         onStartPanning={pointerInput.startPanning}
         onViewportWheel={handleViewportWheel}
-        onZoomActual={() => applyZoom(1)}
+        onZoomActual={() =>
+          applyZoom(1, { x: 0, y: -zoomDockReservedHeight / 2 })
+        }
         onZoomCenter={() => {
           beginZoomAnimation();
           setViewMode("center");
@@ -2322,7 +2497,6 @@ export function AppShell({
           <DevToolsPanel
             disconnected={providerDisconnected}
             onClose={() => setDevToolsVisible(false)}
-            overviewRequestKey={devToolsOverviewRequestKey}
             selectedSimulator={selectedSimulator}
             visible={devToolsVisible}
           />

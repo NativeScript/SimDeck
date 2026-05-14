@@ -16,6 +16,7 @@ interface UsePointerInputOptions {
   fitScale: number;
   isBooted: boolean;
   pan: Point;
+  reservedBottomInset: number;
   rotationQuarterTurns: number;
   setPan: React.Dispatch<React.SetStateAction<Point>>;
   onTouch: (phase: TouchPhase, coords: Point) => void;
@@ -52,6 +53,7 @@ export function usePointerInput({
   fitScale,
   isBooted,
   pan,
+  reservedBottomInset,
   rotationQuarterTurns,
   setPan,
   onTouch,
@@ -135,6 +137,7 @@ export function usePointerInput({
         deviceNaturalSize,
         chromeProfile,
         rotationQuarterTurns,
+        reservedBottomInset,
       ),
     );
   }

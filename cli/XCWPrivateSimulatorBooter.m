@@ -219,9 +219,11 @@ static BOOL XCWPrivateBootErrorMeansAlreadyBooted(NSError *error) {
         booted = ((BOOL(*)(id, SEL, id, NSError **))objc_msgSend)(
             targetDevice,
             bootWithOptionsSelector,
-            // Keep the boot session owned by SimDeck's daemon instead of asking
-            // CoreSimulator for a persistent GUI-visible session.
-            @{ @"persist": @NO },
+            // Keep CoreSimulator's normal persistent boot session alive. The
+            // private display bridge can still attach headlessly, but the
+            // accessibility translation service needs the persistent boot
+            // session to resolve a frontmost app reliably.
+            @{ @"persist": @YES },
             &bootError
         );
     } else {

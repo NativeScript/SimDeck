@@ -260,6 +260,7 @@ export function clampPan(
   deviceNaturalSize: Size | null,
   chromeProfile: ChromeProfile | null,
   rotationQuarterTurns = 0,
+  reservedBottomInset = 0,
 ): Point {
   if (!canvasSize) {
     return nextPan;
@@ -272,11 +273,17 @@ export function clampPan(
   );
   const scaledWidth = deviceSize.width * scale;
   const scaledHeight = deviceSize.height * scale;
+  const visibleHeight = Math.max(canvasSize.height - reservedBottomInset, 0);
+  const visibleCenterOffsetY =
+    reservedBottomInset > 0 ? -reservedBottomInset / 2 : 0;
   const limitX = Math.max((scaledWidth - canvasSize.width) / 2 + 32, 0);
-  const limitY = Math.max((scaledHeight - canvasSize.height) / 2 + 32, 0);
+  const limitY = Math.max((scaledHeight - visibleHeight) / 2 + 32, 0);
 
   return {
     x: Math.min(Math.max(nextPan.x, -limitX), limitX),
-    y: Math.min(Math.max(nextPan.y, -limitY), limitY),
+    y: Math.min(
+      Math.max(nextPan.y, visibleCenterOffsetY - limitY),
+      visibleCenterOffsetY + limitY,
+    ),
   };
 }

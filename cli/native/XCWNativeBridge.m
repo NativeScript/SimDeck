@@ -50,6 +50,74 @@ static char *XCWJSONStringFromObject(id object, char **errorMessage) {
     return XCWCopyCString(string);
 }
 
+@interface XCWNativeAccessibilityThreadRunner : NSObject
+@end
+
+@implementation XCWNativeAccessibilityThreadRunner
+
++ (void)run {
+    @autoreleasepool {
+        NSThread.currentThread.name = @"com.simdeck.native-accessibility";
+        NSRunLoop *runLoop = NSRunLoop.currentRunLoop;
+        [runLoop addPort:NSMachPort.port forMode:NSDefaultRunLoopMode];
+        while (!NSThread.currentThread.cancelled) {
+            @autoreleasepool {
+                [runLoop runMode:NSDefaultRunLoopMode beforeDate:NSDate.distantFuture];
+            }
+        }
+    }
+}
+
+@end
+
+@interface XCWNativeAccessibilitySnapshotRequest : NSObject
+
+@property (nonatomic, copy) NSString *udid;
+@property (nonatomic, assign) BOOL hasPoint;
+@property (nonatomic, assign) double x;
+@property (nonatomic, assign) double y;
+@property (nonatomic, assign) NSUInteger maxDepth;
+@property (nonatomic, assign) char *result;
+@property (nonatomic, assign) char *serializationError;
+@property (nonatomic, strong) NSError *snapshotError;
+
+- (void)performSnapshot;
+
+@end
+
+@implementation XCWNativeAccessibilitySnapshotRequest
+
+- (void)performSnapshot {
+    @autoreleasepool {
+        NSError *error = nil;
+        NSValue *pointValue = self.hasPoint ? [NSValue valueWithPoint:NSMakePoint(self.x, self.y)] : nil;
+        NSDictionary *snapshot = [XCWAccessibilityBridge accessibilitySnapshotForSimulatorUDID:self.udid
+                                                                                       atPoint:pointValue
+                                                                                     maxDepth:self.maxDepth
+                                                                                         error:&error];
+        if (snapshot == nil) {
+            self.snapshotError = error;
+            return;
+        }
+        self.result = XCWJSONStringFromObject(snapshot, &_serializationError);
+    }
+}
+
+@end
+
+static NSThread *XCWNativeAccessibilityThread(void) {
+    static NSThread *thread = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        thread = [[NSThread alloc] initWithTarget:XCWNativeAccessibilityThreadRunner.class
+                                        selector:@selector(run)
+                                          object:nil];
+        thread.name = @"com.simdeck.native-accessibility";
+        [thread start];
+    });
+    return thread;
+}
+
 static xcw_native_owned_bytes XCWOwnedBytesFromData(NSData *data) {
     xcw_native_owned_bytes bytes = {0};
     if (data.length == 0) {
@@ -458,17 +526,37 @@ char *xcw_native_recent_logs(const char *udid, double seconds, size_t limit, cha
 
 char *xcw_native_accessibility_snapshot(const char *udid, bool has_point, double x, double y, size_t max_depth, char **error_message) {
     @autoreleasepool {
-        NSError *error = nil;
-        NSValue *pointValue = has_point ? [NSValue valueWithPoint:NSMakePoint(x, y)] : nil;
-        NSDictionary *snapshot = [XCWAccessibilityBridge accessibilitySnapshotForSimulatorUDID:XCWStringFromCString(udid)
-                                                                                       atPoint:pointValue
-                                                                                     maxDepth:max_depth
-                                                                                         error:&error];
-        if (snapshot == nil) {
-            XCWSetErrorMessage(error_message, error);
+        XCWNativeAccessibilitySnapshotRequest *request = [XCWNativeAccessibilitySnapshotRequest new];
+        request.udid = XCWStringFromCString(udid);
+        request.hasPoint = has_point;
+        request.x = x;
+        request.y = y;
+        request.maxDepth = max_depth;
+
+        NSThread *accessibilityThread = XCWNativeAccessibilityThread();
+        if (NSThread.currentThread == accessibilityThread) {
+            [request performSnapshot];
+        } else {
+            [request performSelector:@selector(performSnapshot)
+                             onThread:accessibilityThread
+                           withObject:nil
+                        waitUntilDone:YES
+                                modes:@[NSDefaultRunLoopMode]];
+        }
+
+        if (request.result != NULL) {
+            return request.result;
+        }
+        if (request.serializationError != NULL) {
+            if (error_message != NULL) {
+                *error_message = request.serializationError;
+            } else {
+                free(request.serializationError);
+            }
             return NULL;
         }
-        return XCWJSONStringFromObject(snapshot, error_message);
+        XCWSetErrorMessage(error_message, request.snapshotError);
+        return NULL;
     }
 }
 
