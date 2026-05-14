@@ -201,6 +201,13 @@ Tree query parameters:
 | `maxDepth`      | Integer depth limit                                                                                       |
 | `includeHidden` | `true` or `false`                                                                                         |
 
+Point query parameters:
+
+| Parameter  | Values                                            |
+| ---------- | ------------------------------------------------- |
+| `x`, `y`   | Required screen-point coordinates                 |
+| `maxDepth` | Optional integer depth limit for native AX output |
+
 Every tree response reports the `source` used and may include a `fallbackReason`.
 
 ## DevTools And WebKit

@@ -57,11 +57,18 @@ const STREAM_CLIENT_FOREGROUND_TTL: Duration = Duration::from_secs(30);
 const CHROME_DEVTOOLS_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(1);
 const FOREGROUND_APP_CACHE_TTL: Duration = Duration::from_secs(3);
 const FOREGROUND_APP_STALE_TTL: Duration = Duration::from_secs(30);
-const SAFARI_ACTIVE_TAB_HINT_TIMEOUT: Duration = Duration::from_millis(750);
 const APP_UPLOAD_FILE_NAME_HEADER: &str = "x-simdeck-filename";
 const MAX_APP_UPLOAD_BYTES: usize = 1024 * 1024 * 1024;
+const SAFARI_ACTIVE_TAB_HINT_CACHE_TTL: Duration = Duration::from_millis(500);
+const SAFARI_ACTIVE_TAB_HINT_STALE_TTL: Duration = Duration::from_secs(30);
+const FOREGROUND_PROCESS_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 
 static FOREGROUND_APP_CACHE: OnceLock<StdMutex<HashMap<String, CachedForegroundApp>>> =
+    OnceLock::new();
+static SAFARI_ACTIVE_URL_HINT_CACHE: OnceLock<
+    StdMutex<HashMap<String, CachedSafariActiveUrlHint>>,
+> = OnceLock::new();
+static SAFARI_ACTIVE_URL_HINT_LOCKS: OnceLock<StdMutex<HashMap<String, Arc<Mutex<()>>>>> =
     OnceLock::new();
 
 #[derive(Clone)]
@@ -81,6 +88,12 @@ pub struct AppState {
 struct CachedForegroundApp {
     cached_at: Instant,
     foreground_app: devtools::ForegroundApp,
+}
+
+#[derive(Clone)]
+struct CachedSafariActiveUrlHint {
+    cached_at: Instant,
+    hint: String,
 }
 
 #[derive(Clone, Default)]
@@ -584,9 +597,11 @@ enum BatchStep {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AccessibilityPointQuery {
     x: f64,
     y: f64,
+    max_depth: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -959,13 +974,30 @@ async fn webkit_target_socket(
 }
 
 async fn safari_active_url_hint(state: &AppState, udid: &str) -> Option<String> {
-    let probe_points = safari_active_url_probe_points(state.clone(), udid.to_owned()).await;
+    if let Some(hint) = cached_safari_active_url_hint(udid, SAFARI_ACTIVE_TAB_HINT_CACHE_TTL) {
+        return Some(hint);
+    }
+
+    let stale_hint = cached_safari_active_url_hint(udid, SAFARI_ACTIVE_TAB_HINT_STALE_TTL);
+    let lock = safari_active_url_hint_lock(udid);
+    if let Ok(guard) = lock.try_lock_owned() {
+        let state = state.clone();
+        let udid = udid.to_owned();
+        tokio::spawn(async move {
+            let _guard = guard;
+            if let Some(hint) = safari_active_url_hint_uncached(&state, &udid).await {
+                cache_safari_active_url_hint(&udid, &hint);
+            }
+        });
+    }
+    stale_hint
+}
+
+async fn safari_active_url_hint_uncached(state: &AppState, udid: &str) -> Option<String> {
+    let probe_points = safari_active_url_probe_points(state, udid);
     for point in probe_points {
-        let Ok(Ok(snapshot)) = timeout(
-            SAFARI_ACTIVE_TAB_HINT_TIMEOUT,
-            accessibility_snapshot(state.clone(), udid.to_owned(), Some(point), Some(0)),
-        )
-        .await
+        let Ok(snapshot) =
+            accessibility_snapshot(state.clone(), udid.to_owned(), Some(point), Some(0)).await
         else {
             continue;
         };
@@ -976,20 +1008,73 @@ async fn safari_active_url_hint(state: &AppState, udid: &str) -> Option<String> 
     None
 }
 
-async fn safari_active_url_probe_points(state: AppState, udid: String) -> Vec<(f64, f64)> {
-    let profile = run_bridge_action(state, move |bridge| bridge.chrome_profile(&udid)).await;
-    let (screen_width, screen_height) = profile
-        .map(|profile| (profile.screen_width, profile.screen_height))
-        .unwrap_or((402.0, 874.0));
+fn safari_active_url_hint_lock(udid: &str) -> Arc<Mutex<()>> {
+    let locks = SAFARI_ACTIVE_URL_HINT_LOCKS.get_or_init(|| StdMutex::new(HashMap::new()));
+    let Ok(mut locks) = locks.lock() else {
+        return Arc::new(Mutex::new(()));
+    };
+    locks
+        .entry(udid.to_owned())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+fn cache_safari_active_url_hint(udid: &str, hint: &str) {
+    if hint.trim().is_empty() {
+        return;
+    }
+    let cache = SAFARI_ACTIVE_URL_HINT_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
+    let Ok(mut cache) = cache.lock() else {
+        return;
+    };
+    cache.insert(
+        udid.to_owned(),
+        CachedSafariActiveUrlHint {
+            cached_at: Instant::now(),
+            hint: hint.to_owned(),
+        },
+    );
+}
+
+fn cached_safari_active_url_hint(udid: &str, ttl: Duration) -> Option<String> {
+    let cache = SAFARI_ACTIVE_URL_HINT_CACHE.get()?;
+    let Ok(cache) = cache.lock() else {
+        return None;
+    };
+    let cached = cache.get(udid)?;
+    (cached.cached_at.elapsed() <= ttl).then(|| cached.hint.clone())
+}
+
+fn safari_active_url_probe_points(state: &AppState, udid: &str) -> Vec<(f64, f64)> {
+    let (screen_width, screen_height) =
+        simulator_logical_screen_size(state, udid).unwrap_or((402.0, 874.0));
     let center_x = (screen_width * 0.5).max(1.0);
     let bottom_address_y = (screen_height - 54.0).clamp(1.0, screen_height.max(1.0));
-    let bottom_title_y = (screen_height - 28.0).clamp(1.0, screen_height.max(1.0));
     let top_address_y = 92.0_f64.min((screen_height * 0.18).max(1.0));
-    vec![
-        (center_x, bottom_address_y),
-        (center_x, bottom_title_y),
-        (center_x, top_address_y),
-    ]
+    vec![(center_x, bottom_address_y), (center_x, top_address_y)]
+}
+
+fn simulator_logical_screen_size(state: &AppState, udid: &str) -> Option<(f64, f64)> {
+    let snapshot = state.registry.get(udid)?.snapshot();
+    let width = snapshot.get("displayWidth")?.as_f64()?;
+    let height = snapshot.get("displayHeight")?.as_f64()?;
+    logical_screen_size_from_display_pixels(width, height)
+}
+
+fn logical_screen_size_from_display_pixels(width: f64, height: f64) -> Option<(f64, f64)> {
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let short_edge = width.min(height);
+    let long_edge = width.max(height);
+    let scale = if short_edge <= 1320.0 && long_edge >= 1800.0 {
+        3.0
+    } else if short_edge >= 700.0 && long_edge >= 1000.0 {
+        2.0
+    } else {
+        1.0
+    };
+    Some((width / scale, height / scale))
 }
 
 fn active_url_hint_from_accessibility_snapshot(snapshot: &Value) -> Option<String> {
@@ -3922,7 +4007,24 @@ async fn accessibility_point(
             &snapshot, query.x, query.y,
         )?));
     }
-    let snapshot = accessibility_snapshot(state, udid, Some((query.x, query.y)), None).await?;
+    let snapshot = accessibility_snapshot(
+        state.clone(),
+        udid.clone(),
+        Some((query.x, query.y)),
+        query.max_depth,
+    )
+    .await?;
+    if point_snapshot_looks_like_local_widget_coordinates(&snapshot, query.x, query.y) {
+        if let Ok(full_snapshot) =
+            accessibility_snapshot(state, udid, None, query.max_depth.or(Some(4))).await
+        {
+            if let Ok(point_snapshot) =
+                accessibility_point_snapshot(&full_snapshot, query.x, query.y)
+            {
+                return Ok(json(point_snapshot));
+            }
+        }
+    }
     Ok(json(snapshot))
 }
 
@@ -4676,6 +4778,42 @@ fn accessibility_point_snapshot(snapshot: &Value, x: f64, y: f64) -> Result<Valu
     Ok(Value::Object(response))
 }
 
+fn point_snapshot_looks_like_local_widget_coordinates(snapshot: &Value, x: f64, y: f64) -> bool {
+    let Some(roots) = snapshot.get("roots").and_then(Value::as_array) else {
+        return false;
+    };
+    if roots.len() != 1 {
+        return false;
+    }
+
+    let Some(frame) = roots[0]
+        .get("frame")
+        .or_else(|| roots[0].get("frameInScreen"))
+    else {
+        return false;
+    };
+    let Ok(frame_x) = number_field(frame, "x") else {
+        return false;
+    };
+    let Ok(frame_y) = number_field(frame, "y") else {
+        return false;
+    };
+    let Ok(width) = number_field(frame, "width") else {
+        return false;
+    };
+    let Ok(height) = number_field(frame, "height") else {
+        return false;
+    };
+
+    if width <= 0.0 || height <= 0.0 || frame_x > 64.0 || frame_y > 64.0 {
+        return false;
+    }
+
+    let compact_local_frame = width <= 240.0 && height <= 240.0;
+    let point_outside_frame = x > frame_x + width || y > frame_y + height;
+    compact_local_frame || point_outside_frame
+}
+
 fn deepest_node_at_point(node: &Value, x: f64, y: f64) -> Option<&Value> {
     let has_frame = node
         .get("frame")
@@ -5352,11 +5490,11 @@ async fn frontmost_process_identifier_from_points(
     state: &AppState,
     udid: &str,
 ) -> Result<Option<i64>, String> {
-    let probe_points = foreground_process_probe_points(state.clone(), udid.to_owned()).await;
+    let probe_points = foreground_process_probe_points(state, udid);
     let mut last_error: Option<String> = None;
     for point in probe_points {
         match timeout(
-            SAFARI_ACTIVE_TAB_HINT_TIMEOUT,
+            FOREGROUND_PROCESS_PROBE_TIMEOUT,
             accessibility_snapshot(state.clone(), udid.to_owned(), Some(point), Some(0)),
         )
         .await
@@ -5379,11 +5517,9 @@ async fn frontmost_process_identifier_from_points(
     }
 }
 
-async fn foreground_process_probe_points(state: AppState, udid: String) -> Vec<(f64, f64)> {
-    let profile = run_bridge_action(state, move |bridge| bridge.chrome_profile(&udid)).await;
-    let (screen_width, screen_height) = profile
-        .map(|profile| (profile.screen_width, profile.screen_height))
-        .unwrap_or((402.0, 874.0));
+fn foreground_process_probe_points(state: &AppState, udid: &str) -> Vec<(f64, f64)> {
+    let (screen_width, screen_height) =
+        simulator_logical_screen_size(state, udid).unwrap_or((402.0, 874.0));
     let center_x = (screen_width * 0.5).max(1.0);
     let center_y = (screen_height * 0.5).clamp(1.0, screen_height.max(1.0));
     let bottom_address_y = (screen_height - 54.0).clamp(1.0, screen_height.max(1.0));
@@ -5457,7 +5593,7 @@ async fn foreground_app_for_simulator(
     }
 
     let mut last_error: Option<String> = None;
-    match foreground_app_metadata(state, udid).await {
+    match foreground_app_from_launchctl(udid).await {
         Ok(Some(foreground)) => {
             cache_foreground_app(udid, &foreground);
             return Ok(Some(foreground));
@@ -5466,7 +5602,7 @@ async fn foreground_app_for_simulator(
         Err(error) => last_error = Some(error),
     }
 
-    match foreground_app_from_launchctl(udid).await {
+    match foreground_app_metadata(state, udid).await {
         Ok(Some(foreground)) => {
             cache_foreground_app(udid, &foreground);
             Ok(Some(foreground))
@@ -6685,9 +6821,9 @@ mod tests {
         compact_accessibility_snapshot, element_matches_selector, first_matching_element,
         inspector_available_sources, inspector_metadata, inspector_session_from_published,
         inspector_session_score, is_inspector_agent_transport_path,
-        mark_safari_active_webkit_target, normalize_inspector_node,
-        normalize_screen_point_from_snapshot, normalized_gesture_coordinates,
-        parse_lsof_tcp_listener, parse_ui_application_service_line,
+        logical_screen_size_from_display_pixels, mark_safari_active_webkit_target,
+        normalize_inspector_node, normalize_screen_point_from_snapshot,
+        normalized_gesture_coordinates, parse_lsof_tcp_listener, parse_ui_application_service_line,
         process_identifier_from_accessibility_snapshot, resolved_stream_quality_limits,
         split_filter_values, stream_quality_profile, suppress_native_ax_translation_error,
         tap_point_from_snapshot, trim_tree_depth, ui_application_foreground_score,
@@ -6795,6 +6931,22 @@ mod tests {
         );
         assert!(targets[0].page_active);
         assert!(targets.iter().skip(1).all(|target| !target.page_active));
+    }
+
+    #[test]
+    fn logical_screen_size_infers_simulator_point_scale() {
+        assert_eq!(
+            logical_screen_size_from_display_pixels(1206.0, 2622.0),
+            Some((402.0, 874.0))
+        );
+        assert_eq!(
+            logical_screen_size_from_display_pixels(750.0, 1334.0),
+            Some((375.0, 667.0))
+        );
+        assert_eq!(
+            logical_screen_size_from_display_pixels(1668.0, 2388.0),
+            Some((834.0, 1194.0))
+        );
     }
 
     #[test]

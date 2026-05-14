@@ -75,6 +75,26 @@ export async function fetchAccessibilityTree(
   );
 }
 
+export async function fetchAccessibilityPoint(
+  udid: string,
+  x: number,
+  y: number,
+  options: RequestInit & { maxDepth?: number } = {},
+): Promise<AccessibilityTreeResponse> {
+  const { maxDepth, ...requestOptions } = options;
+  const params = new URLSearchParams({
+    x: String(x),
+    y: String(y),
+  });
+  if (maxDepth != null) {
+    params.set("maxDepth", String(maxDepth));
+  }
+  return apiRequest<AccessibilityTreeResponse>(
+    `/api/simulators/${encodeURIComponent(udid)}/accessibility-point?${params}`,
+    requestOptions,
+  );
+}
+
 export async function fetchSimulatorLogs(
   udid: string,
   options: {
