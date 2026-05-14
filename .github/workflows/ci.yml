@@ -27,6 +27,9 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install native build dependencies
+        run: brew install pkg-config x264
+
       - name: Cache Rust build outputs
         uses: actions/cache@v4
         with:
@@ -132,6 +135,9 @@ jobs:
             client/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native build dependencies
+        run: brew install pkg-config x264
 
       - name: Cache Rust build outputs and fixture app
         uses: actions/cache@v4

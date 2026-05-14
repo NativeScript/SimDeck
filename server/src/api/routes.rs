@@ -6165,10 +6165,7 @@ mod tests {
             client_stats_foreground(&page_stats(Some("visible"), None)),
             Some(true)
         );
-        assert_eq!(
-            client_stats_foreground(&page_stats(None, Some(true))),
-            None
-        );
+        assert_eq!(client_stats_foreground(&page_stats(None, Some(true))), None);
         assert_eq!(
             client_stats_foreground(&ClientStreamStats {
                 client_id: "client".to_owned(),

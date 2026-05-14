@@ -153,6 +153,10 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
+      - name: Install native build dependencies
+        if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
+        run: brew install pkg-config x264
+
       - name: Install root dependencies
         run: npm ci
 

@@ -91,6 +91,10 @@ jobs:
             }" \
             "$SIMDECK_CLOUD_URL/api/actions/providers/register"
 
+      - name: Install native build dependencies
+        if: ${{ inputs.simdeck_artifact_url == '' }}
+        run: brew install pkg-config x264
+
       - name: Build or download SimDeck
         shell: bash
         env:
