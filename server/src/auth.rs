@@ -126,7 +126,9 @@ pub fn append_cors_headers(
     );
     response_headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("content-type, authorization, x-simdeck-token"),
+        HeaderValue::from_static(
+            "content-type, authorization, x-simdeck-token, x-simdeck-filename",
+        ),
     );
     response_headers.insert(
         header::ACCESS_CONTROL_ALLOW_CREDENTIALS,

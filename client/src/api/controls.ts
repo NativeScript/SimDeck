@@ -4,6 +4,7 @@ import type {
   ButtonPayload,
   CrownPayload,
   EdgeTouchPayload,
+  InstallUploadResponse,
   KeyPayload,
   LaunchPayload,
   MultiTouchPayload,
@@ -67,6 +68,23 @@ export function openSimulatorUrl(udid: string, payload: OpenUrlPayload) {
 
 export function launchSimulatorBundle(udid: string, payload: LaunchPayload) {
   return postSimulatorAction(udid, "launch", payload);
+}
+
+export function uploadSimulatorApp(
+  udid: string,
+  file: File,
+): Promise<InstallUploadResponse> {
+  return apiRequest<InstallUploadResponse>(
+    `/api/simulators/${encodeURIComponent(udid)}/install-upload`,
+    {
+      body: file,
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-SimDeck-Filename": encodeURIComponent(file.name || "app-upload"),
+      },
+      method: "POST",
+    },
+  );
 }
 
 export function sendTouch(udid: string, payload: TouchPayload) {

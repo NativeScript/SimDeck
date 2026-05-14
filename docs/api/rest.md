@@ -97,12 +97,16 @@ Android:
 
 ## Apps
 
-| Method | Path                               | Body                                |
-| ------ | ---------------------------------- | ----------------------------------- |
-| `POST` | `/api/simulators/{udid}/install`   | `{ "appPath": "/path/to/App.app" }` |
-| `POST` | `/api/simulators/{udid}/uninstall` | `{ "bundleId": "com.example.App" }` |
-| `POST` | `/api/simulators/{udid}/launch`    | `{ "bundleId": "com.example.App" }` |
-| `POST` | `/api/simulators/{udid}/open-url`  | `{ "url": "https://example.com" }`  |
+| Method | Path                                    | Body                                                 |
+| ------ | --------------------------------------- | ---------------------------------------------------- |
+| `POST` | `/api/simulators/{udid}/install`        | `{ "appPath": "/path/to/App.app" }`                  |
+| `POST` | `/api/simulators/{udid}/install-upload` | Raw `.ipa` or `.apk` bytes with `x-simdeck-filename` |
+| `POST` | `/api/simulators/{udid}/uninstall`      | `{ "bundleId": "com.example.App" }`                  |
+| `POST` | `/api/simulators/{udid}/launch`         | `{ "bundleId": "com.example.App" }`                  |
+| `POST` | `/api/simulators/{udid}/open-url`       | `{ "url": "https://example.com" }`                   |
+
+`install-upload` is intended for browser clients. iOS simulator uploads must be
+`.ipa` archives; Android emulator uploads must be `.apk` files.
 
 ## Performance
 
