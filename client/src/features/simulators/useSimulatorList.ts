@@ -89,7 +89,9 @@ export function useSimulatorList({
             ...nextSimulator,
           };
         });
-        return bootedFirst(replaced ? nextSimulators : [nextSimulator, ...current]);
+        return bootedFirst(
+          replaced ? nextSimulators : [nextSimulator, ...current],
+        );
       }),
     );
   }, []);

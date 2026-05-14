@@ -510,8 +510,7 @@
   --new-sim-checkbox-border: #77777b;
   --new-sim-checkbox-checked: #0a84ff;
   --new-sim-window-shadow:
-    0 34px 90px rgba(0, 0, 0, 0.52),
-    0 12px 32px rgba(0, 0, 0, 0.34);
+    0 34px 90px rgba(0, 0, 0, 0.52), 0 12px 32px rgba(0, 0, 0, 0.34);
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -689,7 +688,8 @@
 .new-sim-field input:focus,
 .new-sim-field select:focus {
   border-color: var(--new-sim-focus);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--new-sim-focus) 28%, transparent);
+  box-shadow: 0 0 0 2px
+    color-mix(in srgb, var(--new-sim-focus) 28%, transparent);
 }
 
 .new-sim-checkbox {
@@ -814,8 +814,7 @@
     --new-sim-checkbox-border: #8e8e93;
     --new-sim-checkbox-checked: #007aff;
     --new-sim-window-shadow:
-      0 30px 80px rgba(0, 0, 0, 0.24),
-      0 10px 28px rgba(0, 0, 0, 0.16);
+      0 30px 80px rgba(0, 0, 0, 0.24), 0 10px 28px rgba(0, 0, 0, 0.16);
   }
 
   .new-sim-window {
