@@ -86,7 +86,9 @@ export function NewSimulatorModal({
         }
         setOptions(nextOptions);
         const initialPlatform =
-          selectedSimulator?.platform === "android-emulator" ? "android" : "ios";
+          selectedSimulator?.platform === "android-emulator"
+            ? "android"
+            : "ios";
         setPlatform(initialPlatform);
         const initialDeviceType = chooseInitialDeviceType(
           nextOptions.deviceTypes,
@@ -102,9 +104,8 @@ export function NewSimulatorModal({
         setName(initialDeviceType?.name ?? "");
         setNameDirty(false);
 
-        const initialWatchDeviceType = chooseInitialWatchDeviceType(
-          nextOptions,
-        );
+        const initialWatchDeviceType =
+          chooseInitialWatchDeviceType(nextOptions);
         const initialWatchRuntime = chooseCompatibleRuntime(
           initialWatchDeviceType?.identifier ?? "",
           nextOptions,
@@ -140,7 +141,9 @@ export function NewSimulatorModal({
       .catch((loadError) => {
         if (
           !cancelled &&
-          !(loadError instanceof DOMException && loadError.name === "AbortError")
+          !(
+            loadError instanceof DOMException && loadError.name === "AbortError"
+          )
         ) {
           setError(
             loadError instanceof Error
@@ -229,8 +232,8 @@ export function NewSimulatorModal({
   const canCreateAndroid =
     Boolean(
       trimmedAndroidName &&
-        androidDeviceTypeIdentifier &&
-        androidSystemImageIdentifier,
+      androidDeviceTypeIdentifier &&
+      androidSystemImageIdentifier,
     ) && !options?.android?.unavailableReason;
   const canCreateSimulator =
     platform === "android"
@@ -239,8 +242,8 @@ export function NewSimulatorModal({
         (!pairedWatch ||
           Boolean(
             trimmedWatchName &&
-              watchDeviceTypeIdentifier &&
-              watchRuntimeIdentifier,
+            watchDeviceTypeIdentifier &&
+            watchRuntimeIdentifier,
           ));
 
   useEffect(() => {
@@ -333,7 +336,9 @@ export function NewSimulatorModal({
       (systemImage) => systemImage.identifier === nextIdentifier,
     );
     if (!androidNameDirty && selectedAndroidDeviceType) {
-      setAndroidName(defaultAndroidName(selectedAndroidDeviceType, nextSystemImage));
+      setAndroidName(
+        defaultAndroidName(selectedAndroidDeviceType, nextSystemImage),
+      );
     }
   }
 
@@ -364,16 +369,19 @@ export function NewSimulatorModal({
             ? androidDeviceTypeIdentifier
             : deviceTypeIdentifier,
         name: platform === "android" ? trimmedAndroidName : trimmedName,
-        pairedWatch: platform === "ios" && pairedWatch
-          ? {
-              deviceTypeIdentifier: watchDeviceTypeIdentifier,
-              name: trimmedWatchName,
-              runtimeIdentifier: watchRuntimeIdentifier,
-            }
-          : undefined,
+        pairedWatch:
+          platform === "ios" && pairedWatch
+            ? {
+                deviceTypeIdentifier: watchDeviceTypeIdentifier,
+                name: trimmedWatchName,
+                runtimeIdentifier: watchRuntimeIdentifier,
+              }
+            : undefined,
         platform,
         runtimeIdentifier:
-          platform === "android" ? androidSystemImageIdentifier : runtimeIdentifier,
+          platform === "android"
+            ? androidSystemImageIdentifier
+            : runtimeIdentifier,
       });
       onCreated(response);
     } catch (createError) {
@@ -602,7 +610,9 @@ export function NewSimulatorModal({
           <span className="new-sim-action-spacer" />
           <button
             className="new-sim-button"
-            disabled={platform === "android" || step === "simulator" || isCreating}
+            disabled={
+              platform === "android" || step === "simulator" || isCreating
+            }
             onClick={() => setStep("simulator")}
             type="button"
           >
@@ -641,12 +651,16 @@ function chooseInitialAndroidDeviceType(
   return (
     deviceTypes.find((deviceType) => deviceType.identifier === preferredName) ??
     deviceTypes.find((deviceType) => deviceType.identifier === "pixel_8") ??
-    deviceTypes.find((deviceType) => deviceType.identifier.startsWith("pixel_")) ??
+    deviceTypes.find((deviceType) =>
+      deviceType.identifier.startsWith("pixel_"),
+    ) ??
     deviceTypes[0]
   );
 }
 
-function chooseInitialAndroidSystemImage(options: SimulatorCreateOptionsResponse) {
+function chooseInitialAndroidSystemImage(
+  options: SimulatorCreateOptionsResponse,
+) {
   return options.android?.systemImages?.[0];
 }
 
