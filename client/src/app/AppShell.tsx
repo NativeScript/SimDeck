@@ -1892,12 +1892,10 @@ export function AppShell({
   }
 
   function applyZoom(nextScale: number, nextPan?: Point, animate = true) {
-    const panForClamp =
-      nextPan ??
-      {
-        x: panRef.current.x,
-        y: panRef.current.y + autoViewportOffsetY,
-      };
+    const panForClamp = nextPan ?? {
+      x: panRef.current.x,
+      y: panRef.current.y + autoViewportOffsetY,
+    };
     const clampedScale = clampZoom(nextScale, fitScale);
     const clampedPan = clampPan(
       panForClamp,
