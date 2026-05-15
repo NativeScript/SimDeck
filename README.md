@@ -194,10 +194,11 @@ transport stream.
 `stream` writes an Annex B H.264 elementary stream to stdout for diagnostics or
 external tools such as `ffplay`.
 
-`camera start` runs a local camera helper, injects the SimDeck camera shim into
-the target iOS simulator app, and relaunches that bundle. The source can be a
-generated pattern, an absolute image or video path, an `http://`, `https://`, or
-`file://` video URL, or a Mac camera selected with `--webcam [id-or-name]`.
+`camera start` asks the SimDeck daemon to publish a camera feed, injects the
+SimDeck camera shim into the target iOS simulator app, and relaunches that
+bundle. The source can be a generated pattern, an absolute image or video path,
+an `http://`, `https://`, or `file://` video URL, or a Mac camera selected with
+`--webcam [id-or-name]`.
 Use the browser menu item **Camera Simulation...** for the same flow from the UI.
 Camera simulation is iOS-simulator-only and requires a booted simulator.
 

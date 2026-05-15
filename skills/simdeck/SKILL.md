@@ -226,10 +226,11 @@ Use screenshots for still evidence. Use `stats` for simulator app CPU, memory, d
 ## Camera Simulation
 
 Use `camera start` when a booted iOS simulator app needs a deterministic camera
-feed. It starts the local helper, injects the camera shim into the app with
-`simctl launch`, and relaunches the bundle. Use `camera switch` to swap between
-placeholder, media, and webcam sources without relaunching while the helper is
-alive.
+feed. The CLI talks to the SimDeck daemon, which owns the camera source and
+shared-memory writer, then injects the camera shim into the app with
+`simctl launch` and relaunches the bundle. Use `camera switch` to swap between
+placeholder, media, and webcam sources without relaunching while the daemon feed
+is alive.
 
 ```bash
 simdeck camera sources
@@ -240,7 +241,7 @@ simdeck camera stop <UDID>
 ```
 
 Media paths must be absolute. URLs are treated as video streams. Webcam support
-depends on macOS camera availability and permission for the helper process.
+depends on macOS camera availability and permission for SimDeck.
 
 ## Default Loop
 

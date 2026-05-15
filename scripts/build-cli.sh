@@ -69,8 +69,6 @@ chmod +x "$OUTPUT"
 echo "Built $OUTPUT"
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  "$ROOT_DIR/cli/camera/build-helper.sh" "$CAMERA_DIR" >/dev/null
   "$ROOT_DIR/cli/camera/build-injector.sh" "$CAMERA_DIR" >/dev/null
-  echo "Built $CAMERA_DIR/SimDeckCameraHelper.app"
   echo "Built $CAMERA_DIR/libSimDeckCameraInjector.dylib"
 fi

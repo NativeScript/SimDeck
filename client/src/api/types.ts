@@ -237,12 +237,12 @@ export interface CameraStatusResponse {
   arg?: string;
   sourceLabel?: string;
   mirror?: "auto" | "on" | "off" | string;
-  helperPid?: number;
+  daemonPid?: number;
   bundleIds?: string[];
   width?: number;
   height?: number;
   sequence?: number;
-  helperLogPath?: string;
+  appLogPath?: string;
   error?: string;
 }
 

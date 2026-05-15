@@ -94,14 +94,16 @@ async function main() {
   step("build camera fixture app");
   const appPath = buildCameraFixtureApp();
   const imagePath = path.join(tempRoot, "solid-red.bmp");
+  const videoPath = path.join(tempRoot, "solid-green.mov");
   writeSolidBmp(imagePath, 32, 24, { r: 255, g: 0, b: 0 });
+  writeSolidMov(videoPath, 64, 48, { r: 0, g: 255, b: 0 });
 
   step("install camera fixture app");
   runText("xcrun", ["simctl", "install", simulatorUDID, appPath], {
     timeoutMs: commandTimeoutMs,
   });
 
-  step("check camera helper sources");
+  step("check camera sources");
   const sources = simdeckJson(["camera", "sources"]);
   if (!Array.isArray(sources.webcams)) {
     throw new Error(
@@ -113,7 +115,7 @@ async function main() {
   const initialStatus = simdeckJson(["camera", "status", simulatorUDID]);
   if (initialStatus.alive !== false) {
     throw new Error(
-      `expected camera helper to be stopped: ${JSON.stringify(initialStatus)}`,
+      `expected daemon camera feed to be stopped: ${JSON.stringify(initialStatus)}`,
     );
   }
 
@@ -147,6 +149,33 @@ async function main() {
     `received image frames: frames=${imageMarker.frames} rgb=${Math.round(imageMarker.avgRed)},${Math.round(imageMarker.avgGreen)},${Math.round(imageMarker.avgBlue)}`,
   );
 
+  step("switch to static video source");
+  const videoStatus = simdeckJson([
+    "camera",
+    "switch",
+    simulatorUDID,
+    "--file",
+    videoPath,
+    "--mirror",
+    "off",
+  ]);
+  assertCameraStatus(videoStatus, "video");
+
+  const videoMarker = await waitForMarker(
+    "solid green video frames",
+    (marker) => {
+      return (
+        marker.frames > imageMarker.frames &&
+        marker.avgRed < 90 &&
+        marker.avgGreen > 180 &&
+        marker.avgBlue < 90
+      );
+    },
+  );
+  console.log(
+    `received video frames: frames=${videoMarker.frames} rgb=${Math.round(videoMarker.avgRed)},${Math.round(videoMarker.avgGreen)},${Math.round(videoMarker.avgBlue)}`,
+  );
+
   step("switch to placeholder source");
   const switchStatus = simdeckJson([
     "camera",
@@ -162,7 +191,7 @@ async function main() {
     "placeholder frames",
     (marker) => {
       return (
-        marker.frames > imageMarker.frames &&
+        marker.frames > videoMarker.frames &&
         marker.avgRed > 120 &&
         marker.avgGreen > 60 &&
         marker.avgBlue > 60
@@ -173,7 +202,7 @@ async function main() {
     `received placeholder frames: frames=${placeholderMarker.frames} rgb=${Math.round(placeholderMarker.avgRed)},${Math.round(placeholderMarker.avgGreen)},${Math.round(placeholderMarker.avgBlue)}`,
   );
 
-  step("stop camera helper");
+  step("stop daemon camera feed");
   const stopStatus = simdeckJson(["camera", "stop", simulatorUDID]);
   if (stopStatus.alive !== false) {
     throw new Error(
@@ -214,6 +243,99 @@ function buildCameraFixtureApp() {
     path.join(appPath, executable),
   ]);
   return appPath;
+}
+
+function writeSolidMov(outputPath, width, height, color) {
+  const sourcePath = path.join(tempRoot, "WriteSolidMov.m");
+  const binaryPath = path.join(tempRoot, "WriteSolidMov");
+  fs.writeFileSync(
+    sourcePath,
+    `#import <AVFoundation/AVFoundation.h>
+#import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CoreVideo.h>
+#import <Foundation/Foundation.h>
+
+int main(int argc, const char *argv[]) {
+  @autoreleasepool {
+    if (argc < 2) return 64;
+    NSString *path = [NSString stringWithUTF8String:argv[1]];
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    NSURL *url = [NSURL fileURLWithPath:path];
+    NSError *error = nil;
+    AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:url fileType:AVFileTypeQuickTimeMovie error:&error];
+    if (!writer) {
+      fprintf(stderr, "%s\\n", error.localizedDescription.UTF8String);
+      return 1;
+    }
+    NSDictionary *settings = @{
+      AVVideoCodecKey: AVVideoCodecTypeH264,
+      AVVideoWidthKey: @(${width}),
+      AVVideoHeightKey: @(${height}),
+    };
+    AVAssetWriterInput *input = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:settings];
+    input.expectsMediaDataInRealTime = NO;
+    NSDictionary *attributes = @{
+      (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+      (id)kCVPixelBufferWidthKey: @(${width}),
+      (id)kCVPixelBufferHeightKey: @(${height}),
+    };
+    AVAssetWriterInputPixelBufferAdaptor *adaptor = [AVAssetWriterInputPixelBufferAdaptor assetWriterInputPixelBufferAdaptorWithAssetWriterInput:input sourcePixelBufferAttributes:attributes];
+    if (![writer canAddInput:input]) return 2;
+    [writer addInput:input];
+    if (![writer startWriting]) return 3;
+    [writer startSessionAtSourceTime:kCMTimeZero];
+    for (int frame = 0; frame < 90; frame += 1) {
+      while (!input.readyForMoreMediaData) {
+        [NSThread sleepForTimeInterval:0.01];
+      }
+      CVPixelBufferRef pixelBuffer = NULL;
+      CVReturn status = CVPixelBufferPoolCreatePixelBuffer(NULL, adaptor.pixelBufferPool, &pixelBuffer);
+      if (status != kCVReturnSuccess || !pixelBuffer) return 4;
+      CVPixelBufferLockBaseAddress(pixelBuffer, 0);
+      uint8_t *base = (uint8_t *)CVPixelBufferGetBaseAddress(pixelBuffer);
+      size_t bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer);
+      for (int y = 0; y < ${height}; y += 1) {
+        uint8_t *row = base + (size_t)y * bytesPerRow;
+        for (int x = 0; x < ${width}; x += 1) {
+          uint8_t *pixel = row + (size_t)x * 4;
+          pixel[0] = ${color.b};
+          pixel[1] = ${color.g};
+          pixel[2] = ${color.r};
+          pixel[3] = 255;
+        }
+      }
+      CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
+      CMTime presentationTime = CMTimeMake(frame, 30);
+      if (![adaptor appendPixelBuffer:pixelBuffer withPresentationTime:presentationTime]) return 5;
+      CVPixelBufferRelease(pixelBuffer);
+    }
+    [input markAsFinished];
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    [writer finishWritingWithCompletionHandler:^{
+      dispatch_semaphore_signal(semaphore);
+    }];
+    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+    return writer.status == AVAssetWriterStatusCompleted ? 0 : 6;
+  }
+}
+`,
+  );
+  runText("clang", [
+    "-fobjc-arc",
+    "-fmodules",
+    "-framework",
+    "AVFoundation",
+    "-framework",
+    "CoreMedia",
+    "-framework",
+    "CoreVideo",
+    "-framework",
+    "Foundation",
+    sourcePath,
+    "-o",
+    binaryPath,
+  ]);
+  runText(binaryPath, [outputPath]);
 }
 
 function fixtureInfoPlist() {

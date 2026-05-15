@@ -74,6 +74,45 @@ void xcw_native_run_main_loop_slice(double duration_seconds) {
   nanosleep(&delay, NULL);
 }
 
+char *simdeck_camera_list_webcams_json(char **error_message) {
+  (void)error_message;
+  return xcw_strdup("{\"webcams\":[]}");
+}
+
+bool simdeck_camera_start(const char *udid, const char *shm_name,
+                          const char *source, const char *source_argument,
+                          const char *mirror, char **error_message) {
+  (void)udid;
+  (void)shm_name;
+  (void)source;
+  (void)source_argument;
+  (void)mirror;
+  return xcw_unsupported(error_message);
+}
+
+char *simdeck_camera_status(const char *udid, char **error_message) {
+  (void)udid;
+  (void)error_message;
+  return xcw_strdup("{\"ok\":true,\"alive\":false}");
+}
+
+char *simdeck_camera_switch(const char *udid, const char *source,
+                            const char *source_argument, const char *mirror,
+                            char **error_message) {
+  (void)udid;
+  (void)source;
+  (void)source_argument;
+  (void)mirror;
+  xcw_unsupported(error_message);
+  return NULL;
+}
+
+bool simdeck_camera_stop(const char *udid, char **error_message) {
+  (void)udid;
+  (void)error_message;
+  return true;
+}
+
 char *xcw_native_list_simulators(char **error_message) {
   (void)error_message;
   return xcw_strdup("{\"simulators\":[]}");

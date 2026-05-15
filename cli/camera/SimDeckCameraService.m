@@ -7,7 +7,6 @@
 
 #import <CoreVideo/CoreVideo.h>
 #import <dispatch/dispatch.h>
-#import <errno.h>
 #import <fcntl.h>
 #import <signal.h>
 #import <stdatomic.h>
@@ -17,15 +16,12 @@
 #import <stdlib.h>
 #import <string.h>
 #import <sys/mman.h>
-#import <sys/socket.h>
 #import <sys/stat.h>
-#import <sys/un.h>
 #import <unistd.h>
 
 static uint32_t gWidth = 1280;
 static uint32_t gHeight = 720;
 static char *gShmName = NULL;
-static NSString *gSocketPath = nil;
 static SimDeckCameraHeader *gHeader = NULL;
 static uint8_t *gPixels = NULL;
 static size_t gMappedSize = 0;
@@ -40,6 +36,25 @@ static NSString *gSourceName = nil;
 static NSString *gSourceArgument = nil;
 static uint32_t gSourceKind = SIMDECK_CAMERA_SOURCE_PLACEHOLDER;
 static OSType gLastPixelFormat = 0;
+static BOOL gServiceStarted = NO;
+static NSString *gActiveUDID = nil;
+
+static NSObject *CameraLock(void) {
+    static NSObject *lock;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        lock = [NSObject new];
+    });
+    return lock;
+}
+
+static void RunOnMainSync(dispatch_block_t block) {
+    if ([NSThread isMainThread]) {
+        block();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), block);
+    }
+}
 
 static void RunMainRunLoopUntil(BOOL (^isFinished)(void), NSTimeInterval timeout) {
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout];
@@ -118,7 +133,7 @@ static BOOL EnsureCameraAccess(NSString **error) {
         status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
     }
     if (error) {
-        *error = [NSString stringWithFormat:@"Mac camera permission is %@ for SimDeck Camera Helper.", AuthorizationStatusName(status)];
+        *error = [NSString stringWithFormat:@"Mac camera permission is %@ for SimDeck.", AuthorizationStatusName(status)];
     }
     return NO;
 }
@@ -416,7 +431,10 @@ static BOOL StartVideo(NSString *path, NSString **error) {
         while (atomic_load(&gSourceGeneration) == generation) {
             @autoreleasepool {
                 AVAsset *asset = [AVAsset assetWithURL:url];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
                 NSArray<AVAssetTrack *> *tracks = [asset tracksWithMediaType:AVMediaTypeVideo];
+#pragma clang diagnostic pop
                 AVAssetTrack *track = tracks.firstObject;
                 if (!track) {
                     usleep(300 * 1000);
@@ -425,7 +443,7 @@ static BOOL StartVideo(NSString *path, NSString **error) {
                 NSError *readerError = nil;
                 AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset error:&readerError];
                 if (!reader) {
-                    fprintf(stderr, "simdeck-camera-helper: video reader failed: %s\n", readerError.localizedDescription.UTF8String);
+                    fprintf(stderr, "simdeck-camera: video reader failed: %s\n", readerError.localizedDescription.UTF8String);
                     usleep(300 * 1000);
                     continue;
                 }
@@ -557,97 +575,6 @@ static NSDictionary *StatusPayload(BOOL ok, NSString *error) {
     return payload;
 }
 
-static NSData *JSONLine(NSDictionary *payload) {
-    NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil] ?: [NSData data];
-    NSMutableData *line = [data mutableCopy];
-    const char newline = '\n';
-    [line appendBytes:&newline length:1];
-    return line;
-}
-
-static void SendReply(int fd, NSDictionary *payload) {
-    NSData *line = JSONLine(payload);
-    const uint8_t *bytes = line.bytes;
-    NSUInteger remaining = line.length;
-    while (remaining > 0) {
-        ssize_t written = write(fd, bytes, remaining);
-        if (written > 0) {
-            bytes += written;
-            remaining -= (NSUInteger)written;
-        } else if (written < 0 && errno == EINTR) {
-            continue;
-        } else {
-            break;
-        }
-    }
-}
-
-static void HandleClient(int fd) {
-    char buffer[8192];
-    ssize_t length = read(fd, buffer, sizeof(buffer) - 1);
-    if (length <= 0) {
-        close(fd);
-        return;
-    }
-    buffer[length] = '\0';
-    NSData *data = [[NSData alloc] initWithBytes:buffer length:(NSUInteger)length];
-    NSDictionary *request = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    if (![request isKindOfClass:NSDictionary.class]) {
-        SendReply(fd, @{ @"ok": @NO, @"error": @"Invalid JSON command." });
-        close(fd);
-        return;
-    }
-    NSString *action = [request[@"action"] isKindOfClass:NSString.class] ? request[@"action"] : @"status";
-    if ([action isEqualToString:@"switch"]) {
-        NSString *source = [request[@"source"] isKindOfClass:NSString.class] ? request[@"source"] : @"placeholder";
-        NSString *arg = [request[@"arg"] isKindOfClass:NSString.class] ? request[@"arg"] : nil;
-        NSString *error = nil;
-        BOOL ok = SwitchSource(source, arg, &error);
-        SendReply(fd, StatusPayload(ok, error));
-    } else if ([action isEqualToString:@"mirror"]) {
-        NSString *mode = [request[@"mode"] isKindOfClass:NSString.class] ? request[@"mode"] : @"auto";
-        if (gHeader) gHeader->mirrorMode = MirrorModeForName(mode);
-        SendReply(fd, StatusPayload(YES, nil));
-    } else if ([action isEqualToString:@"shutdown"]) {
-        SendReply(fd, @{ @"ok": @YES });
-        close(fd);
-        StopCurrentSource();
-        exit(0);
-    } else {
-        SendReply(fd, StatusPayload(YES, nil));
-    }
-    close(fd);
-}
-
-static void StartControlSocket(NSString *path) {
-    unlink(path.fileSystemRepresentation);
-    int server = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (server < 0) {
-        perror("socket");
-        return;
-    }
-    struct sockaddr_un address;
-    memset(&address, 0, sizeof(address));
-    address.sun_family = AF_UNIX;
-    strlcpy(address.sun_path, path.fileSystemRepresentation, sizeof(address.sun_path));
-    if (bind(server, (struct sockaddr *)&address, sizeof(address)) != 0) {
-        perror("bind");
-        close(server);
-        return;
-    }
-    if (listen(server, 8) != 0) {
-        perror("listen");
-        close(server);
-        return;
-    }
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        for (;;) {
-            int client = accept(server, NULL, NULL);
-            if (client >= 0) HandleClient(client);
-        }
-    });
-}
-
 static int OpenSharedMemory(void) {
     if (!gShmName) return -1;
     shm_unlink(gShmName);
@@ -682,7 +609,7 @@ static int OpenSharedMemory(void) {
     return 0;
 }
 
-static void ListWebcamsAndExit(void) {
+static NSDictionary *WebcamsPayload(void) {
     NSMutableArray *items = [NSMutableArray array];
     for (AVCaptureDevice *device in CameraDevices()) {
         [items addObject:@{
@@ -692,11 +619,7 @@ static void ListWebcamsAndExit(void) {
                 device.position == AVCaptureDevicePositionBack ? @"back" : @"unspecified",
         }];
     }
-    NSData *data = [NSJSONSerialization dataWithJSONObject:@{ @"webcams": items } options:0 error:nil];
-    if (data) {
-        fwrite(data.bytes, 1, data.length, stdout);
-        fputc('\n', stdout);
-    }
+    return @{ @"webcams": items };
 }
 
 static void Cleanup(void) {
@@ -707,10 +630,16 @@ static void Cleanup(void) {
     }
     if (gShmName) {
         shm_unlink(gShmName);
+        free(gShmName);
+        gShmName = NULL;
     }
-    if (gSocketPath) {
-        unlink(gSocketPath.fileSystemRepresentation);
-    }
+    gPixels = NULL;
+    gMappedSize = 0;
+    gSourceName = nil;
+    gSourceArgument = nil;
+    gSourceKind = SIMDECK_CAMERA_SOURCE_PLACEHOLDER;
+    gActiveUDID = nil;
+    gServiceStarted = NO;
 }
 
 static void SignalHandler(int signalNumber) {
@@ -719,64 +648,153 @@ static void SignalHandler(int signalNumber) {
     _exit(0);
 }
 
-int main(int argc, const char *argv[]) {
-    @autoreleasepool {
-        NSString *initialSource = @"placeholder";
-        NSString *initialArg = nil;
-        uint32_t mirror = SIMDECK_CAMERA_MIRROR_AUTO;
-        for (int i = 1; i < argc; i += 1) {
-            const char *arg = argv[i];
-            if (!strcmp(arg, "--list-webcams-json")) {
-                ListWebcamsAndExit();
-                return 0;
-            } else if (!strcmp(arg, "--shm") && i + 1 < argc) {
-                gShmName = strdup(argv[++i]);
-            } else if (!strcmp(arg, "--socket") && i + 1 < argc) {
-                gSocketPath = [StringFromCString(argv[++i]) copy];
-            } else if (!strcmp(arg, "--source") && i + 1 < argc) {
-                initialSource = StringFromCString(argv[++i]);
-            } else if (!strcmp(arg, "--arg") && i + 1 < argc) {
-                initialArg = StringFromCString(argv[++i]);
-            } else if (!strcmp(arg, "--width") && i + 1 < argc) {
-                gWidth = (uint32_t)MAX(1, atoi(argv[++i]));
-            } else if (!strcmp(arg, "--height") && i + 1 < argc) {
-                gHeight = (uint32_t)MAX(1, atoi(argv[++i]));
-            } else if (!strcmp(arg, "--mirror") && i + 1 < argc) {
-                mirror = MirrorModeForName(StringFromCString(argv[++i]));
-            } else if (!strcmp(arg, "--help")) {
-                fprintf(stderr, "Usage: %s --shm <name> --socket <path> [--source placeholder|image|video|webcam] [--arg value]\n", argv[0]);
-                return 64;
-            }
-        }
-        if (!gShmName || gShmName[0] != '/') {
-            fprintf(stderr, "simdeck-camera-helper: --shm /name is required\n");
-            return 64;
-        }
-        [NSApplication sharedApplication];
-        [NSApp finishLaunching];
-        gWriteQueue = dispatch_queue_create("dev.nativescript.simdeck.camera.writer", DISPATCH_QUEUE_SERIAL);
-        signal(SIGINT, SignalHandler);
-        signal(SIGTERM, SignalHandler);
-        if (OpenSharedMemory() != 0) {
-            return 1;
-        }
-        if (gHeader) gHeader->mirrorMode = mirror;
-        if (gSocketPath.length > 0) {
-            StartControlSocket(gSocketPath);
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            NSString *error = nil;
-            if (!SwitchSource(initialSource, initialArg, &error)) {
-                fprintf(stderr, "simdeck-camera-helper: source failed: %s\n", error.UTF8String ?: "unknown");
-                StartPlaceholder(NULL);
-            }
-            fprintf(stderr, "simdeck-camera-helper: shm=%s source=%s socket=%s\n",
-                    gShmName,
-                    gSourceName.UTF8String ?: "placeholder",
-                    gSocketPath.UTF8String ?: "");
-        });
-        [NSApp run];
-        Cleanup();
+static char *CopyCString(NSString *value) {
+    const char *utf8 = value.UTF8String ?: "";
+    char *copy = strdup(utf8);
+    return copy ?: strdup("");
+}
+
+static void SetNativeError(char **errorMessage, NSString *message) {
+    if (errorMessage) {
+        *errorMessage = CopyCString(message ?: @"Unknown camera error.");
     }
-    return 0;
+}
+
+static char *JSONCString(NSDictionary *payload) {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:payload ?: @{} options:0 error:nil];
+    if (!data) {
+        return CopyCString(@"{}");
+    }
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"{}";
+    return CopyCString(json);
+}
+
+char *simdeck_camera_list_webcams_json(char **errorMessage) {
+    (void)errorMessage;
+    __block char *result = NULL;
+    RunOnMainSync(^{
+        @autoreleasepool {
+            result = JSONCString(WebcamsPayload());
+        }
+    });
+    return result;
+}
+
+bool simdeck_camera_start(const char *udid,
+                          const char *shmName,
+                          const char *source,
+                          const char *sourceArgument,
+                          const char *mirror,
+                          char **errorMessage) {
+    __block BOOL ok = NO;
+    __block NSString *nativeError = nil;
+    RunOnMainSync(^{
+        @autoreleasepool {
+            @synchronized (CameraLock()) {
+                Cleanup();
+                if (!shmName || shmName[0] != '/') {
+                    nativeError = @"Camera shared memory name must start with `/`.";
+                    return;
+                }
+                gActiveUDID = [StringFromCString(udid) copy];
+                gShmName = strdup(shmName);
+                gWriteQueue = dispatch_queue_create("dev.nativescript.simdeck.camera.writer", DISPATCH_QUEUE_SERIAL);
+                atomic_store(&gPublishedFrames, 0);
+                atomic_store(&gDroppedFrames, 0);
+                gLastPixelFormat = 0;
+                [NSApplication sharedApplication];
+                [NSApp finishLaunching];
+                signal(SIGINT, SignalHandler);
+                signal(SIGTERM, SignalHandler);
+                if (OpenSharedMemory() != 0) {
+                    nativeError = @"Unable to open camera shared memory.";
+                    Cleanup();
+                    return;
+                }
+                if (gHeader) {
+                    gHeader->mirrorMode = MirrorModeForName(StringFromCString(mirror));
+                }
+                if (!SwitchSource(StringFromCString(source), StringFromCString(sourceArgument), &nativeError)) {
+                    Cleanup();
+                    return;
+                }
+                gServiceStarted = YES;
+                ok = YES;
+            }
+        }
+    });
+    if (!ok) {
+        SetNativeError(errorMessage, nativeError);
+    }
+    return ok;
+}
+
+char *simdeck_camera_status(const char *udid, char **errorMessage) {
+    (void)errorMessage;
+    __block char *result = NULL;
+    RunOnMainSync(^{
+        @autoreleasepool {
+            @synchronized (CameraLock()) {
+                NSString *requestedUDID = StringFromCString(udid);
+                if (!gServiceStarted || (requestedUDID.length > 0 && gActiveUDID.length > 0 && ![requestedUDID isEqualToString:gActiveUDID])) {
+                    result = JSONCString(@{
+                        @"ok": @YES,
+                        @"alive": @NO,
+                        @"cameraAuthorization": AuthorizationStatusName([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo]),
+                    });
+                    return;
+                }
+                result = JSONCString(StatusPayload(YES, nil));
+            }
+        }
+    });
+    return result;
+}
+
+char *simdeck_camera_switch(const char *udid,
+                            const char *source,
+                            const char *sourceArgument,
+                            const char *mirror,
+                            char **errorMessage) {
+    __block char *result = NULL;
+    __block NSString *nativeError = nil;
+    RunOnMainSync(^{
+        @autoreleasepool {
+            @synchronized (CameraLock()) {
+                NSString *requestedUDID = StringFromCString(udid);
+                if (!gServiceStarted || (requestedUDID.length > 0 && gActiveUDID.length > 0 && ![requestedUDID isEqualToString:gActiveUDID])) {
+                    nativeError = @"Camera simulation is not running for this simulator.";
+                    return;
+                }
+                if (mirror && mirror[0] && gHeader) {
+                    gHeader->mirrorMode = MirrorModeForName(StringFromCString(mirror));
+                }
+                if (source && source[0] && !SwitchSource(StringFromCString(source), StringFromCString(sourceArgument), &nativeError)) {
+                    return;
+                }
+                result = JSONCString(StatusPayload(YES, nil));
+            }
+        }
+    });
+    if (!result) {
+        SetNativeError(errorMessage, nativeError);
+    }
+    return result;
+}
+
+bool simdeck_camera_stop(const char *udid, char **errorMessage) {
+    (void)errorMessage;
+    __block BOOL stopped = NO;
+    RunOnMainSync(^{
+        @autoreleasepool {
+            @synchronized (CameraLock()) {
+                NSString *requestedUDID = StringFromCString(udid);
+                if (requestedUDID.length == 0 || gActiveUDID.length == 0 || [requestedUDID isEqualToString:gActiveUDID]) {
+                    Cleanup();
+                }
+                stopped = YES;
+            }
+        }
+    });
+    return stopped;
 }

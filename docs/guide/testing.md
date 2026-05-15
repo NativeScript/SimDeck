@@ -55,7 +55,7 @@ simdeck camera stop <udid>
 
 The browser UI exposes the same controls from **Camera Simulation...** in the
 simulator menu. Webcam forwarding is available with `--webcam` when macOS has an
-available camera and has granted the helper permission.
+available camera and has granted camera permission to SimDeck.
 
 ## Repository Tests
 

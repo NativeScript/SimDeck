@@ -113,10 +113,10 @@ Android:
 | Method   | Path                                   | Purpose                                     |
 | -------- | -------------------------------------- | ------------------------------------------- |
 | `GET`    | `/api/camera/webcams`                  | List available Mac camera sources           |
-| `GET`    | `/api/simulators/{udid}/camera`        | Get camera helper status                    |
-| `POST`   | `/api/simulators/{udid}/camera`        | Start helper and optionally relaunch an app |
-| `POST`   | `/api/simulators/{udid}/camera/source` | Switch the running helper source            |
-| `DELETE` | `/api/simulators/{udid}/camera`        | Stop the camera helper                      |
+| `GET`    | `/api/simulators/{udid}/camera`        | Get daemon camera feed status               |
+| `POST`   | `/api/simulators/{udid}/camera`        | Start feed and optionally relaunch an app   |
+| `POST`   | `/api/simulators/{udid}/camera/source` | Switch the running daemon source            |
+| `DELETE` | `/api/simulators/{udid}/camera`        | Stop the daemon camera feed                 |
 
 Start request:
 

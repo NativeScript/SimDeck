@@ -2367,7 +2367,13 @@ fn main() -> anyhow::Result<()> {
         },
         Command::Camera { command } => match command {
             CameraCommand::Sources => {
-                println_json(&camera::list_webcams_value()?)?;
+                let service_url = command_service_url(explicit_server_url.as_deref())?;
+                println_json(&service_camera_request_json(
+                    &service_url,
+                    "GET",
+                    "/api/camera/webcams",
+                    None,
+                )?)?;
                 Ok(())
             }
             CameraCommand::Start {
@@ -2377,13 +2383,18 @@ fn main() -> anyhow::Result<()> {
                 webcam,
                 mirror,
             } => {
+                let service_url = command_service_url(explicit_server_url.as_deref())?;
                 let source = camera_source_from_args(file, webcam, false)?;
-                let status = camera::start_camera(camera::CameraStartOptions {
-                    udid,
-                    bundle_id: Some(bundle_id),
-                    source,
-                    mirror: Some(mirror),
-                })?;
+                let status = service_camera_request_json(
+                    &service_url,
+                    "POST",
+                    &format!("/api/simulators/{}/camera", url_path_component(&udid)),
+                    Some(&serde_json::json!({
+                        "bundleId": bundle_id,
+                        "source": source,
+                        "mirror": mirror,
+                    })),
+                )?;
                 println_json(&status)?;
                 Ok(())
             }
@@ -2394,17 +2405,41 @@ fn main() -> anyhow::Result<()> {
                 placeholder,
                 mirror,
             } => {
+                let service_url = command_service_url(explicit_server_url.as_deref())?;
                 let source = camera_source_from_args(file, webcam, placeholder)?;
-                let status = camera::switch_camera(&udid, source, mirror)?;
+                let status = service_camera_request_json(
+                    &service_url,
+                    "POST",
+                    &format!(
+                        "/api/simulators/{}/camera/source",
+                        url_path_component(&udid)
+                    ),
+                    Some(&serde_json::json!({
+                        "source": source,
+                        "mirror": mirror,
+                    })),
+                )?;
                 println_json(&status)?;
                 Ok(())
             }
             CameraCommand::Status { udid } => {
-                println_json(&camera::camera_status(&udid)?)?;
+                let service_url = command_service_url(explicit_server_url.as_deref())?;
+                println_json(&service_camera_request_json(
+                    &service_url,
+                    "GET",
+                    &format!("/api/simulators/{}/camera", url_path_component(&udid)),
+                    None,
+                )?)?;
                 Ok(())
             }
             CameraCommand::Stop { udid } => {
-                println_json(&camera::stop_camera(&udid)?)?;
+                let service_url = command_service_url(explicit_server_url.as_deref())?;
+                println_json(&service_camera_request_json(
+                    &service_url,
+                    "DELETE",
+                    &format!("/api/simulators/{}/camera", url_path_component(&udid)),
+                    None,
+                )?)?;
                 Ok(())
             }
         },
@@ -4026,6 +4061,36 @@ fn service_touch_sequence(server_url: &str, udid: &str, events: Vec<Value>) -> a
         "touch-sequence",
         &serde_json::json!({ "events": events }),
     )
+}
+
+fn service_camera_request_json(
+    server_url: &str,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+) -> anyhow::Result<Value> {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        match http_request_json(server_url, method, path, body) {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if Instant::now() < deadline
+                    && service_camera_error_is_retryable(&error.to_string()) =>
+            {
+                std::thread::sleep(Duration::from_millis(150));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn service_camera_error_is_retryable(message: &str) -> bool {
+    let message = message.to_lowercase();
+    message.contains("parse simdeck service json response")
+        || message.contains("connect to simdeck service")
+        || message.contains("connection reset")
+        || message.contains("broken pipe")
+        || message.contains("unexpected eof")
 }
 
 fn service_key(server_url: &str, udid: &str, key_code: u16, modifiers: u32) -> anyhow::Result<()> {
