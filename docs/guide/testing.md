@@ -42,6 +42,21 @@ try {
 
 Selectors can match `id`, `label`, `value`, or `type`.
 
+## Camera Apps
+
+For iOS apps that use `AVFoundation`, start camera simulation before running the
+camera workflow:
+
+```sh
+simdeck camera start <udid> com.example.App --file /absolute/path/to/feed.mov --mirror off
+simdeck camera switch <udid> --placeholder
+simdeck camera stop <udid>
+```
+
+The browser UI exposes the same controls from **Camera Simulation...** in the
+simulator menu. Webcam forwarding is available with `--webcam` when macOS has an
+available camera and has granted camera permission to SimDeck.
+
 ## Repository Tests
 
 Normal unit and client tests:
@@ -57,6 +72,7 @@ npm run build:cli
 npm run build:client
 npm run test:integration:fixture
 npm run test:integration:cli
+npm run test:integration:camera
 ```
 
 Verbose iOS run:

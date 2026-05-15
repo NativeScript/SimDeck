@@ -108,6 +108,35 @@ Android:
 `install-upload` is intended for browser clients. iOS simulator uploads must be
 `.ipa` archives; Android emulator uploads must be `.apk` files.
 
+## Camera Simulation
+
+| Method   | Path                                   | Purpose                                   |
+| -------- | -------------------------------------- | ----------------------------------------- |
+| `GET`    | `/api/camera/webcams`                  | List available Mac camera sources         |
+| `GET`    | `/api/simulators/{udid}/camera`        | Get daemon camera feed status             |
+| `POST`   | `/api/simulators/{udid}/camera`        | Start feed and optionally relaunch an app |
+| `POST`   | `/api/simulators/{udid}/camera/source` | Switch the running daemon source          |
+| `DELETE` | `/api/simulators/{udid}/camera`        | Stop the daemon camera feed               |
+
+Start request:
+
+```json
+{
+  "bundleId": "com.example.App",
+  "mirror": "off",
+  "source": {
+    "kind": "video",
+    "arg": "/absolute/path/to/feed.mov"
+  }
+}
+```
+
+Source `kind` is `placeholder`, `image`, `video`, or `webcam`. Image and video
+sources require `arg`; local files must be absolute paths. Video sources also
+accept `http://`, `https://`, and `file://` URLs. `webcam` can omit `arg` to use
+the first available Mac camera, or pass a camera ID/name from `/api/camera/webcams`.
+`mirror` is `auto`, `on`, or `off`.
+
 ## Performance
 
 iOS simulator app processes run as host macOS processes. These endpoints expose host-process telemetry for matching simulator app PIDs.

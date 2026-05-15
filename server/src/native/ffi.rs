@@ -31,6 +31,28 @@ pub type xcw_native_frame_callback =
     unsafe extern "C" fn(frame: *const xcw_native_frame, user_data: *mut c_void);
 
 unsafe extern "C" {
+    pub fn simdeck_camera_list_webcams_json(error_message: *mut *mut c_char) -> *mut c_char;
+    pub fn simdeck_camera_start(
+        udid: *const c_char,
+        shm_name: *const c_char,
+        source: *const c_char,
+        source_argument: *const c_char,
+        mirror: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn simdeck_camera_status(
+        udid: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> *mut c_char;
+    pub fn simdeck_camera_switch(
+        udid: *const c_char,
+        source: *const c_char,
+        source_argument: *const c_char,
+        mirror: *const c_char,
+        error_message: *mut *mut c_char,
+    ) -> *mut c_char;
+    pub fn simdeck_camera_stop(udid: *const c_char, error_message: *mut *mut c_char) -> bool;
+
     pub fn xcw_native_initialize_app();
     pub fn xcw_native_run_main_loop_slice(duration_seconds: f64);
 

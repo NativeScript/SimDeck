@@ -36,6 +36,8 @@ simdeck install <udid> /path/to/App.app
 simdeck install <udid> /path/to/App.ipa
 simdeck launch <udid> com.example.App
 simdeck open-url <udid> https://example.com
+simdeck camera start <udid> com.example.App --file /absolute/path/to/feed.mov
+simdeck camera stop <udid>
 simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
 simdeck describe <udid> --format agent --max-depth 3
 simdeck screenshot <udid> --output screen.png

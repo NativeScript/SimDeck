@@ -35,6 +35,7 @@ interface ToolbarProps {
   onDismissKeyboard: () => void;
   onHome: () => void;
   onInstallAppPrompt: () => void;
+  onOpenCameraSimulation: () => void;
   onOpenAppSwitcher: () => void;
   onOpenBundlePrompt: () => void;
   onOpenNewSimulator: () => void;
@@ -83,6 +84,7 @@ export function Toolbar({
   onDismissKeyboard,
   onHome,
   onInstallAppPrompt,
+  onOpenCameraSimulation,
   onOpenAppSwitcher,
   onOpenBundlePrompt,
   onOpenNewSimulator,
@@ -154,6 +156,7 @@ export function Toolbar({
           onDismissKeyboard={onDismissKeyboard}
           onHome={onHome}
           onInstallAppPrompt={onInstallAppPrompt}
+          onOpenCameraSimulation={onOpenCameraSimulation}
           onOpenAppSwitcher={onOpenAppSwitcher}
           onOpenBundlePrompt={onOpenBundlePrompt}
           onOpenNewSimulator={onOpenNewSimulator}
