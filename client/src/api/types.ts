@@ -206,6 +206,46 @@ export interface InstallUploadResponse {
   udid: string;
 }
 
+export type CameraSourceKind = "placeholder" | "image" | "video" | "webcam";
+
+export interface CameraSourceRequest {
+  kind: CameraSourceKind;
+  arg?: string;
+}
+
+export interface CameraStartRequest {
+  bundleId?: string;
+  source: CameraSourceRequest;
+  mirror?: "auto" | "on" | "off";
+}
+
+export interface CameraWebcam {
+  id: string;
+  name: string;
+  position?: string;
+}
+
+export interface CameraWebcamsResponse {
+  webcams: CameraWebcam[];
+}
+
+export interface CameraStatusResponse {
+  ok?: boolean;
+  udid?: string;
+  alive: boolean;
+  source?: CameraSourceKind | string;
+  arg?: string;
+  sourceLabel?: string;
+  mirror?: "auto" | "on" | "off" | string;
+  helperPid?: number;
+  bundleIds?: string[];
+  width?: number;
+  height?: number;
+  sequence?: number;
+  helperLogPath?: string;
+  error?: string;
+}
+
 export interface SimulatorForegroundApp {
   appName?: string | null;
   bundleIdentifier?: string | null;

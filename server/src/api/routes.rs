@@ -1,6 +1,7 @@
 use crate::android::{self, AndroidBridge, AndroidEmulatorSpec};
 use crate::api::json::json;
 use crate::auth;
+use crate::camera::{self, CameraStartRequest, CameraSwitchRequest};
 use crate::config::Config;
 use crate::devtools;
 use crate::error::AppError;
@@ -699,6 +700,7 @@ pub fn router(state: AppState) -> Router {
             "/api/simulators/create-options",
             get(simulator_create_options),
         )
+        .route("/api/camera/webcams", get(camera_webcams))
         .route("/api/simulators/{udid}/state", get(simulator_state))
         .route("/api/simulators/{udid}/processes", get(simulator_processes))
         .route(
@@ -734,6 +736,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/refresh", post(refresh_stream))
         .route("/api/simulators/{udid}/open-url", post(open_url))
         .route("/api/simulators/{udid}/launch", post(launch_bundle))
+        .route(
+            "/api/simulators/{udid}/camera",
+            get(camera_status).post(start_camera).delete(stop_camera),
+        )
+        .route(
+            "/api/simulators/{udid}/camera/source",
+            post(switch_camera_source),
+        )
         .route("/api/simulators/{udid}/tap", post(tap_element))
         .route("/api/simulators/{udid}/query", post(accessibility_query))
         .route("/api/simulators/{udid}/wait-for", post(wait_for_element))
@@ -2346,6 +2356,75 @@ async fn launch_bundle(
     })
     .await?;
     Ok(json(json_value!({ "ok": true })))
+}
+
+async fn camera_webcams() -> Result<Json<Value>, AppError> {
+    let webcams = task::spawn_blocking(camera::list_webcams_value)
+        .await
+        .map_err(|error| AppError::internal(format!("Camera task failed. {error}")))??;
+    Ok(json(webcams))
+}
+
+async fn camera_status(Path(udid): Path<String>) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Camera simulation is only supported for iOS simulators.",
+        ));
+    }
+    let status = task::spawn_blocking(move || camera::camera_status(&udid))
+        .await
+        .map_err(|error| AppError::internal(format!("Camera task failed. {error}")))??;
+    Ok(json(status))
+}
+
+async fn start_camera(
+    Path(udid): Path<String>,
+    Json(payload): Json<CameraStartRequest>,
+) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Camera simulation is only supported for iOS simulators.",
+        ));
+    }
+    let status = task::spawn_blocking(move || {
+        camera::start_camera(camera::CameraStartOptions {
+            udid,
+            bundle_id: payload.bundle_id,
+            source: payload.source,
+            mirror: payload.mirror,
+        })
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("Camera task failed. {error}")))??;
+    Ok(json(status))
+}
+
+async fn switch_camera_source(
+    Path(udid): Path<String>,
+    Json(payload): Json<CameraSwitchRequest>,
+) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Camera simulation is only supported for iOS simulators.",
+        ));
+    }
+    let status =
+        task::spawn_blocking(move || camera::switch_camera(&udid, payload.source, payload.mirror))
+            .await
+            .map_err(|error| AppError::internal(format!("Camera task failed. {error}")))??;
+    Ok(json(status))
+}
+
+async fn stop_camera(Path(udid): Path<String>) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Camera simulation is only supported for iOS simulators.",
+        ));
+    }
+    let status = task::spawn_blocking(move || camera::stop_camera(&udid))
+        .await
+        .map_err(|error| AppError::internal(format!("Camera task failed. {error}")))??;
+    Ok(json(status))
 }
 
 async fn tap_element(

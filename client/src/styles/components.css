@@ -640,6 +640,11 @@
   box-shadow: none;
 }
 
+.camera-source-switcher {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 270px;
+}
+
 .new-sim-fieldset {
   display: grid;
   align-content: center;
@@ -648,6 +653,16 @@
   padding: 28px clamp(16px, 12vw, 148px);
   border: 1px solid var(--new-sim-panel-border);
   background: var(--new-sim-panel-bg);
+}
+
+.camera-sim-fieldset {
+  height: 238px;
+  align-content: center;
+}
+
+.camera-sim-status {
+  margin-top: 10px;
+  text-align: center;
 }
 
 .new-sim-fieldset:disabled {

@@ -1,6 +1,7 @@
 mod android;
 mod api;
 mod auth;
+mod camera;
 mod config;
 mod core_simulator;
 mod devtools;
@@ -177,6 +178,10 @@ enum Command {
     Pasteboard {
         #[command(subcommand)]
         command: PasteboardCommand,
+    },
+    Camera {
+        #[command(subcommand)]
+        command: CameraCommand,
     },
     Logs {
         udid: String,
@@ -642,6 +647,38 @@ enum PasteboardCommand {
         stdin: bool,
         #[arg(long)]
         file: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum CameraCommand {
+    Sources,
+    Start {
+        udid: String,
+        bundle_id: String,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long, num_args = 0..=1, require_equals = false)]
+        webcam: Option<Option<String>>,
+        #[arg(long, default_value = "auto")]
+        mirror: String,
+    },
+    Switch {
+        udid: String,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long, num_args = 0..=1, require_equals = false)]
+        webcam: Option<Option<String>>,
+        #[arg(long)]
+        placeholder: bool,
+        #[arg(long)]
+        mirror: Option<String>,
+    },
+    Status {
+        udid: String,
+    },
+    Stop {
+        udid: String,
     },
 }
 
@@ -2328,6 +2365,49 @@ fn main() -> anyhow::Result<()> {
                 Ok(())
             }
         },
+        Command::Camera { command } => match command {
+            CameraCommand::Sources => {
+                println_json(&camera::list_webcams_value()?)?;
+                Ok(())
+            }
+            CameraCommand::Start {
+                udid,
+                bundle_id,
+                file,
+                webcam,
+                mirror,
+            } => {
+                let source = camera_source_from_args(file, webcam, false)?;
+                let status = camera::start_camera(camera::CameraStartOptions {
+                    udid,
+                    bundle_id: Some(bundle_id),
+                    source,
+                    mirror: Some(mirror),
+                })?;
+                println_json(&status)?;
+                Ok(())
+            }
+            CameraCommand::Switch {
+                udid,
+                file,
+                webcam,
+                placeholder,
+                mirror,
+            } => {
+                let source = camera_source_from_args(file, webcam, placeholder)?;
+                let status = camera::switch_camera(&udid, source, mirror)?;
+                println_json(&status)?;
+                Ok(())
+            }
+            CameraCommand::Status { udid } => {
+                println_json(&camera::camera_status(&udid)?)?;
+                Ok(())
+            }
+            CameraCommand::Stop { udid } => {
+                println_json(&camera::stop_camera(&udid)?)?;
+                Ok(())
+            }
+        },
         Command::Logs {
             udid,
             seconds,
@@ -3446,6 +3526,34 @@ fn read_text_input(
         return Ok(fs::read_to_string(file)?);
     }
     Ok(text.unwrap_or_default())
+}
+
+fn camera_source_from_args(
+    file: Option<String>,
+    webcam: Option<Option<String>>,
+    placeholder: bool,
+) -> anyhow::Result<camera::CameraSource> {
+    let source_count =
+        usize::from(file.is_some()) + usize::from(webcam.is_some()) + usize::from(placeholder);
+    if source_count > 1 {
+        return Err(crate::error::AppError::bad_request(
+            "Choose only one camera source: --file, --webcam, or --placeholder.",
+        )
+        .into());
+    }
+    if let Some(file) = file {
+        return Ok(camera::file_source(file.trim()));
+    }
+    if let Some(webcam) = webcam {
+        return Ok(camera::CameraSource {
+            kind: camera::CameraSourceKind::Webcam,
+            arg: webcam.and_then(|value| {
+                let trimmed = value.trim().to_owned();
+                (!trimmed.is_empty()).then_some(trimmed)
+            }),
+        });
+    }
+    Ok(camera::CameraSource::default())
 }
 
 fn default_screenshot_path(udid: &str) -> PathBuf {

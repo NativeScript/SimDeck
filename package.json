@@ -19,6 +19,7 @@
     "scripts/studio-provider-bridge.mjs",
     "scripts/postinstall.mjs",
     "build/simdeck-bin",
+    "build/camera/",
     "client/dist/",
     "packages/simdeck-test/dist/"
   ],
@@ -67,6 +68,7 @@
     "test": "cargo test --manifest-path server/Cargo.toml && npm run --prefix client test",
     "test:integration:cli": "node scripts/integration/cli.mjs",
     "test:integration:cli:verbose": "SIMDECK_INTEGRATION_VERBOSE=1 SIMDECK_INTEGRATION_SHOW_SIMULATOR=1 node scripts/integration/cli.mjs",
+    "test:integration:camera": "node scripts/integration/camera.mjs",
     "test:integration:fixture": "node scripts/integration/prebuild-fixture.mjs",
     "test:integration:js-api": "node scripts/integration/js-api.mjs",
     "test:integration:js-api:verbose": "SIMDECK_INTEGRATION_SHOW_SIMULATOR=1 node scripts/integration/js-api.mjs",

@@ -28,6 +28,7 @@ interface SimulatorMenuProps {
   onDismissKeyboard: () => void;
   onHome: () => void;
   onInstallAppPrompt: () => void;
+  onOpenCameraSimulation: () => void;
   onOpenAppSwitcher: () => void;
   onOpenBundlePrompt: () => void;
   onOpenNewSimulator: () => void;
@@ -67,6 +68,7 @@ export function SimulatorMenu({
   onDismissKeyboard,
   onHome,
   onInstallAppPrompt,
+  onOpenCameraSimulation,
   onOpenAppSwitcher,
   onOpenBundlePrompt,
   onOpenNewSimulator,
@@ -279,6 +281,15 @@ export function SimulatorMenu({
                 </button>
                 <button className="menu-action" onClick={onOpenBundlePrompt}>
                   Launch Bundle…
+                </button>
+                <button
+                  className="menu-action"
+                  onClick={() => {
+                    onOpenCameraSimulation();
+                    onCloseMenu();
+                  }}
+                >
+                  Camera Simulation…
                 </button>
                 <button
                   className="menu-action mobile-menu-action"

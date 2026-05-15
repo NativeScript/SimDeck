@@ -75,6 +75,7 @@ import type {
   ViewMode,
 } from "../features/viewport/types";
 import { useViewportLayout } from "../features/viewport/useViewportLayout";
+import { CameraSimulationModal } from "../features/simulators/CameraSimulationModal";
 import { NewSimulatorModal } from "../features/simulators/NewSimulatorModal";
 import {
   buildShellRotationTransform,
@@ -396,6 +397,7 @@ export function AppShell({
   );
   const [menuOpen, setMenuOpen] = useState(false);
   const [newSimulatorOpen, setNewSimulatorOpen] = useState(false);
+  const [cameraSimulationOpen, setCameraSimulationOpen] = useState(false);
   const [localError, setLocalError] = useState("");
   const [failedStreamUDIDs, setFailedStreamUDIDs] = useState<Set<string>>(
     () => new Set(),
@@ -2503,6 +2505,10 @@ export function AppShell({
           }
         }}
         onInstallAppPrompt={openInstallAppPicker}
+        onOpenCameraSimulation={() => {
+          setMenuOpen(false);
+          setCameraSimulationOpen(true);
+        }}
         onOpenAppSwitcher={() => {
           if (!selectedSimulator) {
             return;
@@ -2609,6 +2615,14 @@ export function AppShell({
         onClose={() => setNewSimulatorOpen(false)}
         onCreated={handleSimulatorCreated}
         open={newSimulatorOpen && !hideSimulatorSelection}
+        selectedSimulator={selectedSimulator}
+      />
+      <CameraSimulationModal
+        foregroundBundleId={
+          selectedSimulatorState?.foregroundApp?.bundleIdentifier ?? null
+        }
+        onClose={() => setCameraSimulationOpen(false)}
+        open={cameraSimulationOpen}
         selectedSimulator={selectedSimulator}
       />
       <SimulatorViewport

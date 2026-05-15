@@ -2,6 +2,9 @@ import { apiRequest } from "./client";
 import type {
   AccessibilitySourcePreference,
   AccessibilityTreeResponse,
+  CameraStartRequest,
+  CameraStatusResponse,
+  CameraWebcamsResponse,
   ChromeDevToolsTargetDiscovery,
   ChromeProfile,
   CreateSimulatorRequest,
@@ -172,6 +175,57 @@ export async function sampleSimulatorProcess(
   return apiRequest<StackSampleResponse>(
     `/api/simulators/${encodeURIComponent(udid)}/processes/${pid}/sample?${params}`,
     { method: "POST" },
+  );
+}
+
+export async function fetchCameraWebcams(
+  options: RequestInit = {},
+): Promise<CameraWebcamsResponse> {
+  return apiRequest<CameraWebcamsResponse>("/api/camera/webcams", options);
+}
+
+export async function fetchCameraStatus(
+  udid: string,
+  options: RequestInit = {},
+): Promise<CameraStatusResponse> {
+  return apiRequest<CameraStatusResponse>(
+    `/api/simulators/${encodeURIComponent(udid)}/camera`,
+    options,
+  );
+}
+
+export async function startCameraSimulation(
+  udid: string,
+  payload: CameraStartRequest,
+): Promise<CameraStatusResponse> {
+  return apiRequest<CameraStatusResponse>(
+    `/api/simulators/${encodeURIComponent(udid)}/camera`,
+    {
+      body: JSON.stringify(payload),
+      method: "POST",
+    },
+  );
+}
+
+export async function switchCameraSimulationSource(
+  udid: string,
+  payload: Pick<CameraStartRequest, "source" | "mirror">,
+): Promise<CameraStatusResponse> {
+  return apiRequest<CameraStatusResponse>(
+    `/api/simulators/${encodeURIComponent(udid)}/camera/source`,
+    {
+      body: JSON.stringify(payload),
+      method: "POST",
+    },
+  );
+}
+
+export async function stopCameraSimulation(
+  udid: string,
+): Promise<CameraStatusResponse> {
+  return apiRequest<CameraStatusResponse>(
+    `/api/simulators/${encodeURIComponent(udid)}/camera`,
+    { method: "DELETE" },
   );
 }
 
