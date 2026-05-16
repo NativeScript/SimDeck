@@ -160,8 +160,17 @@ xcw_native_owned_bytes xcw_native_render_screen_mask_png(
 }
 
 xcw_native_owned_bytes xcw_native_screenshot_png(const char *udid,
+                                                 bool include_bezel,
                                                  char **error_message) {
   (void)udid;
+  (void)include_bezel;
+  return xcw_empty_bytes(error_message);
+}
+
+xcw_native_owned_bytes xcw_native_screen_recording_mp4(
+    const char *udid, double duration_seconds, char **error_message) {
+  (void)udid;
+  (void)duration_seconds;
   return xcw_empty_bytes(error_message);
 }
 

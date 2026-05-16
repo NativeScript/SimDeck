@@ -17,12 +17,14 @@ import {
 import { apiUrl, configureSimDeckClient } from "../api/config";
 import {
   bootSimulator,
+  captureSimulatorScreenshot,
   dismissKeyboard,
   launchSimulatorBundle,
   openAppSwitcher,
   openSimulatorUrl,
   pressHome,
   pressSimulatorButton,
+  recordSimulatorScreen,
   rotateDigitalCrown,
   rotateRight,
   simulatorControlSocketUrl,
@@ -266,6 +268,25 @@ function writeStreamTransportQueryParam(transport: StreamTransport) {
     "",
     `${url.pathname}${url.search}${url.hash}`,
   );
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function captureFileBaseName(
+  simulator: SimulatorMetadata,
+  artifact: "Recording" | "Screenshot",
+): string {
+  const safeName = simulator.name.replace(/[^A-Za-z0-9._-]+/g, "-");
+  return `SimDeck ${artifact} - ${safeName || simulator.udid}`;
 }
 
 function simulatorDisplaySize(
@@ -1746,6 +1767,48 @@ export function AppShell({
     }
   }
 
+  async function downloadSimulatorScreenshot(withBezel: boolean) {
+    if (!selectedSimulator) {
+      return;
+    }
+    setLocalError("");
+    try {
+      const blob = await captureSimulatorScreenshot(selectedSimulator.udid, {
+        withBezel,
+      });
+      downloadBlob(
+        blob,
+        `${captureFileBaseName(selectedSimulator, "Screenshot")}${withBezel ? " Bezel" : ""}.png`,
+      );
+    } catch (captureError) {
+      setLocalError(
+        captureError instanceof Error
+          ? captureError.message
+          : "Capture failed.",
+      );
+    }
+  }
+
+  async function downloadSimulatorRecording() {
+    if (!selectedSimulator) {
+      return;
+    }
+    setLocalError("");
+    try {
+      const blob = await recordSimulatorScreen(selectedSimulator.udid, 5);
+      downloadBlob(
+        blob,
+        `${captureFileBaseName(selectedSimulator, "Recording")}.mp4`,
+      );
+    } catch (captureError) {
+      setLocalError(
+        captureError instanceof Error
+          ? captureError.message
+          : "Recording failed.",
+      );
+    }
+  }
+
   function selectedStateFromSimulator(
     simulator: SimulatorMetadata,
     current: SimulatorStateResponse | null,
@@ -2478,6 +2541,12 @@ export function AppShell({
             bootSimulator(udid),
           );
         }}
+        onCaptureScreenshot={() => {
+          void downloadSimulatorScreenshot(false);
+        }}
+        onCaptureScreenshotWithBezel={() => {
+          void downloadSimulatorScreenshot(true);
+        }}
         onChangeSearch={setSearch}
         onDismissKeyboard={() => {
           if (!selectedSimulator) {
@@ -2545,6 +2614,9 @@ export function AppShell({
             await rotateRight(selectedSimulator.udid);
             setRotationQuarterTurns((current) => (current + 1) % 4);
           }, false);
+        }}
+        onRecordScreen={() => {
+          void downloadSimulatorRecording();
         }}
         onStreamEncoderChange={updateStreamEncoder}
         onStreamFpsChange={updateStreamFps}

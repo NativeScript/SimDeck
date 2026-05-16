@@ -393,11 +393,32 @@ impl NativeBridge {
         }
     }
 
-    pub fn screenshot_png(&self, udid: &str) -> Result<Vec<u8>, AppError> {
+    pub fn screenshot_png(&self, udid: &str, include_bezel: bool) -> Result<Vec<u8>, AppError> {
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
         unsafe {
             let mut error = ptr::null_mut();
-            let bytes = ffi::xcw_native_screenshot_png(udid.as_ptr(), &mut error);
+            let bytes = ffi::xcw_native_screenshot_png(udid.as_ptr(), include_bezel, &mut error);
+            if bytes.data.is_null() {
+                return Err(
+                    take_error(error).unwrap_or_else(|| AppError::native("Unknown native error."))
+                );
+            }
+            let data = std::slice::from_raw_parts(bytes.data, bytes.length).to_vec();
+            ffi::xcw_native_free_bytes(bytes);
+            Ok(data)
+        }
+    }
+
+    pub fn screen_recording_mp4(
+        &self,
+        udid: &str,
+        duration_seconds: f64,
+    ) -> Result<Vec<u8>, AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            let bytes =
+                ffi::xcw_native_screen_recording_mp4(udid.as_ptr(), duration_seconds, &mut error);
             if bytes.data.is_null() {
                 return Err(
                     take_error(error).unwrap_or_else(|| AppError::native("Unknown native error."))

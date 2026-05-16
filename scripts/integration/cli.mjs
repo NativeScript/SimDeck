@@ -216,6 +216,37 @@ async function main() {
     },
     { phase: phaseCommandSmoke },
   );
+  const bezeledScreenshotPath = path.join(tempRoot, "screen-bezel.png");
+  await measuredStep(
+    "CLI screenshot with bezel",
+    async () => {
+      simdeckJson([
+        "screenshot",
+        simulatorUDID,
+        "--with-bezel",
+        "--output",
+        bezeledScreenshotPath,
+      ]);
+      assertPng(bezeledScreenshotPath);
+    },
+    { phase: phaseCommandSmoke },
+  );
+  const recordingPath = path.join(tempRoot, "screen-recording.mp4");
+  await measuredStep(
+    "CLI screen recording",
+    async () => {
+      simdeckJson([
+        "record",
+        simulatorUDID,
+        "--seconds",
+        "1",
+        "--output",
+        recordingPath,
+      ]);
+      assertMp4(recordingPath);
+    },
+    { phase: phaseCommandSmoke },
+  );
 
   await measuredStep(
     "CLI pasteboard set",
@@ -1758,10 +1789,23 @@ function assertPng(filePath) {
   assertPngBuffer(fs.readFileSync(filePath));
 }
 
+function assertMp4(filePath) {
+  assertMp4Buffer(fs.readFileSync(filePath));
+}
+
 function assertPngBuffer(buffer) {
   const pngSignature = "89504e470d0a1a0a";
   if (buffer.subarray(0, 8).toString("hex") !== pngSignature) {
     throw new Error("Expected PNG data.");
+  }
+}
+
+function assertMp4Buffer(buffer) {
+  if (
+    buffer.length < 12 ||
+    buffer.subarray(4, 8).toString("ascii") !== "ftyp"
+  ) {
+    throw new Error("Expected MP4 data.");
   }
 }
 

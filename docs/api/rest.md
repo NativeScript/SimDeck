@@ -227,7 +227,8 @@ For app-owned `WKWebView` on iOS 16.4 or newer, the app must set `isInspectable 
 
 | Method | Path                                            | Purpose                                        |
 | ------ | ----------------------------------------------- | ---------------------------------------------- |
-| `GET`  | `/api/simulators/{udid}/screenshot.png`         | PNG screenshot                                 |
+| `GET`  | `/api/simulators/{udid}/screenshot.png`         | PNG screenshot, with `?bezel=true` for chrome  |
+| `POST` | `/api/simulators/{udid}/screen-recording`       | MP4 recording with `{ "seconds": 5 }`          |
 | `GET`  | `/api/simulators/{udid}/pasteboard`             | Get pasteboard text                            |
 | `POST` | `/api/simulators/{udid}/pasteboard`             | Set pasteboard text with `{ "text": "hello" }` |
 | `GET`  | `/api/simulators/{udid}/logs`                   | Recent logs                                    |

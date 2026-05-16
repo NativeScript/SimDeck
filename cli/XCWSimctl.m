@@ -2,10 +2,13 @@
 
 #import <AppKit/AppKit.h>
 
+#import "XCWChromeRenderer.h"
 #import "XCWPrivateSimulatorBooter.h"
 #import "XCWProcessRunner.h"
 
 #import <errno.h>
+#import <math.h>
+#import <signal.h>
 #import <stdlib.h>
 #import <string.h>
 
@@ -21,6 +24,10 @@ static NSString * const XCWSimctlErrorDomain = @"SimDeck.Simctl";
                                    error:(NSError * _Nullable __autoreleasing *)error;
 + (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
                               timeoutSec:(NSTimeInterval)timeoutSec
+                                   error:(NSError * _Nullable __autoreleasing *)error;
++ (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
+                              timeoutSec:(NSTimeInterval)timeoutSec
+                           timeoutSignal:(int)timeoutSignal
                                    error:(NSError * _Nullable __autoreleasing *)error;
 + (nullable NSDictionary *)listJSONPayloadWithError:(NSError * _Nullable __autoreleasing *)error;
 + (NSError *)errorWithDescription:(NSString *)description code:(NSInteger)code;
@@ -623,6 +630,12 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 }
 
 - (nullable NSData *)screenshotPNGForSimulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
+    return [self screenshotPNGForSimulatorUDID:udid includeBezel:NO error:error];
+}
+
+- (nullable NSData *)screenshotPNGForSimulatorUDID:(NSString *)udid
+                                      includeBezel:(BOOL)includeBezel
+                                             error:(NSError * _Nullable __autoreleasing *)error {
     NSString *filename = [NSString stringWithFormat:@"simdeck-%@.png", NSUUID.UUID.UUIDString];
     NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:filename];
     XCWProcessResult *result = [self.class runSimctl:@[@"io", udid, @"screenshot", @"--type=png", path] error:error];
@@ -633,7 +646,17 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
         NSData *data = [NSData dataWithContentsOfFile:path options:0 error:error];
         [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
         if (data.length > 0) {
-            return data;
+            if (!includeBezel) {
+                return data;
+            }
+            NSDictionary *simulator = [self simulatorWithUDID:udid error:error];
+            if (simulator == nil) {
+                return nil;
+            }
+            NSString *deviceName = simulator[@"deviceTypeName"] ?: simulator[@"name"] ?: @"";
+            return [XCWChromeRenderer screenshotPNGDataForDeviceName:deviceName
+                                                       screenPNGData:data
+                                                               error:error];
         }
         if (error != NULL && *error == nil) {
             *error = [self.class errorWithDescription:@"Simulator screenshot command produced an empty PNG." code:13];
@@ -643,6 +666,54 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
     [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
     if (error != NULL) {
         *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"Unable to capture simulator screenshot." code:13];
+    }
+    return nil;
+}
+
+- (nullable NSData *)screenRecordingMP4ForSimulatorUDID:(NSString *)udid
+                                        durationSeconds:(NSTimeInterval)durationSeconds
+                                                  error:(NSError * _Nullable __autoreleasing *)error {
+    if (!isfinite(durationSeconds) || durationSeconds <= 0.0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:@"Screen recording duration must be finite and greater than zero." code:33];
+        }
+        return nil;
+    }
+
+    NSString *filename = [NSString stringWithFormat:@"simdeck-%@.mp4", NSUUID.UUID.UUIDString];
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:filename];
+    XCWProcessResult *result = [self.class runSimctl:@[
+        @"io",
+        udid,
+        @"recordVideo",
+        @"--codec=h264",
+        @"--force",
+        path,
+    ]
+                                          timeoutSec:durationSeconds
+                                       timeoutSignal:SIGINT
+                                               error:error];
+    if (result == nil) {
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        return nil;
+    }
+
+    BOOL expectedStop = result.terminationStatus == 0 || result.terminationStatus == 124 || result.terminationStatus == 130;
+    if (expectedStop) {
+        NSData *data = [NSData dataWithContentsOfFile:path options:0 error:error];
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        if (data.length > 0) {
+            return data;
+        }
+        if (error != NULL && *error == nil) {
+            *error = [self.class errorWithDescription:@"Simulator screen recording command produced an empty MP4." code:34];
+        }
+        return nil;
+    }
+
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    if (error != NULL) {
+        *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"Unable to record simulator screen." code:34];
     }
     return nil;
 }
@@ -863,10 +934,18 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 + (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
                               timeoutSec:(NSTimeInterval)timeoutSec
                                    error:(NSError * _Nullable __autoreleasing *)error {
+    return [self runSimctl:arguments timeoutSec:timeoutSec timeoutSignal:SIGTERM error:error];
+}
+
++ (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
+                              timeoutSec:(NSTimeInterval)timeoutSec
+                           timeoutSignal:(int)timeoutSignal
+                                   error:(NSError * _Nullable __autoreleasing *)error {
     return [XCWProcessRunner runLaunchPath:@"/usr/bin/xcrun"
                                  arguments:[@[@"simctl"] arrayByAddingObjectsFromArray:arguments]
                                  inputData:nil
                                 timeoutSec:timeoutSec
+                             timeoutSignal:timeoutSignal
                                      error:error];
 }
 

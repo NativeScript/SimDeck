@@ -1,4 +1,4 @@
-import { accessTokenFromLocation, apiRequest } from "./client";
+import { accessTokenFromLocation, apiHeaders, apiRequest } from "./client";
 import { apiUrl } from "./config";
 import type {
   ButtonPayload,
@@ -134,4 +134,52 @@ export function rotateLeft(udid: string) {
 
 export function rotateRight(udid: string) {
   return postSimulatorAction(udid, "rotate-right");
+}
+
+async function fetchSimulatorBlob(
+  path: string,
+  options: RequestInit = {},
+): Promise<Blob> {
+  const { headers, ...rest } = options;
+  const response = await fetch(apiUrl(path), {
+    ...rest,
+    headers: apiHeaders(headers),
+  });
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const body = (await response.json()) as { error?: string };
+      throw new Error(
+        body.error ?? `Request failed with status ${response.status}`,
+      );
+    }
+    throw new Error(
+      (await response.text()) ||
+        `Request failed with status ${response.status}`,
+    );
+  }
+  return response.blob();
+}
+
+export function captureSimulatorScreenshot(
+  udid: string,
+  options: { withBezel?: boolean } = {},
+): Promise<Blob> {
+  const params = options.withBezel ? "?bezel=true" : "";
+  return fetchSimulatorBlob(
+    `/api/simulators/${encodeURIComponent(udid)}/screenshot.png${params}`,
+  );
+}
+
+export function recordSimulatorScreen(
+  udid: string,
+  seconds = 5,
+): Promise<Blob> {
+  return fetchSimulatorBlob(
+    `/api/simulators/${encodeURIComponent(udid)}/screen-recording`,
+    {
+      body: JSON.stringify({ seconds }),
+      method: "POST",
+    },
+  );
 }

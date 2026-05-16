@@ -249,6 +249,111 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     return [self PNGDataForPDFAtPath:maskPath scale:1.0 error:error];
 }
 
++ (nullable NSData *)screenshotPNGDataForDeviceName:(NSString *)deviceName
+                                      screenPNGData:(NSData *)screenPNGData
+                                              error:(NSError * _Nullable __autoreleasing *)error {
+    NSDictionary *profile = [self profileForDeviceName:deviceName error:error];
+    if (profile == nil) {
+        return nil;
+    }
+
+    NSData *chromePNGData = [self PNGDataForDeviceName:deviceName includeButtons:YES error:error];
+    if (chromePNGData == nil) {
+        return nil;
+    }
+
+    NSImage *screenImage = [[NSImage alloc] initWithData:screenPNGData];
+    NSImage *chromeImage = [[NSImage alloc] initWithData:chromePNGData];
+    if (screenImage == nil || chromeImage == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                         code:15
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"Unable to decode simulator screenshot or chrome PNG data.",
+            }];
+        }
+        return nil;
+    }
+
+    CGFloat scale = 3.0;
+    CGFloat totalWidth = [self numberValue:profile[@"totalWidth"]];
+    CGFloat totalHeight = [self numberValue:profile[@"totalHeight"]];
+    CGFloat screenX = [self numberValue:profile[@"screenX"]];
+    CGFloat screenY = [self numberValue:profile[@"screenY"]];
+    CGFloat screenWidth = [self numberValue:profile[@"screenWidth"]];
+    CGFloat screenHeight = [self numberValue:profile[@"screenHeight"]];
+    NSInteger pixelWidth = MAX((NSInteger)ceil(totalWidth * scale), 1);
+    NSInteger pixelHeight = MAX((NSInteger)ceil(totalHeight * scale), 1);
+    if (totalWidth <= 0.0 || totalHeight <= 0.0 || screenWidth <= 0.0 || screenHeight <= 0.0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                         code:16
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"Device chrome profile did not include usable screenshot geometry.",
+            }];
+        }
+        return nil;
+    }
+
+    NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+                                                                       pixelsWide:pixelWidth
+                                                                       pixelsHigh:pixelHeight
+                                                                    bitsPerSample:8
+                                                                  samplesPerPixel:4
+                                                                         hasAlpha:YES
+                                                                         isPlanar:NO
+                                                                   colorSpaceName:NSDeviceRGBColorSpace
+                                                                      bytesPerRow:0
+                                                                     bitsPerPixel:32];
+    if (bitmap == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                         code:17
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"Unable to create a bitmap for bezeled screenshot rendering.",
+            }];
+        }
+        return nil;
+    }
+
+    NSGraphicsContext *graphicsContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext setCurrentContext:graphicsContext];
+    graphicsContext.imageInterpolation = NSImageInterpolationHigh;
+    NSRect outputRect = NSMakeRect(0.0, 0.0, pixelWidth, pixelHeight);
+    [[NSColor clearColor] setFill];
+    NSRectFillUsingOperation(outputRect, NSCompositingOperationClear);
+
+    NSRect screenRect = NSMakeRect(screenX * scale,
+                                   pixelHeight - ((screenY + screenHeight) * scale),
+                                   screenWidth * scale,
+                                   screenHeight * scale);
+    NSDictionary *hints = @{ NSImageHintInterpolation: @(NSImageInterpolationHigh) };
+    [screenImage drawInRect:screenRect
+                   fromRect:NSZeroRect
+                  operation:NSCompositingOperationSourceOver
+                   fraction:1.0
+             respectFlipped:NO
+                      hints:hints];
+    [chromeImage drawInRect:outputRect
+                   fromRect:NSZeroRect
+                  operation:NSCompositingOperationSourceOver
+                   fraction:1.0
+             respectFlipped:NO
+                      hints:hints];
+    [NSGraphicsContext restoreGraphicsState];
+
+    NSData *pngData = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    if (pngData.length == 0 && error != NULL) {
+        *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                     code:18
+                                 userInfo:@{
+            NSLocalizedDescriptionKey: @"Unable to encode bezeled simulator screenshot PNG.",
+        }];
+    }
+    return pngData.length > 0 ? pngData : nil;
+}
+
 + (nullable NSDictionary<NSString *, id> *)profileForChromeInfo:(NSDictionary *)chromeInfo
                                                           error:(NSError * _Nullable __autoreleasing *)error {
     NSDictionary *plist = chromeInfo[@"plist"];

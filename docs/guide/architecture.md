@@ -20,7 +20,7 @@ Most user actions follow the same path:
 1. Browser, CLI, or test sends a command to the daemon.
 2. The daemon checks the selected device and starts a warm session when needed.
 3. SimDeck performs the requested simulator or emulator action.
-4. The command returns JSON, a screenshot, logs, or updated stream state.
+4. The command returns JSON, a screenshot, a recording, logs, or updated stream state.
 
 This is why a long-lived daemon feels faster than repeatedly calling lower-level simulator tools.
 
