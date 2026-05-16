@@ -720,7 +720,11 @@ fn proxied_target_port(target_id: &str) -> Result<u16, String> {
 fn metro_devtools_frontend_url(port: u16, entry: &Value, web_socket_debugger_url: &str) -> String {
     let frontend = string_value(entry, "devtoolsFrontendUrl")
         .unwrap_or_else(|| "/debugger-frontend/rn_fusebox.html".to_owned());
-    let (path, query) = split_path_query(&frontend);
+    let path = frontend_path_for_match(&frontend);
+    if is_rozenite_frontend_path(path) {
+        return metro_served_frontend_url(port, entry, &frontend, web_socket_debugger_url);
+    }
+    let (_, query) = split_path_query(&frontend);
     if path.ends_with("/rn_fusebox.html") {
         return local_metro_fusebox_frontend_url(query, web_socket_debugger_url);
     }
@@ -733,16 +737,44 @@ fn metro_devtools_frontend_url(port: u16, entry: &Value, web_socket_debugger_url
     format!("http://{host}{frontend}")
 }
 
-fn websocket_authority(value: &str) -> Option<String> {
-    value
-        .strip_prefix("ws://")
-        .or_else(|| value.strip_prefix("wss://"))
-        .and_then(|rest| rest.split('/').next())
-        .filter(|authority| !authority.is_empty())
-        .map(ToOwned::to_owned)
+fn frontend_path_for_match(frontend: &str) -> &str {
+    let (path, _) = split_path_query(frontend);
+    if let Some(rest) = path
+        .strip_prefix("http://")
+        .or_else(|| path.strip_prefix("https://"))
+    {
+        return rest
+            .find('/')
+            .and_then(|index| rest.get(index..))
+            .unwrap_or("/");
+    }
+    path
 }
 
-fn local_metro_fusebox_frontend_url(query: Option<&str>, web_socket_debugger_url: &str) -> String {
+fn is_rozenite_frontend_path(path: &str) -> bool {
+    path == "/rozenite" || path.starts_with("/rozenite/")
+}
+
+fn metro_served_frontend_url(
+    port: u16,
+    entry: &Value,
+    frontend: &str,
+    web_socket_debugger_url: &str,
+) -> String {
+    let (base, query) = split_path_query(frontend);
+    let base = if base.starts_with("http://") || base.starts_with("https://") {
+        base.to_owned()
+    } else {
+        let host = string_value(entry, "webSocketDebuggerUrl")
+            .and_then(|url| websocket_authority(&url))
+            .unwrap_or_else(|| format!("{DEVTOOLS_HOST}:{port}"));
+        format!("http://{host}{base}")
+    };
+    let query = metro_frontend_query_with_socket(query, web_socket_debugger_url);
+    format!("{base}?{query}")
+}
+
+fn metro_frontend_query_with_socket(query: Option<&str>, web_socket_debugger_url: &str) -> String {
     let socket_param = web_socket_debugger_url
         .trim_start_matches("ws://")
         .trim_start_matches("wss://");
@@ -754,11 +786,29 @@ fn local_metro_fusebox_frontend_url(query: Option<&str>, web_socket_debugger_url
         params.extend(
             query
                 .split('&')
-                .filter(|param| !param.is_empty() && !param.starts_with("ws="))
+                .filter(|param| {
+                    !param.is_empty() && !param.starts_with("ws=") && !param.starts_with("wss=")
+                })
                 .map(ToOwned::to_owned),
         );
     }
-    format!("/chrome-devtools-ui/rn_fusebox.html?{}", params.join("&"))
+    params.join("&")
+}
+
+fn websocket_authority(value: &str) -> Option<String> {
+    value
+        .strip_prefix("ws://")
+        .or_else(|| value.strip_prefix("wss://"))
+        .and_then(|rest| rest.split('/').next())
+        .filter(|authority| !authority.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn local_metro_fusebox_frontend_url(query: Option<&str>, web_socket_debugger_url: &str) -> String {
+    format!(
+        "/chrome-devtools-ui/rn_fusebox.html?{}",
+        metro_frontend_query_with_socket(query, web_socket_debugger_url)
+    )
 }
 
 fn split_path_query(value: &str) -> (&str, Option<&str>) {
@@ -1618,4 +1668,66 @@ fn timestamp_ms() -> f64 {
         .unwrap_or(Duration::ZERO)
         .as_secs_f64()
         * 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metro_devtools_frontend_url_keeps_rozenite_frontend_on_metro() {
+        let entry = json!({
+            "devtoolsFrontendUrl": "/rozenite/rn_fusebox.html?ws=127.0.0.1:8081/inspector/debug&device=ios",
+            "webSocketDebuggerUrl": "ws://127.0.0.1:8081/inspector/debug"
+        });
+
+        let url = metro_devtools_frontend_url(
+            8081,
+            &entry,
+            "ws://127.0.0.1:4310/api/simulators/ABC/devtools/targets/metro-8081-target/socket",
+        );
+
+        assert_eq!(
+            url,
+            "http://127.0.0.1:8081/rozenite/rn_fusebox.html?ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket&device=ios"
+        );
+    }
+
+    #[test]
+    fn metro_devtools_frontend_url_preserves_absolute_rozenite_origin() {
+        let entry = json!({
+            "devtoolsFrontendUrl": "http://localhost:8081/rozenite/rn_fusebox.html?panel=redux&ws=localhost:8081/inspector/debug",
+            "webSocketDebuggerUrl": "ws://127.0.0.1:8081/inspector/debug"
+        });
+
+        let url = metro_devtools_frontend_url(
+            8081,
+            &entry,
+            "ws://simdeck.local:4310/api/simulators/ABC/devtools/targets/metro-8081-target/socket",
+        );
+
+        assert_eq!(
+            url,
+            "http://localhost:8081/rozenite/rn_fusebox.html?ws=simdeck.local%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket&panel=redux"
+        );
+    }
+
+    #[test]
+    fn metro_devtools_frontend_url_keeps_embedded_frontend_for_plain_fusebox() {
+        let entry = json!({
+            "devtoolsFrontendUrl": "/debugger-frontend/rn_fusebox.html?ws=127.0.0.1:8081/inspector/debug&device=ios",
+            "webSocketDebuggerUrl": "ws://127.0.0.1:8081/inspector/debug"
+        });
+
+        let url = metro_devtools_frontend_url(
+            8081,
+            &entry,
+            "ws://127.0.0.1:4310/api/simulators/ABC/devtools/targets/metro-8081-target/socket",
+        );
+
+        assert_eq!(
+            url,
+            "/chrome-devtools-ui/rn_fusebox.html?ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket&device=ios"
+        );
+    }
 }
