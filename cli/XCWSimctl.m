@@ -815,13 +815,18 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
     }
     if (!XCWWaitForTaskExit(task, didStart ? 10.0 : 2.0) && task.running) {
         [task terminate];
-        XCWWaitForTaskExit(task, 2.0);
+        if (!XCWWaitForTaskExit(task, 2.0) && task.running) {
+            kill(task.processIdentifier, SIGKILL);
+            XCWWaitForTaskExit(task, 2.0);
+        }
     }
 
     stdoutHandle.readabilityHandler = nil;
     stderrHandle.readabilityHandler = nil;
-    XCWAppendAvailableData(stdoutHandle, stdoutData);
-    XCWAppendAvailableData(stderrHandle, stderrData);
+    if (!task.running) {
+        XCWAppendAvailableData(stdoutHandle, stdoutData);
+        XCWAppendAvailableData(stderrHandle, stderrData);
+    }
 
     NSError *readError = nil;
     NSData *data = nil;
