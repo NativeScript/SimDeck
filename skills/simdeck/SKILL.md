@@ -1,6 +1,6 @@
 ---
 name: simdeck
-description: Use for simulator lifecycle, app install/launch, live viewing, UI inspection, touch/keyboard automation, screenshots, logs, pasteboard, hardware controls, and repeatable simulator flows.
+description: Use for simulator lifecycle, app install/launch, live viewing, UI inspection, touch/keyboard automation, screenshots, recordings, logs, pasteboard, hardware controls, and repeatable simulator flows.
 ---
 
 # SimDeck Agent Guide
@@ -206,7 +206,10 @@ await simdeck.batch(udid, [
 
 ```bash
 simdeck screenshot <UDID> --output screen.png
+simdeck screenshot <UDID> --with-bezel --output screen-bezel.png
 simdeck screenshot <UDID> --stdout > screen.png
+simdeck record <UDID> --seconds 5 --output screen-recording.mp4
+simdeck record <UDID> --seconds 5 --stdout > screen-recording.mp4
 simdeck logs <UDID> --seconds 30 --limit 200
 simdeck chrome-profile <UDID>
 simdeck processes <UDID>
@@ -215,7 +218,7 @@ simdeck stats <UDID> --watch
 simdeck sample <UDID> --seconds 3
 ```
 
-Use screenshots for still evidence. Use `stats` for simulator app CPU, memory, disk write, network receive/send rates, connections, hang, and crash/termination signals. Use `sample` only when a short CPU stack capture is worth the extra pause. Prefer describe for token-efficient state dumps, if they have enough context.
+Use screenshots for still evidence, `--with-bezel` when the device frame matters, and `record` for short MP4 screen recordings. Use `stats` for simulator app CPU, memory, disk write, network receive/send rates, connections, hang, and crash/termination signals. Use `sample` only when a short CPU stack capture is worth the extra pause. Prefer describe for token-efficient state dumps, if they have enough context.
 
 ## Default Loop
 

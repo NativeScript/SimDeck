@@ -18,6 +18,8 @@ try {
   await sim.tap(0.5, 0.5);
   await sim.waitFor({ label: "Continue" });
   await sim.screenshot();
+  await sim.screenshot({ withBezel: true });
+  await sim.record({ seconds: 5 });
 } finally {
   sim.close();
 }
@@ -37,7 +39,7 @@ try {
 | `typeText()`, `key()`, `keySequence()`          | Text and keyboard input        |
 | `button()`, `home()`, `appSwitcher()`           | System controls                |
 | `tree()`, `query()`, `waitFor()`, `assert()`    | UI state checks                |
-| `screenshot()`, `logs()`                        | Evidence capture               |
+| `screenshot()`, `record()`, `logs()`            | Evidence capture               |
 | `batch()`                                       | Multi-step actions             |
 
 Selectors can match `id`, `label`, `value`, or `type`.

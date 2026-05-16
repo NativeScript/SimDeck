@@ -137,6 +137,8 @@ Useful direct commands:
 ./build/simdeck pasteboard set <udid> "hello"
 ./build/simdeck pasteboard get <udid>
 ./build/simdeck screenshot <udid> --output screen.png
+./build/simdeck screenshot <udid> --with-bezel --output screen-bezel.png
+./build/simdeck record <udid> --seconds 5 --output screen-recording.mp4
 ./build/simdeck describe <udid>
 ./build/simdeck tap <udid> 120 240
 ./build/simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000

@@ -532,16 +532,33 @@ xcw_native_owned_bytes xcw_native_render_screen_mask_png(const char *udid, char 
     }
 }
 
-xcw_native_owned_bytes xcw_native_screenshot_png(const char *udid, char **error_message) {
+xcw_native_owned_bytes xcw_native_screenshot_png(const char *udid, bool include_bezel, char **error_message) {
     @autoreleasepool {
         XCWSimctl *simctl = [[XCWSimctl alloc] init];
         NSError *error = nil;
-        NSData *png = [simctl screenshotPNGForSimulatorUDID:XCWStringFromCString(udid) error:&error];
+        NSData *png = [simctl screenshotPNGForSimulatorUDID:XCWStringFromCString(udid)
+                                               includeBezel:include_bezel
+                                                      error:&error];
         if (png == nil) {
             XCWSetErrorMessage(error_message, error);
             return (xcw_native_owned_bytes){0};
         }
         return XCWOwnedBytesFromData(png);
+    }
+}
+
+xcw_native_owned_bytes xcw_native_screen_recording_mp4(const char *udid, double duration_seconds, char **error_message) {
+    @autoreleasepool {
+        XCWSimctl *simctl = [[XCWSimctl alloc] init];
+        NSError *error = nil;
+        NSData *mp4 = [simctl screenRecordingMP4ForSimulatorUDID:XCWStringFromCString(udid)
+                                                 durationSeconds:duration_seconds
+                                                           error:&error];
+        if (mp4 == nil) {
+            XCWSetErrorMessage(error_message, error);
+            return (xcw_native_owned_bytes){0};
+        }
+        return XCWOwnedBytesFromData(mp4);
     }
 }
 

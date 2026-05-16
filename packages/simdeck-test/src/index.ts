@@ -68,6 +68,15 @@ export type LogsOptions = {
   q?: string;
 };
 
+export type ScreenshotOptions = {
+  bezel?: boolean;
+  withBezel?: boolean;
+};
+
+export type ScreenRecordingOptions = {
+  seconds?: number;
+};
+
 type DeviceMethod<TArgs extends unknown[], TResult> = {
   (udid: string, ...args: TArgs): TResult;
   (...args: TArgs): TResult;
@@ -145,7 +154,8 @@ export type SimDeckSession = {
     [steps: unknown[], continueOnError?: boolean],
     Promise<unknown>
   >;
-  screenshot: DeviceMethod<[], Promise<Buffer>>;
+  screenshot: DeviceMethod<[options?: ScreenshotOptions], Promise<Buffer>>;
+  record: DeviceMethod<[options?: ScreenRecordingOptions], Promise<Buffer>>;
   close(): void;
 };
 
@@ -206,6 +216,12 @@ export async function connect(
       return { udid: args[0], value: args[1] as T, rest: args.slice(2) };
     }
     return { udid: requireUdid(), value: args[0] as T, rest: args.slice(1) };
+  };
+  const resolveOptionalObjectDeviceCall = <T>(args: unknown[]) => {
+    if (typeof args[0] === "string") {
+      return { udid: args[0], options: args[1] as T | undefined };
+    }
+    return { udid: requireUdid(), options: args[0] as T | undefined };
   };
   const session: SimDeckSession = {
     endpoint,
@@ -514,9 +530,34 @@ export async function connect(
         continueOnError,
       });
     },
-    screenshot: (...args: [] | [string]) => {
-      const { udid } = resolveNoArgDeviceCall(args);
-      return requestBuffer(endpoint, simulatorPath(udid, "/screenshot.png"));
+    screenshot: (
+      ...args: [string, ScreenshotOptions?] | [ScreenshotOptions?]
+    ) => {
+      const { udid, options } =
+        resolveOptionalObjectDeviceCall<ScreenshotOptions>(args);
+      const params = new URLSearchParams();
+      if (options?.withBezel ?? options?.bezel) {
+        params.set("bezel", "true");
+      }
+      const query = params.toString();
+      return requestBuffer(
+        endpoint,
+        simulatorPath(udid, `/screenshot.png${query ? `?${query}` : ""}`),
+      );
+    },
+    record: (
+      ...args: [string, ScreenRecordingOptions?] | [ScreenRecordingOptions?]
+    ) => {
+      const { udid, options } =
+        resolveOptionalObjectDeviceCall<ScreenRecordingOptions>(args);
+      return requestBuffer(
+        endpoint,
+        simulatorPath(udid, "/screen-recording"),
+        "POST",
+        {
+          seconds: options?.seconds ?? 5,
+        },
+      );
     },
     close: () => {
       if (options.keepDaemon) {

@@ -119,6 +119,20 @@ static int XCWCreateTemporaryOutputFile(NSString **path, NSError * _Nullable __a
                           inputData:(NSData *)inputData
                          timeoutSec:(NSTimeInterval)timeoutSec
                               error:(NSError * _Nullable __autoreleasing *)error {
+    return [self runLaunchPath:launchPath
+                     arguments:arguments
+                     inputData:inputData
+                    timeoutSec:timeoutSec
+                 timeoutSignal:SIGTERM
+                         error:error];
+}
+
++ (XCWProcessResult *)runLaunchPath:(NSString *)launchPath
+                          arguments:(NSArray<NSString *> *)arguments
+                          inputData:(NSData *)inputData
+                         timeoutSec:(NSTimeInterval)timeoutSec
+                      timeoutSignal:(int)timeoutSignal
+                              error:(NSError * _Nullable __autoreleasing *)error {
     int stdoutFD = -1;
     int stderrFD = -1;
     int stdinPipe[2] = { -1, -1 };
@@ -244,8 +258,10 @@ static int XCWCreateTemporaryOutputFile(NSString **path, NSError * _Nullable __a
         }
         if (hasTimeout && [deadline timeIntervalSinceNow] <= 0) {
             timedOut = YES;
-            kill(pid, SIGTERM);
-            NSDate *killDeadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
+            int signalToSend = timeoutSignal > 0 ? timeoutSignal : SIGTERM;
+            kill(pid, signalToSend);
+            NSTimeInterval graceSeconds = signalToSend == SIGINT ? 10.0 : 2.0;
+            NSDate *killDeadline = [NSDate dateWithTimeIntervalSinceNow:graceSeconds];
             do {
                 waitResult = waitpid(pid, &waitStatus, WNOHANG);
                 if (waitResult == pid || (waitResult < 0 && errno != EINTR)) {

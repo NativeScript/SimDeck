@@ -131,7 +131,10 @@ Use `wait-for` or `assert` steps instead of fixed sleeps when possible.
 
 ```sh
 simdeck screenshot <udid> --output screen.png
+simdeck screenshot <udid> --with-bezel --output screen-bezel.png
 simdeck screenshot <udid> --stdout > screen.png
+simdeck record <udid> --seconds 5 --output screen-recording.mp4
+simdeck record <udid> --seconds 5 --stdout > screen-recording.mp4
 simdeck pasteboard set <udid> "hello"
 simdeck pasteboard get <udid>
 simdeck logs <udid> --seconds 30 --limit 200

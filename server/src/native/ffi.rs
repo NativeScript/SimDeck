@@ -85,6 +85,12 @@ unsafe extern "C" {
     ) -> xcw_native_owned_bytes;
     pub fn xcw_native_screenshot_png(
         udid: *const c_char,
+        include_bezel: bool,
+        error_message: *mut *mut c_char,
+    ) -> xcw_native_owned_bytes;
+    pub fn xcw_native_screen_recording_mp4(
+        udid: *const c_char,
+        duration_seconds: f64,
         error_message: *mut *mut c_char,
     ) -> xcw_native_owned_bytes;
     pub fn xcw_native_recent_logs(

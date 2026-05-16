@@ -31,6 +31,13 @@ NS_ASSUME_NONNULL_BEGIN
                          timeoutSec:(NSTimeInterval)timeoutSec
                               error:(NSError * _Nullable * _Nullable)error;
 
++ (XCWProcessResult *)runLaunchPath:(NSString *)launchPath
+                          arguments:(NSArray<NSString *> *)arguments
+                          inputData:(nullable NSData *)inputData
+                         timeoutSec:(NSTimeInterval)timeoutSec
+                      timeoutSignal:(int)timeoutSignal
+                              error:(NSError * _Nullable * _Nullable)error;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -20,7 +20,7 @@ mod webkit;
 use anyhow::Context;
 use api::routes::{router, AppState};
 use axum::Router;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use config::Config;
 use inspector::{InspectorHub, InspectorRegistryAdvertisement};
 use logs::LogRegistry;
@@ -210,6 +210,17 @@ enum Command {
         output: Option<PathBuf>,
         #[arg(long)]
         stdout: bool,
+        #[arg(long = "with-bezel", visible_alias = "bezel", action = ArgAction::SetTrue)]
+        with_bezel: bool,
+    },
+    Record {
+        udid: String,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        stdout: bool,
+        #[arg(long, default_value_t = 5.0, value_parser = parse_positive_seconds_arg)]
+        seconds: f64,
     },
     Stream {
         udid: String,
@@ -2400,13 +2411,16 @@ fn main() -> anyhow::Result<()> {
             udid,
             output,
             stdout,
+            with_bezel,
         } => {
             let service_url = command_service_url(explicit_server_url.as_deref())?;
+            let query = if with_bezel { "?bezel=true" } else { "" };
             let png = service_get_bytes(
                 &service_url,
                 &format!(
-                    "/api/simulators/{}/screenshot.png",
-                    url_path_component(&udid)
+                    "/api/simulators/{}/screenshot.png{}",
+                    url_path_component(&udid),
+                    query
                 ),
             )?;
             if stdout {
@@ -2422,6 +2436,38 @@ fn main() -> anyhow::Result<()> {
                 fs::write(&output, &png)?;
                 println_json(
                     &serde_json::json!({ "ok": true, "udid": udid, "action": "screenshot", "output": output }),
+                )?;
+            }
+            Ok(())
+        }
+        Command::Record {
+            udid,
+            output,
+            stdout,
+            seconds,
+        } => {
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
+            let mp4 = service_post_bytes(
+                &service_url,
+                &format!(
+                    "/api/simulators/{}/screen-recording",
+                    url_path_component(&udid)
+                ),
+                &serde_json::json!({ "seconds": seconds }),
+            )?;
+            if stdout {
+                io::stdout().write_all(&mp4)?;
+            } else {
+                let output = output.unwrap_or_else(|| default_recording_path(&udid));
+                if let Some(parent) = output
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&output, &mp4)?;
+                println_json(
+                    &serde_json::json!({ "ok": true, "udid": udid, "action": "record", "output": output, "seconds": seconds }),
                 )?;
             }
             Ok(())
@@ -3456,6 +3502,14 @@ fn default_screenshot_path(udid: &str) -> PathBuf {
     PathBuf::from(format!("Simulator Screenshot - {udid} - {timestamp}.png"))
 }
 
+fn default_recording_path(udid: &str) -> PathBuf {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    PathBuf::from(format!("Simulator Recording - {udid} - {timestamp}.mp4"))
+}
+
 fn run_stream_stdout(bridge: &NativeBridge, udid: String, frames: u64) -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
@@ -3640,6 +3694,10 @@ fn service_get_json(server_url: &str, path: &str) -> anyhow::Result<Value> {
 
 fn service_get_bytes(server_url: &str, path: &str) -> anyhow::Result<Vec<u8>> {
     http_request(server_url, "GET", path, None)
+}
+
+fn service_post_bytes(server_url: &str, path: &str, body: &Value) -> anyhow::Result<Vec<u8>> {
+    http_request(server_url, "POST", path, Some(body))
 }
 
 fn service_open_url(server_url: &str, udid: &str, url: &str) -> anyhow::Result<()> {
@@ -5700,6 +5758,17 @@ fn parse_point(value: &str) -> Result<(f64, f64), String> {
     Ok((x, y))
 }
 
+fn parse_positive_seconds_arg(value: &str) -> Result<f64, String> {
+    let seconds = value
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| "seconds must be a number".to_owned())?;
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err("seconds must be finite and greater than zero".to_owned());
+    }
+    Ok(seconds)
+}
+
 fn resolve_touch_point(
     bridge: &NativeBridge,
     udid: &str,
@@ -6093,6 +6162,58 @@ mod tests {
             Cli::try_parse_from(["simdeck", "daemon", "start", "--local-stream-fps", "241"])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn screenshot_accepts_bezel_capture_flag() {
+        let cli = Cli::parse_from(["simdeck", "screenshot", "SIM-1", "--with-bezel"]);
+
+        let Command::Screenshot { with_bezel, .. } = cli.command else {
+            panic!("expected screenshot command");
+        };
+        assert!(with_bezel);
+
+        let cli = Cli::parse_from(["simdeck", "screenshot", "SIM-1", "--bezel"]);
+        let Command::Screenshot { with_bezel, .. } = cli.command else {
+            panic!("expected screenshot command");
+        };
+        assert!(with_bezel);
+    }
+
+    #[test]
+    fn record_accepts_duration_output_and_stdout() {
+        let cli = Cli::parse_from([
+            "simdeck",
+            "record",
+            "SIM-1",
+            "--seconds",
+            "2.5",
+            "--output",
+            "capture.mp4",
+        ]);
+
+        let Command::Record {
+            seconds,
+            output,
+            stdout,
+            ..
+        } = cli.command
+        else {
+            panic!("expected record command");
+        };
+        assert_eq!(seconds, 2.5);
+        assert_eq!(output, Some(PathBuf::from("capture.mp4")));
+        assert!(!stdout);
+
+        let cli = Cli::parse_from(["simdeck", "record", "SIM-1", "--stdout"]);
+        let Command::Record {
+            seconds, stdout, ..
+        } = cli.command
+        else {
+            panic!("expected record command");
+        };
+        assert_eq!(seconds, 5.0);
+        assert!(stdout);
     }
 
     #[test]

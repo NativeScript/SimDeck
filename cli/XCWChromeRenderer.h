@@ -15,6 +15,9 @@ NS_ASSUME_NONNULL_BEGIN
                                           error:(NSError * _Nullable * _Nullable)error;
 + (nullable NSData *)screenMaskPNGDataForDeviceName:(NSString *)deviceName
                                               error:(NSError * _Nullable * _Nullable)error;
++ (nullable NSData *)screenshotPNGDataForDeviceName:(NSString *)deviceName
+                                      screenPNGData:(NSData *)screenPNGData
+                                              error:(NSError * _Nullable * _Nullable)error;
 + (nullable NSDictionary<NSString *, id> *)profileForDeviceName:(NSString *)deviceName
                                                           error:(NSError * _Nullable * _Nullable)error;
 

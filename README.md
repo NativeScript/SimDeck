@@ -130,6 +130,8 @@ simdeck toggle-appearance <udid>
 simdeck pasteboard set <udid> "hello"
 simdeck pasteboard get <udid>
 simdeck screenshot <udid> --output screen.png
+simdeck screenshot <udid> --with-bezel --output screen-bezel.png
+simdeck record <udid> --seconds 5 --output screen-recording.mp4
 simdeck stream <udid> --frames 120 > stream.h264
 simdeck describe <udid>
 simdeck describe <udid> --format agent --max-depth 4
@@ -206,6 +208,8 @@ try {
   await sim.tap(0.5, 0.5);
   await sim.waitFor({ label: "Continue" });
   await sim.screenshot();
+  await sim.screenshot({ withBezel: true });
+  await sim.record({ seconds: 5 });
 } finally {
   sim.close();
 }

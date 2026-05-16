@@ -48,6 +48,12 @@ export async function connect(options = {}) {
     }
     return { udid: requireUdid(), value: args[0], rest: args.slice(1) };
   };
+  const resolveOptionalObjectDeviceCall = (args) => {
+    if (typeof args[0] === "string") {
+      return { udid: args[0], options: args[1] };
+    }
+    return { udid: requireUdid(), options: args[0] };
+  };
   const session = {
     endpoint,
     pid: result.pid,
@@ -311,8 +317,27 @@ export async function connect(options = {}) {
       });
     },
     screenshot: (...args) => {
-      const { udid } = resolveNoArgDeviceCall(args);
-      return requestBuffer(endpoint, simulatorPath(udid, "/screenshot.png"));
+      const { udid, options } = resolveOptionalObjectDeviceCall(args);
+      const params = new URLSearchParams();
+      if (options?.withBezel ?? options?.bezel) {
+        params.set("bezel", "true");
+      }
+      const query = params.toString();
+      return requestBuffer(
+        endpoint,
+        simulatorPath(udid, `/screenshot.png${query ? `?${query}` : ""}`),
+      );
+    },
+    record: (...args) => {
+      const { udid, options } = resolveOptionalObjectDeviceCall(args);
+      return requestBuffer(
+        endpoint,
+        simulatorPath(udid, "/screen-recording"),
+        "POST",
+        {
+          seconds: options?.seconds ?? 5,
+        },
+      );
     },
     close: () => {
       if (options.keepDaemon) {

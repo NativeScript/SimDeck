@@ -9,7 +9,7 @@ Run `simdeck` from your project. It starts a local server, serves a browser UI, 
 - View a live iOS Simulator or Android emulator in a browser.
 - Tap, swipe, type, press hardware buttons, rotate, and open URLs.
 - Install, launch, uninstall, boot, shut down, and erase devices.
-- Capture screenshots, logs, pasteboard text, and accessibility trees.
+- Capture screenshots, recordings, logs, pasteboard text, and accessibility trees.
 - Inspect app UI through built-in accessibility or optional in-app inspectors.
 - Write JS/TS automation with `simdeck/test`.
 - Share a paired browser session over your LAN.

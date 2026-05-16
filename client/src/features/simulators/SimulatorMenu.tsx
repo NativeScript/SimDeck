@@ -23,6 +23,8 @@ interface SimulatorMenuProps {
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
   onBoot: () => void;
+  onCaptureScreenshot: () => void;
+  onCaptureScreenshotWithBezel: () => void;
   onChangeSearch: (value: string) => void;
   onCloseMenu: () => void;
   onDismissKeyboard: () => void;
@@ -33,6 +35,7 @@ interface SimulatorMenuProps {
   onOpenNewSimulator: () => void;
   onOpenUrlPrompt: () => void;
   onRotateRight: () => void;
+  onRecordScreen: () => void;
   onShutdown: () => void;
   onStreamEncoderChange: (encoder: StreamEncoder) => void;
   onStreamFpsChange: (fps: StreamFps) => void;
@@ -62,6 +65,8 @@ export function SimulatorMenu({
   menuOpen,
   menuRef,
   onBoot,
+  onCaptureScreenshot,
+  onCaptureScreenshotWithBezel,
   onChangeSearch,
   onCloseMenu,
   onDismissKeyboard,
@@ -72,6 +77,7 @@ export function SimulatorMenu({
   onOpenNewSimulator,
   onOpenUrlPrompt,
   onRotateRight,
+  onRecordScreen,
   onShutdown,
   onStreamEncoderChange,
   onStreamFpsChange,
@@ -279,6 +285,33 @@ export function SimulatorMenu({
                 </button>
                 <button className="menu-action" onClick={onOpenBundlePrompt}>
                   Launch Bundle…
+                </button>
+                <button
+                  className="menu-action"
+                  onClick={() => {
+                    onCaptureScreenshot();
+                    onCloseMenu();
+                  }}
+                >
+                  Screenshot
+                </button>
+                <button
+                  className="menu-action"
+                  onClick={() => {
+                    onCaptureScreenshotWithBezel();
+                    onCloseMenu();
+                  }}
+                >
+                  Screenshot With Bezel
+                </button>
+                <button
+                  className="menu-action"
+                  onClick={() => {
+                    onRecordScreen();
+                    onCloseMenu();
+                  }}
+                >
+                  Record 5s Video
                 </button>
                 <button
                   className="menu-action mobile-menu-action"
