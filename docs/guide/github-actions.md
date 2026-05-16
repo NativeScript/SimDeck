@@ -192,5 +192,5 @@ Supported quality values include `tiny`, `low`, `economy`, `fast`, `smooth`, `ba
 - Picks or creates an iOS Simulator or Android emulator.
 - Downloads the app artifact for the PR head commit.
 - Installs and launches the app.
-- Posts a browser URL back to the pull request after the simulator or emulator is booted.
+- Posts a browser URL back to the pull request after the simulator or emulator is booted. The iOS action waits until the public URL can load the selected booted simulator from `/api/simulators`.
 - Stops after the configured keepalive window.
