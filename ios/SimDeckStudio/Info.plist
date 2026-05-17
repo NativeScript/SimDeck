@@ -55,8 +55,12 @@
 	<array>
 		<string>_simdeck._tcp</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>SimDeck uses WebRTC to connect to simulator streams. Camera access is only used for WebRTC features that send video from this device.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>SimDeck discovers and connects to simulator streams on your local network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>SimDeck uses WebRTC to connect to simulator streams. Microphone access is only used for WebRTC features that send audio from this device.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
