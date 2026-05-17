@@ -102,6 +102,15 @@ npm run package:vscode
 
 This now builds the Rust server in `server/` and copies the resulting binary to `build/simdeck`.
 
+Codex worktrees can use the checked-in local environment config at
+`.codex/local-environment.toml`. Its setup runs `npm run codex:setup`, which
+hydrates root/client `node_modules` and `server/target` from the shared cache
+under `~/.cache/simdeck/codex-worktree-cache` or from another SimDeck checkout
+before falling back to `npm ci` for missing package installs and ensuring
+Homebrew `pkgconf`/`x264` are available for native builds. Its Run action
+executes `npm run codex:run`, which builds the CLI and client, saves fresh
+caches, and restarts the workspace-local daemon.
+
 Run the local daemon:
 
 ```sh

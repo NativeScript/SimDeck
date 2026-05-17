@@ -138,6 +138,40 @@ npx skills add NativeScript/SimDeck --skill simdeck -a codex -g
 
 The npm postinstall message also prints this command after a global install.
 
+## Codex local worktrees
+
+This repo includes a Codex local environment at
+`.codex/local-environment.toml`. Use it when creating Codex worktrees for
+SimDeck. The setup script runs:
+
+```sh
+npm run codex:setup
+```
+
+That hydrates the root `node_modules`, `client/node_modules`, and
+`server/target` from `~/.cache/simdeck/codex-worktree-cache` or a matching
+existing SimDeck checkout. If either `node_modules` directory is still missing,
+it falls back to `npm ci` for that package so lockfiles stay unchanged. On
+macOS it also ensures the Homebrew `pkgconf` and `x264` packages are available
+for the native Rust build. Set
+`SIMDECK_CODEX_SKIP_BREW=1` if you want setup to report missing Homebrew
+packages instead of installing them.
+
+The cleanup script saves fresh caches with:
+
+```sh
+npm run codex:cache:save
+```
+
+The environment also exposes a **Build and Restart Daemon** Run action:
+
+```sh
+npm run codex:run
+```
+
+It builds the Rust CLI and React client, saves the refreshed caches, and runs
+`./build/simdeck daemon restart` for the current workspace.
+
 ## Releasing
 
 Releases are published from the `Release` GitHub Actions workflow at
