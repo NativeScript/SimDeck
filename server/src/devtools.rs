@@ -216,6 +216,7 @@ pub fn build_target(
 pub async fn discover_external_devtools_targets(
     udid: &str,
     http_origin: Option<&str>,
+    access_token: Option<&str>,
     simulator_name: Option<&str>,
     simulator_device_type_name: Option<&str>,
 ) -> (Vec<ChromeDevToolsTarget>, Vec<String>) {
@@ -264,7 +265,7 @@ pub async fn discover_external_devtools_targets(
             if !metro_target_matches_simulator(entry, simulator_name, simulator_device_type_name) {
                 continue;
             }
-            let target = build_metro_target(udid, http_origin, port, entry);
+            let target = build_metro_target(udid, http_origin, access_token, port, entry);
             if seen_ids.insert(target.id.clone()) {
                 targets.push(target);
             }
@@ -309,7 +310,7 @@ pub async fn proxied_websocket_url_for_target(target_id: &str) -> Result<String,
     })?;
     for entry in entries {
         let target = if target_id.starts_with("metro-") {
-            build_metro_target("", None, port, entry)
+            build_metro_target("", None, None, port, entry)
         } else if target_id.starts_with("cdp-") {
             let Some(target) = build_chrome_inspector_target("", None, port, entry) else {
                 continue;
@@ -600,6 +601,7 @@ fn is_preferred_react_native_metro_target(entry: &Value) -> bool {
 fn build_metro_target(
     udid: &str,
     http_origin: Option<&str>,
+    access_token: Option<&str>,
     port: u16,
     entry: &Value,
 ) -> ChromeDevToolsTarget {
@@ -612,6 +614,7 @@ fn build_metro_target(
     let description = string_value(entry, "description")
         .unwrap_or_else(|| "React Native Metro DevTools target".to_owned());
     let web_socket_path = format!("/api/simulators/{udid}/devtools/targets/{id}/socket");
+    let web_socket_path = websocket_path_with_access_token(web_socket_path, access_token);
     let web_socket_debugger_url = websocket_url(http_origin.unwrap_or(""), &web_socket_path);
     let devtools_frontend_url = metro_devtools_frontend_url(port, entry, &web_socket_debugger_url);
     let app_name = app_id.clone().or_else(|| Some(title.clone()));
@@ -718,10 +721,11 @@ fn proxied_target_port(target_id: &str) -> Result<u16, String> {
 }
 
 fn metro_devtools_frontend_url(port: u16, entry: &Value, web_socket_debugger_url: &str) -> String {
-    let frontend = string_value(entry, "devtoolsFrontendUrl")
-        .unwrap_or_else(|| "/debugger-frontend/rn_fusebox.html".to_owned());
+    let Some(frontend) = string_value(entry, "devtoolsFrontendUrl") else {
+        return local_metro_fusebox_frontend_url(None, web_socket_debugger_url);
+    };
     let path = frontend_path_for_match(&frontend);
-    if is_rozenite_frontend_path(path) {
+    if is_metro_hosted_react_native_frontend_path(path) {
         return metro_served_frontend_url(port, entry, &frontend, web_socket_debugger_url);
     }
     let (_, query) = split_path_query(&frontend);
@@ -751,8 +755,11 @@ fn frontend_path_for_match(frontend: &str) -> &str {
     path
 }
 
-fn is_rozenite_frontend_path(path: &str) -> bool {
-    path == "/rozenite" || path.starts_with("/rozenite/")
+fn is_metro_hosted_react_native_frontend_path(path: &str) -> bool {
+    path == "/rozenite"
+        || path.starts_with("/rozenite/")
+        || path == "/debugger-frontend"
+        || path.starts_with("/debugger-frontend/")
 }
 
 fn metro_served_frontend_url(
@@ -802,6 +809,20 @@ fn websocket_authority(value: &str) -> Option<String> {
         .and_then(|rest| rest.split('/').next())
         .filter(|authority| !authority.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn websocket_path_with_access_token(path: String, access_token: Option<&str>) -> String {
+    let Some(access_token) = access_token
+        .map(str::trim)
+        .filter(|access_token| !access_token.is_empty())
+    else {
+        return path;
+    };
+    let separator = if path.contains('?') { '&' } else { '?' };
+    format!(
+        "{path}{separator}simdeckToken={}",
+        percent_encode_query_component(access_token)
+    )
 }
 
 fn local_metro_fusebox_frontend_url(query: Option<&str>, web_socket_debugger_url: &str) -> String {
@@ -1713,7 +1734,7 @@ mod tests {
     }
 
     #[test]
-    fn metro_devtools_frontend_url_keeps_embedded_frontend_for_plain_fusebox() {
+    fn metro_devtools_frontend_url_keeps_explicit_fusebox_frontend_on_metro() {
         let entry = json!({
             "devtoolsFrontendUrl": "/debugger-frontend/rn_fusebox.html?ws=127.0.0.1:8081/inspector/debug&device=ios",
             "webSocketDebuggerUrl": "ws://127.0.0.1:8081/inspector/debug"
@@ -1727,7 +1748,49 @@ mod tests {
 
         assert_eq!(
             url,
-            "/chrome-devtools-ui/rn_fusebox.html?ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket&device=ios"
+            "http://127.0.0.1:8081/debugger-frontend/rn_fusebox.html?ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket&device=ios"
         );
+    }
+
+    #[test]
+    fn metro_devtools_frontend_url_uses_embedded_frontend_when_metro_omits_frontend() {
+        let entry = json!({
+            "webSocketDebuggerUrl": "ws://127.0.0.1:8081/inspector/debug"
+        });
+
+        let url = metro_devtools_frontend_url(
+            8081,
+            &entry,
+            "ws://127.0.0.1:4310/api/simulators/ABC/devtools/targets/metro-8081-target/socket",
+        );
+
+        assert_eq!(
+            url,
+            "/chrome-devtools-ui/rn_fusebox.html?ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket"
+        );
+    }
+
+    #[test]
+    fn build_metro_target_adds_access_token_to_proxied_socket() {
+        let entry = json!({
+            "id": "target-1",
+            "devtoolsFrontendUrl": "/debugger-frontend/rn_fusebox.html?ws=127.0.0.1:8081/inspector/debug",
+            "webSocketDebuggerUrl": "ws://127.0.0.1:8081/inspector/debug"
+        });
+
+        let target = build_metro_target(
+            "ABC",
+            Some("http://127.0.0.1:4310"),
+            Some("secret token"),
+            8081,
+            &entry,
+        );
+
+        assert!(target.web_socket_debugger_url.ends_with(
+            "/api/simulators/ABC/devtools/targets/metro-8081-target-1/socket?simdeckToken=secret%20token"
+        ));
+        assert!(target.devtools_frontend_url.contains(
+            "ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target-1%2Fsocket%3FsimdeckToken%3Dsecret%2520token"
+        ));
     }
 }
