@@ -152,7 +152,11 @@ final class AppModel {
                     presentPairingOnAuth: false
                 )
                 isAutoConnecting = false
-                hasAutoConnected = connected
+                if connected {
+                    hasAutoConnected = true
+                } else {
+                    await autoConnectToAvailableEndpointIfNeeded()
+                }
             }
         }
         discovery.start()
@@ -762,22 +766,43 @@ final class AppModel {
     }
 
     private func autoConnectIfNeeded(_ endpoint: SimDeckEndpoint) async {
-        let connectionEndpoint = endpointWithReusableToken(endpoint)
-        guard !connectionEndpoint.requiresPairing || connectionEndpoint.token?.nilIfBlank != nil else {
-            return
-        }
         guard !hasAutoConnected, !isAutoConnecting, self.endpoint == nil, authEndpoint == nil else { return }
+        await autoConnectToAvailableEndpointIfNeeded(preferredEndpoint: endpoint)
+    }
+
+    private func autoConnectToAvailableEndpointIfNeeded(preferredEndpoint: SimDeckEndpoint? = nil) async {
+        guard !hasAutoConnected, !isAutoConnecting, self.endpoint == nil, authEndpoint == nil else { return }
+        let candidates = autoConnectCandidates(preferredEndpoint: preferredEndpoint)
+        guard !candidates.isEmpty else { return }
+
         isAutoConnecting = true
-        let connected = await connect(
-            connectionEndpoint,
-            autoStart: false,
-            saveEndpoint: false,
-            presentPairingOnAuth: false
-        )
+        var connected = false
+        for candidate in candidates {
+            connected = await connect(
+                candidate,
+                autoStart: false,
+                saveEndpoint: false,
+                presentPairingOnAuth: false
+            )
+            if connected {
+                break
+            }
+        }
         isAutoConnecting = false
         if connected {
             hasAutoConnected = true
         }
+    }
+
+    private func autoConnectCandidates(preferredEndpoint: SimDeckEndpoint?) -> [SimDeckEndpoint] {
+        let orderedEndpoints = [preferredEndpoint].compactMap(\.self)
+            + discovery.endpoints
+            + savedEndpoints
+        return uniqued(orderedEndpoints)
+            .map(endpointWithReusableToken)
+            .filter { endpoint in
+                !endpoint.requiresPairing || endpoint.token?.nilIfBlank != nil
+            }
     }
 
     private func isCurrentStreamRequest(_ generation: Int, simulatorID: String) -> Bool {
