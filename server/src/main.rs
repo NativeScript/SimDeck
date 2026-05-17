@@ -1494,6 +1494,10 @@ fn render_qr_code(value: &str) -> anyhow::Result<String> {
         .build())
 }
 
+fn print_pair_progress(message: impl AsRef<str>) {
+    eprintln!("simdeck pair: {}", message.as_ref());
+}
+
 fn wait_for_daemon(metadata: &DaemonMetadata, timeout: Duration) -> anyhow::Result<()> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -1728,7 +1732,7 @@ fn restart_detached_daemon(options: DaemonLaunchOptions) -> anyhow::Result<()> {
     start_detached_daemon(options)
 }
 
-fn pair_global_service(
+struct PairGlobalServiceOptions {
     port: Option<u16>,
     bind: IpAddr,
     advertise_host: Option<String>,
@@ -1738,16 +1742,43 @@ fn pair_global_service(
     stream_quality: Option<StreamQualityProfileArg>,
     local_stream_fps: Option<u32>,
     json: bool,
-) -> anyhow::Result<()> {
+}
+
+fn pair_global_service(options: PairGlobalServiceOptions) -> anyhow::Result<()> {
+    let PairGlobalServiceOptions {
+        port,
+        bind,
+        advertise_host,
+        client_root,
+        video_codec,
+        low_latency,
+        stream_quality,
+        local_stream_fps,
+        json,
+    } = options;
+
+    if port.is_none() {
+        print_pair_progress("checking the installed service port");
+    }
     let port = match port {
         Some(port) => port,
         None => service::installed_port()?.unwrap_or(choose_daemon_port_for_bind(4310, bind)?),
     };
+    print_pair_progress(format!("using port {port}"));
+
+    print_pair_progress("detecting LAN and Tailscale addresses");
     let advertise_host = advertise_host.or_else(|| {
         detect_lan_ip()
             .or_else(detect_tailscale_ip)
             .map(|ip| ip.to_string())
     });
+    if let Some(host) = advertise_host.as_deref() {
+        print_pair_progress(format!("advertising {host}:{port}"));
+    } else {
+        print_pair_progress("no LAN or Tailscale address detected; local pairing only");
+    }
+
+    print_pair_progress("starting the global SimDeck service");
     let result = service::pair(ServiceOptions {
         port,
         bind,
@@ -1760,8 +1791,16 @@ fn pair_global_service(
         access_token: None,
         pairing_code: None,
     })?;
+    print_pair_progress(format!(
+        "installed {}; logs: {}, {}",
+        result.service,
+        result.stdout_log.display(),
+        result.stderr_log.display()
+    ));
     let target = PairingTarget::from_service(result)?;
+    print_pair_progress(format!("waiting for service health at {}", target.http_url));
     wait_for_pairing_target(&target, Duration::from_secs(15))?;
+    print_pair_progress("service is ready; rendering pairing QR");
     print_pairing_result(&target, true, json)
 }
 
@@ -2335,7 +2374,7 @@ fn main() -> anyhow::Result<()> {
             stream_quality,
             local_stream_fps,
             json,
-        } => pair_global_service(
+        } => pair_global_service(PairGlobalServiceOptions {
             port,
             bind,
             advertise_host,
@@ -2345,7 +2384,7 @@ fn main() -> anyhow::Result<()> {
             stream_quality,
             local_stream_fps,
             json,
-        ),
+        }),
         Command::Daemon { command } => match command {
             DaemonCommand::Start {
                 port,
