@@ -1,0 +1,460 @@
+import Foundation
+
+enum EndpointSource: String, Codable, CaseIterable, Sendable {
+    case bonjour
+    case lan
+    case tailscale
+    case manual
+    case studioLink
+    case recent
+
+    var label: String {
+        switch self {
+        case .bonjour: "Bonjour"
+        case .lan: "LAN"
+        case .tailscale: "Tailscale"
+        case .manual: "Manual"
+        case .studioLink: "Studio"
+        case .recent: "Recent"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .bonjour: "dot.radiowaves.left.and.right"
+        case .lan: "network"
+        case .tailscale: "point.3.connected.trianglepath.dotted"
+        case .manual: "link"
+        case .studioLink: "cloud"
+        case .recent: "clock"
+        }
+    }
+}
+
+struct SimDeckEndpoint: Identifiable, Hashable, Codable, Sendable {
+    var id: String { baseURL.absoluteString }
+
+    var name: String
+    var baseURL: URL
+    var source: EndpointSource
+    var token: String?
+    var requiresPairing: Bool
+    var preferredSimulatorID: String?
+
+    init(
+        name: String,
+        baseURL: URL,
+        source: EndpointSource,
+        token: String? = nil,
+        requiresPairing: Bool = false,
+        preferredSimulatorID: String? = nil
+    ) {
+        self.name = name
+        self.baseURL = baseURL.normalizedSimDeckBaseURL()
+        self.source = source
+        self.token = token?.nilIfBlank
+        self.requiresPairing = requiresPairing
+        self.preferredSimulatorID = preferredSimulatorID?.nilIfBlank
+    }
+}
+
+struct SimulatorMetadata: Identifiable, Hashable, Decodable, Sendable {
+    var id: String { udid }
+
+    let udid: String
+    let name: String
+    let platform: String?
+    let runtimeIdentifier: String?
+    let runtimeName: String?
+    let deviceTypeIdentifier: String?
+    let deviceTypeName: String?
+    let isBooted: Bool
+    let android: AndroidSimulatorInfo?
+    let privateDisplay: PrivateDisplayInfo?
+
+    var subtitle: String {
+        [runtimeName, deviceTypeName]
+            .compactMap(\.self)
+            .filter { !$0.isEmpty }
+            .joined(separator: " - ")
+    }
+
+    var systemImage: String {
+        let metadata = [
+            platform,
+            runtimeIdentifier,
+            runtimeName,
+            deviceTypeIdentifier,
+            deviceTypeName,
+            name
+        ]
+        .compactMap { $0?.lowercased() }
+        .joined(separator: " ")
+
+        if metadata.contains("apple-tv") || metadata.contains("apple tv") || metadata.contains("tvos") {
+            return "appletv"
+        }
+        if metadata.contains("apple-watch") || metadata.contains("apple watch") || metadata.contains("watchos") {
+            return "applewatch"
+        }
+        if metadata.contains("ipad") {
+            return "ipad"
+        }
+        if metadata.contains("vision") || metadata.contains("xros") {
+            return "visionpro"
+        }
+        if metadata.contains("mac") {
+            return "macbook"
+        }
+        if metadata.contains("android") || metadata.contains("pixel") {
+            return "rectangle.portrait"
+        }
+        return "iphone.gen3"
+    }
+}
+
+struct AndroidSimulatorInfo: Hashable, Decodable, Sendable {
+    let avdName: String?
+    let grpcPort: Int?
+    let serial: String?
+}
+
+struct PrivateDisplayInfo: Hashable, Decodable, Sendable {
+    let displayReady: Bool
+    let displayStatus: String
+    let displayWidth: Int
+    let displayHeight: Int
+}
+
+struct StreamDiagnostics: Hashable, Sendable {
+    var codec: String = ""
+    var receivedPackets: UInt64 = 0
+    var decodedFrames: UInt64 = 0
+    var droppedFrames: UInt64 = 0
+    var packetsLost: UInt64 = 0
+    var latestFrameGapMs: Double = 0
+    var decodedFps: Double = 0
+    var renderedFps: Double = 0
+    var selectedCandidatePair: String = ""
+    var timestamp = Date()
+
+    init() {}
+
+    init(stats: [String: Any]) {
+        codec = stats["codec"] as? String ?? ""
+        receivedPackets = StreamDiagnostics.uintValue(stats["receivedPackets"])
+        decodedFrames = StreamDiagnostics.uintValue(stats["decodedFrames"])
+        droppedFrames = StreamDiagnostics.uintValue(stats["droppedFrames"])
+        packetsLost = StreamDiagnostics.uintValue(stats["packetsLost"])
+        latestFrameGapMs = StreamDiagnostics.doubleValue(stats["latestFrameGapMs"])
+        decodedFps = StreamDiagnostics.doubleValue(stats["decodedFps"])
+        renderedFps = StreamDiagnostics.doubleValue(stats["appFps"])
+        selectedCandidatePair = stats["selectedCandidatePair"] as? String ?? ""
+        timestamp = Date()
+    }
+
+    private static func uintValue(_ value: Any?) -> UInt64 {
+        if let value = value as? UInt64 {
+            return value
+        }
+        if let value = value as? UInt {
+            return UInt64(value)
+        }
+        if let value = value as? Int {
+            return UInt64(max(value, 0))
+        }
+        if let value = value as? NSNumber {
+            return value.uint64Value
+        }
+        return 0
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double {
+        if let value = value as? Double {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.doubleValue
+        }
+        return 0
+    }
+}
+
+struct ChromeProfile: Hashable, Decodable, Sendable {
+    let totalWidth: Double
+    let totalHeight: Double
+    let screenX: Double
+    let screenY: Double
+    let screenWidth: Double
+    let screenHeight: Double
+    let cornerRadius: Double
+    let chromeStyle: String?
+    let hasScreenMask: Bool?
+    let buttons: [ChromeButtonProfile]?
+}
+
+struct ChromeButtonProfile: Hashable, Decodable, Sendable {
+    let name: String
+    let label: String?
+    let type: String?
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+    let usagePage: Int?
+    let usage: Int?
+    let onTop: Bool?
+}
+
+struct SimulatorsResponse: Decodable, Sendable {
+    let simulators: [SimulatorMetadata]
+}
+
+struct SimulatorDeviceTypeOption: Identifiable, Hashable, Decodable, Sendable {
+    var id: String { identifier }
+
+    let identifier: String
+    let name: String
+    let productFamily: String?
+    let supportedRuntimeIdentifiers: [String]?
+}
+
+struct SimulatorRuntimeOption: Identifiable, Hashable, Decodable, Sendable {
+    var id: String { identifier }
+
+    let identifier: String
+    let name: String
+    let platform: String?
+    let isAvailable: Bool?
+    let supportedDeviceTypeIdentifiers: [String]?
+}
+
+struct AndroidEmulatorDeviceTypeOption: Identifiable, Hashable, Decodable, Sendable {
+    var id: String { identifier }
+
+    let identifier: String
+    let name: String
+    let oem: String?
+    let tag: String?
+}
+
+struct AndroidEmulatorSystemImageOption: Identifiable, Hashable, Decodable, Sendable {
+    var id: String { identifier }
+
+    let identifier: String
+    let name: String
+    let description: String?
+    let apiLevel: Int?
+    let tag: String?
+    let abi: String?
+}
+
+struct AndroidEmulatorCreateOptions: Hashable, Decodable, Sendable {
+    let deviceTypes: [AndroidEmulatorDeviceTypeOption]
+    let systemImages: [AndroidEmulatorSystemImageOption]
+    let unavailableReason: String?
+}
+
+struct SimulatorCreateOptionsResponse: Hashable, Decodable, Sendable {
+    let deviceTypes: [SimulatorDeviceTypeOption]
+    let runtimes: [SimulatorRuntimeOption]
+    let android: AndroidEmulatorCreateOptions?
+}
+
+struct CreatePairedWatchRequest: Encodable, Hashable, Sendable {
+    let name: String
+    let deviceTypeIdentifier: String
+    let runtimeIdentifier: String?
+}
+
+struct CreateSimulatorRequest: Encodable, Hashable, Sendable {
+    let platform: String?
+    let name: String
+    let deviceTypeIdentifier: String
+    let runtimeIdentifier: String?
+    let pairedWatch: CreatePairedWatchRequest?
+}
+
+struct CreateSimulatorResponse: Decodable, Sendable {
+    let ok: Bool
+    let created: CreatedSimulatorInfo
+    let simulator: SimulatorMetadata
+    let pairedWatchSimulator: SimulatorMetadata?
+}
+
+struct CreatedSimulatorInfo: Decodable, Sendable {
+    let udid: String
+    let pairedWatchUDID: String?
+}
+
+struct HealthResponse: Decodable, Sendable {
+    let ok: Bool
+    let httpPort: Int?
+    let videoCodec: String?
+    let realtimeStream: Bool?
+    let webRtc: WebRTCConfigurationResponse?
+}
+
+struct WebRTCConfigurationResponse: Decodable, Sendable {
+    let iceServers: [IceServer]?
+    let iceTransportPolicy: String?
+}
+
+struct IceServer: Hashable, Decodable, Sendable {
+    let urls: [String]
+    let username: String?
+    let credential: String?
+
+    enum CodingKeys: String, CodingKey {
+        case urls
+        case username
+        case credential
+    }
+
+    init(urls: [String], username: String? = nil, credential: String? = nil) {
+        self.urls = urls
+        self.username = username
+        self.credential = credential
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let urls = try? container.decode([String].self, forKey: .urls) {
+            self.urls = urls
+        } else {
+            self.urls = [try container.decode(String.self, forKey: .urls)]
+        }
+        username = try container.decodeIfPresent(String.self, forKey: .username)
+        credential = try container.decodeIfPresent(String.self, forKey: .credential)
+    }
+}
+
+struct WebRTCVideoMetadata: Decodable, Sendable {
+    let width: Int
+    let height: Int
+}
+
+struct WebRTCAnswerPayload: Decodable, Sendable {
+    let sdp: String
+    let type: String
+    let video: WebRTCVideoMetadata?
+}
+
+enum StreamEncoder: String, CaseIterable, Codable, Hashable, Sendable {
+    case auto
+    case hardware
+    case software
+
+    var label: String {
+        switch self {
+        case .auto: "Auto"
+        case .hardware: "Hardware"
+        case .software: "Software"
+        }
+    }
+}
+
+enum StreamQualityPreset: String, CaseIterable, Codable, Hashable, Sendable {
+    case auto
+    case full
+    case balanced
+    case economy
+    case low
+    case tiny
+
+    var label: String {
+        switch self {
+        case .auto: "Auto"
+        case .full: "Full"
+        case .balanced: "1280"
+        case .economy: "1080"
+        case .low: "720"
+        case .tiny: "540"
+        }
+    }
+
+    var summaryLabel: String {
+        switch self {
+        case .auto: "Auto"
+        case .full: "Full res"
+        case .balanced: "1280px"
+        case .economy: "1080px"
+        case .low: "720px"
+        case .tiny: "540px"
+        }
+    }
+
+    var payloadProfile: String {
+        self == .auto ? StreamQualityPreset.economy.rawValue : rawValue
+    }
+}
+
+struct StreamConfig: Codable, Hashable, Sendable {
+    var encoder: StreamEncoder = .auto
+    var fps: Int = 60
+    var quality: StreamQualityPreset = .full
+
+    var summary: String {
+        "WebRTC / \(quality.summaryLabel) / \(fps) fps"
+    }
+}
+
+struct StreamQualityPayload: Encodable, Sendable {
+    var profile: String
+    var fps: Int
+    var videoCodec: String
+
+    init(config: StreamConfig = StreamConfig()) {
+        profile = config.quality.payloadProfile
+        fps = config.fps
+        videoCodec = config.encoder.rawValue
+    }
+
+    var jsonObject: [String: Any] {
+        [
+            "profile": profile,
+            "fps": fps,
+            "videoCodec": videoCodec
+        ]
+    }
+}
+
+struct WebRTCOfferPayload: Encodable, Sendable {
+    let clientId: String
+    let sdp: String
+    let streamConfig: StreamQualityPayload
+    let type: String
+}
+
+enum AppRoute: Hashable, Sendable {
+    case endpoint(SimDeckEndpoint, autoStart: Bool)
+}
+
+extension URL {
+    func normalizedSimDeckBaseURL() -> URL {
+        guard var components = URLComponents(url: self, resolvingAgainstBaseURL: false) else {
+            return self
+        }
+        components.query = nil
+        components.fragment = nil
+        if components.path != "/" {
+            components.path = components.path.trimmingTrailingSlashes()
+        }
+        return components.url ?? self
+    }
+}
+
+extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func trimmingTrailingSlashes() -> String {
+        var value = self
+        while value.count > 1 && value.hasSuffix("/") {
+            value.removeLast()
+        }
+        return value
+    }
+}
