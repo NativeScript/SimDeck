@@ -405,10 +405,15 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     CGFloat screenX;
     CGFloat screenY;
     if (watchProfile) {
-        screenX = sizingLeft;
-        screenY = sizingTop;
-        screenWidth = MAX(compositeSize.width - sizingLeft - sizingRight, 1.0);
-        screenHeight = MAX(compositeSize.height - standHeight - sizingTop - sizingBottom, 1.0);
+        CGFloat usableHeight = MAX(compositeSize.height - standHeight, 1.0);
+        screenWidth = pointScreenWidth > 0.0
+            ? MIN(pointScreenWidth, compositeSize.width)
+            : MAX(compositeSize.width - sizingLeft - sizingRight, 1.0);
+        screenHeight = pointScreenHeight > 0.0
+            ? MIN(pointScreenHeight, usableHeight)
+            : MAX(usableHeight - sizingTop - sizingBottom, 1.0);
+        screenX = MAX((compositeSize.width - screenWidth) / 2.0, 0.0);
+        screenY = MAX((usableHeight - screenHeight) / 2.0, 0.0);
     } else if (hasComposite && pointScreenWidth > 0.0 && pointScreenHeight > 0.0) {
         screenWidth = pointScreenWidth;
         screenHeight = pointScreenHeight;
@@ -1025,13 +1030,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         return CGSizeMake(rawWidth / scale, rawHeight / scale);
     }
 
-    if (chromeSize.width > 0.0 &&
-        chromeSize.height > 0.0 &&
-        rawWidth <= chromeSize.width &&
-        rawHeight <= chromeSize.height) {
-        return CGSizeMake(rawWidth, rawHeight);
-    }
-    return CGSizeMake(rawWidth / scale, rawHeight / scale);
+    return CGSizeMake(rawWidth, rawHeight);
 }
 
 + (BOOL)drawRasterizedPDFAtPath:(NSString *)path

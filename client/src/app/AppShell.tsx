@@ -918,12 +918,25 @@ export function AppShell({
         button.name.toLowerCase() === "digital-crown",
     ),
   );
+  const chromeGeometryStamp = viewportChromeProfile
+    ? [
+        viewportChromeProfile.totalWidth,
+        viewportChromeProfile.totalHeight,
+        viewportChromeProfile.screenX,
+        viewportChromeProfile.screenY,
+        viewportChromeProfile.screenWidth,
+        viewportChromeProfile.screenHeight,
+      ]
+        .map((value) => Math.round(value))
+        .join("x")
+    : "";
   const chromeAssetStamp = [
     selectedSimulator?.deviceTypeIdentifier,
     selectedSimulator?.deviceTypeName,
     selectedSimulator?.runtimeIdentifier,
     selectedSimulator?.runtimeName,
     selectedSimulator?.udid,
+    chromeGeometryStamp,
     chromeHasInteractiveButtons ? "buttons" : "no-buttons",
     chromeHasCrown ? "crown" : "no-crown",
   ]
