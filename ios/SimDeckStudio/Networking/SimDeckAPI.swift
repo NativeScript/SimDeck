@@ -65,7 +65,7 @@ struct SimDeckAPI: Sendable {
             path: "/api/simulators/\(udid.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? udid)/webrtc/offer",
             method: "POST",
             body: offer,
-            timeout: 15
+            timeout: 20
         )
     }
 

@@ -55,12 +55,17 @@ final class SimDeckDiscovery {
 
     func upsert(_ endpoint: SimDeckEndpoint) {
         let isNewEndpoint: Bool
-        if let index = endpoints.firstIndex(where: { $0.baseURL == endpoint.baseURL }) {
-            endpoints[index] = endpoint
+        let shouldNotify: Bool
+        if let index = endpoints.firstIndex(where: { Self.sameServer($0, endpoint) }) {
+            let previous = endpoints[index]
+            endpoints[index] = Self.mergedEndpoint(previous, endpoint)
             isNewEndpoint = false
+            shouldNotify = previous.baseURL != endpoints[index].baseURL
+                || (previous.requiresPairing && !endpoints[index].requiresPairing)
         } else {
             endpoints.append(endpoint)
             isNewEndpoint = true
+            shouldNotify = true
         }
         endpoints.sort {
             if $0.source == $1.source {
@@ -68,16 +73,64 @@ final class SimDeckDiscovery {
             }
             return sourceRank($0.source) < sourceRank($1.source)
         }
-        if isNewEndpoint {
+        if isNewEndpoint || shouldNotify {
             onEndpoint?(endpoint)
         }
     }
 
+    private static func sameServer(_ lhs: SimDeckEndpoint, _ rhs: SimDeckEndpoint) -> Bool {
+        if let lhsID = lhs.serverID?.nilIfBlank,
+           let rhsID = rhs.serverID?.nilIfBlank {
+            return lhsID == rhsID
+        }
+        return lhs.baseURL == rhs.baseURL
+            || lhs.alternateBaseURLs.contains(rhs.baseURL)
+            || rhs.alternateBaseURLs.contains(lhs.baseURL)
+    }
+
+    private static func mergedEndpoint(_ lhs: SimDeckEndpoint, _ rhs: SimDeckEndpoint) -> SimDeckEndpoint {
+        let preferred = preferredEndpoint(lhs, rhs)
+        let other = preferred.baseURL == lhs.baseURL ? rhs : lhs
+        var merged = preferred
+        merged.serverID = preferred.serverID ?? other.serverID
+        merged.token = preferred.token ?? other.token
+        merged.requiresPairing = preferred.requiresPairing && other.requiresPairing
+        merged.preferredSimulatorID = preferred.preferredSimulatorID ?? other.preferredSimulatorID
+        merged.alternateBaseURLs = uniquedURLs(
+            [lhs.baseURL, rhs.baseURL] + lhs.alternateBaseURLs + rhs.alternateBaseURLs
+        )
+        .filter { $0 != merged.baseURL }
+        return merged
+    }
+
+    private static func preferredEndpoint(_ lhs: SimDeckEndpoint, _ rhs: SimDeckEndpoint) -> SimDeckEndpoint {
+        if lhs.requiresPairing != rhs.requiresPairing {
+            return lhs.requiresPairing ? rhs : lhs
+        }
+        if sourceRankValue(lhs.source) != sourceRankValue(rhs.source) {
+            return sourceRankValue(lhs.source) < sourceRankValue(rhs.source) ? lhs : rhs
+        }
+        return lhs
+    }
+
+    private static func uniquedURLs(_ urls: [URL]) -> [URL] {
+        var seen = Set<URL>()
+        var result: [URL] = []
+        for url in urls.map({ $0.normalizedSimDeckBaseURL() }) where seen.insert(url).inserted {
+            result.append(url)
+        }
+        return result
+    }
+
     private func sourceRank(_ source: EndpointSource) -> Int {
+        Self.sourceRankValue(source)
+    }
+
+    private static func sourceRankValue(_ source: EndpointSource) -> Int {
         switch source {
         case .bonjour: 0
-        case .tailscale: 1
-        case .lan: 2
+        case .lan: 1
+        case .tailscale: 2
         case .studioLink: 3
         case .manual: 4
         case .recent: 5
@@ -144,21 +197,40 @@ final class SimDeckDiscovery {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { return nil }
             if http.statusCode == 401 {
+                let health = try? JSONDecoder().decode(HealthResponse.self, from: data)
                 return SimDeckEndpoint(
-                    name: "SimDeck \(host)",
+                    name: endpointName(for: host),
                     baseURL: baseURL,
                     source: source,
-                    requiresPairing: true
+                    requiresPairing: true,
+                    serverID: health?.serverId,
+                    alternateBaseURLs: alternateURLs(from: health, fallbackPort: port)
                 )
             }
             guard http.statusCode == 200,
-                  (try? JSONDecoder().decode(HealthResponse.self, from: data)).map(\.ok) == true else {
+                  let health = try? JSONDecoder().decode(HealthResponse.self, from: data),
+                  health.ok else {
                 return nil
             }
-            return SimDeckEndpoint(name: endpointName(for: host), baseURL: baseURL, source: source)
+            return SimDeckEndpoint(
+                name: endpointName(for: host),
+                baseURL: baseURL,
+                source: source,
+                serverID: health.serverId,
+                alternateBaseURLs: alternateURLs(from: health, fallbackPort: port)
+            )
         } catch {
             return nil
         }
+    }
+
+    private static func alternateURLs(from health: HealthResponse?, fallbackPort: Int) -> [URL] {
+        guard let advertiseHost = health?.advertiseHost?.nilIfBlank else { return [] }
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = advertiseHost
+        components.port = health?.httpPort ?? fallbackPort
+        return components.url.map { [$0] } ?? []
     }
 
     private static func endpointName(for host: String) -> String {
@@ -196,16 +268,31 @@ private final class BonjourDiscovery: NSObject, NetServiceBrowserDelegate, NetSe
 
     func netServiceDidResolveAddress(_ sender: NetService) {
         let host = sender.hostName?.trimmingTrailingSlashes() ?? "\(sender.name).local"
+        let txt = NetService.dictionary(fromTXTRecord: sender.txtRecordData() ?? Data())
+        let serverID = txt["sid"].flatMap { String(data: $0, encoding: .utf8) }?.nilIfBlank
+        let advertisedHost = txt["host"].flatMap { String(data: $0, encoding: .utf8) }?.nilIfBlank
         var components = URLComponents()
         components.scheme = "http"
         components.host = host
         components.port = sender.port
         guard let url = components.url else { return }
+        var alternateURLs: [URL] = []
+        if let advertisedHost {
+            var advertised = URLComponents()
+            advertised.scheme = "http"
+            advertised.host = advertisedHost
+            advertised.port = sender.port
+            if let advertisedURL = advertised.url {
+                alternateURLs.append(advertisedURL)
+            }
+        }
         onEndpoint?(
             SimDeckEndpoint(
                 name: sender.name.isEmpty ? "SimDeck \(host)" : sender.name,
                 baseURL: url,
-                source: .bonjour
+                source: .bonjour,
+                serverID: serverID,
+                alternateBaseURLs: alternateURLs
             )
         )
     }

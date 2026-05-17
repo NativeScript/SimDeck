@@ -1,10 +1,13 @@
 import SwiftUI
+import UIKit
 
 struct SimulatorStreamView: View {
     @Bindable var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var activeTouchKind: StreamTouchKind?
     @State private var presentedSheet: StreamSheet?
+    @State private var keyboardCaptureActive = false
+    @State private var keyboardHeight: CGFloat = 0
 
     var body: some View {
         ZStack {
@@ -13,6 +16,15 @@ struct SimulatorStreamView: View {
             } else {
                 streamViewport
             }
+
+            KeyboardCaptureView(
+                isActive: $keyboardCaptureActive,
+                onText: { model.sendKeyboardText($0) },
+                onDelete: { model.sendKeyboardBackspace() }
+            )
+            .frame(width: 1, height: 1)
+            .opacity(0.01)
+            .accessibilityHidden(true)
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
@@ -90,7 +102,7 @@ struct SimulatorStreamView: View {
                     } label: {
                         Label("Stop", systemImage: "stop.circle")
                     }
-                    .disabled(model.currentStreamClient == nil)
+                    .disabled(!model.canStopStream)
                 } label: {
                     Label("Stream Settings", systemImage: "gearshape")
                 }
@@ -104,8 +116,22 @@ struct SimulatorStreamView: View {
         }
         .safeAreaInset(edge: .bottom) {
             if model.selectedSimulator?.isBooted == true {
-                StreamControlBar(model: model)
+                StreamControlBar(model: model, keyboardCaptureActive: $keyboardCaptureActive)
             }
+        }
+        .onChange(of: model.selectedSimulatorID) { _, _ in
+            keyboardCaptureActive = false
+        }
+        .onChange(of: model.selectedSimulator?.isBooted == true) { _, isBooted in
+            if !isBooted {
+                keyboardCaptureActive = false
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+            updateKeyboardHeight(notification)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
+            updateKeyboardHeight(notification)
         }
     }
 
@@ -127,11 +153,26 @@ struct SimulatorStreamView: View {
                     .frame(width: layout.screenBackingFrame.width, height: layout.screenBackingFrame.height)
                     .position(x: layout.screenBackingFrame.midX, y: layout.screenBackingFrame.midY)
 
+                if showsCachedStreamFrame, let lastStreamFrame = model.lastStreamFrame {
+                    CachedStreamFrameView(image: lastStreamFrame, cornerRadius: layout.screenCornerRadius + 1)
+                        .frame(width: layout.videoFrame.width, height: layout.videoFrame.height)
+                        .position(x: layout.videoFrame.midX, y: layout.videoFrame.midY)
+                        .transition(.opacity)
+                }
+
                 if model.selectedSimulator?.isBooted == true, model.currentStreamClient != nil {
-                    WebRTCVideoView(client: model.currentStreamClient) { size in
-                        model.videoSize = size
-                        model.markStreamFrameRendered(displayToken: displayToken)
-                    }
+                    WebRTCVideoView(
+                        client: model.currentStreamClient,
+                        onVideoSize: { size in
+                            model.videoSize = size
+                        },
+                        onFrameRendered: {
+                            model.markStreamFrameRendered(displayToken: displayToken)
+                        },
+                        onFrameSnapshot: { image in
+                            model.updateLastStreamFrame(image, displayToken: displayToken)
+                        }
+                    )
                     .id(displayToken)
                     .frame(width: layout.videoFrame.width, height: layout.videoFrame.height)
                     .clipShape(RoundedRectangle(cornerRadius: layout.screenCornerRadius + 1, style: .continuous))
@@ -149,20 +190,58 @@ struct SimulatorStreamView: View {
                         .allowsHitTesting(false)
                 }
 
+                if model.selectedSimulator?.isBooted == true,
+                   let chromeProfile = model.chromeProfile,
+                   layout.usesChrome {
+                    HardwareButtonLayer(model: model, chromeProfile: chromeProfile, layout: layout)
+                }
+
                 if let simulator = model.selectedSimulator, !simulator.isBooted {
                     BootSimulatorOverlay(model: model, simulator: simulator)
                         .frame(width: layout.screenFrame.width, height: layout.screenFrame.height)
                         .position(x: layout.screenFrame.midX, y: layout.screenFrame.midY)
                 }
+
+                if showsFirstFrameSpinner {
+                    StreamFirstFrameLoadingOverlay()
+                        .frame(width: layout.screenFrame.width, height: layout.screenFrame.height)
+                        .position(x: layout.screenFrame.midX, y: layout.screenFrame.midY)
+                        .transition(.opacity)
+                }
+
+                if showsRetryOverlay {
+                    StreamRetryOverlay(model: model)
+                        .frame(width: layout.screenFrame.width, height: layout.screenFrame.height)
+                        .position(x: layout.screenFrame.midX, y: layout.screenFrame.midY)
+                        .transition(.opacity)
+                }
             }
             .contentShape(Rectangle())
             .streamTouchGesture(model.selectedSimulator?.isBooted == true, gesture: touchGesture(in: layout.screenFrame))
+            .animation(.snappy(duration: 0.3), value: keyboardCaptureActive)
+            .animation(.smooth(duration: 0.28), value: keyboardHeight)
         }
         .background(streamBackground)
     }
 
     private var streamBackground: Color {
         colorScheme == .dark ? Color(.systemBackground) : Color(.secondarySystemGroupedBackground)
+    }
+
+    private var showsFirstFrameSpinner: Bool {
+        guard model.selectedSimulator?.isBooted == true else { return false }
+        return model.streamState == .connecting
+            || (model.currentStreamClient != nil && !model.hasCurrentStreamFrame)
+    }
+
+    private var showsCachedStreamFrame: Bool {
+        guard model.selectedSimulator?.isBooted == true else { return false }
+        return model.lastStreamFrame != nil && !model.hasCurrentStreamFrame
+    }
+
+    private var showsRetryOverlay: Bool {
+        guard model.selectedSimulator?.isBooted == true else { return false }
+        return model.streamState == .failed || model.streamState == .disconnected
     }
 
     private func touchGesture(in screenFrame: CGRect) -> some Gesture {
@@ -193,6 +272,20 @@ struct SimulatorStreamView: View {
             model.sendTouch(location: location, in: screenFrame, phase: phase)
         case nil:
             break
+            }
+    }
+
+    private func updateKeyboardHeight(_ notification: Notification) {
+        let endFrame = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue ?? .zero
+        let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.28
+        let height = notification.name == UIResponder.keyboardWillHideNotification
+            ? 0
+            : max(0, UIScreen.main.bounds.height - endFrame.minY)
+        withAnimation(.easeOut(duration: duration)) {
+            keyboardHeight = height
+        }
+        if height <= 1 {
+            keyboardCaptureActive = false
         }
     }
 }
@@ -237,6 +330,66 @@ private struct BootSimulatorOverlay: View {
             .disabled(model.isSelectedSimulatorBooting)
             .modifier(StreamGlassCircleModifier(interactive: !model.isSelectedSimulatorBooting))
             .accessibilityLabel(model.isSelectedSimulatorBooting ? "Booting \(simulator.name)" : "Boot \(simulator.name)")
+        }
+    }
+}
+
+private struct StreamFirstFrameLoadingOverlay: View {
+    var body: some View {
+        ZStack {
+            Color.clear
+            ProgressView()
+                .controlSize(.small)
+                .tint(.white)
+        }
+        .allowsHitTesting(false)
+        .accessibilityLabel("Loading stream")
+    }
+}
+
+private struct CachedStreamFrameView: View {
+    let image: UIImage
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFill()
+            .saturation(0.82)
+            .brightness(-0.08)
+            .overlay(Color.black.opacity(0.28))
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .shadow(color: .black.opacity(0.34), radius: 16, y: 8)
+            .clipped()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct StreamRetryOverlay: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.06)
+            VStack(spacing: 10) {
+                Button {
+                    model.retryStream()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 52, height: 52)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .modifier(StreamGlassCircleModifier(interactive: true))
+                .accessibilityLabel("Retry Stream")
+
+                Text("Retry")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.88))
+            }
         }
     }
 }
@@ -384,12 +537,13 @@ private struct StreamBadge: View {
 
 private struct StreamControlBar: View {
     @Bindable var model: AppModel
+    @Binding var keyboardCaptureActive: Bool
 
     var body: some View {
         if #available(iOS 26.0, *) {
-            LiquidGlassStreamControlBar(model: model)
+            LiquidGlassStreamControlBar(model: model, keyboardCaptureActive: $keyboardCaptureActive)
         } else {
-            LegacyStreamControlBar(model: model)
+            LegacyStreamControlBar(model: model, keyboardCaptureActive: $keyboardCaptureActive)
         }
     }
 }
@@ -397,10 +551,11 @@ private struct StreamControlBar: View {
 @available(iOS 26.0, *)
 private struct LiquidGlassStreamControlBar: View {
     @Bindable var model: AppModel
+    @Binding var keyboardCaptureActive: Bool
 
     var body: some View {
         GlassEffectContainer(spacing: 14) {
-            StreamControlButtons(model: model)
+            StreamControlButtons(model: model, keyboardCaptureActive: $keyboardCaptureActive)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -409,9 +564,10 @@ private struct LiquidGlassStreamControlBar: View {
 
 private struct LegacyStreamControlBar: View {
     @Bindable var model: AppModel
+    @Binding var keyboardCaptureActive: Bool
 
     var body: some View {
-        StreamControlButtons(model: model)
+        StreamControlButtons(model: model, keyboardCaptureActive: $keyboardCaptureActive)
             .buttonStyle(StreamToolbarButtonStyle())
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -420,24 +576,25 @@ private struct LegacyStreamControlBar: View {
 
 private struct StreamControlButtons: View {
     @Bindable var model: AppModel
+    @Binding var keyboardCaptureActive: Bool
 
     var body: some View {
         HStack(spacing: 8) {
-            StreamControlButton("Home", systemImage: "house") { model.sendHome() }
+            StreamHardwareControlButton("Home", systemImage: "house", buttonName: "home", model: model)
 
             StreamControlButton("Switcher", systemImage: "square.on.square") { model.sendAppSwitcher() }
 
             Spacer(minLength: 4)
 
-            StreamControlButton("Rotate Left", systemImage: "rotate.left") { model.rotateLeft() }
+            StreamControlButton("Appearance", systemImage: "circle.lefthalf.filled") { model.toggleAppearance() }
 
             StreamControlButton("Rotate Right", systemImage: "rotate.right") { model.rotateRight() }
 
             Spacer(minLength: 4)
 
-            StreamControlButton("Keyframe", systemImage: "bolt") { model.requestKeyframe() }
+            StreamHardwareControlButton("Lock", systemImage: "lock", buttonName: "power", model: model)
 
-            StreamControlButton("Lock", systemImage: "lock") { model.sendLock() }
+            StreamKeyboardControlButton(model: model, isActive: $keyboardCaptureActive)
         }
     }
 }
@@ -455,14 +612,89 @@ private struct StreamControlButton: View {
 
     var body: some View {
         Button(action: action) {
-            label
+            StreamControlIconLabel(title: title, systemImage: systemImage)
         }
         .buttonStyle(.plain)
         .buttonBorderShape(.circle)
     }
+}
+
+private struct StreamHardwareControlButton: View {
+    let title: LocalizedStringKey
+    let systemImage: String
+    let buttonName: String
+    @Bindable var model: AppModel
+    @State private var isPressed = false
+
+    init(_ title: LocalizedStringKey, systemImage: String, buttonName: String, model: AppModel) {
+        self.title = title
+        self.systemImage = systemImage
+        self.buttonName = buttonName
+        self.model = model
+    }
+
+    var body: some View {
+        StreamControlIconLabel(title: title, systemImage: systemImage)
+            .opacity(isPressed ? 0.45 : 1)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in pressDown() }
+                    .onEnded { _ in pressUp() }
+            )
+            .onDisappear {
+                pressUp()
+            }
+            .accessibilityLabel(title)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                model.tapHardwareButton(named: buttonName)
+            }
+    }
+
+    private func pressDown() {
+        guard !isPressed else { return }
+        isPressed = true
+        model.sendHardwareButton(named: buttonName, phase: .down)
+    }
+
+    private func pressUp() {
+        guard isPressed else { return }
+        isPressed = false
+        model.sendHardwareButton(named: buttonName, phase: .up)
+    }
+}
+
+private struct StreamKeyboardControlButton: View {
+    @Bindable var model: AppModel
+    @Binding var isActive: Bool
+
+    var body: some View {
+        Button {
+            model.hapticSelection()
+            withAnimation(.snappy(duration: 0.25)) {
+                isActive.toggle()
+            }
+            if !isActive {
+                model.dismissSimulatorKeyboard()
+            }
+        } label: {
+            StreamControlIconLabel(title: "Keyboard", systemImage: "keyboard")
+                .opacity(isActive ? 1 : 0.86)
+                .scaleEffect(isActive ? 1.04 : 1)
+        }
+        .buttonStyle(.plain)
+        .buttonBorderShape(.circle)
+        .accessibilityLabel("Keyboard")
+        .accessibilityValue(isActive ? "Active" : "Inactive")
+    }
+}
+
+private struct StreamControlIconLabel: View {
+    let title: LocalizedStringKey
+    let systemImage: String
 
     @ViewBuilder
-    private var label: some View {
+    var body: some View {
         let content = Label(title, systemImage: systemImage)
             .labelStyle(.iconOnly)
             .font(.body)
@@ -476,6 +708,172 @@ private struct StreamControlButton: View {
             content
                 .background(.ultraThinMaterial, in: Circle())
         }
+    }
+}
+
+private struct HardwareButtonLayer: View {
+    @Bindable var model: AppModel
+    let chromeProfile: ChromeProfile
+    let layout: DeviceViewportLayout
+
+    var body: some View {
+        ForEach(chromeProfile.buttons ?? [], id: \.self) { button in
+            if let buttonName = button.hardwareWireName, button.width > 0, button.height > 0 {
+                HardwareButtonHitArea(
+                    model: model,
+                    button: button,
+                    buttonName: buttonName,
+                    frame: layout.chromeButtonFrame(button)
+                )
+            }
+        }
+    }
+}
+
+private struct HardwareButtonHitArea: View {
+    @Bindable var model: AppModel
+    let button: ChromeButtonProfile
+    let buttonName: String
+    let frame: CGRect
+    @State private var isPressed = false
+
+    var body: some View {
+        Color.clear
+            .frame(width: hitFrame.width, height: hitFrame.height)
+            .contentShape(Rectangle())
+            .position(x: hitFrame.midX, y: hitFrame.midY)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in pressDown() }
+                    .onEnded { _ in pressUp() }
+            )
+            .onDisappear {
+                pressUp()
+            }
+            .accessibilityLabel(Text(button.label ?? button.name))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                model.tapHardwareButton(named: buttonName, usagePage: button.usagePage, usage: button.usage)
+            }
+    }
+
+    private var hitFrame: CGRect {
+        let minimumTarget: CGFloat = 34
+        let width = max(frame.width, minimumTarget)
+        let height = max(frame.height, minimumTarget)
+        return CGRect(
+            x: frame.midX - width / 2,
+            y: frame.midY - height / 2,
+            width: width,
+            height: height
+        )
+    }
+
+    private func pressDown() {
+        guard !isPressed else { return }
+        isPressed = true
+        model.sendHardwareButton(
+            named: buttonName,
+            phase: .down,
+            usagePage: button.usagePage,
+            usage: button.usage
+        )
+    }
+
+    private func pressUp() {
+        guard isPressed else { return }
+        isPressed = false
+        model.sendHardwareButton(
+            named: buttonName,
+            phase: .up,
+            usagePage: button.usagePage,
+            usage: button.usage
+        )
+    }
+}
+
+private struct KeyboardCaptureView: UIViewRepresentable {
+    @Binding var isActive: Bool
+    let onText: (String) -> Void
+    let onDelete: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isActive: $isActive)
+    }
+
+    func makeUIView(context: Context) -> KeyboardCaptureTextView {
+        let view = KeyboardCaptureTextView()
+        view.delegate = context.coordinator
+        view.backgroundColor = .clear
+        view.tintColor = .clear
+        view.textColor = .clear
+        view.isScrollEnabled = false
+        view.autocorrectionType = .no
+        view.autocapitalizationType = .none
+        view.spellCheckingType = .no
+        view.smartDashesType = .no
+        view.smartInsertDeleteType = .no
+        view.smartQuotesType = .no
+        view.keyboardType = .default
+        view.returnKeyType = .default
+        view.textContentType = nil
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.inputAssistantItem.leadingBarButtonGroups = []
+        view.inputAssistantItem.trailingBarButtonGroups = []
+        return view
+    }
+
+    func updateUIView(_ view: KeyboardCaptureTextView, context: Context) {
+        view.onText = onText
+        view.onDelete = onDelete
+        if isActive, !view.isFirstResponder {
+            DispatchQueue.main.async {
+                view.becomeFirstResponder()
+            }
+        } else if !isActive, view.isFirstResponder {
+            DispatchQueue.main.async {
+                view.resignFirstResponder()
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var isActive: Binding<Bool>
+
+        init(isActive: Binding<Bool>) {
+            self.isActive = isActive
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            isActive.wrappedValue = false
+        }
+    }
+}
+
+private final class KeyboardCaptureTextView: UITextView {
+    var onText: ((String) -> Void)?
+    var onDelete: (() -> Void)?
+
+    override var canBecomeFirstResponder: Bool {
+        true
+    }
+
+    override var hasText: Bool {
+        true
+    }
+
+    override func insertText(_ text: String) {
+        onText?(text)
+    }
+
+    override func deleteBackward() {
+        onDelete?()
+    }
+
+    override func paste(_ sender: Any?) {
+        guard let text = UIPasteboard.general.string, !text.isEmpty else { return }
+        onText?(text)
     }
 }
 
@@ -528,6 +926,8 @@ private struct DeviceViewportLayout {
     let videoFrame: CGRect
     let screenCornerRadius: CGFloat
     let usesChrome: Bool
+    private let chromeCoordinateScale: CGFloat
+    private let chromeMetricScale: Double
 
     init(chromeProfile: ChromeProfile?, chromeImageSize: CGSize?, videoSize: CGSize, availableSize: CGSize) {
         let viewport = CGRect(origin: .zero, size: availableSize)
@@ -546,6 +946,8 @@ private struct DeviceViewportLayout {
             let scale = shell.width / profileSize.width
             let screenRect = Self.chromeScreenRect(profile: chromeProfile, videoSize: videoSize, metricScale: metricScale)
             shellFrame = shell
+            chromeCoordinateScale = scale
+            chromeMetricScale = metricScale
             screenFrame = CGRect(
                 x: shell.minX + screenRect.minX * scale,
                 y: shell.minY + screenRect.minY * scale,
@@ -574,6 +976,18 @@ private struct DeviceViewportLayout {
         videoFrame = screen
         screenCornerRadius = min(44, screen.width * 0.14)
         usesChrome = false
+        chromeCoordinateScale = 1
+        chromeMetricScale = 1
+    }
+
+    func chromeButtonFrame(_ button: ChromeButtonProfile) -> CGRect {
+        guard usesChrome else { return .zero }
+        return CGRect(
+            x: shellFrame.minX + CGFloat(button.x / chromeMetricScale) * chromeCoordinateScale,
+            y: shellFrame.minY + CGFloat(button.y / chromeMetricScale) * chromeCoordinateScale,
+            width: CGFloat(button.width / chromeMetricScale) * chromeCoordinateScale,
+            height: CGFloat(button.height / chromeMetricScale) * chromeCoordinateScale
+        )
     }
 
     private static func chromeMetricScale(profile: ChromeProfile, imageSize: CGSize?) -> Double {
@@ -651,6 +1065,33 @@ private struct DeviceViewportLayout {
             profileScreenRect.height * scale / 2,
             CGFloat(profile.cornerRadius / metricScale) * scale
         )
+    }
+}
+
+private extension ChromeButtonProfile {
+    var hardwareWireName: String? {
+        switch name.lowercased() {
+        case "action":
+            "action"
+        case "digital-crown", "crown":
+            "digital-crown"
+        case "home":
+            "home"
+        case "left-side-button":
+            "left-side-button"
+        case "lock", "power":
+            "power"
+        case "mute":
+            "mute"
+        case "side-button":
+            "side-button"
+        case "volume-down":
+            "volume-down"
+        case "volume-up":
+            "volume-up"
+        default:
+            nil
+        }
     }
 }
 

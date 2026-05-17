@@ -993,6 +993,8 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         stream_quality_state_value(&current_stream_quality_state(video_codec.clone()));
     json(json_value!({
         "ok": true,
+        "serverId": crate::auth::server_identity(&state.config),
+        "advertiseHost": state.config.advertise_host,
         "httpPort": state.config.http_port,
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64(),
         "videoCodec": video_codec,

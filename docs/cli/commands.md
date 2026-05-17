@@ -12,6 +12,7 @@ Replace `simdeck` with `./build/simdeck` when running from a source checkout.
 | `simdeck -k`                     | Stop the detached project daemon            |
 | `simdeck -r`                     | Restart the detached project daemon         |
 | `simdeck ui --open`              | Open the browser UI from a daemon           |
+| `simdeck pair`                   | Show native iOS pairing code and QR         |
 | `simdeck daemon status`          | Show daemon URL, PID, token, and log path   |
 | `simdeck daemon stop`            | Stop the current project daemon             |
 | `simdeck daemon killall`         | Stop all project daemons                    |
@@ -22,8 +23,14 @@ Examples:
 ```sh
 simdeck ui --port 4320 --open
 simdeck ui --open
+simdeck pair
 simdeck daemon restart --video-codec software --stream-quality low
 ```
+
+`simdeck pair` uses the global LaunchAgent-backed service instead of a
+project-local daemon. It binds the service for LAN access, preserves an existing
+service token and pairing code when present, detects LAN and Tailscale IPv4
+addresses, and prints a `simdeck://pair` QR for the native iOS app.
 
 ## Device Lifecycle
 

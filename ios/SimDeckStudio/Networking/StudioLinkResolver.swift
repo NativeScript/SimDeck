@@ -2,8 +2,13 @@ import Foundation
 
 enum StudioLinkResolver {
     static func route(for url: URL) -> AppRoute? {
-        if let endpoint = endpointFromCustomScheme(url) {
-            return .endpoint(endpoint, autoStart: true)
+        if url.scheme?.lowercased() == "simdeck" {
+            if let pairingLink = pairingLinkFromCustomScheme(url) {
+                return .pairing(pairingLink, autoStart: true)
+            }
+            if let endpoint = endpointFromCustomScheme(url) {
+                return .endpoint(endpoint, autoStart: true)
+            }
         }
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
             return nil
@@ -11,12 +16,14 @@ enum StudioLinkResolver {
         if let endpoint = endpointFromStudioURL(url) {
             return .endpoint(endpoint, autoStart: true)
         }
+        let serverID = queryValue("serverId", in: url) ?? queryValue("sid", in: url) ?? queryValue("s", in: url)
         return .endpoint(
             SimDeckEndpoint(
                 name: url.host ?? "SimDeck",
                 baseURL: url,
                 source: source(for: url.host),
-                preferredSimulatorID: queryValue("device", in: url) ?? queryValue("udid", in: url)
+                preferredSimulatorID: queryValue("device", in: url) ?? queryValue("udid", in: url),
+                serverID: serverID
             ),
             autoStart: true
         )
@@ -32,13 +39,25 @@ enum StudioLinkResolver {
             endpointWithToken.token = token?.nilIfBlank
             return endpointWithToken
         }
-        return SimDeckEndpoint(name: url.host ?? "SimDeck", baseURL: url, source: source(for: url.host), token: token)
+        return SimDeckEndpoint(
+            name: url.host ?? "SimDeck",
+            baseURL: url,
+            source: source(for: url.host),
+            token: token
+        )
     }
 
     private static func endpointFromCustomScheme(_ url: URL) -> SimDeckEndpoint? {
         guard url.scheme?.lowercased() == "simdeck" else { return nil }
-        if let rawURL = queryValue("url", in: url), let nested = URL(string: rawURL) {
-            return endpointFromStudioURL(nested) ?? SimDeckEndpoint(name: nested.host ?? "SimDeck", baseURL: nested, source: .manual)
+        let serverID = queryValue("serverId", in: url) ?? queryValue("sid", in: url) ?? queryValue("s", in: url)
+        if let rawURL = queryValue("url", in: url) ?? queryValue("u", in: url),
+           var endpoint = endpointFromAddress(rawURL) {
+            if let token = queryValue("token", in: url) {
+                endpoint.token = token
+            }
+            endpoint.preferredSimulatorID = queryValue("device", in: url) ?? queryValue("udid", in: url)
+            endpoint.serverID = serverID
+            return endpoint
         }
         guard let host = queryValue("host", in: url) ?? url.host else { return nil }
         let port = queryValue("port", in: url).flatMap(Int.init)
@@ -52,7 +71,34 @@ enum StudioLinkResolver {
             baseURL: baseURL,
             source: source(for: host),
             token: queryValue("token", in: url),
-            preferredSimulatorID: queryValue("device", in: url) ?? queryValue("udid", in: url)
+            preferredSimulatorID: queryValue("device", in: url) ?? queryValue("udid", in: url),
+            serverID: serverID
+        )
+    }
+
+    private static func pairingLinkFromCustomScheme(_ url: URL) -> SimDeckPairingLink? {
+        guard url.scheme?.lowercased() == "simdeck",
+              ["pair", "pairing"].contains(url.host?.lowercased() ?? "") else {
+            return nil
+        }
+        guard var endpoint = endpointFromCustomScheme(url) else { return nil }
+        let pairingCode = queryValue("code", in: url) ?? queryValue("pairingCode", in: url) ?? queryValue("c", in: url)
+        let serverID = queryValue("serverId", in: url) ?? queryValue("sid", in: url) ?? queryValue("s", in: url)
+        endpoint.serverID = endpoint.serverID ?? serverID
+        if endpoint.token == nil {
+            endpoint.token = queryValue("token", in: url)
+        }
+        let alternateEndpoints = alternateEndpointValues(in: url).compactMap { rawValue -> SimDeckEndpoint? in
+            guard var alternate = endpointFromAddress(rawValue, token: endpoint.token) else { return nil }
+            alternate.preferredSimulatorID = endpoint.preferredSimulatorID
+            alternate.serverID = endpoint.serverID
+            return alternate
+        }
+        .filter { $0.baseURL != endpoint.baseURL }
+        return SimDeckPairingLink(
+            endpoint: endpoint,
+            pairingCode: pairingCode,
+            alternateEndpoints: uniquedEndpoints(alternateEndpoints)
         )
     }
 
@@ -76,7 +122,8 @@ enum StudioLinkResolver {
             baseURL: baseURL,
             source: .studioLink,
             token: queryValue("simdeckToken", in: url) ?? queryValue("token", in: url),
-            preferredSimulatorID: queryValue("device", in: url) ?? queryValue("udid", in: url)
+            preferredSimulatorID: queryValue("device", in: url) ?? queryValue("udid", in: url),
+            serverID: queryValue("serverId", in: url) ?? queryValue("sid", in: url) ?? queryValue("s", in: url)
         )
     }
 
@@ -86,6 +133,30 @@ enum StudioLinkResolver {
             .first { $0.name == name }?
             .value?
             .nilIfBlank
+    }
+
+    private static func queryValues(_ name: String, in url: URL) -> [String] {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .filter { $0.name == name }
+            .compactMap { $0.value?.nilIfBlank } ?? []
+    }
+
+    private static func alternateEndpointValues(in url: URL) -> [String] {
+        queryValues("alt", in: url)
+            + queryValues("a", in: url)
+            + Array(queryValues("url", in: url).dropFirst())
+            + queryValues("lan", in: url)
+            + queryValues("tailscale", in: url)
+    }
+
+    private static func uniquedEndpoints(_ endpoints: [SimDeckEndpoint]) -> [SimDeckEndpoint] {
+        var seen = Set<URL>()
+        var result: [SimDeckEndpoint] = []
+        for endpoint in endpoints where seen.insert(endpoint.baseURL).inserted {
+            result.append(endpoint)
+        }
+        return result
     }
 
     private static func source(for host: String?) -> EndpointSource {

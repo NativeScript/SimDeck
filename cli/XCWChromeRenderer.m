@@ -394,8 +394,6 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     BOOL hasModernPhoneSensor = [self shouldRenderPhoneChromeFromSlices:plist sensorName:sensorName];
     BOOL hasComposite = !hasModernPhoneSensor && [self compositeAssetPathForChromeInfo:chromeInfo].length > 0;
     CGFloat screenScale = MAX([self numberValue:plist[@"mainScreenScale"]], 1.0);
-    CGFloat profileScreenWidth = [self numberValue:plist[@"mainScreenWidth"]];
-    CGFloat profileScreenHeight = [self numberValue:plist[@"mainScreenHeight"]];
     CGSize profileScreenSize = [self screenSizeForChromeInfo:chromeInfo
                                                    chromeSize:compositeSize
                                                   screenScale:screenScale];
@@ -406,17 +404,17 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     CGFloat screenHeight;
     CGFloat screenX;
     CGFloat screenY;
-    if (hasComposite && pointScreenWidth > 0.0 && pointScreenHeight > 0.0) {
+    if (watchProfile) {
+        screenX = sizingLeft;
+        screenY = sizingTop;
+        screenWidth = MAX(compositeSize.width - sizingLeft - sizingRight, 1.0);
+        screenHeight = MAX(compositeSize.height - standHeight - sizingTop - sizingBottom, 1.0);
+    } else if (hasComposite && pointScreenWidth > 0.0 && pointScreenHeight > 0.0) {
         screenWidth = pointScreenWidth;
         screenHeight = pointScreenHeight;
         screenX = MAX((compositeSize.width - screenWidth) / 2.0, 0.0);
         CGFloat usableHeight = compositeSize.height - standHeight;
         screenY = MAX((usableHeight - screenHeight) / 2.0, bezelTop);
-    } else if (watchProfile) {
-        screenWidth = profileScreenWidth;
-        screenHeight = profileScreenHeight;
-        screenX = MAX((compositeSize.width - screenWidth) / 2.0, 0.0);
-        screenY = MAX((compositeSize.height - screenHeight) / 2.0, 0.0);
     } else {
         screenX = bezelLeft;
         screenY = bezelTop;
@@ -425,7 +423,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     }
 
     CGFloat innerRadius = MAX(rawCornerRadius - MAX(screenX, screenY), 0.0);
-    CGFloat radiusScale = pointScreenWidth > 0.0 ? screenWidth / pointScreenWidth : 1.0;
+    CGFloat radiusScale = !watchProfile && pointScreenWidth > 0.0 ? screenWidth / pointScreenWidth : 1.0;
     CGFloat chromeCornerRadius = innerRadius * radiusScale;
     CGFloat cornerRadius = chromeCornerRadius;
 
