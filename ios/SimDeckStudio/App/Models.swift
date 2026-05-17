@@ -40,6 +40,8 @@ struct SimDeckEndpoint: Identifiable, Hashable, Codable, Sendable {
     var token: String?
     var requiresPairing: Bool
     var preferredSimulatorID: String?
+    var serverID: String?
+    var alternateBaseURLs: [URL]
 
     init(
         name: String,
@@ -47,14 +49,46 @@ struct SimDeckEndpoint: Identifiable, Hashable, Codable, Sendable {
         source: EndpointSource,
         token: String? = nil,
         requiresPairing: Bool = false,
-        preferredSimulatorID: String? = nil
+        preferredSimulatorID: String? = nil,
+        serverID: String? = nil,
+        alternateBaseURLs: [URL] = []
     ) {
+        let normalizedBaseURL = baseURL.normalizedSimDeckBaseURL()
         self.name = name
-        self.baseURL = baseURL.normalizedSimDeckBaseURL()
+        self.baseURL = normalizedBaseURL
         self.source = source
         self.token = token?.nilIfBlank
         self.requiresPairing = requiresPairing
         self.preferredSimulatorID = preferredSimulatorID?.nilIfBlank
+        self.serverID = serverID?.nilIfBlank
+        self.alternateBaseURLs = alternateBaseURLs
+            .map { $0.normalizedSimDeckBaseURL() }
+            .filter { $0 != normalizedBaseURL }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case baseURL
+        case source
+        case token
+        case requiresPairing
+        case preferredSimulatorID
+        case serverID
+        case alternateBaseURLs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            name: try container.decode(String.self, forKey: .name),
+            baseURL: try container.decode(URL.self, forKey: .baseURL),
+            source: try container.decode(EndpointSource.self, forKey: .source),
+            token: try container.decodeIfPresent(String.self, forKey: .token),
+            requiresPairing: try container.decodeIfPresent(Bool.self, forKey: .requiresPairing) ?? false,
+            preferredSimulatorID: try container.decodeIfPresent(String.self, forKey: .preferredSimulatorID),
+            serverID: try container.decodeIfPresent(String.self, forKey: .serverID),
+            alternateBaseURLs: try container.decodeIfPresent([URL].self, forKey: .alternateBaseURLs) ?? []
+        )
     }
 }
 
@@ -289,6 +323,8 @@ struct CreatedSimulatorInfo: Decodable, Sendable {
 
 struct HealthResponse: Decodable, Sendable {
     let ok: Bool
+    let serverId: String?
+    let advertiseHost: String?
     let httpPort: Int?
     let videoCodec: String?
     let realtimeStream: Bool?
@@ -428,6 +464,13 @@ struct WebRTCOfferPayload: Encodable, Sendable {
 
 enum AppRoute: Hashable, Sendable {
     case endpoint(SimDeckEndpoint, autoStart: Bool)
+    case pairing(SimDeckPairingLink, autoStart: Bool)
+}
+
+struct SimDeckPairingLink: Hashable, Sendable {
+    let endpoint: SimDeckEndpoint
+    let pairingCode: String?
+    let alternateEndpoints: [SimDeckEndpoint]
 }
 
 extension URL {

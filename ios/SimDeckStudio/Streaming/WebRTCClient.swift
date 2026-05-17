@@ -8,6 +8,7 @@ final class WebRTCClient: NSObject {
     var onVideoSize: (@Sendable (CGSize) -> Void)?
     var onMessage: (@Sendable (String) -> Void)?
     var onDiagnostics: (@Sendable (StreamDiagnostics) -> Void)?
+    var onReconnectNeeded: (@Sendable (String) -> Void)?
 
     private static let initializeSSL: Void = {
         RTCInitializeSSL()
@@ -37,9 +38,12 @@ final class WebRTCClient: NSObject {
     private var lastStatsRenderedFrames: UInt64 = 0
     private var lastStatsPacketsReceived: UInt64 = 0
     private var lastStallRecoveryAt = Date.distantPast
+    private var lastReconnectRequestedAt = Date.distantPast
     private var lastUserActivityAt = Date.distantPast
     private var renderedFrameCount: UInt64 = 0
     private var lastRenderedFrameAt = Date()
+    private var isAppForeground = true
+    private var isDisconnecting = false
 
     override init() {
         _ = Self.initializeSSL
@@ -57,6 +61,7 @@ final class WebRTCClient: NSObject {
         streamConfig: StreamConfig
     ) async throws -> WebRTCAnswerPayload {
         disconnect()
+        isDisconnecting = false
 
         let configuration = RTCConfiguration()
         configuration.sdpSemantics = .unifiedPlan
@@ -127,7 +132,9 @@ final class WebRTCClient: NSObject {
         renderedFrameCount = 0
         lastRenderedFrameAt = Date()
         lastStallRecoveryAt = .distantPast
+        lastReconnectRequestedAt = .distantPast
         lastUserActivityAt = .distantPast
+        isAppForeground = true
         sendPageVisibilityStats(visible: true, simulatorID: simulatorID)
         sendStreamControl(foreground: true, forceKeyframe: true, snapshot: true)
         startKeepAlive()
@@ -152,6 +159,7 @@ final class WebRTCClient: NSObject {
     }
 
     func disconnect() {
+        isDisconnecting = true
         keepAliveTask?.cancel()
         keepAliveTask = nil
         statsTask?.cancel()
@@ -187,6 +195,22 @@ final class WebRTCClient: NSObject {
         sendJSON(["type": "edgeTouch", "x": x, "y": y, "phase": phase, "edge": edge])
     }
 
+    @discardableResult
+    func sendKey(keyCode: Int, modifiers: Int) -> Bool {
+        markUserActivity()
+        return sendJSON([
+            "type": "key",
+            "keyCode": keyCode,
+            "modifiers": modifiers
+        ], allowQueue: false)
+    }
+
+    @discardableResult
+    func dismissSimulatorKeyboard() -> Bool {
+        markUserActivity()
+        return sendJSON(["type": "dismissKeyboard"], allowQueue: false)
+    }
+
     func sendHome() {
         markUserActivity()
         sendJSON(["type": "home"])
@@ -207,9 +231,49 @@ final class WebRTCClient: NSObject {
         sendJSON(["type": "rotateRight"])
     }
 
+    @discardableResult
+    func sendToggleAppearance() -> Bool {
+        markUserActivity()
+        return sendJSON(["type": "toggleAppearance"], allowQueue: false)
+    }
+
     func sendLock() {
         markUserActivity()
-        sendJSON(["type": "button", "button": "lock", "durationMs": 50])
+        pressHardwareButton(button: "power", durationMs: 80)
+    }
+
+    @discardableResult
+    func sendHardwareButton(button: String, phase: String, usagePage: Int?, usage: Int?) -> Bool {
+        markUserActivity()
+        var payload: [String: Any] = [
+            "type": "button",
+            "button": button,
+            "phase": phase
+        ]
+        if let usagePage {
+            payload["usagePage"] = usagePage
+        }
+        if let usage {
+            payload["usage"] = usage
+        }
+        return sendJSON(payload, allowQueue: false)
+    }
+
+    @discardableResult
+    func pressHardwareButton(button: String, durationMs: Int = 80, usagePage: Int? = nil, usage: Int? = nil) -> Bool {
+        markUserActivity()
+        var payload: [String: Any] = [
+            "type": "button",
+            "button": button,
+            "durationMs": durationMs
+        ]
+        if let usagePage {
+            payload["usagePage"] = usagePage
+        }
+        if let usage {
+            payload["usage"] = usage
+        }
+        return sendJSON(payload, allowQueue: false)
     }
 
     func requestKeyframe() {
@@ -231,6 +295,31 @@ final class WebRTCClient: NSObject {
         lastRenderedFrameAt = Date()
     }
 
+    func appDidBecomeActive() {
+        isAppForeground = true
+        startKeepAlive()
+        startRenderWatchdog()
+        if let activeSimulatorID {
+            sendPageVisibilityStats(visible: true, simulatorID: activeSimulatorID)
+        }
+        sendStreamControl(foreground: true, forceKeyframe: true, snapshot: true, allowQueue: false)
+        let now = Date()
+        let staleFrameGap = now.timeIntervalSince(max(lastRenderedFrameAt, lastDecodedFrameAt))
+        if peerConnectionState != "connected" || staleFrameGap > 4 {
+            requestReconnect(reason: "foreground-resume")
+        }
+    }
+
+    func appDidEnterBackground() {
+        isAppForeground = false
+        keepAliveTask?.cancel()
+        keepAliveTask = nil
+        if let activeSimulatorID {
+            sendPageVisibilityStats(visible: false, simulatorID: activeSimulatorID)
+        }
+        sendStreamControl(foreground: false, forceKeyframe: false, snapshot: false, allowQueue: false)
+    }
+
     private func sendStreamControl(
         foreground: Bool,
         forceKeyframe: Bool,
@@ -250,20 +339,30 @@ final class WebRTCClient: NSObject {
         lastUserActivityAt = Date()
     }
 
-    private func sendJSON(_ object: [String: Any], allowQueue: Bool = true) {
-        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return }
+    @discardableResult
+    private func sendJSON(_ object: [String: Any], allowQueue: Bool = true) -> Bool {
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return false }
         let isMove = Self.isMoveControlMessage(object)
         if isMove, let controlChannel, controlChannel.readyState == .open, controlChannel.bufferedAmount > 128_000 {
-            return
+            return false
         }
         if sendControlData(data) {
-            return
+            return true
         }
-        guard allowQueue, !isMove else { return }
+        guard allowQueue, !isMove else { return false }
         pendingControlMessages.append(data)
         if pendingControlMessages.count > 80 {
             pendingControlMessages.removeFirst(pendingControlMessages.count - 80)
         }
+        return false
+    }
+
+    private func requestReconnect(reason: String) {
+        guard isAppForeground, !isDisconnecting else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastReconnectRequestedAt) > 5 else { return }
+        lastReconnectRequestedAt = now
+        onReconnectNeeded?(reason)
     }
 
     private func sendTelemetryJSON(_ object: [String: Any]) {
@@ -323,12 +422,17 @@ final class WebRTCClient: NSObject {
         renderWatchdogTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(750))
-                guard let self, !Task.isCancelled, self.peerConnection != nil else { return }
+                guard let self, !Task.isCancelled, self.peerConnection != nil, self.isAppForeground else { return }
                 let now = Date()
                 let packetGap = now.timeIntervalSince(self.lastPacketReceivedAt)
                 let renderedGap = now.timeIntervalSince(self.lastRenderedFrameAt)
                 let decodedGap = now.timeIntervalSince(self.lastDecodedFrameAt)
                 let noFirstFrame = self.renderedFrameCount == 0 && renderedGap > 1.5
+                let hardStall = max(packetGap, max(renderedGap, decodedGap)) > 4
+                if hardStall {
+                    self.requestReconnect(reason: "stream-stalled")
+                    continue
+                }
                 let recentUserActivity = now.timeIntervalSince(self.lastUserActivityAt) < 8
                 let activeStall = recentUserActivity && (packetGap > 1.5 || max(renderedGap, decodedGap) > 2)
                 guard (noFirstFrame || activeStall),
@@ -576,6 +680,18 @@ extension WebRTCClient: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
         peerConnectionState = newState.statsLabel
         onConnectionState?(newState)
+        switch newState {
+        case .failed, .closed:
+            requestReconnect(reason: "peer-\(newState.statsLabel)")
+        case .disconnected:
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                guard let self, self.peerConnectionState == "disconnected" else { return }
+                self.requestReconnect(reason: "peer-disconnected")
+            }
+        default:
+            break
+        }
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {

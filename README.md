@@ -68,6 +68,17 @@ simdeck "iPhone 17 Pro Max"
 
 The served loopback browser UI receives the generated API access token automatically.
 LAN clients should pair with the printed code before receiving the API cookie.
+For native iOS pairing, run:
+
+```sh
+simdeck pair
+```
+
+This starts or refreshes the global LaunchAgent-backed SimDeck service, prints
+local, LAN, and Tailscale URLs when available, and shows a QR code with a
+`simdeck://pair` link. The QR contains the pairing code plus all detected
+non-loopback addresses, so pairing once can save both the LAN and Tailscale
+routes with the same service token.
 
 CLI commands automatically use the same warm daemon:
 

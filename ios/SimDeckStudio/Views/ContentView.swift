@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import SwiftUI
 
 struct ContentView: View {
@@ -208,35 +209,68 @@ private struct ServerTitleButton: View {
 private struct ServerSelectionSheet: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var renamingEndpoint: SimDeckEndpoint?
+    @State private var renameText = ""
 
     var body: some View {
         NavigationStack {
             List {
-                if model.availableEndpoints.isEmpty {
+                if model.savedEndpoints.isEmpty && model.automaticEndpoints.isEmpty {
                     ContentUnavailableView("No Servers", systemImage: "server.rack")
                 } else {
-                    ForEach(model.availableEndpoints) { endpoint in
-                        Button {
-                            model.hapticSelection()
-                            Task {
-                                if await model.connect(endpoint, autoStart: false) {
-                                    dismiss()
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 12) {
-                                EndpointRow(endpoint: endpoint)
-                                Spacer()
-                                if model.endpoint?.baseURL == endpoint.baseURL {
-                                    Image(systemName: "checkmark")
-                                        .font(.headline)
-                                        .foregroundStyle(.tint)
-                                }
+                    if !model.savedEndpoints.isEmpty {
+                        Section("Saved") {
+                            ForEach(model.savedEndpoints) { endpoint in
+                                serverButton(endpoint, saveEndpoint: false)
+                                    .swipeActions(edge: .trailing) {
+                                        Button(role: .destructive) {
+                                            model.deleteSavedEndpoint(endpoint)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                        Button {
+                                            beginRenaming(endpoint)
+                                        } label: {
+                                            Label("Rename", systemImage: "pencil")
+                                        }
+                                    }
+                                    .contextMenu {
+                                        Button {
+                                            beginRenaming(endpoint)
+                                        } label: {
+                                            Label("Rename", systemImage: "pencil")
+                                        }
+                                        Button(role: .destructive) {
+                                            model.deleteSavedEndpoint(endpoint)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
                             }
                         }
-                        .buttonStyle(.plain)
+                    }
+
+                    if !model.automaticEndpoints.isEmpty {
+                        Section("Auto-Detected") {
+                            ForEach(model.automaticEndpoints) { endpoint in
+                                serverButton(endpoint, saveEndpoint: false)
+                            }
+                        }
                     }
                 }
+            }
+            .alert("Rename Server", isPresented: renameAlertBinding) {
+                TextField("Name", text: $renameText)
+                Button("Cancel", role: .cancel) {
+                    renamingEndpoint = nil
+                }
+                Button("Save") {
+                    if let renamingEndpoint {
+                        model.renameSavedEndpoint(renamingEndpoint, to: renameText)
+                    }
+                    renamingEndpoint = nil
+                }
+                .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .navigationTitle("SimDeck Servers")
             .navigationBarTitleDisplayMode(.inline)
@@ -260,11 +294,50 @@ private struct ServerSelectionSheet: View {
         }
         .presentationDetents([.medium, .large])
     }
+
+    private func serverButton(_ endpoint: SimDeckEndpoint, saveEndpoint: Bool) -> some View {
+        Button {
+            model.hapticSelection()
+            Task {
+                if await model.connect(endpoint, autoStart: false, saveEndpoint: saveEndpoint) {
+                    dismiss()
+                }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                EndpointRow(endpoint: endpoint)
+                Spacer()
+                if model.endpoint?.baseURL == endpoint.baseURL {
+                    Image(systemName: "checkmark")
+                        .font(.headline)
+                        .foregroundStyle(.tint)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var renameAlertBinding: Binding<Bool> {
+        Binding {
+            renamingEndpoint != nil
+        } set: { isPresented in
+            if !isPresented {
+                renamingEndpoint = nil
+            }
+        }
+    }
+
+    private func beginRenaming(_ endpoint: SimDeckEndpoint) {
+        model.hapticSelection()
+        renamingEndpoint = endpoint
+        renameText = endpoint.name
+    }
 }
 
 private struct PairServerSheet: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var isScanning = false
 
     var body: some View {
         NavigationStack {
@@ -278,6 +351,12 @@ private struct PairServerSheet: View {
                 Section("Pair") {
                     TextField("Pairing Code", text: $model.pairingCode)
                         .keyboardType(.numberPad)
+                    Button {
+                        model.hapticSelection()
+                        isScanning = true
+                    } label: {
+                        Label("Scan QR Code", systemImage: "qrcode.viewfinder")
+                    }
                     Button {
                         model.hapticSelection()
                         Task {
@@ -295,6 +374,12 @@ private struct PairServerSheet: View {
                     SecureField("Token", text: $model.manualToken)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                    Button {
+                        model.hapticSelection()
+                        isScanning = true
+                    } label: {
+                        Label("Scan Pairing QR", systemImage: "qrcode.viewfinder")
+                    }
                     Button {
                         model.hapticSelection()
                         Task {
@@ -326,6 +411,9 @@ private struct PairServerSheet: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $isScanning) {
+            QRCodeScannerSheet(model: model)
         }
         .presentationDetents([.medium, .large])
     }
@@ -773,6 +861,7 @@ private func defaultAndroidName(
 private struct ConnectServerSheet: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var isScanning = false
 
     var body: some View {
         NavigationStack {
@@ -785,6 +874,12 @@ private struct ConnectServerSheet: View {
                     SecureField("Token", text: $model.manualToken)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                    Button {
+                        model.hapticSelection()
+                        isScanning = true
+                    } label: {
+                        Label("Scan Pairing QR", systemImage: "qrcode.viewfinder")
+                    }
                     Button {
                         model.hapticSelection()
                         Task {
@@ -801,6 +896,12 @@ private struct ConnectServerSheet: View {
                     Section("Pair") {
                         TextField("Pairing Code", text: $model.pairingCode)
                             .keyboardType(.numberPad)
+                        Button {
+                            model.hapticSelection()
+                            isScanning = true
+                        } label: {
+                            Label("Scan QR Code", systemImage: "qrcode.viewfinder")
+                        }
                         Button {
                             model.hapticSelection()
                             Task {
@@ -842,6 +943,9 @@ private struct ConnectServerSheet: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $isScanning) {
+            QRCodeScannerSheet(model: model)
         }
         .presentationDetents([.medium, .large])
     }
@@ -980,6 +1084,168 @@ private struct GlassCircleModifier: ViewModifier {
         } else {
             content.background(.ultraThinMaterial, in: Circle())
         }
+    }
+}
+
+private struct QRCodeScannerSheet: View {
+    @Bindable var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            QRCodeScannerView { value in
+                model.handleScannedPairingPayload(value)
+                dismiss()
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .navigationTitle("Scan Pairing QR")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        model.hapticSelection()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct QRCodeScannerView: UIViewControllerRepresentable {
+    let onScan: (String) -> Void
+
+    func makeUIViewController(context: Context) -> QRCodeScannerViewController {
+        QRCodeScannerViewController(onScan: onScan)
+    }
+
+    func updateUIViewController(_ uiViewController: QRCodeScannerViewController, context: Context) {}
+}
+
+private final class QRCodeScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    private let onScan: (String) -> Void
+    private let session = AVCaptureSession()
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var didScan = false
+    private let messageLabel = UILabel()
+
+    init(onScan: @escaping (String) -> Void) {
+        self.onScan = onScan
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        return nil
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        configureMessageLabel()
+        requestCameraAccess()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = view.bounds
+        messageLabel.frame = CGRect(
+            x: 24,
+            y: view.safeAreaInsets.top + 24,
+            width: view.bounds.width - 48,
+            height: 64
+        )
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        stopSession()
+    }
+
+    func metadataOutput(
+        _ output: AVCaptureMetadataOutput,
+        didOutput metadataObjects: [AVMetadataObject],
+        from connection: AVCaptureConnection
+    ) {
+        guard !didScan,
+              let object = metadataObjects.compactMap({ $0 as? AVMetadataMachineReadableCodeObject }).first(where: { $0.type == .qr }),
+              let value = object.stringValue?.nilIfBlank else {
+            return
+        }
+        didScan = true
+        stopSession()
+        onScan(value)
+    }
+
+    private func configureMessageLabel() {
+        messageLabel.text = "Scan the QR from simdeck pair"
+        messageLabel.textAlignment = .center
+        messageLabel.textColor = .white
+        messageLabel.font = .preferredFont(forTextStyle: .headline)
+        messageLabel.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        messageLabel.layer.cornerRadius = 14
+        messageLabel.clipsToBounds = true
+        view.addSubview(messageLabel)
+    }
+
+    private func requestCameraAccess() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            configureSession()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                DispatchQueue.main.async {
+                    granted ? self?.configureSession() : self?.showCameraDenied()
+                }
+            }
+        default:
+            showCameraDenied()
+        }
+    }
+
+    private func configureSession() {
+        guard previewLayer == nil else { return }
+        guard let device = AVCaptureDevice.default(for: .video),
+              let input = try? AVCaptureDeviceInput(device: device),
+              session.canAddInput(input) else {
+            showScannerUnavailable()
+            return
+        }
+        session.addInput(input)
+
+        let output = AVCaptureMetadataOutput()
+        guard session.canAddOutput(output) else {
+            showScannerUnavailable()
+            return
+        }
+        session.addOutput(output)
+        output.setMetadataObjectsDelegate(self, queue: .main)
+        output.metadataObjectTypes = [.qr]
+
+        let previewLayer = AVCaptureVideoPreviewLayer(session: session)
+        previewLayer.videoGravity = .resizeAspectFill
+        previewLayer.frame = view.bounds
+        view.layer.insertSublayer(previewLayer, at: 0)
+        self.previewLayer = previewLayer
+
+        DispatchQueue.global(qos: .userInitiated).async { [session] in
+            session.startRunning()
+        }
+    }
+
+    private func stopSession() {
+        guard session.isRunning else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [session] in
+            session.stopRunning()
+        }
+    }
+
+    private func showCameraDenied() {
+        messageLabel.text = "Camera access is needed to scan pairing QR codes."
+    }
+
+    private func showScannerUnavailable() {
+        messageLabel.text = "QR scanning is unavailable on this device."
     }
 }
 

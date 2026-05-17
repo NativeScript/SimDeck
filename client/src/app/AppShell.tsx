@@ -904,7 +904,7 @@ export function AppShell({
     ? buildChromeUrl(
         selectedSimulator.udid,
         chromeAssetStamp,
-        !chromeHasInteractiveButtons || chromeHasCrown,
+        !chromeHasInteractiveButtons,
       )
     : "";
   const chromeButtonUrl = useCallback(
