@@ -31,6 +31,8 @@ interface ToolbarProps {
   isLoading: boolean;
   canInstallApp: boolean;
   onBoot: () => void;
+  onCaptureScreenshot: () => void;
+  onCaptureScreenshotWithBezel: () => void;
   onChangeSearch: (value: string) => void;
   onDismissKeyboard: () => void;
   onHome: () => void;
@@ -40,6 +42,7 @@ interface ToolbarProps {
   onOpenNewSimulator: () => void;
   onOpenUrlPrompt: () => void;
   onRotateRight: () => void;
+  onRecordScreen: () => void;
   onShutdown: () => void;
   onStreamEncoderChange: (encoder: StreamEncoder) => void;
   onStreamFpsChange: (fps: StreamFps) => void;
@@ -79,6 +82,8 @@ export function Toolbar({
   menuOpen,
   menuRef,
   onBoot,
+  onCaptureScreenshot,
+  onCaptureScreenshotWithBezel,
   onChangeSearch,
   onDismissKeyboard,
   onHome,
@@ -88,6 +93,7 @@ export function Toolbar({
   onOpenNewSimulator,
   onOpenUrlPrompt,
   onRotateRight,
+  onRecordScreen,
   onShutdown,
   onStreamEncoderChange,
   onStreamFpsChange,
@@ -149,6 +155,8 @@ export function Toolbar({
           menuOpen={menuOpen}
           menuRef={menuRef}
           onBoot={onBoot}
+          onCaptureScreenshot={onCaptureScreenshot}
+          onCaptureScreenshotWithBezel={onCaptureScreenshotWithBezel}
           onChangeSearch={onChangeSearch}
           onCloseMenu={closeMenu}
           onDismissKeyboard={onDismissKeyboard}
@@ -159,6 +167,7 @@ export function Toolbar({
           onOpenNewSimulator={onOpenNewSimulator}
           onOpenUrlPrompt={onOpenUrlPrompt}
           onRotateRight={onRotateRight}
+          onRecordScreen={onRecordScreen}
           onShutdown={onShutdown}
           onStreamEncoderChange={onStreamEncoderChange}
           onStreamFpsChange={onStreamFpsChange}

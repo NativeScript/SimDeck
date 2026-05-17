@@ -61,7 +61,8 @@ Used by `simdeck ui`, `daemon start`, `daemon restart`, `service on`, and `servi
 
 | Command          | Flags                                                |
 | ---------------- | ---------------------------------------------------- |
-| `screenshot`     | `--output <path>`, `--stdout`                        |
+| `screenshot`     | `--output <path>`, `--stdout`, `--with-bezel`        |
+| `record`         | `--seconds <seconds>`, `--output <path>`, `--stdout` |
 | `logs`           | `--seconds <seconds>`, `--limit <count>`             |
 | `stats`          | `--pid <pid>`, `--watch`, `--interval <seconds>`     |
 | `sample`         | `--pid <pid>`, `--seconds <seconds>`                 |

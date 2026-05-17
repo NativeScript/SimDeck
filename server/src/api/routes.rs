@@ -187,6 +187,17 @@ struct PasteboardPayload {
     text: String,
 }
 
+#[derive(Deserialize)]
+struct ScreenshotPngQuery {
+    bezel: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenRecordingPayload {
+    seconds: Option<f64>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateSimulatorPayload {
@@ -728,6 +739,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/simulators/{udid}/screenshot.png", get(screenshot_png))
         .route(
+            "/api/simulators/{udid}/screen-recording",
+            post(screen_recording),
+        )
+        .route(
             "/api/simulators/{udid}/toggle-appearance",
             post(toggle_appearance),
         )
@@ -1004,6 +1019,7 @@ async fn chrome_devtools_targets(
         devtools::discover_external_devtools_targets(
             &udid,
             origin.as_deref(),
+            Some(&state.config.access_token),
             simulator.as_ref().map(|simulator| simulator.name.as_str()),
             simulator
                 .as_ref()
@@ -2260,11 +2276,25 @@ async fn set_pasteboard(
 async fn screenshot_png(
     State(state): State<AppState>,
     Path(udid): Path<String>,
+    Query(query): Query<ScreenshotPngQuery>,
 ) -> Result<(StatusCode, HeaderMap, Vec<u8>), AppError> {
+    let include_bezel = query
+        .bezel
+        .as_deref()
+        .map(parse_asset_bool)
+        .unwrap_or(false);
     let png = if android::is_android_id(&udid) {
+        if include_bezel {
+            return Err(AppError::bad_request(
+                "Android emulators do not support bezeled screenshots.",
+            ));
+        }
         run_android_action(state, move |android| android.screenshot_png(&udid)).await?
     } else {
-        run_bridge_action(state, move |bridge| bridge.screenshot_png(&udid)).await?
+        run_bridge_action(state, move |bridge| {
+            bridge.screenshot_png(&udid, include_bezel)
+        })
+        .await?
     };
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
@@ -2273,6 +2303,45 @@ async fn screenshot_png(
         "no-cache, no-store, must-revalidate".parse().unwrap(),
     );
     Ok((StatusCode::OK, headers, png))
+}
+
+async fn screen_recording(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<ScreenRecordingPayload>,
+) -> Result<(StatusCode, HeaderMap, Vec<u8>), AppError> {
+    let seconds = validate_screen_recording_seconds(payload.seconds)?;
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Screen recording is currently supported for iOS simulators only.",
+        ));
+    }
+    let mp4 = run_bridge_action(state, move |bridge| {
+        bridge.screen_recording_mp4(&udid, seconds)
+    })
+    .await?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "video/mp4".parse().unwrap());
+    headers.insert(
+        header::CACHE_CONTROL,
+        "no-cache, no-store, must-revalidate".parse().unwrap(),
+    );
+    Ok((StatusCode::OK, headers, mp4))
+}
+
+fn validate_screen_recording_seconds(seconds: Option<f64>) -> Result<f64, AppError> {
+    let seconds = seconds.unwrap_or(5.0);
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err(AppError::bad_request(
+            "`seconds` must be finite and greater than zero.",
+        ));
+    }
+    if seconds > 120.0 {
+        return Err(AppError::bad_request(
+            "`seconds` must be 120 or less for API screen recordings.",
+        ));
+    }
+    Ok(seconds)
 }
 
 async fn toggle_appearance(

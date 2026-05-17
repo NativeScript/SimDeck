@@ -51,6 +51,13 @@ export type LogsOptions = {
   processes?: string[];
   q?: string;
 };
+export type ScreenshotOptions = {
+  bezel?: boolean;
+  withBezel?: boolean;
+};
+export type ScreenRecordingOptions = {
+  seconds?: number;
+};
 type DeviceMethod<TArgs extends unknown[], TResult> = {
   (udid: string, ...args: TArgs): TResult;
   (...args: TArgs): TResult;
@@ -130,7 +137,8 @@ export type SimDeckSession = {
     [steps: unknown[], continueOnError?: boolean],
     Promise<unknown>
   >;
-  screenshot: DeviceMethod<[], Promise<Buffer>>;
+  screenshot: DeviceMethod<[options?: ScreenshotOptions], Promise<Buffer>>;
+  record: DeviceMethod<[options?: ScreenRecordingOptions], Promise<Buffer>>;
   close(): void;
 };
 export declare function connect(

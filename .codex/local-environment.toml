@@ -1,0 +1,23 @@
+version = 1
+name = "SimDeck"
+
+[setup]
+script = '''
+cd "$CODEX_WORKTREE_PATH"
+npm run codex:setup
+'''
+
+[cleanup]
+script = '''
+cd "$CODEX_WORKTREE_PATH"
+npm run codex:cache:save
+'''
+
+[[actions]]
+name = "Build and Restart Daemon"
+icon = "run"
+command = '''
+cd "$CODEX_WORKTREE_PATH"
+npm run codex:run
+'''
+platform = "darwin"

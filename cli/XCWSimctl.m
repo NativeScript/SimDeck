@@ -2,10 +2,14 @@
 
 #import <AppKit/AppKit.h>
 
+#import "XCWChromeRenderer.h"
 #import "XCWPrivateSimulatorBooter.h"
 #import "XCWProcessRunner.h"
 
+#import <dispatch/dispatch.h>
 #import <errno.h>
+#import <math.h>
+#import <signal.h>
 #import <stdlib.h>
 #import <string.h>
 
@@ -21,6 +25,10 @@ static NSString * const XCWSimctlErrorDomain = @"SimDeck.Simctl";
                                    error:(NSError * _Nullable __autoreleasing *)error;
 + (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
                               timeoutSec:(NSTimeInterval)timeoutSec
+                                   error:(NSError * _Nullable __autoreleasing *)error;
++ (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
+                              timeoutSec:(NSTimeInterval)timeoutSec
+                           timeoutSignal:(int)timeoutSignal
                                    error:(NSError * _Nullable __autoreleasing *)error;
 + (nullable NSDictionary *)listJSONPayloadWithError:(NSError * _Nullable __autoreleasing *)error;
 + (NSError *)errorWithDescription:(NSString *)description code:(NSInteger)code;
@@ -46,8 +54,45 @@ static NSString *XCWStringValue(id value) {
     return [value isKindOfClass:[NSString class]] ? value : @"";
 }
 
+static NSString *XCWTrimmedString(NSString *value) {
+    return [value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+}
+
 static NSNumber *XCWNumberValue(id value) {
     return [value isKindOfClass:[NSNumber class]] ? value : nil;
+}
+
+static NSString *XCWStringFromData(NSData *data) {
+    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+}
+
+static NSData *XCWDataSnapshot(NSMutableData *data) {
+    @synchronized(data) {
+        return [data copy];
+    }
+}
+
+static void XCWAppendAvailableData(NSFileHandle *handle, NSMutableData *destination) {
+    @try {
+        NSData *chunk = [handle availableData];
+        if (chunk.length > 0) {
+            @synchronized(destination) {
+                [destination appendData:chunk];
+            }
+        }
+    } @catch (NSException *exception) {
+    }
+}
+
+static BOOL XCWWaitForTaskExit(NSTask *task, NSTimeInterval timeoutSeconds) {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeoutSeconds];
+    while (task.running && [deadline timeIntervalSinceNow] > 0) {
+        usleep(10 * 1000);
+    }
+    if (!task.running) {
+        return YES;
+    }
+    return NO;
 }
 
 static NSString * _Nullable XCWCreateTemporaryDirectory(NSString *prefix, NSError * _Nullable __autoreleasing *error) {
@@ -623,6 +668,12 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 }
 
 - (nullable NSData *)screenshotPNGForSimulatorUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
+    return [self screenshotPNGForSimulatorUDID:udid includeBezel:NO error:error];
+}
+
+- (nullable NSData *)screenshotPNGForSimulatorUDID:(NSString *)udid
+                                      includeBezel:(BOOL)includeBezel
+                                             error:(NSError * _Nullable __autoreleasing *)error {
     NSString *filename = [NSString stringWithFormat:@"simdeck-%@.png", NSUUID.UUID.UUIDString];
     NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:filename];
     XCWProcessResult *result = [self.class runSimctl:@[@"io", udid, @"screenshot", @"--type=png", path] error:error];
@@ -633,7 +684,17 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
         NSData *data = [NSData dataWithContentsOfFile:path options:0 error:error];
         [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
         if (data.length > 0) {
-            return data;
+            if (!includeBezel) {
+                return data;
+            }
+            NSDictionary *simulator = [self simulatorWithUDID:udid error:error];
+            if (simulator == nil) {
+                return nil;
+            }
+            NSString *deviceName = simulator[@"deviceTypeName"] ?: simulator[@"name"] ?: @"";
+            return [XCWChromeRenderer screenshotPNGDataForDeviceName:deviceName
+                                                       screenPNGData:data
+                                                               error:error];
         }
         if (error != NULL && *error == nil) {
             *error = [self.class errorWithDescription:@"Simulator screenshot command produced an empty PNG." code:13];
@@ -643,6 +704,157 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
     [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
     if (error != NULL) {
         *error = [self.class errorWithDescription:result.stderrString.length > 0 ? result.stderrString : @"Unable to capture simulator screenshot." code:13];
+    }
+    return nil;
+}
+
+- (nullable NSData *)screenRecordingMP4ForSimulatorUDID:(NSString *)udid
+                                        durationSeconds:(NSTimeInterval)durationSeconds
+                                                  error:(NSError * _Nullable __autoreleasing *)error {
+    if (!isfinite(durationSeconds) || durationSeconds <= 0.0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:@"Screen recording duration must be finite and greater than zero." code:33];
+        }
+        return nil;
+    }
+
+    NSString *filename = [NSString stringWithFormat:@"simdeck-%@.mp4", NSUUID.UUID.UUIDString];
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:filename];
+    XCWProcessResult *resolvedSimctl = [XCWProcessRunner runLaunchPath:@"/usr/bin/xcrun"
+                                                             arguments:@[@"-f", @"simctl"]
+                                                             inputData:nil
+                                                                 error:error];
+    if (resolvedSimctl == nil) {
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        return nil;
+    }
+    NSString *simctlPath = XCWTrimmedString(XCWStringFromData(resolvedSimctl.stdoutData));
+    if (resolvedSimctl.terminationStatus != 0 || simctlPath.length == 0) {
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        if (error != NULL) {
+            NSString *message = resolvedSimctl.stderrString.length > 0 ? resolvedSimctl.stderrString : @"Unable to locate simctl.";
+            *error = [self.class errorWithDescription:message code:34];
+        }
+        return nil;
+    }
+
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = simctlPath;
+    task.arguments = @[@"io", udid, @"recordVideo", @"--codec=h264", @"--force", path];
+    task.standardInput = NSFileHandle.fileHandleWithNullDevice;
+    NSPipe *stdoutPipe = [NSPipe pipe];
+    NSPipe *stderrPipe = [NSPipe pipe];
+    task.standardOutput = stdoutPipe;
+    task.standardError = stderrPipe;
+
+    NSMutableData *stdoutData = [NSMutableData data];
+    NSMutableData *stderrData = [NSMutableData data];
+    NSFileHandle *stdoutHandle = stdoutPipe.fileHandleForReading;
+    NSFileHandle *stderrHandle = stderrPipe.fileHandleForReading;
+    dispatch_semaphore_t recordingStartedSemaphore = dispatch_semaphore_create(0);
+    __block BOOL recordingStarted = NO;
+
+    stdoutHandle.readabilityHandler = ^(NSFileHandle *handle) {
+        XCWAppendAvailableData(handle, stdoutData);
+    };
+    stderrHandle.readabilityHandler = ^(NSFileHandle *handle) {
+        @try {
+            NSData *chunk = [handle availableData];
+            if (chunk.length == 0) {
+                return;
+            }
+            BOOL shouldSignal = NO;
+            @synchronized(stderrData) {
+                [stderrData appendData:chunk];
+                NSString *text = XCWStringFromData(stderrData);
+                if (!recordingStarted && [text rangeOfString:@"Recording started"].location != NSNotFound) {
+                    recordingStarted = YES;
+                    shouldSignal = YES;
+                }
+            }
+            if (shouldSignal) {
+                dispatch_semaphore_signal(recordingStartedSemaphore);
+            }
+        } @catch (NSException *exception) {
+        }
+    };
+
+    NSError *launchError = nil;
+    if (![task launchAndReturnError:&launchError]) {
+        stdoutHandle.readabilityHandler = nil;
+        stderrHandle.readabilityHandler = nil;
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        if (error != NULL) {
+            *error = launchError ?: [self.class errorWithDescription:@"Unable to launch simulator screen recording." code:34];
+        }
+        return nil;
+    }
+
+    NSTimeInterval startTimeout = MAX(10.0, MIN(30.0, durationSeconds + 10.0));
+    NSDate *startDeadline = [NSDate dateWithTimeIntervalSinceNow:startTimeout];
+    BOOL didStart = NO;
+    while ([startDeadline timeIntervalSinceNow] > 0) {
+        if (dispatch_semaphore_wait(recordingStartedSemaphore, DISPATCH_TIME_NOW) == 0) {
+            didStart = YES;
+            break;
+        }
+        if (!task.running) {
+            break;
+        }
+        usleep(10 * 1000);
+    }
+
+    if (didStart) {
+        NSDate *stopAt = [NSDate dateWithTimeIntervalSinceNow:durationSeconds];
+        while (task.running && [stopAt timeIntervalSinceNow] > 0) {
+            usleep(10 * 1000);
+        }
+    }
+    if (task.running) {
+        [task interrupt];
+    }
+    if (!XCWWaitForTaskExit(task, didStart ? 10.0 : 2.0) && task.running) {
+        [task terminate];
+        if (!XCWWaitForTaskExit(task, 2.0) && task.running) {
+            kill(task.processIdentifier, SIGKILL);
+            XCWWaitForTaskExit(task, 2.0);
+        }
+    }
+
+    stdoutHandle.readabilityHandler = nil;
+    stderrHandle.readabilityHandler = nil;
+    if (!task.running) {
+        XCWAppendAvailableData(stdoutHandle, stdoutData);
+        XCWAppendAvailableData(stderrHandle, stderrData);
+    }
+
+    NSError *readError = nil;
+    NSData *data = nil;
+    NSDate *fileDeadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
+    do {
+        data = [NSData dataWithContentsOfFile:path options:0 error:&readError];
+        if (data.length > 0) {
+            break;
+        }
+        usleep(50 * 1000);
+    } while ([fileDeadline timeIntervalSinceNow] > 0);
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    if (data.length > 0) {
+        return data;
+    }
+
+    if (error != NULL) {
+        NSString *stderrString = XCWStringFromData(XCWDataSnapshot(stderrData));
+        NSString *stdoutString = XCWStringFromData(XCWDataSnapshot(stdoutData));
+        NSString *details = stderrString.length > 0 ? stderrString : stdoutString;
+        if (!didStart && details.length == 0) {
+            details = @"Simulator screen recording did not start before the timeout.";
+        } else if (details.length == 0 && readError.localizedDescription.length > 0) {
+            details = readError.localizedDescription;
+        } else if (details.length == 0) {
+            details = @"Simulator screen recording command produced an empty MP4.";
+        }
+        *error = [self.class errorWithDescription:details code:34];
     }
     return nil;
 }
@@ -863,10 +1075,18 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
 + (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
                               timeoutSec:(NSTimeInterval)timeoutSec
                                    error:(NSError * _Nullable __autoreleasing *)error {
+    return [self runSimctl:arguments timeoutSec:timeoutSec timeoutSignal:SIGTERM error:error];
+}
+
++ (nullable XCWProcessResult *)runSimctl:(NSArray<NSString *> *)arguments
+                              timeoutSec:(NSTimeInterval)timeoutSec
+                           timeoutSignal:(int)timeoutSignal
+                                   error:(NSError * _Nullable __autoreleasing *)error {
     return [XCWProcessRunner runLaunchPath:@"/usr/bin/xcrun"
                                  arguments:[@[@"simctl"] arrayByAddingObjectsFromArray:arguments]
                                  inputData:nil
                                 timeoutSec:timeoutSec
+                             timeoutSignal:timeoutSignal
                                      error:error];
 }
 

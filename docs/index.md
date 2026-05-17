@@ -28,7 +28,7 @@ features:
       width: 28
       height: 28
     title: Fast local control
-    details: Boot devices, install apps, open URLs, type, tap, swipe, rotate, capture screenshots, and read logs from the CLI.
+    details: Boot devices, install apps, open URLs, type, tap, swipe, rotate, capture screenshots and recordings, and read logs from the CLI.
   - icon:
       src: /icons/scan-search.svg
       width: 28

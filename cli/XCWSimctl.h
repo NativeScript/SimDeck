@@ -19,6 +19,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)openURL:(NSString *)urlString simulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)launchBundleID:(NSString *)bundleID simulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (nullable NSData *)screenshotPNGForSimulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
+- (nullable NSData *)screenshotPNGForSimulatorUDID:(NSString *)udid
+                                      includeBezel:(BOOL)includeBezel
+                                             error:(NSError * _Nullable * _Nullable)error;
+- (nullable NSData *)screenRecordingMP4ForSimulatorUDID:(NSString *)udid
+                                        durationSeconds:(NSTimeInterval)durationSeconds
+                                                  error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)eraseSimulatorWithUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)installAppAtPath:(NSString *)appPath simulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)uninstallBundleID:(NSString *)bundleID simulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;

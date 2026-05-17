@@ -545,6 +545,58 @@ runs:
         fi
         date +%s > /tmp/sim-boot-end
 
+    - name: Wait for public SimDeck iOS session access
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        udid="${SIMULATOR_UDID}"
+        public_simulators_url="${{ steps.stream.outputs.url }}/api/simulators?simdeckToken=${{ steps.stream.outputs.access_token }}"
+        tunnel_host="${{ steps.stream.outputs.url }}"
+        tunnel_host="${tunnel_host#https://}"
+        tunnel_host="${tunnel_host%%/*}"
+
+        fetch_public_simulators() {
+          curl -fsS "${public_simulators_url}" -o public-simulators.json ||
+            curl -fsS --resolve "${tunnel_host}:443:104.16.230.132" "${public_simulators_url}" -o public-simulators.json ||
+            curl -fsS --resolve "${tunnel_host}:443:104.16.231.132" "${public_simulators_url}" -o public-simulators.json
+        }
+
+        verify_selected_simulator() {
+          SIMDECK_READY_UDID="${udid}" python3 - <<'PY'
+        import json
+        import os
+
+        with open("public-simulators.json", "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+
+        udid = os.environ["SIMDECK_READY_UDID"]
+        simulators = data.get("simulators", data if isinstance(data, list) else [])
+        for simulator in simulators:
+            if simulator.get("udid") == udid and simulator.get("isBooted") is True:
+                raise SystemExit(0)
+
+        raise SystemExit(1)
+        PY
+        }
+
+        for attempt in {1..120}; do
+          if fetch_public_simulators && verify_selected_simulator; then
+            echo "Public SimDeck URL lists booted simulator ${udid}."
+            exit 0
+          fi
+          echo "Waiting for public SimDeck simulator list (${attempt}/120)."
+          sleep 1
+        done
+
+        echo "SimDeck public simulator list did not become accessible for ${udid}" >&2
+        if [[ -f public-simulators.json ]]; then
+          cat public-simulators.json >&2 || true
+        fi
+        cat cloudflared.log >&2 || true
+        cat simdeck-daemon.log >&2 || true
+        exit 1
+
     - name: Update status comment with booted simulator URL
       shell: bash
       run: |

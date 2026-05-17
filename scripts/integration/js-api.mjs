@@ -267,6 +267,16 @@ async function main() {
     "JS screenshot",
     async () => {
       assertPngBuffer(await session.screenshot(simulatorUDID));
+      assertPngBuffer(
+        await session.screenshot(simulatorUDID, { withBezel: true }),
+      );
+    },
+    { phase: phaseCommandSmoke },
+  );
+  await measuredStep(
+    "JS screen recording",
+    async () => {
+      assertMp4Buffer(await session.record(simulatorUDID, { seconds: 1 }));
     },
     { phase: phaseCommandSmoke },
   );
@@ -433,6 +443,15 @@ function assertJson(payload, label) {
 function assertPngBuffer(buffer) {
   if (buffer.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") {
     throw new Error("Expected PNG data.");
+  }
+}
+
+function assertMp4Buffer(buffer) {
+  if (
+    buffer.length < 12 ||
+    buffer.subarray(4, 8).toString("ascii") !== "ftyp"
+  ) {
+    throw new Error("Expected MP4 data.");
   }
 }
 
