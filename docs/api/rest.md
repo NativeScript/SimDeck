@@ -19,6 +19,13 @@ LAN browsers can pair with the printed six-digit code through:
 POST /api/pair
 ```
 
+Successful pairing sets the browser auth cookie and also returns the access token
+for native clients:
+
+```json
+{ "ok": true, "accessToken": "<token>" }
+```
+
 ## Quick Examples
 
 ```sh

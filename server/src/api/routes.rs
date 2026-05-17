@@ -970,7 +970,11 @@ async fn pair_browser(
     if !auth::pairing_code_matches(&state.config, &payload.code) {
         return auth::unauthorized_response(&state.config, &headers);
     }
-    let mut response = Json(json_value!({ "ok": true })).into_response();
+    let mut response = Json(json_value!({
+        "ok": true,
+        "accessToken": state.config.access_token,
+    }))
+    .into_response();
     auth::append_cors_headers(&state.config, &headers, response.headers_mut());
     auth::append_access_cookie(response.headers_mut(), &state.config.access_token);
     response

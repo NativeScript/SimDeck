@@ -17,6 +17,7 @@ packages/flutter-inspector/.dart_tool/
 packages/flutter-inspector/pubspec.lock
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+ios/DerivedData/
 cloud/
 .cache/
 .playwright-mcp/

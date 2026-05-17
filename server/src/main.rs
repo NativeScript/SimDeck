@@ -44,12 +44,12 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command as ProcessCommand, Stdio};
+use std::process::{Child, Command as ProcessCommand, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
-use tracing::info;
+use tracing::{info, warn};
 
 const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
 const SUPERVISED_DAEMON_METADATA_PID_ENV: &str = "SIMDECK_DAEMON_METADATA_PID";
@@ -5989,6 +5989,7 @@ async fn serve(
         .with_context(|| format!("bind HTTP listener on {}", config.http_addr()))?;
     let health_heartbeat = Arc::new(AtomicU64::new(now_secs()));
     start_server_health_watchdog(config.http_addr(), health_heartbeat.clone());
+    let _bonjour_advertisement = BonjourAdvertisement::start(&config);
 
     info!("HTTP listening on http://{}", config.http_addr());
     info!("Serving client from {}", config.client_root.display());
@@ -6027,6 +6028,59 @@ async fn serve(
     }
 
     Ok(())
+}
+
+struct BonjourAdvertisement {
+    child: Child,
+}
+
+impl BonjourAdvertisement {
+    fn start(config: &Config) -> Option<Self> {
+        if config.bind_ip.is_loopback() {
+            return None;
+        }
+        let service_name = bonjour_service_name(&config.advertise_host);
+        match ProcessCommand::new("dns-sd")
+            .args([
+                "-R",
+                &service_name,
+                "_simdeck._tcp.",
+                "local.",
+                &config.http_port.to_string(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => {
+                info!(
+                    "Advertising Bonjour service '{}' on _simdeck._tcp. port {}",
+                    service_name, config.http_port
+                );
+                Some(Self { child })
+            }
+            Err(error) => {
+                warn!("Unable to advertise Bonjour service with dns-sd: {error}");
+                None
+            }
+        }
+    }
+}
+
+impl Drop for BonjourAdvertisement {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn bonjour_service_name(advertise_host: &str) -> String {
+    let host = advertise_host.trim();
+    if host.is_empty() || host == "127.0.0.1" || host == "localhost" {
+        "SimDeck".to_owned()
+    } else {
+        format!("SimDeck {host}")
+    }
 }
 
 fn app_router(state: AppState, client_root: PathBuf, access_token: String) -> Router {
