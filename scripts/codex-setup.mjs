@@ -41,16 +41,22 @@ function installBrewPackage(formula, label) {
     );
   }
   if (!commandSucceeds("brew", ["--version"])) {
-    throw new Error(`Missing ${label}, and Homebrew is not available to install ${formula}.`);
+    throw new Error(
+      `Missing ${label}, and Homebrew is not available to install ${formula}.`,
+    );
   }
   run("brew", ["install", formula]);
 }
 
 function ensureNodeModules(prefix, label) {
   const modulesPath =
-    prefix === "." ? resolve(ROOT, "node_modules") : resolve(ROOT, prefix, "node_modules");
+    prefix === "."
+      ? resolve(ROOT, "node_modules")
+      : resolve(ROOT, prefix, "node_modules");
   if (existsAndHasContent(modulesPath)) {
-    console.log(`[setup] skip ${label} npm install; node_modules already exists`);
+    console.log(
+      `[setup] skip ${label} npm install; node_modules already exists`,
+    );
     return;
   }
 

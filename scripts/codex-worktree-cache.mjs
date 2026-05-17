@@ -29,7 +29,9 @@ const force = args.includes("--force");
 const bestEffort = args.includes("--best-effort") || command === "hydrate";
 
 if (!["hydrate", "save", "status"].includes(command)) {
-  console.error("Usage: codex-worktree-cache.mjs <hydrate|save|status> [--force]");
+  console.error(
+    "Usage: codex-worktree-cache.mjs <hydrate|save|status> [--force]",
+  );
   process.exit(2);
 }
 
@@ -112,7 +114,13 @@ function buildEntries() {
     {
       label: "client node_modules",
       destination: "client/node_modules",
-      cachePath: join(CACHE_ROOT, "node", "client", clientLockHash, "node_modules"),
+      cachePath: join(
+        CACHE_ROOT,
+        "node",
+        "client",
+        clientLockHash,
+        "node_modules",
+      ),
       sourceLockFiles: ["client/package-lock.json"],
     },
     {
