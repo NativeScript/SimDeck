@@ -1013,6 +1013,7 @@ async fn chrome_devtools_targets(
         devtools::discover_external_devtools_targets(
             &udid,
             origin.as_deref(),
+            Some(&state.config.access_token),
             simulator.as_ref().map(|simulator| simulator.name.as_str()),
             simulator
                 .as_ref()
