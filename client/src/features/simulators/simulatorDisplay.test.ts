@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { SimulatorMetadata } from "../../api/types";
 import {
   shouldRenderNativeChrome,
+  simulatorHasFixedOrientation,
   simulatorRuntimeLabel,
 } from "./simulatorDisplay";
 
@@ -40,7 +41,7 @@ describe("simulatorDisplay", () => {
     ).toBe(true);
   });
 
-  it("keeps native chrome off for device families without supported bezels", () => {
+  it("enables native chrome for Apple TV simulators", () => {
     expect(
       shouldRenderNativeChrome(
         simulator({
@@ -49,7 +50,7 @@ describe("simulatorDisplay", () => {
           name: "Apple TV 4K (3rd generation)",
         }),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("keeps native chrome off for Android emulators", () => {
@@ -59,6 +60,36 @@ describe("simulatorDisplay", () => {
           deviceTypeIdentifier: "android-emulator",
           name: "SimDeck Pixel",
           platform: "android-emulator",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("marks Apple TV and Apple Watch simulators as fixed-orientation devices", () => {
+    expect(
+      simulatorHasFixedOrientation(
+        simulator({
+          deviceTypeIdentifier:
+            "com.apple.CoreSimulator.SimDeviceType.Apple-TV-4K-3rd-generation-4K",
+          runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.tvOS-26-0",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      simulatorHasFixedOrientation(
+        simulator({
+          deviceTypeIdentifier:
+            "com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Ultra-3-49mm",
+          runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.watchOS-26-0",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      simulatorHasFixedOrientation(
+        simulator({
+          deviceTypeIdentifier:
+            "com.apple.CoreSimulator.SimDeviceType.iPhone-17",
+          runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-0",
         }),
       ),
     ).toBe(false);

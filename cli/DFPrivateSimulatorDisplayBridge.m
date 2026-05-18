@@ -32,13 +32,12 @@ typedef struct IndigoHIDMessageStruct IndigoHIDMessage;
 typedef uint32_t IndigoHIDEdge;
 
 typedef IndigoHIDMessage *(*DFIndigoHIDMessageForMouseNSEventFn)(CGPoint *location, CGPoint *windowLocation, uint32_t target, NSEventType type, NSSize displaySize, IndigoHIDEdge edge);
-typedef IndigoHIDMessage *(*DFIndigoHIDMessageForMouseNSEvent9Fn)(CGPoint *location, CGPoint *windowLocation, uint32_t target, uint32_t eventType, uint32_t direction, double unused1, double unused2, double widthPoints, double heightPoints);
-typedef IndigoHIDMessage *(*DFIndigoHIDMessageForMouseNSEventEdgeFn)(CGPoint *location, CGPoint *windowLocation, uint32_t target, uint32_t eventType, IndigoHIDEdge edge, double widthPoints, double heightPoints);
 typedef IndigoHIDMessage *(*DFIndigoHIDMessageForKeyboardArbitraryFn)(int keyCode, int op);
 typedef IndigoHIDMessage *(*DFIndigoHIDMessageForKeyboardNSEventFn)(NSEvent *event);
 typedef IndigoHIDMessage *(*DFIndigoHIDMessageForButtonFn)(uint32_t buttonCode, uint32_t operation, uint32_t target);
 typedef IndigoHIDMessage *(*DFIndigoHIDMessageForHIDArbitraryFn)(uint32_t target, uint32_t page, uint32_t usage, uint32_t operation);
-typedef IndigoHIDMessage *(*DFIndigoHIDMessageForScrollEventFn)(uint32_t target, double deltaX, double deltaY, double momentumPhase);
+typedef IndigoHIDMessage *(*DFIndigoHIDMessageForScrollEventFn)(uint32_t flags, double deltaX, double deltaY, double momentumPhase, uint32_t target);
+typedef IndigoHIDMessage *(*DFIndigoHIDMessageForDigitalCrownEventFn)(double delta);
 typedef IndigoHIDMessage *(*DFIndigoHIDServiceMessageFn)(void);
 
 #pragma pack(push, 4)
@@ -92,15 +91,13 @@ typedef struct {
 } DFIndigoMessage;
 #pragma pack(pop)
 
-static const uint32_t DFIndigoTouchTarget = 0x32;
+static const uint32_t DFIndigoDigitizerTarget = 0x32;
+static const uint32_t DFIndigoDigitalCrownTarget = 0x34;
 static const uint8_t DFIndigoEventTypeTouch = 0x02;
 static const uint32_t DFIndigoTouchEventKind = 0x0b;
 static const uint32_t DFIndigoMouseEventDown = 1;
 static const uint32_t DFIndigoMouseEventUp = 2;
 static const uint32_t DFIndigoMouseEventDragged = 6;
-static const uint32_t DFIndigoMouseDirectionDown = 1;
-static const uint32_t DFIndigoMouseDirectionMove = 0;
-static const uint32_t DFIndigoMouseDirectionUp = 2;
 static const IndigoHIDEdge DFIndigoHIDEdgeNone = 0;
 static const IndigoHIDEdge DFIndigoHIDEdgeLeft = 1;
 static const IndigoHIDEdge DFIndigoHIDEdgeTop = 2;
@@ -119,6 +116,12 @@ static const NSUInteger DFKeyboardModifierControl = 1 << 1;
 static const NSUInteger DFKeyboardModifierOption = 1 << 2;
 static const NSUInteger DFKeyboardModifierCommand = 1 << 3;
 static const NSUInteger DFKeyboardModifierCapsLock = 1 << 4;
+
+typedef NS_ENUM(NSInteger, DFSimulatorInputFamily) {
+    DFSimulatorInputFamilyDefault = 0,
+    DFSimulatorInputFamilyWatch = 1,
+    DFSimulatorInputFamilyTV = 2,
+};
 
 static NSString *DFActiveDeveloperDirectory(void) {
     const char *developerDir = getenv("DEVELOPER_DIR");
@@ -151,32 +154,12 @@ static NSString *DFSimulatorKitExecutablePath(void) {
     return @"/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit";
 }
 
-static NSInteger DFXcodeMajorVersion(void) {
-    NSString *developerPath = DFActiveDeveloperDirectory();
-    if (developerPath.length == 0) {
-        return 0;
-    }
-
-    NSString *contentsPath = developerPath;
-    if ([contentsPath.lastPathComponent isEqualToString:@"Developer"]) {
-        contentsPath = contentsPath.stringByDeletingLastPathComponent;
-    }
-
-    NSDictionary *versionInfo = [NSDictionary dictionaryWithContentsOfFile:[contentsPath stringByAppendingPathComponent:@"version.plist"]];
-    NSString *version = versionInfo[@"CFBundleShortVersionString"];
-    if (version.length == 0) {
-        NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:[contentsPath stringByAppendingPathComponent:@"Info.plist"]];
-        version = info[@"CFBundleShortVersionString"];
-    }
-    return [[version componentsSeparatedByString:@"."].firstObject integerValue];
-}
-
 typedef struct {
     __unsafe_unretained id unit;
     double value;
 } DFUnitAngleMeasurement;
 
-static DFIndigoMessage *DFCreateIndigoMultiTouchMessage(CGPoint normalizedPoint1, CGPoint normalizedPoint2, NSSize displaySize, BOOL touchDown, NSError **error);
+static DFIndigoMessage *DFCreateIndigoMultiTouchMessage(CGPoint normalizedPoint1, CGPoint normalizedPoint2, NSSize displaySize, BOOL touchDown, uint32_t target, NSError **error);
 
 typedef NS_ENUM(NSInteger, DFPrivateSimulatorErrorCode) {
     DFPrivateSimulatorErrorCodeFrameworkLoadFailed = 1,
@@ -226,23 +209,6 @@ static BOOL DFVerboseTouchLoggingEnabled(void) {
         enabled = [value isEqualToString:@"1"] ||
                   [value caseInsensitiveCompare:@"true"] == NSOrderedSame ||
                   [value caseInsensitiveCompare:@"yes"] == NSOrderedSame;
-    });
-    return enabled;
-}
-
-static BOOL DFShouldUseIndigoMouse9Path(void) {
-    static BOOL enabled = NO;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        NSString *override = NSProcessInfo.processInfo.environment[@"SIMDECK_INDIGO_MOUSE_9ARG"];
-        if (override.length > 0) {
-            enabled = [override isEqualToString:@"1"] ||
-                      [override caseInsensitiveCompare:@"true"] == NSOrderedSame ||
-                      [override caseInsensitiveCompare:@"yes"] == NSOrderedSame;
-            return;
-        }
-
-        enabled = DFXcodeMajorVersion() >= 26;
     });
     return enabled;
 }
@@ -571,6 +537,18 @@ static id DFSendObject(id target, const char *selectorName) {
     return ((id(*)(id, SEL))objc_msgSend)(target, sel_registerName(selectorName));
 }
 
+static id DFSendObjectIfResponds(id target, const char *selectorName) {
+    if (target == nil || selectorName == NULL) {
+        return nil;
+    }
+
+    SEL selector = sel_registerName(selectorName);
+    if (![target respondsToSelector:selector]) {
+        return nil;
+    }
+    return ((id(*)(id, SEL))objc_msgSend)(target, selector);
+}
+
 static NSString *DFOptionalStringFromObjectSelector(id target, const char *selectorName) {
     if (target == nil || selectorName == NULL) {
         return nil;
@@ -580,9 +558,88 @@ static NSString *DFOptionalStringFromObjectSelector(id target, const char *selec
     return [value isKindOfClass:[NSString class]] ? value : nil;
 }
 
+static NSString *DFOptionalStringFromRespondingObjectSelector(id target, const char *selectorName) {
+    id value = DFSendObjectIfResponds(target, selectorName);
+    return [value isKindOfClass:[NSString class]] ? value : nil;
+}
+
 static NSString *DFTrimmedString(NSString *value) {
     NSString *trimmed = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     return trimmed.length > 0 ? trimmed : nil;
+}
+
+static void DFAppendSimulatorMetadataValue(NSMutableArray<NSString *> *values, NSString *value) {
+    NSString *trimmed = DFTrimmedString(value);
+    if (trimmed.length > 0) {
+        [values addObject:trimmed.lowercaseString];
+    }
+}
+
+static void DFAppendSimulatorMetadataObject(NSMutableArray<NSString *> *values, id object) {
+    if (object == nil) {
+        return;
+    }
+
+    for (NSString *selectorName in @[
+        @"identifier",
+        @"name",
+        @"platform",
+        @"productFamily",
+        @"modelIdentifier",
+        @"runtimeIdentifier",
+        @"deviceTypeIdentifier",
+    ]) {
+        DFAppendSimulatorMetadataValue(
+            values,
+            DFOptionalStringFromRespondingObjectSelector(object, selectorName.UTF8String)
+        );
+    }
+}
+
+static DFSimulatorInputFamily DFSimulatorInputFamilyForCoreSimulatorDevice(id device) {
+    NSMutableArray<NSString *> *values = [NSMutableArray array];
+    DFAppendSimulatorMetadataObject(values, DFSendObjectIfResponds(device, "runtime"));
+    DFAppendSimulatorMetadataObject(values, DFSendObjectIfResponds(device, "deviceType"));
+
+    if (values.count == 0) {
+        DFAppendSimulatorMetadataObject(values, device);
+        if ([device respondsToSelector:@selector(description)]) {
+            DFAppendSimulatorMetadataValue(values, [device description]);
+        }
+    }
+
+    NSString *metadata = [values componentsJoinedByString:@" "];
+    if ([metadata containsString:@"tvos"] ||
+        [metadata containsString:@"apple-tv"] ||
+        [metadata containsString:@"apple tv"] ||
+        [metadata containsString:@"appletv"]) {
+        return DFSimulatorInputFamilyTV;
+    }
+    if ([metadata containsString:@"watchos"] ||
+        [metadata containsString:@"apple-watch"] ||
+        [metadata containsString:@"apple watch"]) {
+        return DFSimulatorInputFamilyWatch;
+    }
+    return DFSimulatorInputFamilyDefault;
+}
+
+static const char *DFSimulatorInputFamilyName(DFSimulatorInputFamily family) {
+    switch (family) {
+    case DFSimulatorInputFamilyWatch:
+        return "watch";
+    case DFSimulatorInputFamilyTV:
+        return "tv";
+    case DFSimulatorInputFamilyDefault:
+    default:
+        return "default";
+    }
+}
+
+static NSError *DFTVDirectTouchUnsupportedError(void) {
+    return DFMakeError(
+        DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+        @"tvOS simulators do not support direct screen touch. Use remote key input (Enter and arrow keys) instead."
+    );
 }
 
 static id DFCreateCoreSimulatorServiceContext(NSError **error) {
@@ -1171,23 +1228,12 @@ static uint32_t DFIndigoMouseEventTypeForPhase(DFPrivateSimulatorTouchPhase phas
     }
 }
 
-static uint32_t DFIndigoMouseDirectionForPhase(DFPrivateSimulatorTouchPhase phase) {
-    switch (phase) {
-    case DFPrivateSimulatorTouchPhaseBegan:
-        return DFIndigoMouseDirectionDown;
-    case DFPrivateSimulatorTouchPhaseMoved:
-        return DFIndigoMouseDirectionMove;
-    case DFPrivateSimulatorTouchPhaseEnded:
-    case DFPrivateSimulatorTouchPhaseCancelled:
-        return DFIndigoMouseDirectionUp;
-    }
-}
-
-static IndigoHIDMessage *DFCreateIndigoTouchMessage9(CGPoint normalizedPoint, NSSize displaySize, DFPrivateSimulatorTouchPhase phase) {
-    if (!DFShouldUseIndigoMouse9Path()) {
-        return NULL;
-    }
-    DFIndigoHIDMessageForMouseNSEvent9Fn mouseMessage = (DFIndigoHIDMessageForMouseNSEvent9Fn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
+static IndigoHIDMessage *DFCreateIndigoTouchMessageDirect(CGPoint normalizedPoint,
+                                                          NSSize displaySize,
+                                                          DFPrivateSimulatorTouchPhase phase,
+                                                          uint32_t target,
+                                                          IndigoHIDEdge edge) {
+    DFIndigoHIDMessageForMouseNSEventFn mouseMessage = (DFIndigoHIDMessageForMouseNSEventFn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
     if (mouseMessage == NULL) {
         return NULL;
     }
@@ -1198,20 +1244,18 @@ static IndigoHIDMessage *DFCreateIndigoTouchMessage9(CGPoint normalizedPoint, NS
     );
     return mouseMessage(&ratioPoint,
                         NULL,
-                        DFIndigoTouchTarget,
-                        DFIndigoMouseEventTypeForPhase(phase),
-                        DFIndigoMouseDirectionForPhase(phase),
-                        1.0,
-                        1.0,
-                        displaySize.width,
-                        displaySize.height);
+                        target,
+                        (NSEventType)DFIndigoMouseEventTypeForPhase(phase),
+                        displaySize,
+                        edge);
 }
 
-static IndigoHIDMessage *DFCreateIndigoMultiTouchMessage9(CGPoint normalizedPoint1, CGPoint normalizedPoint2, NSSize displaySize, DFPrivateSimulatorTouchPhase phase) {
-    if (!DFShouldUseIndigoMouse9Path()) {
-        return NULL;
-    }
-    DFIndigoHIDMessageForMouseNSEvent9Fn mouseMessage = (DFIndigoHIDMessageForMouseNSEvent9Fn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
+static IndigoHIDMessage *DFCreateIndigoMultiTouchMessageDirect(CGPoint normalizedPoint1,
+                                                               CGPoint normalizedPoint2,
+                                                               NSSize displaySize,
+                                                               DFPrivateSimulatorTouchPhase phase,
+                                                               uint32_t target) {
+    DFIndigoHIDMessageForMouseNSEventFn mouseMessage = (DFIndigoHIDMessageForMouseNSEventFn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
     if (mouseMessage == NULL) {
         return NULL;
     }
@@ -1226,13 +1270,10 @@ static IndigoHIDMessage *DFCreateIndigoMultiTouchMessage9(CGPoint normalizedPoin
     );
     return mouseMessage(&ratioPoint,
                         &secondRatioPoint,
-                        DFIndigoTouchTarget,
-                        DFIndigoMouseEventTypeForPhase(phase),
-                        DFIndigoMouseDirectionForPhase(phase),
-                        1.0,
-                        1.0,
-                        displaySize.width,
-                        displaySize.height);
+                        target,
+                        (NSEventType)DFIndigoMouseEventTypeForPhase(phase),
+                        displaySize,
+                        DFIndigoHIDEdgeNone);
 }
 
 static IndigoHIDEdge DFIndigoHIDEdgeForPrivateTouchEdge(DFPrivateSimulatorTouchEdge edge) {
@@ -1251,33 +1292,30 @@ static IndigoHIDEdge DFIndigoHIDEdgeForPrivateTouchEdge(DFPrivateSimulatorTouchE
     }
 }
 
-static IndigoHIDMessage *DFCreateIndigoEdgeTouchMessage(CGPoint normalizedPoint, DFPrivateSimulatorTouchPhase phase, DFPrivateSimulatorTouchEdge edge) {
-    DFIndigoHIDMessageForMouseNSEventEdgeFn mouseMessage = (DFIndigoHIDMessageForMouseNSEventEdgeFn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
-    if (mouseMessage == NULL) {
-        return NULL;
-    }
-
-    CGPoint ratioPoint = CGPointMake(
-        fmax(0.0, fmin(1.0, normalizedPoint.x)),
-        fmax(0.0, fmin(1.0, normalizedPoint.y))
-    );
-    return mouseMessage(&ratioPoint,
-                        NULL,
-                        DFIndigoTouchTarget,
-                        DFIndigoMouseEventTypeForPhase(phase),
-                        DFIndigoHIDEdgeForPrivateTouchEdge(edge),
-                        1.0,
-                        1.0);
+static IndigoHIDMessage *DFCreateIndigoEdgeTouchMessage(CGPoint normalizedPoint,
+                                                        NSSize displaySize,
+                                                        DFPrivateSimulatorTouchPhase phase,
+                                                        DFPrivateSimulatorTouchEdge edge,
+                                                        uint32_t target) {
+    return DFCreateIndigoTouchMessageDirect(normalizedPoint,
+                                            displaySize,
+                                            phase,
+                                            target,
+                                            DFIndigoHIDEdgeForPrivateTouchEdge(edge));
 }
 
-static IndigoHIDMessage *DFCreateIndigoEdgeTouchMessageOnMain(CGPoint normalizedPoint, DFPrivateSimulatorTouchPhase phase, DFPrivateSimulatorTouchEdge edge) {
+static IndigoHIDMessage *DFCreateIndigoEdgeTouchMessageOnMain(CGPoint normalizedPoint,
+                                                              NSSize displaySize,
+                                                              DFPrivateSimulatorTouchPhase phase,
+                                                              DFPrivateSimulatorTouchEdge edge,
+                                                              uint32_t target) {
     if ([NSThread isMainThread]) {
-        return DFCreateIndigoEdgeTouchMessage(normalizedPoint, phase, edge);
+        return DFCreateIndigoEdgeTouchMessage(normalizedPoint, displaySize, phase, edge, target);
     }
 
     __block IndigoHIDMessage *message = NULL;
     dispatch_sync(dispatch_get_main_queue(), ^{
-        message = DFCreateIndigoEdgeTouchMessage(normalizedPoint, phase, edge);
+        message = DFCreateIndigoEdgeTouchMessage(normalizedPoint, displaySize, phase, edge, target);
     });
     return message;
 }
@@ -1309,7 +1347,33 @@ static void DFWarmIndigoHIDServices(id hidClient) {
     }
 }
 
-static DFIndigoMessage *DFCreateIndigoTouchMessage(CGPoint normalizedPoint, NSSize displaySize, BOOL touchDown, NSError **error) {
+static id DFCreateLegacyHIDClientForDevice(id device, NSError **error) {
+    Class legacyHIDClientClass = NSClassFromString(@"SimulatorKit.SimDeviceLegacyHIDClient");
+    if (legacyHIDClientClass == Nil) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit legacy HID client class was unavailable."
+            );
+        }
+        return nil;
+    }
+
+    id hidClientAlloc = ((id(*)(id, SEL))objc_msgSend)(legacyHIDClientClass, sel_registerName("alloc"));
+    return ((id(*)(id, SEL, id, NSError **))objc_msgSend)(
+        hidClientAlloc,
+        sel_registerName("initWithDevice:error:"),
+        device,
+        error
+    );
+}
+
+static DFIndigoMessage *DFCreateIndigoTouchMessage(CGPoint normalizedPoint,
+                                                   NSSize displaySize,
+                                                   BOOL touchDown,
+                                                   uint32_t target,
+                                                   IndigoHIDEdge edge,
+                                                   NSError **error) {
     DFIndigoHIDMessageForMouseNSEventFn mouseMessage = (DFIndigoHIDMessageForMouseNSEventFn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
     if (mouseMessage == NULL) {
         if (error != NULL) {
@@ -1327,7 +1391,7 @@ static DFIndigoMessage *DFCreateIndigoTouchMessage(CGPoint normalizedPoint, NSSi
         fmax(0.0, fmin(1.0, normalizedPoint.y))
     );
 
-    DFIndigoMessage *baseMessage = (DFIndigoMessage *)mouseMessage(&ratioPoint, NULL, DFIndigoTouchTarget, eventType, displaySize, 0);
+    DFIndigoMessage *baseMessage = (DFIndigoMessage *)mouseMessage(&ratioPoint, NULL, target, eventType, displaySize, edge);
     if (baseMessage == NULL) {
         if (error != NULL) {
             *error = DFMakeError(
@@ -1368,7 +1432,12 @@ static DFIndigoMessage *DFCreateIndigoTouchMessage(CGPoint normalizedPoint, NSSi
     return message;
 }
 
-static DFIndigoMessage *DFCreateIndigoMultiTouchMessage(CGPoint normalizedPoint1, CGPoint normalizedPoint2, NSSize displaySize, BOOL touchDown, NSError **error) {
+static DFIndigoMessage *DFCreateIndigoMultiTouchMessage(CGPoint normalizedPoint1,
+                                                        CGPoint normalizedPoint2,
+                                                        NSSize displaySize,
+                                                        BOOL touchDown,
+                                                        uint32_t target,
+                                                        NSError **error) {
     DFIndigoHIDMessageForMouseNSEventFn mouseMessage = (DFIndigoHIDMessageForMouseNSEventFn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
     if (mouseMessage == NULL) {
         if (error != NULL) {
@@ -1390,7 +1459,7 @@ static DFIndigoMessage *DFCreateIndigoMultiTouchMessage(CGPoint normalizedPoint1
         fmax(0.0, fmin(1.0, normalizedPoint2.y))
     );
 
-    DFIndigoMessage *baseMessage = (DFIndigoMessage *)mouseMessage(&ratioPoint, NULL, DFIndigoTouchTarget, eventType, displaySize, 0);
+    DFIndigoMessage *baseMessage = (DFIndigoMessage *)mouseMessage(&ratioPoint, NULL, target, eventType, displaySize, 0);
     if (baseMessage == NULL) {
         if (error != NULL) {
             *error = DFMakeError(
@@ -1536,11 +1605,34 @@ static IndigoHIDMessage *DFCreateScrollHIDMessage(uint32_t target, double deltaX
         return NULL;
     }
 
-    IndigoHIDMessage *message = scrollMessage(target, deltaX, deltaY, 0);
+    IndigoHIDMessage *message = scrollMessage(0, deltaX, deltaY, 0, target);
     if (message == NULL && error != NULL) {
         *error = DFMakeError(
             DFPrivateSimulatorErrorCodeTouchDispatchFailed,
             [NSString stringWithFormat:@"SimulatorKit could not construct scroll HID for delta %.3f.", deltaY]
+        );
+    }
+
+    return message;
+}
+
+static IndigoHIDMessage *DFCreateDigitalCrownHIDMessage(double delta, NSError **error) {
+    DFIndigoHIDMessageForDigitalCrownEventFn crownMessage = (DFIndigoHIDMessageForDigitalCrownEventFn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForDigitalCrownEvent");
+    if (crownMessage == NULL) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit did not expose IndigoHIDMessageForDigitalCrownEvent."
+            );
+        }
+        return NULL;
+    }
+
+    IndigoHIDMessage *message = crownMessage(delta);
+    if (message == NULL && error != NULL) {
+        *error = DFMakeError(
+            DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+            [NSString stringWithFormat:@"SimulatorKit could not construct Digital Crown HID for delta %.3f.", delta]
         );
     }
 
@@ -2340,14 +2432,14 @@ static BOOL DFPressHomeViaHIDClient(id hidClient, NSError **error) {
     static const DFHomeButtonHIDStrategy strategies[] = {
         // USB consumer-control Menu (0x0c/0x40) — the documented iOS Home mapping
         // used by fbsimctl / idb; works on both Face ID and Touch ID simulators.
-        { "IndigoHIDMessageForHIDArbitrary page=0x0c usage=0x40 (Menu) target=0x32", NO, 0, DFConsumerControlUsagePage, 0x40, DFIndigoTouchTarget },
+        { "IndigoHIDMessageForHIDArbitrary page=0x0c usage=0x40 (Menu) target=0x32", NO, 0, DFConsumerControlUsagePage, 0x40, DFIndigoDigitizerTarget },
         // Older iOS builds exposed Home directly at usage 0x65 on the consumer page.
-        { "IndigoHIDMessageForHIDArbitrary page=0x0c usage=0x65 (Home) target=0x32", NO, 0, DFConsumerControlUsagePage, DFHomeConsumerUsage, DFIndigoTouchTarget },
+        { "IndigoHIDMessageForHIDArbitrary page=0x0c usage=0x65 (Home) target=0x32", NO, 0, DFConsumerControlUsagePage, DFHomeConsumerUsage, DFIndigoDigitizerTarget },
         // Legacy IndigoButton paths — may be rejected, accepted-but-misrouted, or
         // correctly map to Home depending on the SimulatorKit build. Kept as a last
         // resort after the documented consumer-control paths.
         { "IndigoHIDMessageForButton code=0x191 target=0x2",  YES, DFHomeButtonCode, 0, 0, 0x2 },
-        { "IndigoHIDMessageForButton code=0x191 target=0x32", YES, DFHomeButtonCode, 0, 0, DFIndigoTouchTarget },
+        { "IndigoHIDMessageForButton code=0x191 target=0x32", YES, DFHomeButtonCode, 0, 0, DFIndigoDigitizerTarget },
     };
 
     NSError *lastError = nil;
@@ -2395,10 +2487,10 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     }
 
     static const DFHomeButtonHIDStrategy strategies[] = {
-        { "IndigoHIDMessageForHIDArbitrary page=0x0c usage=0x40 (Menu) target=0x32", NO, 0, DFConsumerControlUsagePage, 0x40, DFIndigoTouchTarget },
-        { "IndigoHIDMessageForHIDArbitrary page=0x0c usage=0x65 (Home) target=0x32", NO, 0, DFConsumerControlUsagePage, DFHomeConsumerUsage, DFIndigoTouchTarget },
+        { "IndigoHIDMessageForHIDArbitrary page=0x0c usage=0x40 (Menu) target=0x32", NO, 0, DFConsumerControlUsagePage, 0x40, DFIndigoDigitizerTarget },
+        { "IndigoHIDMessageForHIDArbitrary page=0x0c usage=0x65 (Home) target=0x32", NO, 0, DFConsumerControlUsagePage, DFHomeConsumerUsage, DFIndigoDigitizerTarget },
         { "IndigoHIDMessageForButton code=0x191 target=0x2",  YES, DFHomeButtonCode, 0, 0, 0x2 },
-        { "IndigoHIDMessageForButton code=0x191 target=0x32", YES, DFHomeButtonCode, 0, 0, DFIndigoTouchTarget },
+        { "IndigoHIDMessageForButton code=0x191 target=0x32", YES, DFHomeButtonCode, 0, 0, DFIndigoDigitizerTarget },
     };
 
     NSError *lastError = nil;
@@ -2517,6 +2609,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     BOOL _digitizerInputReady;
     BOOL _delegateFrameScheduled;
     double _deviceRotationDegrees;
+    DFSimulatorInputFamily _inputFamily;
 }
 
 + (BOOL)loadPrivateFrameworks:(NSError **)error {
@@ -2699,25 +2792,20 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         return nil;
     }
 
-    Class legacyHIDClientClass = NSClassFromString(@"SimulatorKit.SimDeviceLegacyHIDClient");
-    if (legacyHIDClientClass != Nil) {
-        NSError *hidClientError = nil;
-        id hidClientAlloc = ((id(*)(id, SEL))objc_msgSend)(legacyHIDClientClass, sel_registerName("alloc"));
-        _hidClient = ((id(*)(id, SEL, id, NSError **))objc_msgSend)(
-            hidClientAlloc,
-            sel_registerName("initWithDevice:error:"),
-            _device,
-            &hidClientError
-        );
+    _inputFamily = DFSimulatorInputFamilyForCoreSimulatorDevice(_device);
+    DFLog(@"Resolved simulator input family for %@: %s", udid, DFSimulatorInputFamilyName(_inputFamily));
 
-        if (_hidClient != nil) {
-            DFLog(@"Created private SimulatorKit HID client for %@", udid);
+    NSError *hidClientError = nil;
+    _hidClient = DFCreateLegacyHIDClientForDevice(_device, &hidClientError);
+    if (_hidClient != nil) {
+        DFLog(@"Created private SimulatorKit HID client for %@", udid);
+        if (_inputFamily == DFSimulatorInputFamilyDefault) {
             DFWarmIndigoHIDServices(_hidClient);
         } else {
-            DFLog(@"Failed to create private SimulatorKit HID client for %@: %@", udid, hidClientError.localizedDescription ?: @"unknown error");
+            DFLog(@"Skipping pointer/mouse HID warm-up for %s simulator %@", DFSimulatorInputFamilyName(_inputFamily), udid);
         }
     } else {
-        DFLog(@"SimulatorKit legacy HID client class was unavailable.");
+        DFLog(@"Failed to create private SimulatorKit HID client for %@: %@", udid, hidClientError.localizedDescription ?: @"unknown error");
     }
 
     if (!attachDisplay) {
@@ -3482,7 +3570,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
                 0,
                 DFConsumerControlUsagePage,
                 0x40,
-                DFIndigoTouchTarget
+                DFIndigoDigitizerTarget
             };
             success = DFSendHomeStrategyEdge(self->_hidClient, &strategy, operation, &dispatchError);
         };
@@ -3553,7 +3641,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             uint32_t page = hasExplicitUsage ? usagePage.unsignedIntValue : arbitraryUsage[0].unsignedIntValue;
             uint32_t usageValue = hasExplicitUsage ? usage.unsignedIntValue : arbitraryUsage[1].unsignedIntValue;
             NSError *messageError = nil;
-            IndigoHIDMessage *message = DFCreateArbitraryHIDMessage(DFIndigoTouchTarget, page, usageValue, operation, &messageError);
+            IndigoHIDMessage *message = DFCreateArbitraryHIDMessage(DFIndigoDigitizerTarget, page, usageValue, operation, &messageError);
             if (message == NULL || !DFSendHIDMessage(self->_hidClient, message, YES, &messageError)) {
                 dispatchError = messageError;
                 return;
@@ -3565,7 +3653,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         }
 
         uint32_t code = buttonCode.unsignedIntValue;
-        uint32_t targets[] = { DFIndigoTouchTarget, 0x2 };
+        uint32_t targets[] = { DFIndigoDigitizerTarget, 0x2 };
         for (NSUInteger targetIndex = 0; targetIndex < sizeof(targets) / sizeof(targets[0]); targetIndex++) {
             NSError *messageError = nil;
             IndigoHIDMessage *message = DFCreateButtonMessage(code, operation, targets[targetIndex], &messageError);
@@ -3625,7 +3713,10 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         }
 
         NSError *messageError = nil;
-        IndigoHIDMessage *message = DFCreateScrollHIDMessage(DFIndigoTouchTarget, 0, delta, &messageError);
+        IndigoHIDMessage *message = DFCreateDigitalCrownHIDMessage(delta, &messageError);
+        if (message == NULL) {
+            message = DFCreateScrollHIDMessage(DFIndigoDigitalCrownTarget, 0, delta, &messageError);
+        }
         if (message == NULL || !DFSendHIDMessage(self->_hidClient, message, YES, &messageError)) {
             dispatchError = messageError;
             return;
@@ -3762,13 +3853,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     __block NSError *dispatchError = nil;
 
     dispatch_block_t work = ^{
-        if (self->_hidClient == nil) {
-            dispatchError = DFMakeError(
-                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
-                @"SimulatorKit did not provide a headless HID client for this simulator."
-            );
-            return;
-        }
+        id hidClient = self->_hidClient;
 
         CGFloat clampedX = (CGFloat)fmax(0.0, fmin(1.0, normalizedX));
         CGFloat clampedY = (CGFloat)fmax(0.0, fmin(1.0, normalizedY));
@@ -3794,18 +3879,42 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             phaseLabel = phase == DFPrivateSimulatorTouchPhaseEnded ? @"ended" : @"cancelled";
             break;
         }
-        IndigoHIDMessage *message = DFCreateIndigoTouchMessage9(CGPointMake(clampedX, clampedY), displaySize, phase);
-        BOOL freeWhenDone = YES;
+        if (self->_inputFamily == DFSimulatorInputFamilyTV) {
+            (void)phaseLabel;
+            (void)point;
+            dispatchError = DFTVDirectTouchUnsupportedError();
+            return;
+        }
+        uint32_t target = DFIndigoDigitizerTarget;
+
+        if (hidClient == nil) {
+            dispatchError = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit did not provide a headless HID client for this simulator."
+            );
+            return;
+        }
+
+        BOOL touchDown = phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved;
+        IndigoHIDMessage *message = (IndigoHIDMessage *)DFCreateIndigoTouchMessage(CGPointMake(clampedX, clampedY),
+                                                                                   displaySize,
+                                                                                   touchDown,
+                                                                                   target,
+                                                                                   DFIndigoHIDEdgeNone,
+                                                                                   &dispatchError);
         if (message == NULL) {
-            BOOL touchDown = phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved;
-            message = (IndigoHIDMessage *)DFCreateIndigoTouchMessage(CGPointMake(clampedX, clampedY), displaySize, touchDown, &dispatchError);
+            message = DFCreateIndigoTouchMessageDirect(CGPointMake(clampedX, clampedY),
+                                                       displaySize,
+                                                       phase,
+                                                       target,
+                                                       DFIndigoHIDEdgeNone);
             if (message == NULL) {
                 return;
             }
         }
 
         NSError *messageError = nil;
-        if (!DFSendHIDMessage(self->_hidClient, message, freeWhenDone, &messageError)) {
+        if (!DFSendHIDMessage(hidClient, message, YES, &messageError)) {
             dispatchError = messageError ?: DFMakeError(
                 DFPrivateSimulatorErrorCodeTouchDispatchFailed,
                 @"SimulatorKit rejected the Indigo HID touch packet."
@@ -3814,7 +3923,15 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         }
 
         if (DFVerboseTouchLoggingEnabled() && phase != DFPrivateSimulatorTouchPhaseMoved) {
-            DFLog(@"Sending %@ Indigo HID touch at pixel (%.1f, %.1f) ratio (%.4f, %.4f) within %.0fx%.0f", phaseLabel, point.x, point.y, clampedX, clampedY, displaySize.width, displaySize.height);
+            DFLog(@"Sending %@ Indigo HID touch target=0x%x at pixel (%.1f, %.1f) ratio (%.4f, %.4f) within %.0fx%.0f",
+                  phaseLabel,
+                  target,
+                  point.x,
+                  point.y,
+                  clampedX,
+                  clampedY,
+                  displaySize.width,
+                  displaySize.height);
         }
 
         self->_lastTouchPoint = point;
@@ -3849,6 +3966,10 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     __block NSError *dispatchError = nil;
 
     dispatch_block_t work = ^{
+        if (self->_inputFamily == DFSimulatorInputFamilyTV) {
+            dispatchError = DFTVDirectTouchUnsupportedError();
+            return;
+        }
         if (self->_hidClient == nil) {
             dispatchError = DFMakeError(
                 DFPrivateSimulatorErrorCodeTouchDispatchFailed,
@@ -3868,13 +3989,28 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             clampedY * fmax(displaySize.height - 1.0, 1.0)
         );
 
-        IndigoHIDMessage *message = DFCreateIndigoEdgeTouchMessageOnMain(CGPointMake(clampedX, clampedY), phase, edge);
+        uint32_t target = DFIndigoDigitizerTarget;
+        IndigoHIDEdge hidEdge = DFIndigoHIDEdgeForPrivateTouchEdge(edge);
+        BOOL touchDown = phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved;
+        IndigoHIDMessage *message = (IndigoHIDMessage *)DFCreateIndigoTouchMessage(CGPointMake(clampedX, clampedY),
+                                                                                   displaySize,
+                                                                                   touchDown,
+                                                                                   target,
+                                                                                   hidEdge,
+                                                                                   &dispatchError);
         if (message == NULL) {
-            dispatchError = DFMakeError(
-                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
-                @"SimulatorKit failed to create an edge-aware Indigo HID touch packet."
-            );
-            return;
+            message = DFCreateIndigoEdgeTouchMessageOnMain(CGPointMake(clampedX, clampedY),
+                                                           displaySize,
+                                                           phase,
+                                                           edge,
+                                                           target);
+            if (message == NULL) {
+                dispatchError = DFMakeError(
+                    DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                    @"SimulatorKit failed to create an edge-aware Indigo HID touch packet."
+                );
+                return;
+            }
         }
 
         NSError *messageError = nil;
@@ -3887,8 +4023,8 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         }
 
         if (DFVerboseTouchLoggingEnabled() && phase != DFPrivateSimulatorTouchPhaseMoved) {
-            DFLog(@"Sending edge Indigo HID touch edge=%ld at pixel (%.1f, %.1f) ratio (%.4f, %.4f)",
-                  (long)edge, point.x, point.y, clampedX, clampedY);
+            DFLog(@"Sending edge Indigo HID touch target=0x%x edge=%ld at pixel (%.1f, %.1f) ratio (%.4f, %.4f)",
+                  target, (long)edge, point.x, point.y, clampedX, clampedY);
         }
 
         self->_lastTouchPoint = point;
@@ -3924,6 +4060,10 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     __block NSError *dispatchError = nil;
 
     dispatch_block_t work = ^{
+        if (self->_inputFamily == DFSimulatorInputFamilyTV) {
+            dispatchError = DFTVDirectTouchUnsupportedError();
+            return;
+        }
         if (self->_hidClient == nil) {
             dispatchError = DFMakeError(
                 DFPrivateSimulatorErrorCodeTouchDispatchFailed,
@@ -3955,18 +4095,27 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             break;
         }
 
-        IndigoHIDMessage *message = NULL;
-        const NSUInteger maxAttempts = phase == DFPrivateSimulatorTouchPhaseMoved ? 12 : 3;
-        for (NSUInteger attempt = 0; attempt < maxAttempts; attempt++) {
-            message = DFCreateIndigoMultiTouchMessage9(CGPointMake(x1, y1), CGPointMake(x2, y2), displaySize, phase);
-            if (message != NULL) {
-                break;
-            }
-            usleep(5 * 1000);
-        }
+        uint32_t target = DFIndigoDigitizerTarget;
+        BOOL touchDown = phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved;
+        IndigoHIDMessage *message = (IndigoHIDMessage *)DFCreateIndigoMultiTouchMessage(CGPointMake(x1, y1),
+                                                                                        CGPointMake(x2, y2),
+                                                                                        displaySize,
+                                                                                        touchDown,
+                                                                                        target,
+                                                                                        &dispatchError);
         if (message == NULL) {
-            BOOL touchDown = phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved;
-            message = (IndigoHIDMessage *)DFCreateIndigoMultiTouchMessage(CGPointMake(x1, y1), CGPointMake(x2, y2), displaySize, touchDown, &dispatchError);
+            const NSUInteger maxAttempts = phase == DFPrivateSimulatorTouchPhaseMoved ? 12 : 3;
+            for (NSUInteger attempt = 0; attempt < maxAttempts; attempt++) {
+                message = DFCreateIndigoMultiTouchMessageDirect(CGPointMake(x1, y1),
+                                                                CGPointMake(x2, y2),
+                                                                displaySize,
+                                                                phase,
+                                                                target);
+                if (message != NULL) {
+                    break;
+                }
+                usleep(5 * 1000);
+            }
             if (message == NULL) {
                 return;
             }
@@ -3982,7 +4131,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         }
 
         if (phase != DFPrivateSimulatorTouchPhaseMoved) {
-            DFLog(@"Sending %@ Indigo HID multi-touch p1=(%.4f, %.4f) p2=(%.4f, %.4f) within %.0fx%.0f", phaseLabel, x1, y1, x2, y2, displaySize.width, displaySize.height);
+            DFLog(@"Sending %@ Indigo HID multi-touch target=0x%x p1=(%.4f, %.4f) p2=(%.4f, %.4f) within %.0fx%.0f", phaseLabel, target, x1, y1, x2, y2, displaySize.width, displaySize.height);
         }
         success = YES;
     };

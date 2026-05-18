@@ -12,6 +12,7 @@ import type {
   StreamQualityPreset,
   StreamTransport,
 } from "../stream/streamTypes";
+import { simulatorHasFixedOrientation } from "./simulatorDisplay";
 import { SimulatorRow } from "./SimulatorRow";
 
 interface SimulatorMenuProps {
@@ -116,6 +117,9 @@ export function SimulatorMenu({
   )
     ? []
     : [{ label: String(streamConfig.fps), value: streamConfig.fps }];
+  const canRotateSelectedSimulator =
+    selectedSimulator != null &&
+    !simulatorHasFixedOrientation(selectedSimulator);
   return (
     <div className="menu-wrap" ref={menuRef}>
       <button
@@ -331,15 +335,17 @@ export function SimulatorMenu({
                 >
                   App Switcher
                 </button>
-                <button
-                  className="menu-action mobile-menu-action"
-                  onClick={() => {
-                    onRotateRight();
-                    onCloseMenu();
-                  }}
-                >
-                  Rotate Right
-                </button>
+                {canRotateSelectedSimulator ? (
+                  <button
+                    className="menu-action mobile-menu-action"
+                    onClick={() => {
+                      onRotateRight();
+                      onCloseMenu();
+                    }}
+                  >
+                    Rotate Right
+                  </button>
+                ) : null}
                 <button
                   className="menu-action"
                   onClick={() => {

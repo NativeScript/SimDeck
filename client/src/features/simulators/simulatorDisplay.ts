@@ -14,18 +14,50 @@ export function simulatorRuntimeLabel(simulator: SimulatorMetadata): string {
 export function shouldRenderNativeChrome(
   simulator: SimulatorMetadata,
 ): boolean {
-  const identifier = simulator.deviceTypeIdentifier ?? "";
-  const name = simulator.name ?? "";
-  const deviceTypeName = simulator.deviceTypeName ?? "";
+  if (simulator.platform === "android-emulator") {
+    return false;
+  }
+  const metadata = simulatorMetadataText(simulator);
   return (
-    identifier.includes(".iPhone-") ||
-    identifier.includes(".iPad-") ||
-    identifier.includes(".Apple-Watch-") ||
-    name.startsWith("iPhone") ||
-    name.startsWith("iPad") ||
-    name.startsWith("Apple Watch") ||
-    deviceTypeName.startsWith("Apple Watch")
+    metadata.includes("iphone") ||
+    metadata.includes("ipad") ||
+    metadata.includes("apple-watch") ||
+    metadata.includes("apple watch") ||
+    metadata.includes("apple-tv") ||
+    metadata.includes("apple tv") ||
+    metadata.includes("appletv")
   );
+}
+
+export function simulatorHasFixedOrientation(
+  simulator: SimulatorMetadata | null,
+): boolean {
+  if (!simulator || simulator.platform === "android-emulator") {
+    return false;
+  }
+  const metadata = simulatorMetadataText(simulator);
+  return (
+    metadata.includes("tvos") ||
+    metadata.includes("watchos") ||
+    metadata.includes("apple-tv") ||
+    metadata.includes("apple tv") ||
+    metadata.includes("appletv") ||
+    metadata.includes("apple-watch") ||
+    metadata.includes("apple watch")
+  );
+}
+
+function simulatorMetadataText(simulator: SimulatorMetadata): string {
+  return [
+    simulator.name,
+    simulator.deviceTypeName,
+    simulator.deviceTypeIdentifier,
+    simulator.runtimeName,
+    simulator.runtimeIdentifier,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 }
 
 function formatRuntimeLabel(value: string | undefined): string | null {

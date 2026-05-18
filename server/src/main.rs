@@ -25,7 +25,11 @@ use config::Config;
 use inspector::{InspectorHub, InspectorRegistryAdvertisement};
 use logs::LogRegistry;
 use metrics::counters::Metrics;
-use native::bridge::{NativeBridge, NativeInputSession};
+use native::bridge::{
+    tvos_remote_key_for_touch_motion, tvos_remote_key_for_touch_phase, NativeBridge,
+    NativeInputSession, HID_KEY_ARROW_DOWN, HID_KEY_ARROW_LEFT, HID_KEY_ARROW_RIGHT,
+    HID_KEY_ARROW_UP, HID_KEY_ENTER,
+};
 use native::ffi;
 use performance::PerformanceRegistry;
 use serde::{Deserialize, Serialize};
@@ -2533,20 +2537,24 @@ fn main() -> anyhow::Result<()> {
                     service_touch(server_url, &udid, x, y, &phase)?;
                 }
             } else {
-                let (x, y) = resolve_touch_point(&bridge, &udid, x, y, normalized)?;
-                if down || up {
-                    let input = bridge.create_input_session(&udid)?;
-                    if down {
-                        input.send_touch(x, y, "began")?;
-                    }
-                    if down && up {
-                        std::thread::sleep(Duration::from_millis(delay_ms));
-                    }
-                    if up {
-                        input.send_touch(x, y, "ended")?;
-                    }
+                if bridge_simulator_is_tvos(&bridge, &udid) {
+                    perform_tvos_touch_command(&bridge, &udid, &phase, down, up)?;
                 } else {
-                    bridge.send_touch(&udid, x, y, &phase)?;
+                    let (x, y) = resolve_touch_point(&bridge, &udid, x, y, normalized)?;
+                    if down || up {
+                        let input = bridge.create_input_session(&udid)?;
+                        if down {
+                            input.send_touch(x, y, "began")?;
+                        }
+                        if down && up {
+                            std::thread::sleep(Duration::from_millis(delay_ms));
+                        }
+                        if up {
+                            input.send_touch(x, y, "ended")?;
+                        }
+                    } else {
+                        bridge.send_touch(&udid, x, y, &phase)?;
+                    }
                 }
             }
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "touch" }))?;
@@ -2622,7 +2630,9 @@ fn main() -> anyhow::Result<()> {
                     },
                 )?;
                 sleep_ms(pre_delay_ms);
-                if let Some(input) = target.input.as_ref() {
+                if bridge_simulator_is_tvos(&bridge, &udid) {
+                    press_tvos_remote_key(&bridge, &udid, HID_KEY_ENTER)?;
+                } else if let Some(input) = target.input.as_ref() {
                     perform_tap_with_input(input, target.x, target.y, duration_ms)?;
                 } else {
                     perform_tap(&bridge, &udid, target.x, target.y, duration_ms)?;
@@ -3407,6 +3417,45 @@ fn sleep_ms(duration_ms: u64) {
     }
 }
 
+fn bridge_simulator_is_tvos(bridge: &NativeBridge, udid: &str) -> bool {
+    bridge.simulator_is_tvos(udid).unwrap_or(false)
+}
+
+fn press_tvos_remote_key(
+    bridge: &NativeBridge,
+    udid: &str,
+    key_code: u16,
+) -> Result<(), crate::error::AppError> {
+    bridge.send_key(udid, key_code, 0)
+}
+
+fn perform_tvos_touch_phase(
+    bridge: &NativeBridge,
+    udid: &str,
+    phase: &str,
+) -> Result<(), crate::error::AppError> {
+    if let Some(key_code) = tvos_remote_key_for_touch_phase(phase)? {
+        press_tvos_remote_key(bridge, udid, key_code)?;
+    }
+    Ok(())
+}
+
+fn perform_tvos_touch_command(
+    bridge: &NativeBridge,
+    udid: &str,
+    phase: &str,
+    down: bool,
+    up: bool,
+) -> Result<(), crate::error::AppError> {
+    if down || up {
+        if up {
+            return press_tvos_remote_key(bridge, udid, HID_KEY_ENTER);
+        }
+        return Ok(());
+    }
+    perform_tvos_touch_phase(bridge, udid, phase)
+}
+
 fn perform_tap(
     bridge: &NativeBridge,
     udid: &str,
@@ -3414,6 +3463,9 @@ fn perform_tap(
     y: f64,
     duration_ms: u64,
 ) -> Result<(), crate::error::AppError> {
+    if bridge_simulator_is_tvos(bridge, udid) {
+        return press_tvos_remote_key(bridge, udid, HID_KEY_ENTER);
+    }
     let input = bridge.create_input_session(udid)?;
     perform_tap_with_input(&input, x, y, duration_ms)
 }
@@ -3435,6 +3487,15 @@ fn perform_swipe(
     gesture: GestureCoordinates,
     steps: u32,
 ) -> Result<(), crate::error::AppError> {
+    if bridge_simulator_is_tvos(bridge, udid) {
+        let key_code = tvos_remote_key_for_touch_motion(
+            gesture.start_x.clamp(0.0, 1.0),
+            gesture.start_y.clamp(0.0, 1.0),
+            gesture.end_x.clamp(0.0, 1.0),
+            gesture.end_y.clamp(0.0, 1.0),
+        );
+        return press_tvos_remote_key(bridge, udid, key_code);
+    }
     let step_count = steps.max(1);
     let delay = Duration::from_millis(gesture.duration_ms / u64::from(step_count));
     let input = bridge.create_input_session(udid)?;
@@ -4916,15 +4977,15 @@ fn parse_hid_key(value: &str) -> Result<u16, crate::error::AppError> {
         return Ok(code);
     }
     let key = match value.to_lowercase().as_str() {
-        "enter" | "return" => 40,
+        "enter" | "return" => HID_KEY_ENTER,
         "escape" | "esc" => 41,
         "backspace" | "delete" => 42,
         "tab" => 43,
         "space" => 44,
-        "right" | "arrow-right" => 79,
-        "left" | "arrow-left" => 80,
-        "down" | "arrow-down" => 81,
-        "up" | "arrow-up" => 82,
+        "right" | "arrow-right" => HID_KEY_ARROW_RIGHT,
+        "left" | "arrow-left" => HID_KEY_ARROW_LEFT,
+        "down" | "arrow-down" => HID_KEY_ARROW_DOWN,
+        "up" | "arrow-up" => HID_KEY_ARROW_UP,
         "home" => 74,
         "end" => 77,
         other if other.len() == 1 => hid_for_character(other.chars().next().unwrap())
@@ -5224,7 +5285,9 @@ fn run_batch_step(
                         .unwrap_or(100),
                 },
             )?;
-            if let Some(input) = target.input.as_ref() {
+            if bridge_simulator_is_tvos(bridge, udid) {
+                press_tvos_remote_key(bridge, udid, HID_KEY_ENTER)?;
+            } else if let Some(input) = target.input.as_ref() {
                 perform_tap_with_input(input, target.x, target.y, duration_ms)?;
             } else {
                 perform_tap(bridge, udid, target.x, target.y, duration_ms)?;
@@ -5369,24 +5432,34 @@ fn run_batch_step(
             let x = required_f64(&args, "x")?;
             let y = required_f64(&args, "y")?;
             let normalized = args.flag("normalized");
-            let (x, y) = resolve_touch_point(bridge, udid, x, y, normalized)?;
-            if args.flag("down") || args.flag("up") {
-                let input = bridge.create_input_session(udid)?;
-                if args.flag("down") {
-                    input.send_touch(x, y, "began")?;
-                }
-                if args.flag("down") && args.flag("up") {
-                    sleep_ms(
-                        args.value("delay-ms")
-                            .and_then(|value| value.parse().ok())
-                            .unwrap_or(100),
-                    );
-                }
-                if args.flag("up") {
-                    input.send_touch(x, y, "ended")?;
-                }
+            if bridge_simulator_is_tvos(bridge, udid) {
+                perform_tvos_touch_command(
+                    bridge,
+                    udid,
+                    args.value("phase").unwrap_or("began"),
+                    args.flag("down"),
+                    args.flag("up"),
+                )?;
             } else {
-                bridge.send_touch(udid, x, y, args.value("phase").unwrap_or("began"))?;
+                let (x, y) = resolve_touch_point(bridge, udid, x, y, normalized)?;
+                if args.flag("down") || args.flag("up") {
+                    let input = bridge.create_input_session(udid)?;
+                    if args.flag("down") {
+                        input.send_touch(x, y, "began")?;
+                    }
+                    if args.flag("down") && args.flag("up") {
+                        sleep_ms(
+                            args.value("delay-ms")
+                                .and_then(|value| value.parse().ok())
+                                .unwrap_or(100),
+                        );
+                    }
+                    if args.flag("up") {
+                        input.send_touch(x, y, "ended")?;
+                    }
+                } else {
+                    bridge.send_touch(udid, x, y, args.value("phase").unwrap_or("began"))?;
+                }
             }
             Ok("touch")
         }

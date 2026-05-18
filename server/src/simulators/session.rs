@@ -1,6 +1,9 @@
 use crate::error::AppError;
 use crate::metrics::counters::Metrics;
-use crate::native::bridge::{NativeBridge, NativeSession};
+use crate::native::bridge::{
+    digital_crown_error, fixed_orientation_error, simulator_has_fixed_orientation,
+    simulator_is_tvos, simulator_is_watchos, NativeBridge, NativeSession,
+};
 use crate::native::ffi;
 use crate::simulators::state::SessionState;
 use crate::transport::packet::{FramePacket, SharedFrame};
@@ -32,6 +35,9 @@ pub struct SimulatorSession {
 struct SimulatorSessionInner {
     udid: String,
     native: NativeSession,
+    is_tvos: bool,
+    is_watchos: bool,
+    has_fixed_orientation: bool,
     metrics: Arc<Metrics>,
     sender: broadcast::Sender<SharedFrame>,
     latest_keyframe: RwLock<Option<SharedFrame>>,
@@ -81,10 +87,23 @@ impl SimulatorSession {
         metrics: Arc<Metrics>,
     ) -> Result<Self, AppError> {
         let native = bridge.create_session(&udid)?;
+        let simulator = bridge.simulator(&udid).ok().flatten();
+        let is_tvos = simulator.as_ref().map(simulator_is_tvos).unwrap_or(false);
+        let is_watchos = simulator
+            .as_ref()
+            .map(simulator_is_watchos)
+            .unwrap_or(false);
+        let has_fixed_orientation = simulator
+            .as_ref()
+            .map(simulator_has_fixed_orientation)
+            .unwrap_or(false);
         let (sender, _) = broadcast::channel(FRAME_BROADCAST_CAPACITY);
         let inner = Arc::new(SimulatorSessionInner {
             udid,
             native,
+            is_tvos,
+            is_watchos,
+            has_fixed_orientation,
             metrics,
             sender,
             latest_keyframe: RwLock::new(None),
@@ -245,11 +264,33 @@ impl SimulatorSession {
         }
     }
 
+    pub fn is_tvos(&self) -> bool {
+        self.inner.is_tvos
+    }
+
+    pub fn has_fixed_orientation(&self) -> bool {
+        self.inner.has_fixed_orientation
+    }
+
+    pub fn is_watchos(&self) -> bool {
+        self.inner.is_watchos
+    }
+
     pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
+        if self.is_tvos() {
+            return Err(AppError::bad_request(
+                "tvOS simulators do not support direct screen touch. Use Enter and arrow keys instead.",
+            ));
+        }
         self.inner.native.send_touch(x, y, phase)
     }
 
     pub fn send_edge_touch(&self, x: f64, y: f64, phase: &str, edge: u32) -> Result<(), AppError> {
+        if self.is_tvos() {
+            return Err(AppError::bad_request(
+                "tvOS simulators do not support direct screen touch. Use Enter and arrow keys instead.",
+            ));
+        }
         self.inner.native.send_edge_touch(x, y, phase, edge)
     }
 
@@ -261,6 +302,11 @@ impl SimulatorSession {
         y2: f64,
         phase: &str,
     ) -> Result<(), AppError> {
+        if self.is_tvos() {
+            return Err(AppError::bad_request(
+                "tvOS simulators do not support direct screen touch. Use Enter and arrow keys instead.",
+            ));
+        }
         self.inner.native.send_multitouch(x1, y1, x2, y2, phase)
     }
 
@@ -289,6 +335,9 @@ impl SimulatorSession {
     }
 
     pub fn rotate_crown(&self, delta: f64) -> Result<(), AppError> {
+        if !self.is_watchos() {
+            return Err(digital_crown_error());
+        }
         self.inner.native.rotate_crown(delta)
     }
 
@@ -297,10 +346,16 @@ impl SimulatorSession {
     }
 
     pub fn rotate_left(&self) -> Result<(), AppError> {
+        if self.has_fixed_orientation() {
+            return Err(fixed_orientation_error());
+        }
         self.inner.native.rotate_left()
     }
 
     pub fn rotate_right(&self) -> Result<(), AppError> {
+        if self.has_fixed_orientation() {
+            return Err(fixed_orientation_error());
+        }
         self.inner.native.rotate_right()
     }
 

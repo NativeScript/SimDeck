@@ -19,6 +19,7 @@ import type {
   StreamQualityPreset,
   StreamTransport,
 } from "../stream/streamTypes";
+import { simulatorHasFixedOrientation } from "../simulators/simulatorDisplay";
 import { SimulatorMenu } from "../simulators/SimulatorMenu";
 
 interface ToolbarProps {
@@ -117,6 +118,9 @@ export function Toolbar({
   touchOverlayVisible,
 }: ToolbarProps) {
   const [errorCopied, setErrorCopied] = useState(false);
+  const canRotateSelectedSimulator =
+    selectedSimulator != null &&
+    !simulatorHasFixedOrientation(selectedSimulator);
 
   useEffect(() => {
     setErrorCopied(false);
@@ -266,14 +270,16 @@ export function Toolbar({
             >
               <AppearanceIcon />
             </button>
-            <button
-              aria-label="Rotate Right"
-              className="tbtn icon-btn toolbar-mobile-hidden"
-              onClick={onRotateRight}
-              title="Rotate Right"
-            >
-              <RotateRightIcon />
-            </button>
+            {canRotateSelectedSimulator ? (
+              <button
+                aria-label="Rotate Right"
+                className="tbtn icon-btn toolbar-mobile-hidden"
+                onClick={onRotateRight}
+                title="Rotate Right"
+              >
+                <RotateRightIcon />
+              </button>
+            ) : null}
           </div>
         ) : null}
         {error ? (
