@@ -210,6 +210,59 @@ function buildAuthenticatedAssetUrl(
   return url.toString();
 }
 
+function chromeStampNumber(value: number | undefined): string {
+  return Number.isFinite(value) ? String(Math.round((value ?? 0) * 1000)) : "0";
+}
+
+function chromeStampText(value: string | undefined | null): string {
+  return (value ?? "").replace(/[^a-zA-Z0-9_.-]+/g, "_");
+}
+
+function buildChromeProfileAssetStamp(profile: ChromeProfile | null): string {
+  if (!profile) {
+    return "";
+  }
+
+  const geometryStamp = [
+    profile.totalWidth,
+    profile.totalHeight,
+    profile.screenX,
+    profile.screenY,
+    profile.screenWidth,
+    profile.screenHeight,
+    profile.cornerRadius,
+  ]
+    .map(chromeStampNumber)
+    .join("x");
+  const maskStamp = profile.hasScreenMask ? "mask" : "nomask";
+  const buttonStamp = [...(profile.buttons ?? [])]
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((button) =>
+      [
+        chromeStampText(button.name),
+        chromeStampText(button.type),
+        chromeStampText(button.imageName),
+        chromeStampText(button.imageDownName),
+        chromeStampText(button.anchor),
+        chromeStampText(button.align),
+        button.onTop ? "top" : "under",
+        chromeStampNumber(button.x),
+        chromeStampNumber(button.y),
+        chromeStampNumber(button.width),
+        chromeStampNumber(button.height),
+        chromeStampNumber(button.normalOffset?.x),
+        chromeStampNumber(button.normalOffset?.y),
+        chromeStampNumber(button.rolloverOffset?.x),
+        chromeStampNumber(button.rolloverOffset?.y),
+        String(button.usagePage ?? ""),
+        String(button.usage ?? ""),
+      ].join(","),
+    )
+    .join(";");
+
+  return [geometryStamp, maskStamp, buttonStamp].filter(Boolean).join(":");
+}
+
 function shouldUseRemoteStreamDefault(apiRoot: string): boolean {
   if (apiRoot) {
     return true;
@@ -911,23 +964,24 @@ export function AppShell({
         button.name.toLowerCase() === "digital-crown",
     ),
   );
+  const chromeGeometryStamp = buildChromeProfileAssetStamp(
+    viewportChromeProfile,
+  );
   const chromeAssetStamp = [
     selectedSimulator?.deviceTypeIdentifier,
     selectedSimulator?.deviceTypeName,
     selectedSimulator?.runtimeIdentifier,
     selectedSimulator?.runtimeName,
     selectedSimulator?.udid,
-    chromeHasInteractiveButtons ? "buttons" : "no-buttons",
+    chromeGeometryStamp,
+    chromeHasInteractiveButtons ? "baked-buttons" : "no-buttons",
     chromeHasCrown ? "crown" : "no-crown",
   ]
     .filter(Boolean)
     .join(":");
+  const chromeButtonsRenderedInChrome = chromeHasInteractiveButtons;
   const chromeUrl = selectedSimulator
-    ? buildChromeUrl(
-        selectedSimulator.udid,
-        chromeAssetStamp,
-        !chromeHasInteractiveButtons || chromeHasCrown,
-      )
+    ? buildChromeUrl(selectedSimulator.udid, chromeAssetStamp, true)
     : "";
   const chromeButtonUrl = useCallback(
     (button: string, pressed = false) =>
@@ -956,10 +1010,12 @@ export function AppShell({
     if (viewportChromeProfile.hasScreenMask) {
       urls.add(buildScreenMaskUrl(selectedSimulator.udid, chromeAssetStamp));
     }
-    for (const button of viewportChromeProfile.buttons ?? []) {
-      urls.add(chromeButtonUrl(button.name, false));
-      if (button.imageDownName) {
-        urls.add(chromeButtonUrl(button.name, true));
+    if (!chromeButtonsRenderedInChrome) {
+      for (const button of viewportChromeProfile.buttons ?? []) {
+        urls.add(chromeButtonUrl(button.name, false));
+        if (button.imageDownName) {
+          urls.add(chromeButtonUrl(button.name, true));
+        }
       }
     }
     return [...urls].filter(Boolean);
@@ -968,6 +1024,7 @@ export function AppShell({
     chromeRequired,
     chromeUrl,
     chromeAssetStamp,
+    chromeButtonsRenderedInChrome,
     selectedSimulator?.udid,
     viewportChromeProfile,
   ]);
@@ -2719,6 +2776,7 @@ export function AppShell({
         chromeLoaded={chromeLoaded}
         chromeProfile={viewportChromeProfile}
         chromeRequired={chromeRequired}
+        chromeButtonsRenderedInChrome={chromeButtonsRenderedInChrome}
         chromeScreenStyle={viewportScreenStyle}
         chromeUrl={chromeUrl}
         chromeButtonUrl={chromeButtonUrl}

@@ -28,6 +28,15 @@ pub fn generate_access_token() -> String {
     hex::encode(bytes)
 }
 
+pub fn server_identity(config: &Config) -> String {
+    server_identity_for_token(&config.access_token)
+}
+
+pub fn server_identity_for_token(token: &str) -> String {
+    let digest = hex::encode(Sha256::digest(token.as_bytes()));
+    digest[..16].to_owned()
+}
+
 pub fn generate_pairing_code() -> String {
     let token = generate_access_token();
     let value = u32::from_str_radix(&token[..8], 16).unwrap_or_default() % 1_000_000;
@@ -94,6 +103,10 @@ pub fn unauthorized_response(config: &Config, headers: &HeaderMap) -> Response {
         StatusCode::UNAUTHORIZED,
         Json(json!({
             "error": "SimDeck API access token is required.",
+            "ok": false,
+            "serverId": server_identity(config),
+            "advertiseHost": config.advertise_host,
+            "httpPort": config.http_port,
         })),
     )
         .into_response();

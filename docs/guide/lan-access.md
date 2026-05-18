@@ -26,9 +26,13 @@ Use an IP address or hostname that the remote device can resolve:
 ```sh
 simdeck ui --bind 0.0.0.0 --advertise-host my-mac.local --open
 simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
+simdeck ui --bind 0.0.0.0 --advertise-host 100.101.102.103 --open
 ```
 
 If you bind to `0.0.0.0` but advertise `localhost`, remote browsers will try to connect to themselves.
+Tailscale addresses work like direct HTTP hosts; discovery does not use LAN
+broadcast across the tailnet, so use the Tailscale IP or MagicDNS name when
+pairing a native client.
 
 ## Direct API Access
 

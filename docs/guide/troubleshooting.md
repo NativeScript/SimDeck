@@ -189,12 +189,18 @@ Start SimDeck with a LAN bind and reachable advertised host:
 simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 ```
 
+For native iOS pairing, prefer:
+
+```sh
+simdeck pair
+```
+
 Then check:
 
 - The remote browser opens `http://192.168.1.50:4310`.
 - macOS Firewall allows the port.
-- The pairing code matches the current daemon.
-- API scripts send the daemon token.
+- The pairing code matches the current daemon or global service.
+- API scripts send the daemon or service token.
 
 See [LAN Access](/guide/lan-access).
 
