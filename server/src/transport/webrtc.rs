@@ -1,7 +1,8 @@
 use crate::android;
 use crate::api::routes::{
     apply_stream_client_foreground_from_stats, apply_stream_quality_payload, run_control_message,
-    run_toggle_appearance_control, AppState, ControlMessage, StreamQualityPayload,
+    run_toggle_appearance_control, run_tvos_control_message, AppState, ControlMessage,
+    StreamQualityPayload, TvosControlTouchGesture,
 };
 use crate::error::AppError;
 use crate::metrics::counters::ClientStreamStats;
@@ -983,6 +984,7 @@ async fn run_webrtc_control_queue(
     mut receiver: mpsc::UnboundedReceiver<ControlMessage>,
 ) {
     let mut pending = VecDeque::new();
+    let mut tvos_touch = TvosControlTouchGesture::default();
     loop {
         let mut message = match pending.pop_front() {
             Some(message) => message,
@@ -1012,7 +1014,12 @@ async fn run_webrtc_control_queue(
                 }
             }
             message => {
-                if let Err(error) = run_control_message(session.clone(), message).await {
+                let result = if session.is_tvos() {
+                    run_tvos_control_message(session.clone(), message, &mut tvos_touch).await
+                } else {
+                    run_control_message(session.clone(), message).await
+                };
+                if let Err(error) = result {
                     warn!("WebRTC control message failed for {udid}: {error}");
                 }
             }

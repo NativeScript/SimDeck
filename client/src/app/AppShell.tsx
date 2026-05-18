@@ -832,6 +832,9 @@ export function AppShell({
   const selectedHasFixedOrientation =
     selectedSimulator != null &&
     simulatorHasFixedOrientation(selectedSimulator);
+  const viewportRotationQuarterTurns = selectedHasFixedOrientation
+    ? 0
+    : rotationQuarterTurns;
   const androidDisplayKey =
     isAndroidViewport && selectedSimulator
       ? androidDisplayKeyForSimulator(selectedSimulator)
@@ -875,7 +878,7 @@ export function AppShell({
     chromeProfile: viewportChromeProfile,
     deviceNaturalSize: effectiveDeviceNaturalSize,
     pan,
-    rotationQuarterTurns,
+    rotationQuarterTurns: viewportRotationQuarterTurns,
     reservedBottomInset: zoomDockReservedHeight,
     viewMode,
     zoom,
@@ -1046,13 +1049,22 @@ export function AppShell({
         ...(current.viewportByUDID ?? {}),
         [selectedSimulator.udid]: {
           pan,
-          rotationQuarterTurns,
+          rotationQuarterTurns: selectedHasFixedOrientation
+            ? 0
+            : rotationQuarterTurns,
           viewMode,
           zoom,
         },
       },
     }));
-  }, [pan, rotationQuarterTurns, selectedSimulator?.udid, viewMode, zoom]);
+  }, [
+    pan,
+    rotationQuarterTurns,
+    selectedHasFixedOrientation,
+    selectedSimulator?.udid,
+    viewMode,
+    zoom,
+  ]);
 
   useEffect(() => {
     if (!selectedSimulator) {
@@ -1128,7 +1140,11 @@ export function AppShell({
           }
         : nextViewportState.pan,
     );
-    setRotationQuarterTurns(nextViewportState.rotationQuarterTurns);
+    setRotationQuarterTurns(
+      simulatorHasFixedOrientation(selectedSimulator)
+        ? 0
+        : nextViewportState.rotationQuarterTurns,
+    );
     setLocalError("");
     setAccessibilityRoots([]);
     setAccessibilitySelectedId(
@@ -1309,7 +1325,7 @@ export function AppShell({
   }, [isBooted]);
 
   useEffect(() => {
-    if (isAndroidViewport) {
+    if (isAndroidViewport || selectedHasFixedOrientation) {
       setRotationQuarterTurns((current) =>
         normalizeQuarterTurns(current) === 0 ? current : 0,
       );
@@ -1326,7 +1342,11 @@ export function AppShell({
       beginZoomAnimation();
       return simulatorRotationQuarterTurns;
     });
-  }, [isAndroidViewport, simulatorRotationQuarterTurns]);
+  }, [
+    isAndroidViewport,
+    selectedHasFixedOrientation,
+    simulatorRotationQuarterTurns,
+  ]);
 
   useEffect(() => {
     if (!isAndroidViewport || !selectedSimulator?.isBooted) {
@@ -1527,7 +1547,7 @@ export function AppShell({
         canvasSize,
         effectiveDeviceNaturalSize,
         viewportChromeProfile,
-        rotationQuarterTurns,
+        viewportRotationQuarterTurns,
         viewMode === "manual" ? zoomDockReservedHeight : 0,
       );
       return nextPan.x === currentPan.x && nextPan.y === currentPan.y
@@ -1538,7 +1558,7 @@ export function AppShell({
     canvasSize,
     effectiveDeviceNaturalSize,
     effectiveZoom,
-    rotationQuarterTurns,
+    viewportRotationQuarterTurns,
     viewportChromeProfile,
     viewMode,
     zoomDockReservedHeight,
@@ -1627,7 +1647,7 @@ export function AppShell({
     onMultiTouchPreview: showTouchIndicators,
     pan,
     reservedBottomInset: zoomDockReservedHeight,
-    rotationQuarterTurns,
+    rotationQuarterTurns: viewportRotationQuarterTurns,
     setPan,
   });
 
@@ -1733,7 +1753,7 @@ export function AppShell({
   const deviceFrameSize = shellSize(
     effectiveDeviceNaturalSize,
     viewportChromeProfile,
-    rotationQuarterTurns,
+    viewportRotationQuarterTurns,
   );
   const naturalShellSize = shellSize(
     effectiveDeviceNaturalSize,
@@ -1749,7 +1769,7 @@ export function AppShell({
     transform: buildShellRotationTransform(
       effectiveDeviceNaturalSize,
       viewportChromeProfile,
-      rotationQuarterTurns,
+      viewportRotationQuarterTurns,
     ),
   };
 
@@ -2014,7 +2034,7 @@ export function AppShell({
       canvasSize,
       effectiveDeviceNaturalSize,
       viewportChromeProfile,
-      rotationQuarterTurns,
+      viewportRotationQuarterTurns,
       zoomDockReservedHeight,
     );
     effectiveZoomRef.current = clampedScale;
@@ -2114,7 +2134,7 @@ export function AppShell({
           fitScale,
           pan: currentPan,
           reservedBottomInset: zoomDockReservedHeight,
-          rotationQuarterTurns,
+          rotationQuarterTurns: viewportRotationQuarterTurns,
           viewMode,
           zoom,
         }).pan,
@@ -2791,7 +2811,7 @@ export function AppShell({
         onZoomIn={() => applyZoom(effectiveZoom * ZOOM_STEP)}
         onZoomOut={() => applyZoom(effectiveZoom / ZOOM_STEP)}
         outerCanvasRef={handleOuterCanvasRef}
-        rotationQuarterTurns={rotationQuarterTurns}
+        rotationQuarterTurns={viewportRotationQuarterTurns}
         screenAspect={screenAspect}
         screenClassName={isAndroidViewport ? "android-screen" : undefined}
         selectedSimulator={selectedSimulator}
