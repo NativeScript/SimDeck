@@ -252,7 +252,7 @@ struct ChromeProfile: Hashable, Decodable, Sendable {
     let buttons: [ChromeButtonProfile]?
 
     var assetStamp: String {
-        [
+        var parts = [
             totalWidth,
             totalHeight,
             screenX,
@@ -262,9 +262,17 @@ struct ChromeProfile: Hashable, Decodable, Sendable {
             cornerRadius
         ]
             .map { value in
-                value.isFinite ? String(Int((value * 1000).rounded())) : "0"
+                Self.stampValue(value)
             }
-            .joined(separator: "x")
+        parts.append(hasScreenMask == true ? "mask" : "nomask")
+        parts.append(contentsOf: (buttons ?? [])
+            .sorted { $0.name < $1.name }
+            .map(\.assetStamp))
+        return parts.joined(separator: "x")
+    }
+
+    private static func stampValue(_ value: Double) -> String {
+        value.isFinite ? String(Int((value * 1000).rounded())) : "0"
     }
 }
 
@@ -272,13 +280,48 @@ struct ChromeButtonProfile: Hashable, Decodable, Sendable {
     let name: String
     let label: String?
     let type: String?
+    let imageName: String?
+    let imageDownName: String?
     let x: Double
     let y: Double
     let width: Double
     let height: Double
+    let anchor: String?
+    let align: String?
     let usagePage: Int?
     let usage: Int?
     let onTop: Bool?
+
+    var assetStamp: String {
+        [
+            sanitized(name),
+            sanitized(type),
+            sanitized(imageName),
+            sanitized(imageDownName),
+            sanitized(anchor),
+            sanitized(align),
+            onTop == true ? "top" : "under",
+            stampValue(x),
+            stampValue(y),
+            stampValue(width),
+            stampValue(height),
+            usagePage.map(String.init) ?? "",
+            usage.map(String.init) ?? ""
+        ].joined(separator: ".")
+    }
+
+    private func stampValue(_ value: Double) -> String {
+        value.isFinite ? String(Int((value * 1000).rounded())) : "0"
+    }
+
+    private func sanitized(_ value: String?) -> String {
+        (value ?? "").map { character in
+            character.isLetter || character.isNumber || character == "_" || character == "-" || character == "."
+                ? character
+                : "_"
+        }
+        .reduce(into: "") { $0.append($1) }
+    }
 }
 
 struct SimulatorsResponse: Decodable, Sendable {
