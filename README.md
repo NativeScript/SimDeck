@@ -4,18 +4,22 @@
   <h1 align="center">SimDeck</h1>
 
   <p align="center">
-    SimDeck is a developer tool built for streamlining mobile app development for coding agents.
-    Drive iOS Simulators and Android emulators from the CLI using agents, browser, and automated tests on macOS.
+    SimDeck is a developer tool built for streamlining mobile app development using agents.
+    Drive iOS Simulators and Android emulators from browser & CLI.
   </p>
 </p>
 
 <hr/>
+
+![Codex Screenshot](./assets/codex-screenshot.png)
 
 ## Try it out
 
 ```sh
 npx simdeck
 ```
+
+Open the URL in your IDE of choice, for example in-app browser in Codex.
 
 Install the CLI globally for agentic-use:
 
@@ -35,11 +39,10 @@ view inside the editor.
 
 ## Features
 
-- Local iOS Simulator video over browser-native WebRTC H.264 with VideoToolbox hardware encode and x264 software encode
-- Android emulator frames are sourced from emulator gRPC; loopback browsers use raw RGBA over WebRTC, and non-loopback browsers use VideoToolbox-encoded H.264
+- Supports streaming both iOS simulators and Android emulators
 - Full simulator control & inspection using private iOS accessibility APIs and Android UIAutomator - available using `simdeck` CLI
 - Real-time screen `describe` command using accessibility view tree - available in token-efficient format for agents
-- Simulator app performance gauges for CPU, memory, disk writes, network throughput, hang signals, and stack sampling
+- Profiling built-in: CPU, memory, disk writes, network throughput, hang signals, and stack sampling
 - CoreSimulator chrome asset rendering for device bezels
 - NativeScript, React Native, Flutter, UIKit and SwiftUI runtime inspector plugins to debug app's view hierarchy live
 - `simdeck/test` for fast JS-based app tests that can query accessibility state and drive simulator controls
@@ -57,7 +60,6 @@ documented in the [GitHub Actions guide](https://simdeck.nativescript.org/guide/
 simdeck
 ```
 
-This starts a workspace-local foreground daemon, prints local and LAN HTTP URLs plus a pairing code for LAN browsers, and stops when you press `q` or Ctrl-C.
 To focus a specific simulator by name or UDID, pass it as the only argument:
 
 ```sh
@@ -68,6 +70,18 @@ simdeck "iPhone 17 Pro Max"
 
 The served loopback browser UI receives the generated API access token automatically.
 LAN clients should pair with the printed code before receiving the API cookie.
+
+For pairing with SimDeck iOS app:
+
+```sh
+simdeck pair
+```
+
+This starts or refreshes the global LaunchAgent-backed SimDeck service, prints
+local, LAN, and Tailscale URLs when available, and shows a QR code with a
+`simdeck://pair` link. The QR contains the pairing code plus all detected
+non-loopback addresses, so pairing once can save both the LAN and Tailscale
+routes with the same service token.
 
 CLI commands automatically use the same warm daemon:
 

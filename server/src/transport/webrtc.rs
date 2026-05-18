@@ -2207,18 +2207,27 @@ async fn write_frame_sample_with_timeout<P: Packetizer>(
         WEBRTC_WRITE_TIMEOUT
     };
     let started_at = time::Instant::now();
-    write_frame_sample(video_track, packetizer, frame, duration, realtime_stream).await?;
+    let write_result = time::timeout(
+        slow_write_threshold,
+        write_frame_sample(video_track, packetizer, frame, duration, realtime_stream),
+    )
+    .await;
     let elapsed = started_at.elapsed();
-    if elapsed > slow_write_threshold {
-        warn!(
-            "WebRTC frame write exceeded realtime budget: elapsed_ms={} threshold_ms={} keyframe={} realtime={}",
-            elapsed.as_millis(),
-            slow_write_threshold.as_millis(),
-            frame.is_keyframe,
-            realtime_stream
-        );
+
+    match write_result {
+        Ok(Ok(())) => Ok(true),
+        Ok(Err(error)) => Err(error),
+        Err(_) => {
+            warn!(
+                "WebRTC frame write timed out: elapsed_ms={} threshold_ms={} keyframe={} realtime={}",
+                elapsed.as_millis(),
+                slow_write_threshold.as_millis(),
+                frame.is_keyframe,
+                realtime_stream
+            );
+            Ok(false)
+        }
     }
-    Ok(true)
 }
 
 fn rtp_packet_pacing(

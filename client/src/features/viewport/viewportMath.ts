@@ -88,44 +88,63 @@ export function mapDisplayedPointToNaturalOrientation(
 
 export function computeChromeScreenRect(
   chromeProfile: ChromeProfile | null,
-  deviceNaturalSize: Size | null,
+  _deviceNaturalSize: Size | null,
+): ScreenRect | null {
+  const contentRect = computeChromeContentRect(chromeProfile);
+  if (contentRect) {
+    return contentRect;
+  }
+  return computeChromeBackingRect(chromeProfile);
+}
+
+export function computeChromeBackingRect(
+  chromeProfile: ChromeProfile | null,
 ): ScreenRect | null {
   if (!chromeProfile) {
     return null;
   }
 
-  const profileAspect = chromeProfile.screenWidth / chromeProfile.screenHeight;
-  const deviceAspect = deviceNaturalSize
-    ? deviceNaturalSize.width / deviceNaturalSize.height
-    : profileAspect;
-  if (!deviceAspect || !Number.isFinite(deviceAspect)) {
+  if (
+    !Number.isFinite(chromeProfile.screenX) ||
+    !Number.isFinite(chromeProfile.screenY) ||
+    !Number.isFinite(chromeProfile.screenWidth) ||
+    !Number.isFinite(chromeProfile.screenHeight) ||
+    chromeProfile.screenWidth <= 0 ||
+    chromeProfile.screenHeight <= 0
+  ) {
     return null;
   }
 
-  const aspectDelta = Math.abs(deviceAspect - profileAspect) / profileAspect;
-  if (aspectDelta <= 0.01) {
-    return {
-      height: chromeProfile.screenHeight,
-      width: chromeProfile.screenWidth,
-      x: chromeProfile.screenX,
-      y: chromeProfile.screenY,
-    };
+  return {
+    height: chromeProfile.screenHeight,
+    width: chromeProfile.screenWidth,
+    x: chromeProfile.screenX,
+    y: chromeProfile.screenY,
+  };
+}
+
+function computeChromeContentRect(
+  chromeProfile: ChromeProfile | null,
+): ScreenRect | null {
+  if (!chromeProfile) {
+    return null;
   }
-
-  let width = chromeProfile.screenWidth;
-  let height = width / deviceAspect;
-  let x = chromeProfile.screenX;
-  let y = chromeProfile.screenY;
-
-  if (height > chromeProfile.screenHeight) {
-    height = chromeProfile.screenHeight;
-    width = height * deviceAspect;
-    x += (chromeProfile.screenWidth - width) / 2;
-  } else {
-    y += (chromeProfile.screenHeight - height) / 2;
+  if (
+    !Number.isFinite(chromeProfile.contentX) ||
+    !Number.isFinite(chromeProfile.contentY) ||
+    !Number.isFinite(chromeProfile.contentWidth) ||
+    !Number.isFinite(chromeProfile.contentHeight) ||
+    (chromeProfile.contentWidth ?? 0) <= 0 ||
+    (chromeProfile.contentHeight ?? 0) <= 0
+  ) {
+    return null;
   }
-
-  return { x, y, width, height };
+  return {
+    height: chromeProfile.contentHeight ?? 0,
+    width: chromeProfile.contentWidth ?? 0,
+    x: chromeProfile.contentX ?? 0,
+    y: chromeProfile.contentY ?? 0,
+  };
 }
 
 export function computeChromeScreenBorderRadius(
@@ -163,6 +182,27 @@ export function computeChromeScreenBorderRadius(
   const topRight = topTouches && rightTouches ? radius : 0;
   const bottomRight = bottomTouches && rightTouches ? radius : 0;
   const bottomLeft = bottomTouches && leftTouches ? radius : 0;
+
+  if (
+    topLeft === 0 &&
+    topRight === 0 &&
+    bottomRight === 0 &&
+    bottomLeft === 0 &&
+    chromeProfile.contentWidth &&
+    chromeProfile.contentHeight &&
+    Math.abs(screenRect.x - (chromeProfile.contentX ?? Number.NaN)) <=
+      epsilon &&
+    Math.abs(screenRect.y - (chromeProfile.contentY ?? Number.NaN)) <=
+      epsilon &&
+    Math.abs(screenRect.width - chromeProfile.contentWidth) <= epsilon &&
+    Math.abs(screenRect.height - chromeProfile.contentHeight) <= epsilon
+  ) {
+    const contentRadius = Math.max(
+      0,
+      Math.min(radius, screenRect.width / 2, screenRect.height / 2),
+    );
+    return `${contentRadius}px ${contentRadius}px ${contentRadius}px ${contentRadius}px`;
+  }
 
   return `${topLeft}px ${topRight}px ${bottomRight}px ${bottomLeft}px`;
 }

@@ -970,7 +970,11 @@ async fn pair_browser(
     if !auth::pairing_code_matches(&state.config, &payload.code) {
         return auth::unauthorized_response(&state.config, &headers);
     }
-    let mut response = Json(json_value!({ "ok": true })).into_response();
+    let mut response = Json(json_value!({
+        "ok": true,
+        "accessToken": state.config.access_token,
+    }))
+    .into_response();
     auth::append_cors_headers(&state.config, &headers, response.headers_mut());
     auth::append_access_cookie(response.headers_mut(), &state.config.access_token);
     response
@@ -989,6 +993,8 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         stream_quality_state_value(&current_stream_quality_state(video_codec.clone()));
     json(json_value!({
         "ok": true,
+        "serverId": crate::auth::server_identity(&state.config),
+        "advertiseHost": state.config.advertise_host,
         "httpPort": state.config.http_port,
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64(),
         "videoCodec": video_codec,

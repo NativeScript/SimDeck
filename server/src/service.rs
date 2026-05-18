@@ -1,4 +1,4 @@
-use crate::{default_client_root, ServiceOptions};
+use crate::{auth, default_client_root, ServiceOptions};
 use anyhow::{anyhow, bail, Context};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,15 +8,50 @@ use std::time::{Duration, Instant};
 
 const SERVICE_LABEL: &str = "dev.nativescript.simdeck";
 
+#[derive(Clone, Debug)]
+pub struct ServiceInstallResult {
+    pub service: String,
+    pub plist_path: PathBuf,
+    pub stdout_log: PathBuf,
+    pub stderr_log: PathBuf,
+    pub port: u16,
+    pub advertise_host: Option<String>,
+    pub access_token: Option<String>,
+    pub pairing_code: Option<String>,
+}
+
 pub fn enable(options: ServiceOptions) -> anyhow::Result<()> {
-    install(options)
+    let result = install(options)?;
+    print_install_result(&result)
 }
 
 pub fn restart(options: ServiceOptions) -> anyhow::Result<()> {
+    let result = install(options)?;
+    print_install_result(&result)
+}
+
+pub fn pair(mut options: ServiceOptions) -> anyhow::Result<ServiceInstallResult> {
+    let existing_credentials = installed_credentials().unwrap_or(None);
+    if options.access_token.is_none() {
+        options.access_token = existing_credentials
+            .as_ref()
+            .and_then(|credentials| credentials.access_token.clone())
+            .or_else(|| Some(auth::generate_access_token()));
+    }
+    if options.pairing_code.is_none() {
+        options.pairing_code = existing_credentials
+            .as_ref()
+            .and_then(|credentials| credentials.pairing_code.clone())
+            .or_else(|| Some(auth::generate_pairing_code()));
+    }
     install(options)
 }
 
-fn install(options: ServiceOptions) -> anyhow::Result<()> {
+pub fn installed_port() -> anyhow::Result<Option<u16>> {
+    Ok(installed_argument_value("--port")?.and_then(|value| value.parse::<u16>().ok()))
+}
+
+fn install(options: ServiceOptions) -> anyhow::Result<ServiceInstallResult> {
     let plist_path = plist_path()?;
     let log_dir = log_dir()?;
     fs::create_dir_all(
@@ -52,14 +87,30 @@ fn install(options: ServiceOptions) -> anyhow::Result<()> {
     run_launchctl(["bootstrap", &domain, plist_path.to_string_lossy().as_ref()])?;
     run_launchctl(["kickstart", "-k", &format!("{domain}/{SERVICE_LABEL}")])?;
 
+    let advertise_host = options.advertise_host.clone();
+    let access_token = options.access_token.clone();
+    let pairing_code = options.pairing_code.clone();
+    Ok(ServiceInstallResult {
+        service: SERVICE_LABEL.to_owned(),
+        plist_path,
+        stdout_log,
+        stderr_log,
+        port: options.port,
+        advertise_host,
+        access_token,
+        pairing_code,
+    })
+}
+
+fn print_install_result(result: &ServiceInstallResult) -> anyhow::Result<()> {
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "ok": true,
-            "service": SERVICE_LABEL,
-            "plist": plist_path,
-            "stdoutLog": stdout_log,
-            "stderrLog": stderr_log,
+            "service": result.service,
+            "plist": result.plist_path,
+            "stdoutLog": result.stdout_log,
+            "stderrLog": result.stderr_log,
         }))?
     );
     Ok(())
@@ -95,6 +146,60 @@ fn plist_path() -> anyhow::Result<PathBuf> {
 
 fn log_dir() -> anyhow::Result<PathBuf> {
     Ok(home_dir()?.join("Library/Logs"))
+}
+
+#[derive(Clone, Debug)]
+struct ServiceCredentials {
+    access_token: Option<String>,
+    pairing_code: Option<String>,
+}
+
+fn installed_credentials() -> anyhow::Result<Option<ServiceCredentials>> {
+    let Some(arguments) = installed_arguments()? else {
+        return Ok(None);
+    };
+    Ok(Some(ServiceCredentials {
+        access_token: argument_value(&arguments, "--access-token"),
+        pairing_code: argument_value(&arguments, "--pairing-code"),
+    }))
+}
+
+fn installed_argument_value(name: &str) -> anyhow::Result<Option<String>> {
+    Ok(installed_arguments()?
+        .as_deref()
+        .and_then(|arguments| argument_value(arguments, name)))
+}
+
+fn installed_arguments() -> anyhow::Result<Option<Vec<String>>> {
+    let plist_path = plist_path()?;
+    if !plist_path.exists() {
+        return Ok(None);
+    }
+    let plist = plist::Value::from_file(&plist_path)
+        .with_context(|| format!("read {}", plist_path.display()))?;
+    let Some(arguments) = plist
+        .as_dictionary()
+        .and_then(|dict| dict.get("ProgramArguments"))
+        .and_then(|value| value.as_array())
+    else {
+        return Ok(None);
+    };
+    let arguments = arguments
+        .iter()
+        .filter_map(|value| value.as_string())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    Ok(Some(arguments))
+}
+
+fn argument_value(arguments: &[String], name: &str) -> Option<String> {
+    arguments
+        .windows(2)
+        .find(|window| window.first().is_some_and(|value| value == name))
+        .and_then(|window| window.get(1))
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn home_dir() -> anyhow::Result<PathBuf> {

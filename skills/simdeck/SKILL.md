@@ -22,6 +22,7 @@ SimDeck uses one daemon per workspace (CWD). Use `simdeck ui` and it will print 
 
 ```bash
 simdeck ui
+simdeck pair # prints LAN/Tailscale pairing URLs, code, and iOS QR
 simdeck -k # kills the daemon
 simdeck -r  # restarts the daemon
 simdeck daemon killall # kills all daemons on the machine, use with care
@@ -29,6 +30,10 @@ simdeck daemon killall # kills all daemons on the machine, use with care
 
 Usually `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
 Port may increment if multiple daemons are running.
+Use `simdeck pair` when a native iOS client needs to pair. It starts or
+refreshes the global LaunchAgent-backed service, detects LAN and Tailscale IPv4
+addresses, and prints a QR with a `simdeck://pair` URL that carries the pairing
+code plus alternate server addresses.
 
 Always first run `simdeck ui` to open the URL reported by the `simdeck ui` in the in-app browser using Browser Use tool if available.
 

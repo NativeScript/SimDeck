@@ -234,6 +234,14 @@ pub struct ChromeProfile {
     pub screen_width: f64,
     #[serde(rename = "screenHeight")]
     pub screen_height: f64,
+    #[serde(rename = "contentX", default)]
+    pub content_x: Option<f64>,
+    #[serde(rename = "contentY", default)]
+    pub content_y: Option<f64>,
+    #[serde(rename = "contentWidth", default)]
+    pub content_width: Option<f64>,
+    #[serde(rename = "contentHeight", default)]
+    pub content_height: Option<f64>,
     #[serde(rename = "cornerRadius")]
     pub corner_radius: f64,
     #[serde(rename = "hasScreenMask", default)]

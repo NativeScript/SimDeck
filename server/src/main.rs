@@ -32,6 +32,7 @@ use native::bridge::{
 };
 use native::ffi;
 use performance::PerformanceRegistry;
+use qrcode::{render::unicode, QrCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use simulators::registry::SessionRegistry;
@@ -44,12 +45,12 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command as ProcessCommand, Stdio};
+use std::process::{Child, Command as ProcessCommand, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
-use tracing::info;
+use tracing::{info, warn};
 
 const RECOVERABLE_RESTART_EXIT_CODE: i32 = 75;
 const SUPERVISED_DAEMON_METADATA_PID_ENV: &str = "SIMDECK_DAEMON_METADATA_PID";
@@ -101,6 +102,29 @@ enum Command {
         local_stream_fps: Option<u32>,
         #[arg(long)]
         open: bool,
+    },
+    Pair {
+        #[arg(
+            long,
+            help = "Defaults to the existing service port, or the next available port near 4310"
+        )]
+        port: Option<u16>,
+        #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::UNSPECIFIED))]
+        bind: IpAddr,
+        #[arg(long)]
+        advertise_host: Option<String>,
+        #[arg(long)]
+        client_root: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
+        video_codec: VideoCodecMode,
+        #[arg(long)]
+        low_latency: bool,
+        #[arg(long, value_enum)]
+        stream_quality: Option<StreamQualityProfileArg>,
+        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=240))]
+        local_stream_fps: Option<u32>,
+        #[arg(long)]
+        json: bool,
     },
     Daemon {
         #[command(subcommand)]
@@ -1282,6 +1306,198 @@ fn print_daemon_start_result(metadata: &DaemonMetadata, started: bool) -> anyhow
     }))
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairingAddress {
+    kind: &'static str,
+    url: String,
+}
+
+#[derive(Clone, Debug)]
+struct PairingTarget {
+    target: &'static str,
+    service: Option<String>,
+    project_root: Option<PathBuf>,
+    pid: Option<u32>,
+    http_url: String,
+    port: u16,
+    advertise_host: Option<String>,
+    server_id: Option<String>,
+    pairing_code: String,
+}
+
+impl PairingTarget {
+    fn from_service(result: service::ServiceInstallResult) -> anyhow::Result<Self> {
+        Ok(Self {
+            target: "service",
+            service: Some(result.service),
+            project_root: None,
+            pid: None,
+            http_url: http_url_for_host("127.0.0.1", result.port),
+            port: result.port,
+            advertise_host: result.advertise_host,
+            server_id: result
+                .access_token
+                .as_deref()
+                .map(auth::server_identity_for_token),
+            pairing_code: result
+                .pairing_code
+                .context("SimDeck service did not publish a pairing code")?,
+        })
+    }
+}
+
+fn print_pairing_result(target: &PairingTarget, started: bool, json: bool) -> anyhow::Result<()> {
+    let pairing_code = target.pairing_code.as_str();
+    let addresses = pairing_addresses(target);
+    let primary_url = addresses
+        .iter()
+        .find(|address| address.kind != "local")
+        .or_else(|| addresses.first())
+        .map(|address| address.url.as_str())
+        .context("No SimDeck pairing address is available")?;
+    let pair_url = simdeck_pair_url(
+        primary_url,
+        pairing_code,
+        target.server_id.as_deref(),
+        &addresses,
+    );
+
+    if json {
+        println_json(&serde_json::json!({
+            "ok": true,
+            "target": target.target,
+            "service": target.service,
+            "projectRoot": target.project_root,
+            "pid": target.pid,
+            "url": target.http_url,
+            "started": started,
+            "serverId": target.server_id,
+            "pairingCode": pairing_code,
+            "pairUrl": pair_url,
+            "addresses": addresses,
+        }))?;
+        return Ok(());
+    }
+
+    println!("🔐 SimDeck pairing");
+    println!();
+    for address in &addresses {
+        let label = match address.kind {
+            "local" => "Local:",
+            "lan" => "LAN:",
+            "tailscale" => "Tailscale:",
+            _ => "URL:",
+        };
+        println!("{:>12}   {}", label, address.url);
+    }
+    println!("{:>12}   {}", "Pair:", format_pairing_code(pairing_code));
+    println!();
+    println!("Scan this with SimDeck for iOS:");
+    println!("{}", render_qr_code(&pair_url)?);
+    println!("{:>12}   {}", "Deep Link:", pair_url);
+    Ok(())
+}
+
+fn pairing_addresses(target: &PairingTarget) -> Vec<PairingAddress> {
+    let mut addresses = Vec::new();
+    push_pairing_address(
+        &mut addresses,
+        "local",
+        http_url_for_host("127.0.0.1", target.port),
+    );
+
+    let advertise_host = target
+        .advertise_host
+        .as_deref()
+        .filter(|host| !host.trim().is_empty());
+    if let Some(host) = advertise_host {
+        let kind = host
+            .parse::<IpAddr>()
+            .ok()
+            .filter(|ip| is_tailscale_ip(*ip))
+            .map(|_| "tailscale")
+            .unwrap_or("lan");
+        if host != "127.0.0.1" && host != "localhost" {
+            push_pairing_address(&mut addresses, kind, http_url_for_host(host, target.port));
+        }
+    }
+
+    if let Some(lan_ip) = detect_lan_ip() {
+        push_pairing_address(
+            &mut addresses,
+            "lan",
+            http_url_for_host(&lan_ip.to_string(), target.port),
+        );
+    }
+
+    if let Some(tailscale_ip) = detect_tailscale_ip() {
+        push_pairing_address(
+            &mut addresses,
+            "tailscale",
+            http_url_for_host(&tailscale_ip.to_string(), target.port),
+        );
+    }
+
+    addresses
+}
+
+fn push_pairing_address(addresses: &mut Vec<PairingAddress>, kind: &'static str, url: String) {
+    if addresses.iter().any(|address| address.url == url) {
+        return;
+    }
+    addresses.push(PairingAddress { kind, url });
+}
+
+fn simdeck_pair_url(
+    primary_url: &str,
+    pairing_code: &str,
+    server_id: Option<&str>,
+    addresses: &[PairingAddress],
+) -> String {
+    let mut url = format!(
+        "simdeck://pair?u={}&c={}",
+        percent_encode(&pairing_address_value(primary_url)),
+        percent_encode(pairing_code)
+    );
+    if let Some(server_id) = server_id.filter(|value| !value.is_empty()) {
+        url.push_str("&s=");
+        url.push_str(&percent_encode(server_id));
+    }
+    for address in addresses
+        .iter()
+        .filter(|address| address.url != primary_url && address.kind != "local")
+    {
+        url.push_str("&a=");
+        url.push_str(&percent_encode(&pairing_address_value(&address.url)));
+    }
+    url
+}
+
+fn pairing_address_value(url: &str) -> String {
+    let Ok(parsed) = url.parse::<http::Uri>() else {
+        return url.to_owned();
+    };
+    let Some(authority) = parsed.authority() else {
+        return url.to_owned();
+    };
+    authority.as_str().to_owned()
+}
+
+fn render_qr_code(value: &str) -> anyhow::Result<String> {
+    let code = QrCode::new(value.as_bytes()).context("generate pairing QR code")?;
+    Ok(code
+        .render::<unicode::Dense1x2>()
+        .quiet_zone(true)
+        .dark_color(unicode::Dense1x2::Light)
+        .light_color(unicode::Dense1x2::Dark)
+        .build())
+}
+
+fn print_pair_progress(message: impl AsRef<str>) {
+    eprintln!("simdeck pair: {}", message.as_ref());
+}
+
 fn wait_for_daemon(metadata: &DaemonMetadata, timeout: Duration) -> anyhow::Result<()> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -1293,6 +1509,21 @@ fn wait_for_daemon(metadata: &DaemonMetadata, timeout: Duration) -> anyhow::Resu
     anyhow::bail!(
         "Timed out waiting for SimDeck daemon at {}",
         metadata.http_url
+    )
+}
+
+fn wait_for_pairing_target(target: &PairingTarget, timeout: Duration) -> anyhow::Result<()> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if http_get_json(&target.http_url, "/api/health").is_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    anyhow::bail!(
+        "Timed out waiting for SimDeck {} at {}",
+        target.target,
+        target.http_url
     )
 }
 
@@ -1436,7 +1667,8 @@ fn no_command_action_from_args() -> Option<NoCommandAction> {
 fn is_known_command(value: &str) -> bool {
     matches!(
         value,
-        "ui" | "daemon"
+        "ui" | "pair"
+            | "daemon"
             | "service"
             | "core-simulator"
             | "simctl-service"
@@ -1498,6 +1730,78 @@ fn restart_detached_daemon(options: DaemonLaunchOptions) -> anyhow::Result<()> {
         terminate_daemon_metadata(&metadata)?;
     }
     start_detached_daemon(options)
+}
+
+struct PairGlobalServiceOptions {
+    port: Option<u16>,
+    bind: IpAddr,
+    advertise_host: Option<String>,
+    client_root: Option<PathBuf>,
+    video_codec: VideoCodecMode,
+    low_latency: bool,
+    stream_quality: Option<StreamQualityProfileArg>,
+    local_stream_fps: Option<u32>,
+    json: bool,
+}
+
+fn pair_global_service(options: PairGlobalServiceOptions) -> anyhow::Result<()> {
+    let PairGlobalServiceOptions {
+        port,
+        bind,
+        advertise_host,
+        client_root,
+        video_codec,
+        low_latency,
+        stream_quality,
+        local_stream_fps,
+        json,
+    } = options;
+
+    if port.is_none() {
+        print_pair_progress("checking the installed service port");
+    }
+    let port = match port {
+        Some(port) => port,
+        None => service::installed_port()?.unwrap_or(choose_daemon_port_for_bind(4310, bind)?),
+    };
+    print_pair_progress(format!("using port {port}"));
+
+    print_pair_progress("detecting LAN and Tailscale addresses");
+    let advertise_host = advertise_host.or_else(|| {
+        detect_lan_ip()
+            .or_else(detect_tailscale_ip)
+            .map(|ip| ip.to_string())
+    });
+    if let Some(host) = advertise_host.as_deref() {
+        print_pair_progress(format!("advertising {host}:{port}"));
+    } else {
+        print_pair_progress("no LAN or Tailscale address detected; local pairing only");
+    }
+
+    print_pair_progress("starting the global SimDeck service");
+    let result = service::pair(ServiceOptions {
+        port,
+        bind,
+        advertise_host,
+        client_root,
+        video_codec,
+        low_latency,
+        stream_quality_profile: local_stream_quality_profile(low_latency, stream_quality),
+        local_stream_fps,
+        access_token: None,
+        pairing_code: None,
+    })?;
+    print_pair_progress(format!(
+        "installed {}; logs: {}, {}",
+        result.service,
+        result.stdout_log.display(),
+        result.stderr_log.display()
+    ));
+    let target = PairingTarget::from_service(result)?;
+    print_pair_progress(format!("waiting for service health at {}", target.http_url));
+    wait_for_pairing_target(&target, Duration::from_secs(15))?;
+    print_pair_progress("service is ready; rendering pairing QR");
+    print_pairing_result(&target, true, json)
 }
 
 fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
@@ -1588,8 +1892,62 @@ fn detect_lan_ip() -> Option<IpAddr> {
     None
 }
 
+fn detect_tailscale_ip() -> Option<IpAddr> {
+    detect_tailscale_ip_from_cli().or_else(detect_tailscale_ip_from_ifconfig)
+}
+
+fn detect_tailscale_ip_from_cli() -> Option<IpAddr> {
+    let output = ProcessCommand::new("tailscale")
+        .args(["ip", "-4"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .filter_map(|line| line.trim().parse::<IpAddr>().ok())
+        .find(|ip| is_tailscale_ip(*ip))
+}
+
+fn detect_tailscale_ip_from_ifconfig() -> Option<IpAddr> {
+    let output = ProcessCommand::new("ifconfig")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.split_whitespace()
+        .filter_map(|part| part.parse::<IpAddr>().ok())
+        .find(|ip| is_tailscale_ip(*ip))
+}
+
+fn is_tailscale_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            octets[0] == 100 && (octets[1] & 0b1100_0000) == 0b0100_0000
+        }
+        IpAddr::V6(_) => false,
+    }
+}
+
+fn http_url_for_host(host: &str, port: u16) -> String {
+    let host = host.trim();
+    if host.contains(':') && !host.starts_with('[') && !host.ends_with(']') {
+        format!("http://[{host}]:{port}")
+    } else {
+        format!("http://{host}:{port}")
+    }
+}
+
 fn ui_url(host: &str, port: u16, selector: Option<&str>) -> String {
-    let mut url = format!("http://{host}:{port}");
+    let mut url = http_url_for_host(host, port);
     if let Some(selector) = selector.filter(|value| !value.trim().is_empty()) {
         url.push_str(&format!("/?device={}", percent_encode(selector.trim())));
     }
@@ -2006,6 +2364,27 @@ fn main() -> anyhow::Result<()> {
             print_daemon_start_result(&metadata, started)?;
             Ok(())
         }
+        Command::Pair {
+            port,
+            bind,
+            advertise_host,
+            client_root,
+            video_codec,
+            low_latency,
+            stream_quality,
+            local_stream_fps,
+            json,
+        } => pair_global_service(PairGlobalServiceOptions {
+            port,
+            bind,
+            advertise_host,
+            client_root,
+            video_codec,
+            low_latency,
+            stream_quality,
+            local_stream_fps,
+            json,
+        }),
         Command::Daemon { command } => match command {
             DaemonCommand::Start {
                 port,
@@ -5989,6 +6368,7 @@ async fn serve(
         .with_context(|| format!("bind HTTP listener on {}", config.http_addr()))?;
     let health_heartbeat = Arc::new(AtomicU64::new(now_secs()));
     start_server_health_watchdog(config.http_addr(), health_heartbeat.clone());
+    let _bonjour_advertisement = BonjourAdvertisement::start(&config);
 
     info!("HTTP listening on http://{}", config.http_addr());
     info!("Serving client from {}", config.client_root.display());
@@ -6027,6 +6407,62 @@ async fn serve(
     }
 
     Ok(())
+}
+
+struct BonjourAdvertisement {
+    child: Child,
+}
+
+impl BonjourAdvertisement {
+    fn start(config: &Config) -> Option<Self> {
+        if config.bind_ip.is_loopback() {
+            return None;
+        }
+        let service_name = bonjour_service_name(&config.advertise_host);
+        let server_id = auth::server_identity(config);
+        match ProcessCommand::new("dns-sd")
+            .args([
+                "-R",
+                &service_name,
+                "_simdeck._tcp.",
+                "local.",
+                &config.http_port.to_string(),
+                &format!("sid={server_id}"),
+                &format!("host={}", config.advertise_host),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => {
+                info!(
+                    "Advertising Bonjour service '{}' on _simdeck._tcp. port {}",
+                    service_name, config.http_port
+                );
+                Some(Self { child })
+            }
+            Err(error) => {
+                warn!("Unable to advertise Bonjour service with dns-sd: {error}");
+                None
+            }
+        }
+    }
+}
+
+impl Drop for BonjourAdvertisement {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn bonjour_service_name(advertise_host: &str) -> String {
+    let host = advertise_host.trim();
+    if host.is_empty() || host == "127.0.0.1" || host == "localhost" {
+        "SimDeck".to_owned()
+    } else {
+        format!("SimDeck {host}")
+    }
 }
 
 fn app_router(state: AppState, client_root: PathBuf, access_token: String) -> Router {
@@ -6131,14 +6567,16 @@ fn default_client_root() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        batch_line_to_json_step, daemon_matches_launch_options,
-        normalize_accessibility_point_for_display, server_health_watchdog_should_restart,
-        service_post_error_is_retryable, studio_daemon_restart_args, Cli, Command, DaemonCommand,
-        DaemonLaunchOptions, DaemonMetadata, StreamQualityProfileArg, StudioExposeOptions,
+        batch_line_to_json_step, daemon_matches_launch_options, http_url_for_host, is_tailscale_ip,
+        normalize_accessibility_point_for_display, render_qr_code,
+        server_health_watchdog_should_restart, service_post_error_is_retryable, simdeck_pair_url,
+        studio_daemon_restart_args, Cli, Command, DaemonCommand, DaemonLaunchOptions,
+        DaemonMetadata, PairingAddress, StreamQualityProfileArg, StudioExposeOptions,
         VideoCodecMode, DEFAULT_LOCAL_STREAM_QUALITY_PROFILE,
         SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD, SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
     };
     use clap::Parser;
+    use std::net::{IpAddr, Ipv4Addr};
     use std::path::PathBuf;
 
     fn daemon_metadata_for_test(
@@ -6287,6 +6725,74 @@ mod tests {
         };
         assert_eq!(seconds, 5.0);
         assert!(stdout);
+    }
+
+    #[test]
+    fn pair_command_defaults_to_lan_bind() {
+        let cli = Cli::parse_from(["simdeck", "pair"]);
+
+        let Command::Pair { bind, port, .. } = cli.command else {
+            panic!("expected pair command");
+        };
+        assert_eq!(port, None);
+        assert_eq!(bind, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    }
+
+    #[test]
+    fn simdeck_pair_url_encodes_alternate_addresses() {
+        let addresses = vec![
+            PairingAddress {
+                kind: "local",
+                url: "http://127.0.0.1:4310".to_owned(),
+            },
+            PairingAddress {
+                kind: "lan",
+                url: "http://10.0.0.55:4310".to_owned(),
+            },
+            PairingAddress {
+                kind: "tailscale",
+                url: "http://100.112.42.69:4310".to_owned(),
+            },
+        ];
+
+        let url = simdeck_pair_url(
+            "http://10.0.0.55:4310",
+            "123456",
+            Some("server-1"),
+            &addresses,
+        );
+
+        assert!(url.starts_with("simdeck://pair?u=10.0.0.55%3A4310&c=123456&s=server-1"));
+        assert!(url.contains("a=100.112.42.69%3A4310"));
+        assert!(!url.contains("127.0.0.1"));
+    }
+
+    #[test]
+    fn qr_renderer_uses_compact_metro_style_blocks() {
+        let qr = render_qr_code("simdeck://pair?url=http%3A%2F%2F10.0.0.55%3A4310&code=123456")
+            .expect("render QR");
+
+        assert!(qr.contains('█'));
+        assert!(qr.contains(' '));
+        assert!(!qr.contains("\x1b["));
+        assert!(qr.lines().count() < 40);
+    }
+
+    #[test]
+    fn tailscale_ip_detection_matches_100_64_10() {
+        assert!(is_tailscale_ip("100.64.0.1".parse().unwrap()));
+        assert!(is_tailscale_ip("100.127.255.254".parse().unwrap()));
+        assert!(!is_tailscale_ip("100.128.0.1".parse().unwrap()));
+        assert!(!is_tailscale_ip("10.0.0.55".parse().unwrap()));
+    }
+
+    #[test]
+    fn http_url_for_host_brackets_ipv6() {
+        assert_eq!(http_url_for_host("fe80::1", 4310), "http://[fe80::1]:4310");
+        assert_eq!(
+            http_url_for_host("10.0.0.55", 4310),
+            "http://10.0.0.55:4310"
+        );
     }
 
     #[test]
