@@ -31,4 +31,6 @@ copyFileSync("build/types/index.d.ts", "index.d.ts");
 
 rmSync("build", { recursive: true, force: true });
 
-console.log("✓ built @nativescript/simdeck-inspector (index.js, index.mjs, index.d.ts)");
+console.log(
+  "✓ built @nativescript/simdeck-inspector (index.js, index.mjs, index.d.ts)",
+);
