@@ -139,22 +139,27 @@ struct SimulatorStreamView: View {
         GeometryReader { proxy in
             let layout = DeviceViewportLayout(
                 chromeProfile: model.chromeProfile,
-                chromeImageSize: model.chromeImage?.size,
                 videoSize: model.videoSize,
                 availableSize: proxy.size
             )
             let displayToken = model.streamDisplayToken
+            let screenMaskImage = model.chromeProfile?.hasScreenMask == true ? model.chromeScreenMask : nil
 
             ZStack(alignment: .topLeading) {
                 streamBackground
 
-                RoundedRectangle(cornerRadius: layout.screenCornerRadius + 2, style: .continuous)
+                Rectangle()
                     .fill(.black)
                     .frame(width: layout.screenBackingFrame.width, height: layout.screenBackingFrame.height)
+                    .clippedToSimulatorScreen(cornerRadius: layout.screenCornerRadius + 2, maskImage: screenMaskImage)
                     .position(x: layout.screenBackingFrame.midX, y: layout.screenBackingFrame.midY)
 
                 if showsCachedStreamFrame, let lastStreamFrame = model.lastStreamFrame {
-                    CachedStreamFrameView(image: lastStreamFrame, cornerRadius: layout.screenCornerRadius + 1)
+                    CachedStreamFrameView(
+                        image: lastStreamFrame,
+                        cornerRadius: layout.screenCornerRadius + 1,
+                        maskImage: screenMaskImage
+                    )
                         .frame(width: layout.videoFrame.width, height: layout.videoFrame.height)
                         .position(x: layout.videoFrame.midX, y: layout.videoFrame.midY)
                         .transition(.opacity)
@@ -175,7 +180,7 @@ struct SimulatorStreamView: View {
                     )
                     .id(displayToken)
                     .frame(width: layout.videoFrame.width, height: layout.videoFrame.height)
-                    .clipShape(RoundedRectangle(cornerRadius: layout.screenCornerRadius + 1, style: .continuous))
+                    .clippedToSimulatorScreen(cornerRadius: layout.screenCornerRadius + 1, maskImage: screenMaskImage)
                     .position(x: layout.videoFrame.midX, y: layout.videoFrame.midY)
                     .opacity(model.hasCurrentStreamFrame ? 1 : 0)
                 }
@@ -199,12 +204,14 @@ struct SimulatorStreamView: View {
                 if let simulator = model.selectedSimulator, !simulator.isBooted {
                     BootSimulatorOverlay(model: model, simulator: simulator)
                         .frame(width: layout.screenFrame.width, height: layout.screenFrame.height)
+                        .clippedToSimulatorScreen(cornerRadius: layout.screenCornerRadius, maskImage: screenMaskImage)
                         .position(x: layout.screenFrame.midX, y: layout.screenFrame.midY)
                 }
 
                 if showsFirstFrameSpinner {
                     StreamFirstFrameLoadingOverlay()
                         .frame(width: layout.screenFrame.width, height: layout.screenFrame.height)
+                        .clippedToSimulatorScreen(cornerRadius: layout.screenCornerRadius, maskImage: screenMaskImage)
                         .position(x: layout.screenFrame.midX, y: layout.screenFrame.midY)
                         .transition(.opacity)
                 }
@@ -212,6 +219,7 @@ struct SimulatorStreamView: View {
                 if showsRetryOverlay {
                     StreamRetryOverlay(model: model)
                         .frame(width: layout.screenFrame.width, height: layout.screenFrame.height)
+                        .clippedToSimulatorScreen(cornerRadius: layout.screenCornerRadius, maskImage: screenMaskImage)
                         .position(x: layout.screenFrame.midX, y: layout.screenFrame.midY)
                         .transition(.opacity)
                 }
@@ -350,6 +358,7 @@ private struct StreamFirstFrameLoadingOverlay: View {
 private struct CachedStreamFrameView: View {
     let image: UIImage
     let cornerRadius: CGFloat
+    let maskImage: UIImage?
 
     var body: some View {
         Image(uiImage: image)
@@ -358,7 +367,7 @@ private struct CachedStreamFrameView: View {
             .saturation(0.82)
             .brightness(-0.08)
             .overlay(Color.black.opacity(0.28))
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .clippedToSimulatorScreen(cornerRadius: cornerRadius, maskImage: maskImage)
             .shadow(color: .black.opacity(0.34), radius: 16, y: 8)
             .clipped()
             .allowsHitTesting(false)
@@ -927,9 +936,8 @@ private struct DeviceViewportLayout {
     let screenCornerRadius: CGFloat
     let usesChrome: Bool
     private let chromeCoordinateScale: CGFloat
-    private let chromeMetricScale: Double
 
-    init(chromeProfile: ChromeProfile?, chromeImageSize: CGSize?, videoSize: CGSize, availableSize: CGSize) {
+    init(chromeProfile: ChromeProfile?, videoSize: CGSize, availableSize: CGSize) {
         let viewport = CGRect(origin: .zero, size: availableSize)
             .insetBy(dx: min(20, availableSize.width * 0.045), dy: 16)
 
@@ -941,13 +949,11 @@ private struct DeviceViewportLayout {
            viewport.width > 0,
            viewport.height > 0 {
             let profileSize = CGSize(width: CGFloat(chromeProfile.totalWidth), height: CGFloat(chromeProfile.totalHeight))
-            let metricScale = Self.chromeMetricScale(profile: chromeProfile, imageSize: chromeImageSize)
             let shell = profileSize.aspectFit(in: viewport)
             let scale = shell.width / profileSize.width
-            let screenRect = Self.chromeScreenRect(profile: chromeProfile, videoSize: videoSize, metricScale: metricScale)
+            let screenRect = Self.chromeScreenRect(profile: chromeProfile, videoSize: videoSize)
             shellFrame = shell
             chromeCoordinateScale = scale
-            chromeMetricScale = metricScale
             screenFrame = CGRect(
                 x: shell.minX + screenRect.minX * scale,
                 y: shell.minY + screenRect.minY * scale,
@@ -959,8 +965,7 @@ private struct DeviceViewportLayout {
             screenCornerRadius = Self.screenCornerRadius(
                 profile: chromeProfile,
                 profileScreenRect: screenRect,
-                scale: scale,
-                metricScale: metricScale
+                scale: scale
             )
             usesChrome = true
             return
@@ -977,39 +982,23 @@ private struct DeviceViewportLayout {
         screenCornerRadius = min(44, screen.width * 0.14)
         usesChrome = false
         chromeCoordinateScale = 1
-        chromeMetricScale = 1
     }
 
     func chromeButtonFrame(_ button: ChromeButtonProfile) -> CGRect {
         guard usesChrome else { return .zero }
         return CGRect(
-            x: shellFrame.minX + CGFloat(button.x / chromeMetricScale) * chromeCoordinateScale,
-            y: shellFrame.minY + CGFloat(button.y / chromeMetricScale) * chromeCoordinateScale,
-            width: CGFloat(button.width / chromeMetricScale) * chromeCoordinateScale,
-            height: CGFloat(button.height / chromeMetricScale) * chromeCoordinateScale
+            x: shellFrame.minX + CGFloat(button.x) * chromeCoordinateScale,
+            y: shellFrame.minY + CGFloat(button.y) * chromeCoordinateScale,
+            width: CGFloat(button.width) * chromeCoordinateScale,
+            height: CGFloat(button.height) * chromeCoordinateScale
         )
     }
 
-    private static func chromeMetricScale(profile: ChromeProfile, imageSize: CGSize?) -> Double {
-        guard profile.totalWidth > 0,
-              profile.totalHeight > 0,
-              let imageSize,
-              imageSize.width > 0,
-              imageSize.height > 0,
-              profile.screenWidth > profile.totalWidth || profile.screenHeight > profile.totalHeight else {
-            return 1
-        }
-        let widthScale = Double(imageSize.width) / profile.totalWidth
-        let heightScale = Double(imageSize.height) / profile.totalHeight
-        let scale = min(widthScale, heightScale)
-        return scale.isFinite && scale > 1 ? scale : 1
-    }
-
-    private static func chromeScreenRect(profile: ChromeProfile, videoSize: CGSize, metricScale: Double) -> CGRect {
-        let profileScreenWidth = profile.screenWidth / metricScale
-        let profileScreenHeight = profile.screenHeight / metricScale
-        let profileScreenX = profile.screenX / metricScale
-        let profileScreenY = profile.screenY / metricScale
+    private static func chromeScreenRect(profile: ChromeProfile, videoSize: CGSize) -> CGRect {
+        let profileScreenWidth = profile.screenWidth
+        let profileScreenHeight = profile.screenHeight
+        let profileScreenX = profile.screenX
+        let profileScreenY = profile.screenY
         let profileAspect = profileScreenWidth / profileScreenHeight
         let videoAspect = videoSize.width > 0 && videoSize.height > 0
             ? Double(videoSize.width / videoSize.height)
@@ -1047,12 +1036,12 @@ private struct DeviceViewportLayout {
         return CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height))
     }
 
-    private static func screenCornerRadius(profile: ChromeProfile, profileScreenRect: CGRect, scale: CGFloat, metricScale: Double) -> CGFloat {
+    private static func screenCornerRadius(profile: ChromeProfile, profileScreenRect: CGRect, scale: CGFloat) -> CGFloat {
         let fullScreen = CGRect(
-            x: CGFloat(profile.screenX / metricScale),
-            y: CGFloat(profile.screenY / metricScale),
-            width: CGFloat(profile.screenWidth / metricScale),
-            height: CGFloat(profile.screenHeight / metricScale)
+            x: CGFloat(profile.screenX),
+            y: CGFloat(profile.screenY),
+            width: CGFloat(profile.screenWidth),
+            height: CGFloat(profile.screenHeight)
         )
         guard abs(profileScreenRect.minX - fullScreen.minX) <= 0.5,
               abs(profileScreenRect.minY - fullScreen.minY) <= 0.5,
@@ -1063,7 +1052,7 @@ private struct DeviceViewportLayout {
         return min(
             profileScreenRect.width * scale / 2,
             profileScreenRect.height * scale / 2,
-            CGFloat(profile.cornerRadius / metricScale) * scale
+            CGFloat(profile.cornerRadius) * scale
         )
     }
 }
@@ -1112,6 +1101,19 @@ private extension CGSize {
 }
 
 private extension View {
+    @ViewBuilder
+    func clippedToSimulatorScreen(cornerRadius: CGFloat, maskImage: UIImage?) -> some View {
+        if let maskImage {
+            self.mask(
+                Image(uiImage: maskImage)
+                    .resizable()
+                    .scaledToFill()
+            )
+        } else {
+            self.clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        }
+    }
+
     @ViewBuilder
     func streamTouchGesture<G: Gesture>(_ enabled: Bool, gesture: G) -> some View {
         if enabled {

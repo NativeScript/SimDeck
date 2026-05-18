@@ -36,9 +36,10 @@ private struct EmptyControlPayload: Encodable {}
 private struct ChromeAssets {
     var profile: ChromeProfile?
     var image: UIImage?
+    var screenMask: UIImage?
 
     var isEmpty: Bool {
-        profile == nil && image == nil
+        profile == nil && image == nil && screenMask == nil
     }
 }
 
@@ -67,6 +68,7 @@ final class AppModel {
     var videoSize: CGSize = .zero
     var chromeProfile: ChromeProfile?
     var chromeImage: UIImage?
+    var chromeScreenMask: UIImage?
     var streamDiagnostics = StreamDiagnostics()
     var bootingSimulatorID: String?
     var streamDisplayToken = 0
@@ -923,6 +925,7 @@ final class AppModel {
         if !applyCachedChromeAssetsForSelection() {
             chromeProfile = nil
             chromeImage = nil
+            chromeScreenMask = nil
         }
         if !applyCachedLastStreamFrameForSelection() {
             lastStreamFrameKey = nil
@@ -946,7 +949,13 @@ final class AppModel {
 
         let loadedProfile = try? await api.chromeProfile(udid: simulatorID)
         let loadedImage = try? await api.chromeImage(udid: simulatorID)
-        let loadedAssets = ChromeAssets(profile: loadedProfile, image: loadedImage)
+        let loadedScreenMask: UIImage?
+        if loadedProfile?.hasScreenMask == true {
+            loadedScreenMask = try? await api.screenMaskImage(udid: simulatorID)
+        } else {
+            loadedScreenMask = nil
+        }
+        let loadedAssets = ChromeAssets(profile: loadedProfile, image: loadedImage, screenMask: loadedScreenMask)
         cacheChromeAssets(loadedAssets, endpoint: endpoint, simulatorID: simulatorID)
         return loadedAssets
     }
@@ -964,6 +973,7 @@ final class AppModel {
     private func applyChromeAssets(_ assets: ChromeAssets) {
         chromeProfile = assets.profile
         chromeImage = assets.image
+        chromeScreenMask = assets.screenMask
     }
 
     private func cachedChromeAssets(endpoint: SimDeckEndpoint, simulatorID: String) -> ChromeAssets? {
