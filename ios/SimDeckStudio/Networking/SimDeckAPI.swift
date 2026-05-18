@@ -76,12 +76,13 @@ struct SimDeckAPI: Sendable {
         )
     }
 
-    func chromeImage(udid: String) async throws -> UIImage {
+    func chromeImage(udid: String, stamp: String? = nil) async throws -> UIImage {
         let data = try await request(
             path: "/api/simulators/\(udid.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? udid)/chrome.png",
             method: "GET",
             body: Optional<String>.none,
             timeout: 10,
+            queryItems: Self.assetQueryItems(stamp: stamp),
             cachePolicy: .reloadIgnoringLocalAndRemoteCacheData
         )
         guard let image = UIImage(data: data) else {
@@ -90,12 +91,13 @@ struct SimDeckAPI: Sendable {
         return image
     }
 
-    func screenMaskImage(udid: String) async throws -> UIImage {
+    func screenMaskImage(udid: String, stamp: String? = nil) async throws -> UIImage {
         let data = try await request(
             path: "/api/simulators/\(udid.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? udid)/screen-mask.png",
             method: "GET",
             body: Optional<String>.none,
             timeout: 10,
+            queryItems: Self.assetQueryItems(stamp: stamp),
             cachePolicy: .reloadIgnoringLocalAndRemoteCacheData
         )
         guard let image = UIImage(data: data) else {
@@ -113,9 +115,10 @@ struct SimDeckAPI: Sendable {
         method: String = "GET",
         body: (some Encodable)? = Optional<String>.none,
         timeout: TimeInterval = 10,
+        queryItems: [URLQueryItem] = [],
         cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
     ) async throws -> T {
-        let data = try await request(path: path, method: method, body: body, timeout: timeout, cachePolicy: cachePolicy)
+        let data = try await request(path: path, method: method, body: body, timeout: timeout, queryItems: queryItems, cachePolicy: cachePolicy)
         if data.isEmpty, T.self == EmptyResponse.self {
             return EmptyResponse() as! T
         }
@@ -127,6 +130,7 @@ struct SimDeckAPI: Sendable {
         method: String,
         body: (some Encodable)?,
         timeout: TimeInterval,
+        queryItems: [URLQueryItem] = [],
         cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
     ) async throws -> Data {
         let (data, _) = try await requestWithHTTPResponse(
@@ -134,6 +138,7 @@ struct SimDeckAPI: Sendable {
             method: method,
             body: body,
             timeout: timeout,
+            queryItems: queryItems,
             cachePolicy: cachePolicy
         )
         return data
@@ -144,9 +149,10 @@ struct SimDeckAPI: Sendable {
         method: String,
         body: (some Encodable)?,
         timeout: TimeInterval,
+        queryItems: [URLQueryItem] = [],
         cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
     ) async throws -> (Data, HTTPURLResponse) {
-        var request = URLRequest(url: url(for: path), cachePolicy: cachePolicy, timeoutInterval: timeout)
+        var request = URLRequest(url: url(for: path, queryItems: queryItems), cachePolicy: cachePolicy, timeoutInterval: timeout)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(originHeaderValue, forHTTPHeaderField: "Origin")
@@ -194,14 +200,22 @@ struct SimDeckAPI: Sendable {
         return components.url?.absoluteString.trimmingTrailingSlashes() ?? baseURL.absoluteString
     }
 
-    private func url(for path: String) -> URL {
+    private func url(for path: String, queryItems: [URLQueryItem] = []) -> URL {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             return baseURL.appendingPathComponent(path)
         }
         let prefix = components.path.trimmingTrailingSlashes()
         let suffix = path.hasPrefix("/") ? path : "/\(path)"
         components.path = "\(prefix)\(suffix)"
+        if !queryItems.isEmpty {
+            components.queryItems = (components.queryItems ?? []) + queryItems
+        }
         return components.url ?? baseURL.appendingPathComponent(path)
+    }
+
+    private static func assetQueryItems(stamp: String?) -> [URLQueryItem] {
+        guard let stamp = stamp?.nilIfBlank else { return [] }
+        return [URLQueryItem(name: "stamp", value: stamp)]
     }
 }
 

@@ -52,6 +52,7 @@ final class AppModel {
     private static let selectedEndpointKey = "selectedEndpoint"
     private static let streamConfigKey = "streamConfig"
     private static let hapticsEnabledKey = "hapticsEnabled"
+    private static let touchOverlayVisibleKey = "touchOverlayVisible"
     private static let lastFrameCacheDirectoryName = "LastStreamFrames"
 
     var endpoint: SimDeckEndpoint?
@@ -70,6 +71,8 @@ final class AppModel {
     var chromeImage: UIImage?
     var chromeScreenMask: UIImage?
     var streamDiagnostics = StreamDiagnostics()
+    var streamReconnects = 0
+    var streamReconnectReason = ""
     var bootingSimulatorID: String?
     var streamDisplayToken = 0
     var hasCurrentStreamFrame = false
@@ -78,6 +81,11 @@ final class AppModel {
     var hapticsEnabled = AppModel.loadHapticsEnabled() {
         didSet {
             UserDefaults.standard.set(hapticsEnabled, forKey: Self.hapticsEnabledKey)
+        }
+    }
+    var touchOverlayVisible = AppModel.loadTouchOverlayVisible() {
+        didSet {
+            UserDefaults.standard.set(touchOverlayVisible, forKey: Self.touchOverlayVisibleKey)
         }
     }
 
@@ -449,7 +457,7 @@ final class AppModel {
                     self.scheduleStreamReconnect(reason: reason)
                 }
             }
-            let loadedChromeAssets = await chromeAssets(api: api, endpoint: endpoint, simulatorID: selectedSimulatorID)
+            let loadedChromeAssets = await chromeAssets(api: api, endpoint: endpoint, simulatorID: selectedSimulatorID, forceRefresh: true)
             guard isCurrentStreamRequest(generation, simulatorID: selectedSimulatorID) else {
                 client.disconnect()
                 return false
@@ -502,7 +510,7 @@ final class AppModel {
         status = "Loading device chrome."
 
         let api = SimDeckAPI(endpoint: endpoint)
-        let loadedChromeAssets = await chromeAssets(api: api, endpoint: endpoint, simulatorID: selectedSimulatorID)
+        let loadedChromeAssets = await chromeAssets(api: api, endpoint: endpoint, simulatorID: selectedSimulatorID, forceRefresh: true)
         guard isCurrentStreamRequest(generation, simulatorID: selectedSimulatorID) else { return }
         applyChromeAssets(loadedChromeAssets)
         status = selectedSimulator?.isBooted == true ? "Ready." : "Ready to boot."
@@ -767,6 +775,12 @@ final class AppModel {
         updateStreamConfig { $0.quality = quality }
     }
 
+    func setTouchOverlayVisible(_ isVisible: Bool) {
+        guard touchOverlayVisible != isVisible else { return }
+        touchOverlayVisible = isVisible
+        hapticSelection()
+    }
+
     private func autoConnectIfNeeded(_ endpoint: SimDeckEndpoint) async {
         guard !hasAutoConnected, !isAutoConnecting, self.endpoint == nil, authEndpoint == nil else { return }
         await autoConnectToAvailableEndpointIfNeeded(preferredEndpoint: endpoint)
@@ -843,6 +857,8 @@ final class AppModel {
                   self.selectedSimulatorID != nil,
                   self.selectedSimulator?.isBooted == true {
                 attempt += 1
+                self.streamReconnects += 1
+                self.streamReconnectReason = reason
                 self.lastReconnectStartedAt = Date()
                 self.status = attempt == 1
                     ? (reason == "foreground" ? "Resuming stream." : "Recovering stream.")
@@ -941,17 +957,19 @@ final class AppModel {
     private func chromeAssets(
         api: SimDeckAPI,
         endpoint: SimDeckEndpoint,
-        simulatorID: String
+        simulatorID: String,
+        forceRefresh: Bool = false
     ) async -> ChromeAssets {
-        if let cached = cachedChromeAssets(endpoint: endpoint, simulatorID: simulatorID) {
+        if !forceRefresh, let cached = cachedChromeAssets(endpoint: endpoint, simulatorID: simulatorID) {
             return cached
         }
 
         let loadedProfile = try? await api.chromeProfile(udid: simulatorID)
-        let loadedImage = try? await api.chromeImage(udid: simulatorID)
+        let assetStamp = loadedProfile?.assetStamp
+        let loadedImage = try? await api.chromeImage(udid: simulatorID, stamp: assetStamp)
         let loadedScreenMask: UIImage?
         if loadedProfile?.hasScreenMask == true {
-            loadedScreenMask = try? await api.screenMaskImage(udid: simulatorID)
+            loadedScreenMask = try? await api.screenMaskImage(udid: simulatorID, stamp: assetStamp)
         } else {
             loadedScreenMask = nil
         }
@@ -1404,6 +1422,10 @@ final class AppModel {
 
     private static func loadHapticsEnabled() -> Bool {
         UserDefaults.standard.object(forKey: hapticsEnabledKey) as? Bool ?? true
+    }
+
+    private static func loadTouchOverlayVisible() -> Bool {
+        UserDefaults.standard.object(forKey: touchOverlayVisibleKey) as? Bool ?? true
     }
 
     func hapticSelection() {

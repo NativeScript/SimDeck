@@ -5,6 +5,9 @@ struct SimulatorStreamView: View {
     @Bindable var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var activeTouchKind: StreamTouchKind?
+    @State private var activeTouchIndicatorID: UUID?
+    @State private var touchIndicators: [StreamTouchIndicator] = []
+    @State private var touchOverlayRemovalTask: Task<Void, Never>?
     @State private var presentedSheet: StreamSheet?
     @State private var keyboardCaptureActive = false
     @State private var keyboardHeight: CGFloat = 0
@@ -79,6 +82,20 @@ struct SimulatorStreamView: View {
                             }
                         }
                     }
+                    Section("Interaction") {
+                        Toggle(isOn: Binding(
+                            get: { model.touchOverlayVisible },
+                            set: { model.setTouchOverlayVisible($0) }
+                        )) {
+                            Label("Show Touch Overlay", systemImage: "hand.tap")
+                        }
+                        Button {
+                            model.hapticSelection()
+                            presentedSheet = .debugInfo
+                        } label: {
+                            Label("Debug Info", systemImage: "info.circle")
+                        }
+                    }
                     Divider()
                     Button {
                         model.hapticSelection()
@@ -112,6 +129,8 @@ struct SimulatorStreamView: View {
             switch sheet {
             case .simulators:
                 StreamSimulatorSelectionSheet(model: model)
+            case .debugInfo:
+                StreamDebugInfoSheet(model: model)
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -121,10 +140,17 @@ struct SimulatorStreamView: View {
         }
         .onChange(of: model.selectedSimulatorID) { _, _ in
             keyboardCaptureActive = false
+            clearTouchOverlay()
         }
         .onChange(of: model.selectedSimulator?.isBooted == true) { _, isBooted in
             if !isBooted {
                 keyboardCaptureActive = false
+                clearTouchOverlay()
+            }
+        }
+        .onChange(of: model.touchOverlayVisible) { _, isVisible in
+            if !isVisible {
+                clearTouchOverlay()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
@@ -201,6 +227,17 @@ struct SimulatorStreamView: View {
                     HardwareButtonLayer(model: model, chromeProfile: chromeProfile, layout: layout)
                 }
 
+                if model.selectedSimulator?.isBooted == true,
+                   model.touchOverlayVisible,
+                   !touchIndicators.isEmpty {
+                    TouchInteractionOverlay(indicators: touchIndicators)
+                        .frame(width: layout.screenFrame.width, height: layout.screenFrame.height)
+                        .clippedToSimulatorScreen(cornerRadius: layout.screenCornerRadius, maskImage: screenMaskImage)
+                        .position(x: layout.screenFrame.midX, y: layout.screenFrame.midY)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+
                 if let simulator = model.selectedSimulator, !simulator.isBooted {
                     BootSimulatorOverlay(model: model, simulator: simulator)
                         .frame(width: layout.screenFrame.width, height: layout.screenFrame.height)
@@ -273,6 +310,7 @@ struct SimulatorStreamView: View {
     }
 
     private func sendActiveTouch(location: CGPoint, in screenFrame: CGRect, phase: String) {
+        updateTouchOverlay(location: location, in: screenFrame, phase: phase)
         switch activeTouchKind {
         case .bottomEdge:
             model.sendEdgeTouch(location: location, in: screenFrame, phase: phase, edge: "bottom")
@@ -280,7 +318,65 @@ struct SimulatorStreamView: View {
             model.sendTouch(location: location, in: screenFrame, phase: phase)
         case nil:
             break
+        }
+    }
+
+    private func updateTouchOverlay(location: CGPoint, in screenFrame: CGRect, phase: String) {
+        guard model.touchOverlayVisible else {
+            clearTouchOverlay()
+            return
+        }
+
+        let clampedLocation = clampedTouchPoint(location, in: screenFrame)
+        switch phase {
+        case "began":
+            touchOverlayRemovalTask?.cancel()
+            let id = UUID()
+            activeTouchIndicatorID = id
+            withAnimation(.snappy(duration: 0.12)) {
+                touchIndicators = [
+                    StreamTouchIndicator(id: id, start: clampedLocation, current: clampedLocation, isEnding: false)
+                ]
             }
+        case "moved":
+            guard let activeTouchIndicatorID,
+                  let index = touchIndicators.firstIndex(where: { $0.id == activeTouchIndicatorID }) else {
+                return
+            }
+            touchIndicators[index].current = clampedLocation
+        case "ended":
+            guard let activeTouchIndicatorID,
+                  let index = touchIndicators.firstIndex(where: { $0.id == activeTouchIndicatorID }) else {
+                return
+            }
+            let endingID = activeTouchIndicatorID
+            touchIndicators[index].current = clampedLocation
+            touchIndicators[index].isEnding = true
+            self.activeTouchIndicatorID = nil
+            touchOverlayRemovalTask?.cancel()
+            touchOverlayRemovalTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(240))
+                withAnimation(.easeOut(duration: 0.16)) {
+                    touchIndicators.removeAll { $0.id == endingID }
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    private func clampedTouchPoint(_ location: CGPoint, in screenFrame: CGRect) -> CGPoint {
+        CGPoint(
+            x: min(max(location.x - screenFrame.minX, 0), screenFrame.width),
+            y: min(max(location.y - screenFrame.minY, 0), screenFrame.height)
+        )
+    }
+
+    private func clearTouchOverlay() {
+        touchOverlayRemovalTask?.cancel()
+        touchOverlayRemovalTask = nil
+        activeTouchIndicatorID = nil
+        touchIndicators = []
     }
 
     private func updateKeyboardHeight(_ notification: Notification) {
@@ -305,8 +401,43 @@ private enum StreamTouchKind {
 
 private enum StreamSheet: Identifiable {
     case simulators
+    case debugInfo
 
     var id: Self { self }
+}
+
+private struct StreamTouchIndicator: Identifiable, Equatable {
+    let id: UUID
+    var start: CGPoint
+    var current: CGPoint
+    var isEnding: Bool
+}
+
+private struct TouchInteractionOverlay: View {
+    let indicators: [StreamTouchIndicator]
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(indicators) { indicator in
+                Path { path in
+                    path.move(to: indicator.start)
+                    path.addLine(to: indicator.current)
+                }
+                .stroke(.white.opacity(indicator.isEnding ? 0.25 : 0.62), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .shadow(color: .black.opacity(0.28), radius: 4)
+
+                Circle()
+                    .fill(.white.opacity(indicator.isEnding ? 0.18 : 0.36))
+                    .stroke(.white.opacity(indicator.isEnding ? 0.36 : 0.86), lineWidth: 2)
+                    .frame(width: indicator.isEnding ? 34 : 42, height: indicator.isEnding ? 34 : 42)
+                    .position(x: indicator.current.x, y: indicator.current.y)
+                    .shadow(color: .black.opacity(0.3), radius: 7)
+                    .scaleEffect(indicator.isEnding ? 0.82 : 1)
+            }
+        }
+        .compositingGroup()
+        .accessibilityHidden(true)
+    }
 }
 
 private struct BootSimulatorOverlay: View {
@@ -432,11 +563,12 @@ private struct StreamTitleButton: View {
             }
             .padding(.leading, 14)
             .padding(.trailing, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 5)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .frame(minWidth: 190, maxWidth: 260)
+        .frame(height: 42)
         .modifier(StreamGlassCapsuleModifier(interactive: true))
         .accessibilityElement(children: .combine)
     }
@@ -504,6 +636,108 @@ private struct StreamSimulatorSelectionSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+private struct StreamDebugInfoSheet: View {
+    @Bindable var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Stream") {
+                    DebugInfoRow("State", value: model.streamState.rawValue)
+                    DebugInfoRow("FPS", value: formattedDecimal(model.streamDiagnostics.renderedFps))
+                    DebugInfoRow("Decoded FPS", value: formattedDecimal(model.streamDiagnostics.decodedFps))
+                    DebugInfoRow("Packet FPS", value: formattedDecimal(model.streamDiagnostics.packetFps))
+                    DebugInfoRow("Resolution", value: resolution)
+                    DebugInfoRow("Path", value: "webrtc")
+                    DebugInfoRow("Config", value: model.streamConfig.summary)
+                    DebugInfoRow("Codec", value: model.streamDiagnostics.codec.nilIfBlank ?? "-")
+                }
+
+                Section("Frames") {
+                    DebugInfoRow("Packets", value: "\(model.streamDiagnostics.receivedPackets)")
+                    DebugInfoRow("Packet Loss", value: "\(model.streamDiagnostics.packetsLost)")
+                    DebugInfoRow("Decoded", value: "\(model.streamDiagnostics.decodedFrames)")
+                    DebugInfoRow("Rendered", value: "\(model.streamDiagnostics.renderedFrames)")
+                    DebugInfoRow("Decode Drops", value: "\(model.streamDiagnostics.decoderDroppedFrames)")
+                    DebugInfoRow("Present Drops", value: "\(model.streamDiagnostics.presentationDroppedFrames)")
+                    DebugInfoRow("Frame Gap", value: formattedMilliseconds(model.streamDiagnostics.latestFrameGapMs))
+                    DebugInfoRow("Packet Gap", value: formattedMilliseconds(model.streamDiagnostics.latestPacketGapMs))
+                }
+
+                Section("Connection") {
+                    DebugInfoRow("Peer", value: model.streamDiagnostics.peerConnectionState.nilIfBlank ?? "-")
+                    DebugInfoRow("ICE", value: model.streamDiagnostics.iceConnectionState.nilIfBlank ?? "-")
+                    DebugInfoRow("Gathering", value: model.streamDiagnostics.iceGatheringState.nilIfBlank ?? "-")
+                    DebugInfoRow("Signaling", value: model.streamDiagnostics.signalingState.nilIfBlank ?? "-")
+                    DebugInfoRow("Reconnects", value: "\(model.streamReconnects)")
+                    DebugInfoRow("Reconnect Reason", value: model.streamReconnectReason.nilIfBlank ?? "-")
+                    DebugInfoRow("Candidate Pair", value: model.streamDiagnostics.selectedCandidatePair.nilIfBlank ?? "-")
+                }
+
+                Section("Target") {
+                    DebugInfoRow("Server", value: model.endpoint?.baseURL.absoluteString ?? "-")
+                    DebugInfoRow("Simulator", value: model.selectedSimulator?.name ?? "-")
+                    DebugInfoRow("UDID", value: model.selectedSimulatorID ?? "-")
+                    DebugInfoRow("Updated", value: model.streamDiagnostics.timestamp.formatted(date: .omitted, time: .standard))
+                }
+            }
+            .navigationTitle("Debug Info")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        model.hapticSelection()
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var resolution: String {
+        let diagnostics = model.streamDiagnostics
+        if diagnostics.width > 0, diagnostics.height > 0 {
+            return "\(diagnostics.width)x\(diagnostics.height)"
+        }
+        if model.videoSize.width > 0, model.videoSize.height > 0 {
+            return "\(Int(model.videoSize.width))x\(Int(model.videoSize.height))"
+        }
+        return "-"
+    }
+
+    private func formattedDecimal(_ value: Double) -> String {
+        guard value.isFinite else { return "0.0" }
+        return value.formatted(.number.precision(.fractionLength(1)))
+    }
+
+    private func formattedMilliseconds(_ value: Double) -> String {
+        guard value.isFinite, value > 0 else { return "-" }
+        return "\(value.formatted(.number.precision(.fractionLength(1)))) ms"
+    }
+}
+
+private struct DebugInfoRow: View {
+    let title: LocalizedStringKey
+    let value: String
+
+    init(_ title: LocalizedStringKey, value: String) {
+        self.title = title
+        self.value = value
+    }
+
+    var body: some View {
+        LabeledContent(title) {
+            Text(value)
+                .fontDesign(.monospaced)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
     }
 }
 
