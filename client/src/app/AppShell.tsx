@@ -78,6 +78,7 @@ import type {
 } from "../features/viewport/types";
 import { useViewportLayout } from "../features/viewport/useViewportLayout";
 import { NewSimulatorModal } from "../features/simulators/NewSimulatorModal";
+import { nextViewportWheelPanState } from "../features/viewport/viewportWheel";
 import {
   buildShellRotationTransform,
   clampPan,
@@ -2097,20 +2098,22 @@ export function AppShell({
       return;
     }
 
-    setViewMode("manual");
-    setPan((currentPan) =>
-      clampPan(
-        {
-          x: currentPan.x - deltaX,
-          y: currentPan.y + autoViewportOffsetY - deltaY,
-        },
-        effectiveZoom,
-        canvasSize,
-        effectiveDeviceNaturalSize,
-        viewportChromeProfile,
-        rotationQuarterTurns,
-        zoomDockReservedHeight,
-      ),
+    setPan(
+      (currentPan) =>
+        nextViewportWheelPanState({
+          canvasSize,
+          chromeProfile: viewportChromeProfile,
+          deltaX,
+          deltaY,
+          deviceNaturalSize: effectiveDeviceNaturalSize,
+          effectiveZoom,
+          fitScale,
+          pan: currentPan,
+          reservedBottomInset: zoomDockReservedHeight,
+          rotationQuarterTurns,
+          viewMode,
+          zoom,
+        }).pan,
     );
   }
 
