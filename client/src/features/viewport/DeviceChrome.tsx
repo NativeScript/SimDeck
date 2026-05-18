@@ -16,6 +16,7 @@ interface DeviceChromeProps {
   accessibilityRoots: AccessibilityNode[];
   accessibilitySelectedId: string;
   chromeProfile: ChromeProfile | null;
+  chromeButtonsRenderedInChrome: boolean;
   chromeScreenStyle: CSSProperties | null;
   chromeUrl: string;
   chromeButtonUrl: (button: string, pressed?: boolean) => string;
@@ -61,6 +62,7 @@ export function DeviceChrome({
   accessibilityRoots,
   accessibilitySelectedId,
   chromeProfile,
+  chromeButtonsRenderedInChrome,
   chromeScreenStyle,
   chromeUrl,
   chromeButtonUrl,
@@ -109,6 +111,7 @@ export function DeviceChrome({
           chromeProfile={chromeProfile}
           layer="under"
           onEvent={onChromeButtonEvent}
+          renderImages={!chromeButtonsRenderedInChrome}
         />
         <img
           alt=""
@@ -122,6 +125,7 @@ export function DeviceChrome({
           chromeProfile={chromeProfile}
           layer="over"
           onEvent={onChromeButtonEvent}
+          renderImages={!chromeButtonsRenderedInChrome}
         />
         <ScreenLayer
           accessibilityHoveredId={accessibilityHoveredId}
@@ -218,6 +222,7 @@ function ChromeButtonOverlay({
   chromeProfile,
   layer,
   onEvent,
+  renderImages,
 }: {
   chromeButtonUrl: (button: string, pressed?: boolean) => string;
   chromeProfile: ChromeProfile | null;
@@ -228,6 +233,7 @@ function ChromeButtonOverlay({
     usagePage?: number,
     usage?: number,
   ) => void;
+  renderImages: boolean;
 }) {
   const buttons = chromeProfile?.buttons ?? [];
   if (!chromeProfile || buttons.length === 0) {
@@ -254,6 +260,7 @@ function ChromeButtonOverlay({
             chromeButtonUrl={chromeButtonUrl}
             key={`${button.name}-${button.x}-${button.y}`}
             onEvent={onEvent}
+            renderImages={renderImages}
             totalHeight={chromeProfile.totalHeight}
             totalWidth={chromeProfile.totalWidth}
             wireName={wireName}
@@ -268,6 +275,7 @@ function ChromeButtonHitTarget({
   button,
   chromeButtonUrl,
   onEvent,
+  renderImages,
   totalHeight,
   totalWidth,
   wireName,
@@ -280,6 +288,7 @@ function ChromeButtonHitTarget({
     usagePage?: number,
     usage?: number,
   ) => void;
+  renderImages: boolean;
   totalHeight: number;
   totalWidth: number;
   wireName: string;
@@ -372,7 +381,7 @@ function ChromeButtonHitTarget({
       title={label}
       type="button"
     >
-      {downCompositeUnder ? (
+      {renderImages && downCompositeUnder ? (
         <img
           alt=""
           aria-hidden="true"
@@ -381,18 +390,20 @@ function ChromeButtonHitTarget({
           src={pressedImageUrl}
         />
       ) : null}
-      <img
-        alt=""
-        aria-hidden="true"
-        className="device-chrome-button-image"
-        draggable={false}
-        src={
-          pressed && pressedImageUrl && !downCompositeUnder
-            ? pressedImageUrl
-            : imageUrl
-        }
-      />
-      {!pressed && pressedImageUrl ? (
+      {renderImages ? (
+        <img
+          alt=""
+          aria-hidden="true"
+          className="device-chrome-button-image"
+          draggable={false}
+          src={
+            pressed && pressedImageUrl && !downCompositeUnder
+              ? pressedImageUrl
+              : imageUrl
+          }
+        />
+      ) : null}
+      {renderImages && !pressed && pressedImageUrl ? (
         <img
           alt=""
           aria-hidden="true"
