@@ -55,6 +55,7 @@ import { useKeyboardInput } from "../features/input/useKeyboardInput";
 import { usePointerInput } from "../features/input/usePointerInput";
 import {
   shouldRenderNativeChrome,
+  simulatorHasFixedOrientation,
   simulatorRuntimeLabel,
 } from "../features/simulators/simulatorDisplay";
 import { useSimulatorList } from "../features/simulators/useSimulatorList";
@@ -828,6 +829,9 @@ export function AppShell({
     selectedSimulator != null && shouldRenderNativeChrome(selectedSimulator);
   const viewportChromeProfile = shouldRenderChrome ? chromeProfile : null;
   const isAndroidViewport = isAndroidSimulator(selectedSimulator);
+  const selectedHasFixedOrientation =
+    selectedSimulator != null &&
+    simulatorHasFixedOrientation(selectedSimulator);
   const androidDisplayKey =
     isAndroidViewport && selectedSimulator
       ? androidDisplayKeyForSimulator(selectedSimulator)
@@ -2596,6 +2600,9 @@ export function AppShell({
         onOpenUrlPrompt={promptForURL}
         onRotateRight={() => {
           if (!selectedSimulator) {
+            return;
+          }
+          if (selectedHasFixedOrientation) {
             return;
           }
           const androidViewport = isAndroidSimulator(selectedSimulator);

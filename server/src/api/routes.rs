@@ -7,7 +7,10 @@ use crate::error::AppError;
 use crate::inspector::{InspectorHub, PublishedInspector};
 use crate::logs::LogRegistry;
 use crate::metrics::counters::{ClientStreamStats, Metrics};
-use crate::native::bridge::{LogFilters, NativeBridge, NativePairedWatchSpec};
+use crate::native::bridge::{
+    tvos_remote_key_for_touch_motion, tvos_remote_key_for_touch_phase, LogFilters, NativeBridge,
+    NativePairedWatchSpec, HID_KEY_ENTER,
+};
 use crate::performance::{
     sample_stack, DisplaySignal, ForegroundProcess, PerformanceQuery, PerformanceRegistry,
 };
@@ -426,6 +429,93 @@ pub(crate) enum ControlMessage {
     RotateLeft,
     RotateRight,
     ToggleAppearance,
+}
+
+#[derive(Default)]
+struct TvosControlTouchGesture {
+    start: Option<(f64, f64)>,
+    last: Option<(f64, f64)>,
+}
+
+impl TvosControlTouchGesture {
+    fn update(&mut self, x: f64, y: f64, phase: &str) -> Result<Option<u16>, AppError> {
+        let point = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+        match phase.trim().to_ascii_lowercase().as_str() {
+            "began" | "down" => {
+                self.start = Some(point);
+                self.last = Some(point);
+                Ok(None)
+            }
+            "moved" => {
+                if self.start.is_none() {
+                    self.start = Some(point);
+                }
+                self.last = Some(point);
+                Ok(None)
+            }
+            "ended" | "cancelled" | "up" => {
+                let start = self.start.take().unwrap_or(point);
+                let end = self.last.take().unwrap_or(point);
+                Ok(Some(tvos_remote_key_for_touch_motion(
+                    start.0, start.1, end.0, end.1,
+                )))
+            }
+            _ => Err(AppError::bad_request(
+                "`phase` must be `began`, `moved`, `ended`, `cancelled`, `down`, or `up`.",
+            )),
+        }
+    }
+}
+
+fn tvos_touch_sequence_key(events: &[TouchSequenceEvent]) -> Result<u16, AppError> {
+    let first = events
+        .first()
+        .ok_or_else(|| AppError::bad_request("Touch sequence requires events."))?;
+    let mut start = (first.x.clamp(0.0, 1.0), first.y.clamp(0.0, 1.0));
+    let mut end = start;
+
+    for event in events {
+        let point = (event.x.clamp(0.0, 1.0), event.y.clamp(0.0, 1.0));
+        match event.phase.trim().to_ascii_lowercase().as_str() {
+            "began" | "down" => {
+                start = point;
+                end = point;
+            }
+            "moved" => {
+                end = point;
+            }
+            "ended" | "cancelled" | "up" => {
+                end = point;
+                return Ok(tvos_remote_key_for_touch_motion(
+                    start.0, start.1, end.0, end.1,
+                ));
+            }
+            _ => {
+                return Err(AppError::bad_request(
+                    "`phase` must be `began`, `moved`, `ended`, `cancelled`, `down`, or `up`.",
+                ))
+            }
+        }
+    }
+
+    Ok(tvos_remote_key_for_touch_motion(
+        start.0, start.1, end.0, end.1,
+    ))
+}
+
+fn bridge_simulator_is_tvos(bridge: &NativeBridge, udid: &str) -> bool {
+    bridge.simulator_is_tvos(udid).unwrap_or(false)
+}
+
+fn press_tvos_remote_key(bridge: &NativeBridge, udid: &str, key_code: u16) -> Result<(), AppError> {
+    bridge.send_key(udid, key_code, 0)
+}
+
+fn handle_tvos_touch_phase(bridge: &NativeBridge, udid: &str, phase: &str) -> Result<(), AppError> {
+    if let Some(key_code) = tvos_remote_key_for_touch_phase(phase)? {
+        press_tvos_remote_key(bridge, udid, key_code)?;
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -2547,6 +2637,9 @@ async fn send_touch(
         return Ok(json(json_value!({ "ok": true })));
     }
     run_bridge_action(state, move |bridge| {
+        if bridge_simulator_is_tvos(&bridge, &udid) {
+            return handle_tvos_touch_phase(&bridge, &udid, &phase);
+        }
         let input = bridge.create_input_session(&udid)?;
         input.send_touch(x, y, &phase)
     })
@@ -2595,6 +2688,10 @@ async fn send_touch_sequence(
         return Ok(json(json_value!({ "ok": true })));
     }
     run_bridge_action(state, move |bridge| {
+        if bridge_simulator_is_tvos(&bridge, &udid) {
+            let key_code = tvos_touch_sequence_key(&payload.events)?;
+            return press_tvos_remote_key(&bridge, &udid, key_code);
+        }
         let input = bridge.create_input_session(&udid)?;
         for event in payload.events {
             input.send_touch(
@@ -3219,6 +3316,7 @@ async fn run_control_queue(
     mut receiver: mpsc::UnboundedReceiver<ControlMessage>,
 ) {
     let mut pending = VecDeque::new();
+    let mut tvos_touch = TvosControlTouchGesture::default();
     loop {
         let mut message = match pending.pop_front() {
             Some(message) => message,
@@ -3240,6 +3338,9 @@ async fn run_control_queue(
         let result = match message {
             ControlMessage::ToggleAppearance => {
                 run_toggle_appearance_control(bridge.clone(), udid.clone()).await
+            }
+            message if session.is_tvos() => {
+                run_tvos_control_message(session.clone(), message, &mut tvos_touch).await
             }
             message => run_control_message(session.clone(), message).await,
         };
@@ -3353,6 +3454,48 @@ pub(crate) async fn run_control_message(
     })
     .await
     .map_err(|error| AppError::internal(format!("Failed to join control task: {error}")))?
+}
+
+async fn run_tvos_control_message(
+    session: SimulatorSession,
+    message: ControlMessage,
+    active_touch: &mut TvosControlTouchGesture,
+) -> Result<(), AppError> {
+    let key_code = match message {
+        ControlMessage::Touch { x, y, phase } => {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(AppError::bad_request(
+                    "`x` and `y` must be finite normalized numbers.",
+                ));
+            }
+            active_touch.update(x, y, &phase)?
+        }
+        ControlMessage::EdgeTouch { x, y, phase, .. } => {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(AppError::bad_request(
+                    "`x` and `y` must be finite normalized numbers.",
+                ));
+            }
+            active_touch.update(x, y, &phase)?
+        }
+        ControlMessage::MultiTouch { x1, y1, phase, .. } => {
+            if !x1.is_finite() || !y1.is_finite() {
+                return Err(AppError::bad_request(
+                    "`x1` and `y1` must be finite normalized numbers.",
+                ));
+            }
+            active_touch.update(x1, y1, &phase)?
+        }
+        other => return run_control_message(session, other).await,
+    };
+
+    if let Some(key_code) = key_code {
+        task::spawn_blocking(move || session.send_key(key_code, 0))
+            .await
+            .map_err(|error| AppError::internal(format!("Failed to join control task: {error}")))?
+    } else {
+        Ok(())
+    }
 }
 
 pub(crate) async fn run_toggle_appearance_control(
@@ -3918,6 +4061,9 @@ async fn perform_tap_payload(
     }
 
     run_bridge_action(state, move |bridge| {
+        if bridge_simulator_is_tvos(&bridge, &udid) {
+            return press_tvos_remote_key(&bridge, &udid, HID_KEY_ENTER);
+        }
         let input = bridge.create_input_session(&udid)?;
         input.send_touch(x, y, "began")?;
         if duration_ms > 0 {
@@ -4090,6 +4236,19 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
                 return Ok(json_value!({ "action": "touch" }));
             }
             run_bridge_action(state, move |bridge| {
+                if bridge_simulator_is_tvos(&bridge, &udid) {
+                    if down.unwrap_or(false) || up.unwrap_or(false) {
+                        if up.unwrap_or(false) {
+                            return press_tvos_remote_key(&bridge, &udid, HID_KEY_ENTER);
+                        }
+                        return Ok(());
+                    }
+                    return handle_tvos_touch_phase(
+                        &bridge,
+                        &udid,
+                        phase.as_deref().unwrap_or("began"),
+                    );
+                }
                 let input = bridge.create_input_session(&udid)?;
                 let x = x.clamp(0.0, 1.0);
                 let y = y.clamp(0.0, 1.0);
@@ -4146,6 +4305,10 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
                 return Ok(json_value!({ "action": "touchSequence" }));
             }
             run_bridge_action(state, move |bridge| {
+                if bridge_simulator_is_tvos(&bridge, &udid) {
+                    let key_code = tvos_touch_sequence_key(&events)?;
+                    return press_tvos_remote_key(&bridge, &udid, key_code);
+                }
                 let input = bridge.create_input_session(&udid)?;
                 for event in events {
                     if !event.x.is_finite() || !event.y.is_finite() {
@@ -4199,6 +4362,15 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
                 return Ok(json_value!({ "action": "swipe" }));
             }
             run_bridge_action(state, move |bridge| {
+                if bridge_simulator_is_tvos(&bridge, &udid) {
+                    let key_code = tvos_remote_key_for_touch_motion(
+                        start_x.clamp(0.0, 1.0),
+                        start_y.clamp(0.0, 1.0),
+                        end_x.clamp(0.0, 1.0),
+                        end_y.clamp(0.0, 1.0),
+                    );
+                    return press_tvos_remote_key(&bridge, &udid, key_code);
+                }
                 let step_count = steps.unwrap_or(12).max(1);
                 let delay =
                     Duration::from_millis(duration_ms.unwrap_or(350) / u64::from(step_count));
@@ -4245,6 +4417,10 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
                 return Ok(json_value!({ "action": "gesture", "preset": preset }));
             }
             run_bridge_action(state, move |bridge| {
+                if bridge_simulator_is_tvos(&bridge, &udid) {
+                    let key_code = tvos_remote_key_for_touch_motion(start_x, start_y, end_x, end_y);
+                    return press_tvos_remote_key(&bridge, &udid, key_code);
+                }
                 let step_count = steps.unwrap_or(12).max(1);
                 let delay = Duration::from_millis(
                     duration_ms.unwrap_or(default_duration_ms) / u64::from(step_count),

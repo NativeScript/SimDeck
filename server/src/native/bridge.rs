@@ -12,6 +12,12 @@ const RESTART_ON_CORE_SIMULATOR_MISMATCH_ENV: &str = "SIMDECK_RESTART_ON_CORE_SI
 const ACCESSIBILITY_POINT_SNAPSHOT_MAX_ATTEMPTS: usize = 1;
 const ACCESSIBILITY_SNAPSHOT_MAX_ATTEMPTS: usize = 4;
 const ACCESSIBILITY_SNAPSHOT_RETRY_DELAY_MS: u64 = 100;
+pub const HID_KEY_ENTER: u16 = 40;
+pub const HID_KEY_ARROW_RIGHT: u16 = 79;
+pub const HID_KEY_ARROW_LEFT: u16 = 80;
+pub const HID_KEY_ARROW_DOWN: u16 = 81;
+pub const HID_KEY_ARROW_UP: u16 = 82;
+const TVOS_SWIPE_THRESHOLD: f64 = 0.03;
 
 static RECOVERABLE_RESTART_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
@@ -143,6 +149,77 @@ where
     }
 }
 
+pub fn simulator_is_tvos(simulator: &Simulator) -> bool {
+    let metadata = simulator_metadata_text(simulator);
+    metadata.contains("tvos")
+        || metadata.contains("apple-tv")
+        || metadata.contains("apple tv")
+        || metadata.contains("appletv")
+}
+
+pub fn simulator_is_watchos(simulator: &Simulator) -> bool {
+    let metadata = simulator_metadata_text(simulator);
+    metadata.contains("watchos")
+        || metadata.contains("apple-watch")
+        || metadata.contains("apple watch")
+}
+
+pub fn simulator_has_fixed_orientation(simulator: &Simulator) -> bool {
+    simulator_is_tvos(simulator) || simulator_is_watchos(simulator)
+}
+
+pub fn fixed_orientation_error() -> AppError {
+    AppError::bad_request("Rotation is not available for Apple TV or Apple Watch simulators.")
+}
+
+pub fn digital_crown_error() -> AppError {
+    AppError::bad_request("Digital Crown rotation is only available for Apple Watch simulators.")
+}
+
+pub fn tvos_remote_key_for_touch_motion(start_x: f64, start_y: f64, end_x: f64, end_y: f64) -> u16 {
+    let dx = end_x - start_x;
+    let dy = end_y - start_y;
+    if dx.abs().max(dy.abs()) < TVOS_SWIPE_THRESHOLD {
+        return HID_KEY_ENTER;
+    }
+    if dx.abs() >= dy.abs() {
+        if dx < 0.0 {
+            HID_KEY_ARROW_LEFT
+        } else {
+            HID_KEY_ARROW_RIGHT
+        }
+    } else if dy < 0.0 {
+        HID_KEY_ARROW_UP
+    } else {
+        HID_KEY_ARROW_DOWN
+    }
+}
+
+pub fn tvos_remote_key_for_touch_phase(phase: &str) -> Result<Option<u16>, AppError> {
+    match phase.trim().to_ascii_lowercase().as_str() {
+        "began" | "down" | "moved" => Ok(None),
+        "ended" | "cancelled" | "up" => Ok(Some(HID_KEY_ENTER)),
+        _ => Err(AppError::bad_request(
+            "`phase` must be `began`, `moved`, `ended`, `cancelled`, `down`, or `up`.",
+        )),
+    }
+}
+
+fn simulator_metadata_text(simulator: &Simulator) -> String {
+    [
+        simulator.name.as_str(),
+        simulator.device_type_name.as_str(),
+        simulator.runtime_name.as_str(),
+        simulator
+            .device_type_identifier
+            .as_str()
+            .unwrap_or_default(),
+        simulator.runtime_identifier.as_str().unwrap_or_default(),
+    ]
+    .join(" ")
+    .to_ascii_lowercase()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChromeProfile {
     #[serde(rename = "totalWidth")]
@@ -217,6 +294,29 @@ impl NativeBridge {
         let payload: SimulatorsEnvelope =
             serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))?;
         Ok(payload.simulators)
+    }
+
+    pub fn simulator(&self, udid: &str) -> Result<Option<Simulator>, AppError> {
+        Ok(self
+            .list_simulators()?
+            .into_iter()
+            .find(|simulator| simulator.udid == udid))
+    }
+
+    pub fn simulator_is_tvos(&self, udid: &str) -> Result<bool, AppError> {
+        Ok(self
+            .simulator(udid)?
+            .as_ref()
+            .map(simulator_is_tvos)
+            .unwrap_or(false))
+    }
+
+    pub fn simulator_has_fixed_orientation(&self, udid: &str) -> Result<bool, AppError> {
+        Ok(self
+            .simulator(udid)?
+            .as_ref()
+            .map(simulator_has_fixed_orientation)
+            .unwrap_or(false))
     }
 
     pub fn simulator_creation_options(&self) -> Result<serde_json::Value, AppError> {
@@ -587,6 +687,16 @@ impl NativeBridge {
         if !delta.is_finite() {
             return Err(AppError::bad_request("Digital Crown delta must be finite."));
         }
+        if self
+            .simulator(udid)
+            .ok()
+            .flatten()
+            .as_ref()
+            .map(|simulator| !simulator_is_watchos(simulator))
+            .unwrap_or(false)
+        {
+            return Err(digital_crown_error());
+        }
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
         unsafe {
             let mut error = ptr::null_mut();
@@ -598,6 +708,9 @@ impl NativeBridge {
     }
 
     pub fn rotate_right(&self, udid: &str) -> Result<(), AppError> {
+        if self.simulator_has_fixed_orientation(udid).unwrap_or(false) {
+            return Err(fixed_orientation_error());
+        }
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
         unsafe {
             let mut error = ptr::null_mut();
@@ -609,6 +722,9 @@ impl NativeBridge {
     }
 
     pub fn rotate_left(&self, udid: &str) -> Result<(), AppError> {
+        if self.simulator_has_fixed_orientation(udid).unwrap_or(false) {
+            return Err(fixed_orientation_error());
+        }
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
         unsafe {
             let mut error = ptr::null_mut();
@@ -1200,7 +1316,9 @@ fn schedule_recoverable_restart_if_needed(message: &str) {
 mod tests {
     use super::{
         accessibility_snapshot_is_transient_empty, is_core_simulator_service_mismatch,
-        log_entry_matches, LogEntry, LogFilters, Simulator,
+        log_entry_matches, simulator_has_fixed_orientation, simulator_is_tvos,
+        tvos_remote_key_for_touch_motion, LogEntry, LogFilters, Simulator, HID_KEY_ARROW_DOWN,
+        HID_KEY_ARROW_LEFT, HID_KEY_ARROW_RIGHT, HID_KEY_ARROW_UP, HID_KEY_ENTER,
     };
     use serde_json::json;
 
@@ -1234,6 +1352,28 @@ mod tests {
         }
     }
 
+    fn simulator_with_metadata(
+        name: &str,
+        device_type_identifier: &str,
+        runtime_identifier: &str,
+    ) -> Simulator {
+        serde_json::from_value(json!({
+            "udid": "SIM-1",
+            "name": name,
+            "state": "Booted",
+            "isBooted": true,
+            "isAvailable": true,
+            "lastBootedAt": null,
+            "dataPath": null,
+            "logPath": null,
+            "deviceTypeIdentifier": device_type_identifier,
+            "deviceTypeName": name,
+            "runtimeIdentifier": runtime_identifier,
+            "runtimeName": runtime_identifier
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn simulator_boolish_fields_accept_native_json_variants() {
         let true_bool: Simulator =
@@ -1255,6 +1395,55 @@ mod tests {
         let result = serde_json::from_str::<Simulator>(&simulator_json(json!(2), json!(true)));
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn simulator_family_detection_marks_tvos_and_watchos_fixed_orientation() {
+        let tv = simulator_with_metadata(
+            "Apple TV 4K (3rd generation)",
+            "com.apple.CoreSimulator.SimDeviceType.Apple-TV-4K-3rd-generation-4K",
+            "com.apple.CoreSimulator.SimRuntime.tvOS-26-0",
+        );
+        let watch = simulator_with_metadata(
+            "Apple Watch Ultra 3 (49mm)",
+            "com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Ultra-3-49mm",
+            "com.apple.CoreSimulator.SimRuntime.watchOS-26-0",
+        );
+        let phone = simulator_with_metadata(
+            "iPhone 17",
+            "com.apple.CoreSimulator.SimDeviceType.iPhone-17",
+            "com.apple.CoreSimulator.SimRuntime.iOS-26-0",
+        );
+
+        assert!(simulator_is_tvos(&tv));
+        assert!(simulator_has_fixed_orientation(&tv));
+        assert!(simulator_has_fixed_orientation(&watch));
+        assert!(!simulator_is_tvos(&phone));
+        assert!(!simulator_has_fixed_orientation(&phone));
+    }
+
+    #[test]
+    fn tvos_touch_motion_maps_to_remote_keys() {
+        assert_eq!(
+            tvos_remote_key_for_touch_motion(0.5, 0.5, 0.51, 0.51),
+            HID_KEY_ENTER
+        );
+        assert_eq!(
+            tvos_remote_key_for_touch_motion(0.8, 0.5, 0.2, 0.5),
+            HID_KEY_ARROW_LEFT
+        );
+        assert_eq!(
+            tvos_remote_key_for_touch_motion(0.2, 0.5, 0.8, 0.5),
+            HID_KEY_ARROW_RIGHT
+        );
+        assert_eq!(
+            tvos_remote_key_for_touch_motion(0.5, 0.8, 0.5, 0.2),
+            HID_KEY_ARROW_UP
+        );
+        assert_eq!(
+            tvos_remote_key_for_touch_motion(0.5, 0.2, 0.5, 0.8),
+            HID_KEY_ARROW_DOWN
+        );
     }
 
     #[test]
