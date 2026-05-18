@@ -1,4 +1,5 @@
 import { Application, View } from "@nativescript/core";
+import { ViewBase } from "@nativescript/core/ui/core/view-base";
 
 declare const NSBundle: any;
 declare const NSClassFromString: any;
@@ -83,10 +84,21 @@ const nativeScriptDebugAttributes = Symbol("simDeckDebugAttributes");
 const fallbackUIKitLastScripts = new WeakMap<object, string>();
 let angularSourceLocationCaptureInstalled = false;
 
+// Install the debug-attribute shim eagerly at module evaluation so that any
+// framework integration calling DOM-style `node.hasAttribute(...)` /
+// `setAttribute(...)` on a NativeScript view-like instance gets a safe
+// no-op-on-miss implementation. The shim is intentionally
+// framework-agnostic: Vue/Solid/React-NS dev tools and any future
+// renderer-level instrumentation reach the same prototypes. Patching at
+// `ViewBase.prototype` is the only level that covers both branches of the
+// NS class tree — visible Views AND ActionBar-side classes like `ActionItem`
+// (`ActionItemBase → ViewBase`) whose chain never passes through `View`.
+installDebugAttributeShim();
+
 export function startSimDeckInspector(
   options: SimDeckInspectorOptions = {},
 ): SimDeckNativeScriptInspector {
-  installAngularDebugAttributeShim();
+  installDebugAttributeShim();
   installAngularSourceLocationCaptureShim();
   if (sharedInspector) {
     return sharedInspector;
@@ -101,12 +113,13 @@ export function stopSimDeckInspector(): void {
   sharedInspector = null;
 }
 
-function installAngularDebugAttributeShim(): void {
-  const prototype = View.prototype as any;
-  if (typeof prototype.hasAttribute !== "function") {
-    prototype.hasAttribute = function hasAttribute(name: string): boolean {
-      if (debugAttributeStore(this).has(name)) {
-        return true;
+function installDebugAttributeShim(): void {
+  const shimMethods: Record<string, (this: any, ...args: any[]) => any> = {
+    hasAttribute(this: any, name: string): boolean {
+      try {
+        if (debugAttributeStore(this).has(name)) return true;
+      } catch {
+        // node lacks a writable property bag — fall through to introspection.
       }
       return safeCall(
         () =>
@@ -114,31 +127,51 @@ function installAngularDebugAttributeShim(): void {
           this[name] != null,
         false,
       );
-    };
-  }
-  if (typeof prototype.getAttribute !== "function") {
-    prototype.getAttribute = function getAttribute(
-      name: string,
-    ): string | null {
-      const attributes = debugAttributeStore(this);
-      if (attributes.has(name)) {
-        return attributes.get(name) ?? null;
+    },
+    getAttribute(this: any, name: string): string | null {
+      try {
+        const attributes = debugAttributeStore(this);
+        if (attributes.has(name)) return attributes.get(name) ?? null;
+      } catch {
+        // see above
       }
       return safeCall(() => stringValue(this[name]) || null, null);
-    };
-  }
-  if (typeof prototype.setAttribute !== "function") {
-    prototype.setAttribute = function setAttribute(
-      name: string,
-      value: unknown,
-    ): void {
-      debugAttributeStore(this).set(name, stringValue(value));
-    };
-  }
-  if (typeof prototype.removeAttribute !== "function") {
-    prototype.removeAttribute = function removeAttribute(name: string): void {
-      debugAttributeStore(this).delete(name);
-    };
+    },
+    setAttribute(this: any, name: string, value: unknown): void {
+      safeCall(() => {
+        debugAttributeStore(this).set(name, stringValue(value));
+      }, undefined);
+    },
+    removeAttribute(this: any, name: string): void {
+      safeCall(() => {
+        debugAttributeStore(this).delete(name);
+      }, undefined);
+    },
+  };
+
+  const applyToPrototype = (prototype: any): void => {
+    if (!prototype) return;
+    safeCall(() => {
+      for (const name of Object.keys(shimMethods)) {
+        if (typeof prototype[name] !== "function") {
+          Object.defineProperty(prototype, name, {
+            configurable: true,
+            writable: true,
+            value: shimMethods[name],
+          });
+        }
+      }
+    }, undefined);
+  };
+
+  // Walk every common ancestor a NativeScript view-like node can inherit
+  // from. `ViewBase` covers the full tree — including ActionBar-side
+  // classes (`ActionItem`, `NavigationButton`, …) whose chain
+  // (`ActionItemBase → ViewBase → Observable`) never passes through
+  // `View`. `View` is included as a defensive belt-and-suspenders entry
+  // in case `ViewBase` is unreachable in some packaging variant.
+  for (const ctor of [ViewBase, View]) {
+    safeCall(() => applyToPrototype((ctor as any)?.prototype), undefined);
   }
 }
 
