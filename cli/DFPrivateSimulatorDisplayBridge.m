@@ -1372,6 +1372,7 @@ static DFIndigoMessage *DFCreateIndigoTouchMessage(CGPoint normalizedPoint,
                                                    NSSize displaySize,
                                                    BOOL touchDown,
                                                    uint32_t target,
+                                                   IndigoHIDEdge edge,
                                                    NSError **error) {
     DFIndigoHIDMessageForMouseNSEventFn mouseMessage = (DFIndigoHIDMessageForMouseNSEventFn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
     if (mouseMessage == NULL) {
@@ -1390,7 +1391,7 @@ static DFIndigoMessage *DFCreateIndigoTouchMessage(CGPoint normalizedPoint,
         fmax(0.0, fmin(1.0, normalizedPoint.y))
     );
 
-    DFIndigoMessage *baseMessage = (DFIndigoMessage *)mouseMessage(&ratioPoint, NULL, target, eventType, displaySize, 0);
+    DFIndigoMessage *baseMessage = (DFIndigoMessage *)mouseMessage(&ratioPoint, NULL, target, eventType, displaySize, edge);
     if (baseMessage == NULL) {
         if (error != NULL) {
             *error = DFMakeError(
@@ -3894,26 +3895,26 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             return;
         }
 
-        IndigoHIDMessage *message = DFCreateIndigoTouchMessageDirect(CGPointMake(clampedX, clampedY),
-                                                                     displaySize,
-                                                                     phase,
-                                                                     target,
-                                                                     DFIndigoHIDEdgeNone);
-        BOOL freeWhenDone = YES;
+        BOOL touchDown = phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved;
+        IndigoHIDMessage *message = (IndigoHIDMessage *)DFCreateIndigoTouchMessage(CGPointMake(clampedX, clampedY),
+                                                                                   displaySize,
+                                                                                   touchDown,
+                                                                                   target,
+                                                                                   DFIndigoHIDEdgeNone,
+                                                                                   &dispatchError);
         if (message == NULL) {
-            BOOL touchDown = phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved;
-            message = (IndigoHIDMessage *)DFCreateIndigoTouchMessage(CGPointMake(clampedX, clampedY),
-                                                                      displaySize,
-                                                                      touchDown,
-                                                                      target,
-                                                                      &dispatchError);
+            message = DFCreateIndigoTouchMessageDirect(CGPointMake(clampedX, clampedY),
+                                                       displaySize,
+                                                       phase,
+                                                       target,
+                                                       DFIndigoHIDEdgeNone);
             if (message == NULL) {
                 return;
             }
         }
 
         NSError *messageError = nil;
-        if (!DFSendHIDMessage(hidClient, message, freeWhenDone, &messageError)) {
+        if (!DFSendHIDMessage(hidClient, message, YES, &messageError)) {
             dispatchError = messageError ?: DFMakeError(
                 DFPrivateSimulatorErrorCodeTouchDispatchFailed,
                 @"SimulatorKit rejected the Indigo HID touch packet."
@@ -3989,17 +3990,27 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         );
 
         uint32_t target = DFIndigoDigitizerTarget;
-        IndigoHIDMessage *message = DFCreateIndigoEdgeTouchMessageOnMain(CGPointMake(clampedX, clampedY),
-                                                                         displaySize,
-                                                                         phase,
-                                                                         edge,
-                                                                         target);
+        IndigoHIDEdge hidEdge = DFIndigoHIDEdgeForPrivateTouchEdge(edge);
+        BOOL touchDown = phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved;
+        IndigoHIDMessage *message = (IndigoHIDMessage *)DFCreateIndigoTouchMessage(CGPointMake(clampedX, clampedY),
+                                                                                   displaySize,
+                                                                                   touchDown,
+                                                                                   target,
+                                                                                   hidEdge,
+                                                                                   &dispatchError);
         if (message == NULL) {
-            dispatchError = DFMakeError(
-                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
-                @"SimulatorKit failed to create an edge-aware Indigo HID touch packet."
-            );
-            return;
+            message = DFCreateIndigoEdgeTouchMessageOnMain(CGPointMake(clampedX, clampedY),
+                                                           displaySize,
+                                                           phase,
+                                                           edge,
+                                                           target);
+            if (message == NULL) {
+                dispatchError = DFMakeError(
+                    DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                    @"SimulatorKit failed to create an edge-aware Indigo HID touch packet."
+                );
+                return;
+            }
         }
 
         NSError *messageError = nil;
@@ -4084,28 +4095,27 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             break;
         }
 
-        IndigoHIDMessage *message = NULL;
         uint32_t target = DFIndigoDigitizerTarget;
-        const NSUInteger maxAttempts = phase == DFPrivateSimulatorTouchPhaseMoved ? 12 : 3;
-        for (NSUInteger attempt = 0; attempt < maxAttempts; attempt++) {
-            message = DFCreateIndigoMultiTouchMessageDirect(CGPointMake(x1, y1),
-                                                            CGPointMake(x2, y2),
-                                                            displaySize,
-                                                            phase,
-                                                            target);
-            if (message != NULL) {
-                break;
-            }
-            usleep(5 * 1000);
-        }
+        BOOL touchDown = phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved;
+        IndigoHIDMessage *message = (IndigoHIDMessage *)DFCreateIndigoMultiTouchMessage(CGPointMake(x1, y1),
+                                                                                        CGPointMake(x2, y2),
+                                                                                        displaySize,
+                                                                                        touchDown,
+                                                                                        target,
+                                                                                        &dispatchError);
         if (message == NULL) {
-            BOOL touchDown = phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved;
-            message = (IndigoHIDMessage *)DFCreateIndigoMultiTouchMessage(CGPointMake(x1, y1),
-                                                                          CGPointMake(x2, y2),
-                                                                          displaySize,
-                                                                          touchDown,
-                                                                          target,
-                                                                          &dispatchError);
+            const NSUInteger maxAttempts = phase == DFPrivateSimulatorTouchPhaseMoved ? 12 : 3;
+            for (NSUInteger attempt = 0; attempt < maxAttempts; attempt++) {
+                message = DFCreateIndigoMultiTouchMessageDirect(CGPointMake(x1, y1),
+                                                                CGPointMake(x2, y2),
+                                                                displaySize,
+                                                                phase,
+                                                                target);
+                if (message != NULL) {
+                    break;
+                }
+                usleep(5 * 1000);
+            }
             if (message == NULL) {
                 return;
             }
