@@ -71,7 +71,8 @@ struct SimDeckAPI: Sendable {
 
     func chromeProfile(udid: String) async throws -> ChromeProfile {
         try await decode(
-            path: "/api/simulators/\(udid.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? udid)/chrome-profile"
+            path: "/api/simulators/\(udid.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? udid)/chrome-profile",
+            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData
         )
     }
 
@@ -80,7 +81,22 @@ struct SimDeckAPI: Sendable {
             path: "/api/simulators/\(udid.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? udid)/chrome.png",
             method: "GET",
             body: Optional<String>.none,
-            timeout: 10
+            timeout: 10,
+            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData
+        )
+        guard let image = UIImage(data: data) else {
+            throw SimDeckAPIError.invalidResponse
+        }
+        return image
+    }
+
+    func screenMaskImage(udid: String) async throws -> UIImage {
+        let data = try await request(
+            path: "/api/simulators/\(udid.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? udid)/screen-mask.png",
+            method: "GET",
+            body: Optional<String>.none,
+            timeout: 10,
+            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData
         )
         guard let image = UIImage(data: data) else {
             throw SimDeckAPIError.invalidResponse
@@ -96,9 +112,10 @@ struct SimDeckAPI: Sendable {
         path: String,
         method: String = "GET",
         body: (some Encodable)? = Optional<String>.none,
-        timeout: TimeInterval = 10
+        timeout: TimeInterval = 10,
+        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
     ) async throws -> T {
-        let data = try await request(path: path, method: method, body: body, timeout: timeout)
+        let data = try await request(path: path, method: method, body: body, timeout: timeout, cachePolicy: cachePolicy)
         if data.isEmpty, T.self == EmptyResponse.self {
             return EmptyResponse() as! T
         }
@@ -109,9 +126,16 @@ struct SimDeckAPI: Sendable {
         path: String,
         method: String,
         body: (some Encodable)?,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
     ) async throws -> Data {
-        let (data, _) = try await requestWithHTTPResponse(path: path, method: method, body: body, timeout: timeout)
+        let (data, _) = try await requestWithHTTPResponse(
+            path: path,
+            method: method,
+            body: body,
+            timeout: timeout,
+            cachePolicy: cachePolicy
+        )
         return data
     }
 
@@ -119,11 +143,11 @@ struct SimDeckAPI: Sendable {
         path: String,
         method: String,
         body: (some Encodable)?,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
     ) async throws -> (Data, HTTPURLResponse) {
-        var request = URLRequest(url: url(for: path))
+        var request = URLRequest(url: url(for: path), cachePolicy: cachePolicy, timeoutInterval: timeout)
         request.httpMethod = method
-        request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(originHeaderValue, forHTTPHeaderField: "Origin")
         if let token = endpoint.token?.nilIfBlank {
