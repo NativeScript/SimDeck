@@ -162,13 +162,24 @@ struct PrivateDisplayInfo: Hashable, Decodable, Sendable {
 
 struct StreamDiagnostics: Hashable, Sendable {
     var codec: String = ""
+    var width: UInt64 = 0
+    var height: UInt64 = 0
     var receivedPackets: UInt64 = 0
     var decodedFrames: UInt64 = 0
+    var renderedFrames: UInt64 = 0
+    var decoderDroppedFrames: UInt64 = 0
+    var presentationDroppedFrames: UInt64 = 0
     var droppedFrames: UInt64 = 0
     var packetsLost: UInt64 = 0
+    var latestPacketGapMs: Double = 0
     var latestFrameGapMs: Double = 0
+    var packetFps: Double = 0
     var decodedFps: Double = 0
     var renderedFps: Double = 0
+    var peerConnectionState: String = ""
+    var iceConnectionState: String = ""
+    var iceGatheringState: String = ""
+    var signalingState: String = ""
     var selectedCandidatePair: String = ""
     var timestamp = Date()
 
@@ -176,13 +187,27 @@ struct StreamDiagnostics: Hashable, Sendable {
 
     init(stats: [String: Any]) {
         codec = stats["codec"] as? String ?? ""
+        width = StreamDiagnostics.uintValue(stats["width"])
+        height = StreamDiagnostics.uintValue(stats["height"])
         receivedPackets = StreamDiagnostics.uintValue(stats["receivedPackets"])
         decodedFrames = StreamDiagnostics.uintValue(stats["decodedFrames"])
+        renderedFrames = StreamDiagnostics.uintValue(stats["renderedFrames"])
+        decoderDroppedFrames = StreamDiagnostics.uintValue(stats["decoderDroppedFrames"])
+        presentationDroppedFrames = StreamDiagnostics.uintValue(stats["presentationDroppedFrames"])
         droppedFrames = StreamDiagnostics.uintValue(stats["droppedFrames"])
+        if decoderDroppedFrames == 0 {
+            decoderDroppedFrames = droppedFrames
+        }
         packetsLost = StreamDiagnostics.uintValue(stats["packetsLost"])
+        latestPacketGapMs = StreamDiagnostics.doubleValue(stats["latestPacketGapMs"])
         latestFrameGapMs = StreamDiagnostics.doubleValue(stats["latestFrameGapMs"])
+        packetFps = StreamDiagnostics.doubleValue(stats["packetFps"])
         decodedFps = StreamDiagnostics.doubleValue(stats["decodedFps"])
         renderedFps = StreamDiagnostics.doubleValue(stats["appFps"])
+        peerConnectionState = stats["peerConnectionState"] as? String ?? stats["status"] as? String ?? ""
+        iceConnectionState = stats["iceConnectionState"] as? String ?? ""
+        iceGatheringState = stats["iceGatheringState"] as? String ?? ""
+        signalingState = stats["signalingState"] as? String ?? ""
         selectedCandidatePair = stats["selectedCandidatePair"] as? String ?? ""
         timestamp = Date()
     }
@@ -225,6 +250,22 @@ struct ChromeProfile: Hashable, Decodable, Sendable {
     let chromeStyle: String?
     let hasScreenMask: Bool?
     let buttons: [ChromeButtonProfile]?
+
+    var assetStamp: String {
+        [
+            totalWidth,
+            totalHeight,
+            screenX,
+            screenY,
+            screenWidth,
+            screenHeight,
+            cornerRadius
+        ]
+            .map { value in
+                value.isFinite ? String(Int((value * 1000).rounded())) : "0"
+            }
+            .joined(separator: "x")
+    }
 }
 
 struct ChromeButtonProfile: Hashable, Decodable, Sendable {

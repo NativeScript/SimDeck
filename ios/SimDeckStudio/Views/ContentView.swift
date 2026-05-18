@@ -190,11 +190,12 @@ private struct ServerTitleButton: View {
             }
             .padding(.leading, 14)
             .padding(.trailing, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 5)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .frame(minWidth: 170, maxWidth: 240)
+        .frame(height: 42)
         .modifier(GlassCapsuleModifier(interactive: true))
     }
 
