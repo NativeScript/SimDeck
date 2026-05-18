@@ -17,6 +17,7 @@ interface DeviceChromeProps {
   accessibilitySelectedId: string;
   chromeProfile: ChromeProfile | null;
   chromeButtonsRenderedInChrome: boolean;
+  chromeScreenBackingStyle: CSSProperties | null;
   chromeScreenStyle: CSSProperties | null;
   chromeUrl: string;
   chromeButtonUrl: (button: string, pressed?: boolean) => string;
@@ -63,6 +64,7 @@ export function DeviceChrome({
   accessibilitySelectedId,
   chromeProfile,
   chromeButtonsRenderedInChrome,
+  chromeScreenBackingStyle,
   chromeScreenStyle,
   chromeUrl,
   chromeButtonUrl,
@@ -120,6 +122,13 @@ export function DeviceChrome({
           draggable={false}
           src={chromeUrl}
         />
+        {chromeScreenBackingStyle ? (
+          <div
+            aria-hidden="true"
+            className="device-screen-backing"
+            style={chromeScreenBackingStyle}
+          />
+        ) : null}
         <ChromeButtonOverlay
           chromeButtonUrl={chromeButtonUrl}
           chromeProfile={chromeProfile}

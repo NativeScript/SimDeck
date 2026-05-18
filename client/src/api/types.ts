@@ -231,6 +231,10 @@ export interface ChromeProfile {
   screenY: number;
   screenWidth: number;
   screenHeight: number;
+  contentX?: number;
+  contentY?: number;
+  contentWidth?: number;
+  contentHeight?: number;
   cornerRadius: number;
   cornerRadii?: {
     topLeft?: number;

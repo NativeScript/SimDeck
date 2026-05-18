@@ -246,6 +246,10 @@ struct ChromeProfile: Hashable, Decodable, Sendable {
     let screenY: Double
     let screenWidth: Double
     let screenHeight: Double
+    let contentX: Double?
+    let contentY: Double?
+    let contentWidth: Double?
+    let contentHeight: Double?
     let cornerRadius: Double
     let chromeStyle: String?
     let hasScreenMask: Bool?
@@ -259,6 +263,10 @@ struct ChromeProfile: Hashable, Decodable, Sendable {
             screenY,
             screenWidth,
             screenHeight,
+            contentX ?? 0,
+            contentY ?? 0,
+            contentWidth ?? 0,
+            contentHeight ?? 0,
             cornerRadius
         ]
             .map { value in

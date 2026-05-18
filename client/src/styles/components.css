@@ -2374,6 +2374,13 @@
   z-index: 3;
 }
 
+.device-screen-backing {
+  position: absolute;
+  background: #000000;
+  pointer-events: none;
+  z-index: 0;
+}
+
 .device-chrome-button {
   position: absolute;
   display: block;

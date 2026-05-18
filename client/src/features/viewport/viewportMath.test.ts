@@ -4,6 +4,7 @@ import {
   buildShellRotationTransform,
   clampPan,
   clampZoom,
+  computeChromeBackingRect,
   computeChromeScreenBorderRadius,
   computeChromeScreenRect,
   computeFitScale,
@@ -85,6 +86,37 @@ describe("viewportMath", () => {
       width: 438,
       x: 18,
       y: 18,
+    });
+  });
+
+  it("keeps watch display backing separate from stream content", () => {
+    const profile = {
+      contentHeight: 464.062,
+      contentWidth: 381,
+      contentX: 88.5,
+      contentY: 58.469,
+      cornerRadius: 135,
+      screenHeight: 513,
+      screenWidth: 422,
+      screenX: 68,
+      screenY: 34,
+      totalHeight: 581,
+      totalWidth: 573,
+    };
+
+    expect(computeChromeBackingRect(profile)).toEqual({
+      height: 513,
+      width: 422,
+      x: 68,
+      y: 34,
+    });
+    expect(
+      computeChromeScreenRect(profile, { width: 422, height: 514 }),
+    ).toEqual({
+      height: 464.062,
+      width: 381,
+      x: 88.5,
+      y: 58.469,
     });
   });
 

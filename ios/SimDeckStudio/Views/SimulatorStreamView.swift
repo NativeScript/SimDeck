@@ -177,7 +177,7 @@ struct SimulatorStreamView: View {
                 Rectangle()
                     .fill(.black)
                     .frame(width: layout.screenBackingFrame.width, height: layout.screenBackingFrame.height)
-                    .clippedToSimulatorScreen(cornerRadius: layout.screenCornerRadius + 2, maskImage: screenMaskImage)
+                    .clippedToSimulatorScreen(cornerRadius: layout.screenBackingCornerRadius, maskImage: nil)
                     .position(x: layout.screenBackingFrame.midX, y: layout.screenBackingFrame.midY)
 
                 if showsCachedStreamFrame, let lastStreamFrame = model.lastStreamFrame {
@@ -1168,6 +1168,7 @@ private struct DeviceViewportLayout {
     let screenBackingFrame: CGRect
     let videoFrame: CGRect
     let screenCornerRadius: CGFloat
+    let screenBackingCornerRadius: CGFloat
     let usesChrome: Bool
     private let chromeCoordinateScale: CGFloat
 
@@ -1185,20 +1186,31 @@ private struct DeviceViewportLayout {
             let profileSize = CGSize(width: CGFloat(chromeProfile.totalWidth), height: CGFloat(chromeProfile.totalHeight))
             let shell = profileSize.aspectFit(in: viewport)
             let scale = shell.width / profileSize.width
-            let screenRect = Self.chromeScreenRect(profile: chromeProfile)
+            let backingRect = Self.chromeBackingRect(profile: chromeProfile)
+            let contentRect = Self.chromeContentRect(profile: chromeProfile) ?? backingRect
             shellFrame = shell
             chromeCoordinateScale = scale
             screenFrame = CGRect(
-                x: shell.minX + screenRect.minX * scale,
-                y: shell.minY + screenRect.minY * scale,
-                width: screenRect.width * scale,
-                height: screenRect.height * scale
+                x: shell.minX + contentRect.minX * scale,
+                y: shell.minY + contentRect.minY * scale,
+                width: contentRect.width * scale,
+                height: contentRect.height * scale
             )
-            screenBackingFrame = screenFrame.insetBy(dx: -2, dy: -2)
+            screenBackingFrame = CGRect(
+                x: shell.minX + backingRect.minX * scale,
+                y: shell.minY + backingRect.minY * scale,
+                width: backingRect.width * scale,
+                height: backingRect.height * scale
+            )
             videoFrame = screenFrame
             screenCornerRadius = Self.screenCornerRadius(
                 profile: chromeProfile,
-                profileScreenRect: screenRect,
+                profileScreenRect: contentRect,
+                scale: scale
+            )
+            screenBackingCornerRadius = Self.screenCornerRadius(
+                profile: chromeProfile,
+                profileScreenRect: backingRect,
                 scale: scale
             )
             usesChrome = true
@@ -1214,6 +1226,7 @@ private struct DeviceViewportLayout {
         screenBackingFrame = screen
         videoFrame = screen
         screenCornerRadius = min(44, screen.width * 0.14)
+        screenBackingCornerRadius = screenCornerRadius
         usesChrome = false
         chromeCoordinateScale = 1
     }
@@ -1228,12 +1241,29 @@ private struct DeviceViewportLayout {
         )
     }
 
-    private static func chromeScreenRect(profile: ChromeProfile) -> CGRect {
+    private static func chromeBackingRect(profile: ChromeProfile) -> CGRect {
         CGRect(
             x: CGFloat(profile.screenX),
             y: CGFloat(profile.screenY),
             width: CGFloat(profile.screenWidth),
             height: CGFloat(profile.screenHeight)
+        )
+    }
+
+    private static func chromeContentRect(profile: ChromeProfile) -> CGRect? {
+        guard let contentX = profile.contentX,
+              let contentY = profile.contentY,
+              let contentWidth = profile.contentWidth,
+              let contentHeight = profile.contentHeight,
+              contentWidth > 0,
+              contentHeight > 0 else {
+            return nil
+        }
+        return CGRect(
+            x: CGFloat(contentX),
+            y: CGFloat(contentY),
+            width: CGFloat(contentWidth),
+            height: CGFloat(contentHeight)
         )
     }
 
@@ -1248,6 +1278,20 @@ private struct DeviceViewportLayout {
               abs(profileScreenRect.minY - fullScreen.minY) <= 0.5,
               abs(profileScreenRect.maxX - fullScreen.maxX) <= 0.5,
               abs(profileScreenRect.maxY - fullScreen.maxY) <= 0.5 else {
+            if let contentX = profile.contentX,
+               let contentY = profile.contentY,
+               let contentWidth = profile.contentWidth,
+               let contentHeight = profile.contentHeight,
+               abs(profileScreenRect.minX - CGFloat(contentX)) <= 0.5,
+               abs(profileScreenRect.minY - CGFloat(contentY)) <= 0.5,
+               abs(profileScreenRect.width - CGFloat(contentWidth)) <= 0.5,
+               abs(profileScreenRect.height - CGFloat(contentHeight)) <= 0.5 {
+                return min(
+                    profileScreenRect.width * scale / 2,
+                    profileScreenRect.height * scale / 2,
+                    CGFloat(profile.cornerRadius) * scale
+                )
+            }
             return 0
         }
         return min(

@@ -84,6 +84,7 @@ import {
   buildShellRotationTransform,
   clampPan,
   clampZoom,
+  computeChromeBackingRect,
   computeChromeScreenBorderRadius,
   computeChromeScreenRect,
   normalizeQuarterTurns,
@@ -149,6 +150,7 @@ const STREAM_TRANSPORT_VALUES = new Set<StreamTransport>([
   "webrtc",
 ]);
 const MOBILE_VIEWPORT_MEDIA_QUERY = "(max-width: 600px)";
+const CHROME_RENDERER_ASSET_VERSION = "chrome-renderer-watch-bezel-inset-22";
 clearLegacyVolatileUiState();
 
 interface StreamQualityResponse {
@@ -231,6 +233,10 @@ function buildChromeProfileAssetStamp(profile: ChromeProfile | null): string {
     profile.screenY,
     profile.screenWidth,
     profile.screenHeight,
+    profile.contentX,
+    profile.contentY,
+    profile.contentWidth,
+    profile.contentHeight,
     profile.cornerRadius,
   ]
     .map(chromeStampNumber)
@@ -981,6 +987,7 @@ export function AppShell({
     selectedSimulator?.runtimeName,
     selectedSimulator?.udid,
     chromeGeometryStamp,
+    CHROME_RENDERER_ASSET_VERSION,
     chromeHasInteractiveButtons ? "baked-buttons" : "no-buttons",
     chromeHasCrown ? "crown" : "no-crown",
   ]
@@ -1755,9 +1762,16 @@ export function AppShell({
     viewportChromeProfile,
     effectiveDeviceNaturalSize,
   );
+  const chromeScreenBackingRect = computeChromeBackingRect(
+    viewportChromeProfile,
+  );
   const chromeScreenBorderRadius = computeChromeScreenBorderRadius(
     viewportChromeProfile,
     chromeScreenRect,
+  );
+  const chromeScreenBackingBorderRadius = computeChromeScreenBorderRadius(
+    viewportChromeProfile,
+    chromeScreenBackingRect,
   );
   const chromeScreenStyle =
     viewportChromeProfile && chromeScreenRect
@@ -1786,6 +1800,16 @@ export function AppShell({
                 WebkitMaskSize: "100% 100%",
               }
             : {}),
+        } satisfies CSSProperties)
+      : null;
+  const chromeScreenBackingStyle =
+    viewportChromeProfile && chromeScreenBackingRect
+      ? ({
+          left: `${(chromeScreenBackingRect.x / viewportChromeProfile.totalWidth) * 100}%`,
+          top: `${(chromeScreenBackingRect.y / viewportChromeProfile.totalHeight) * 100}%`,
+          width: `${(chromeScreenBackingRect.width / viewportChromeProfile.totalWidth) * 100}%`,
+          height: `${(chromeScreenBackingRect.height / viewportChromeProfile.totalHeight) * 100}%`,
+          borderRadius: chromeScreenBackingBorderRadius ?? "0",
         } satisfies CSSProperties)
       : null;
   const screenOnlyStyle =
@@ -2804,6 +2828,7 @@ export function AppShell({
         chromeProfile={viewportChromeProfile}
         chromeRequired={chromeRequired}
         chromeButtonsRenderedInChrome={chromeButtonsRenderedInChrome}
+        chromeScreenBackingStyle={chromeScreenBackingStyle}
         chromeScreenStyle={viewportScreenStyle}
         chromeUrl={chromeUrl}
         chromeButtonUrl={chromeButtonUrl}
