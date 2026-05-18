@@ -432,7 +432,7 @@ pub(crate) enum ControlMessage {
 }
 
 #[derive(Default)]
-struct TvosControlTouchGesture {
+pub(crate) struct TvosControlTouchGesture {
     start: Option<(f64, f64)>,
     last: Option<(f64, f64)>,
 }
@@ -3456,7 +3456,7 @@ pub(crate) async fn run_control_message(
     .map_err(|error| AppError::internal(format!("Failed to join control task: {error}")))?
 }
 
-async fn run_tvos_control_message(
+pub(crate) async fn run_tvos_control_message(
     session: SimulatorSession,
     message: ControlMessage,
     active_touch: &mut TvosControlTouchGesture,
