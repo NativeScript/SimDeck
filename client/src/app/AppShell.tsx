@@ -211,6 +211,59 @@ function buildAuthenticatedAssetUrl(
   return url.toString();
 }
 
+function chromeStampNumber(value: number | undefined): string {
+  return Number.isFinite(value) ? String(Math.round((value ?? 0) * 1000)) : "0";
+}
+
+function chromeStampText(value: string | undefined | null): string {
+  return (value ?? "").replace(/[^a-zA-Z0-9_.-]+/g, "_");
+}
+
+function buildChromeProfileAssetStamp(profile: ChromeProfile | null): string {
+  if (!profile) {
+    return "";
+  }
+
+  const geometryStamp = [
+    profile.totalWidth,
+    profile.totalHeight,
+    profile.screenX,
+    profile.screenY,
+    profile.screenWidth,
+    profile.screenHeight,
+    profile.cornerRadius,
+  ]
+    .map(chromeStampNumber)
+    .join("x");
+  const maskStamp = profile.hasScreenMask ? "mask" : "nomask";
+  const buttonStamp = [...(profile.buttons ?? [])]
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((button) =>
+      [
+        chromeStampText(button.name),
+        chromeStampText(button.type),
+        chromeStampText(button.imageName),
+        chromeStampText(button.imageDownName),
+        chromeStampText(button.anchor),
+        chromeStampText(button.align),
+        button.onTop ? "top" : "under",
+        chromeStampNumber(button.x),
+        chromeStampNumber(button.y),
+        chromeStampNumber(button.width),
+        chromeStampNumber(button.height),
+        chromeStampNumber(button.normalOffset?.x),
+        chromeStampNumber(button.normalOffset?.y),
+        chromeStampNumber(button.rolloverOffset?.x),
+        chromeStampNumber(button.rolloverOffset?.y),
+        String(button.usagePage ?? ""),
+        String(button.usage ?? ""),
+      ].join(","),
+    )
+    .join(";");
+
+  return [geometryStamp, maskStamp, buttonStamp].filter(Boolean).join(":");
+}
+
 function shouldUseRemoteStreamDefault(apiRoot: string): boolean {
   if (apiRoot) {
     return true;
@@ -918,18 +971,9 @@ export function AppShell({
         button.name.toLowerCase() === "digital-crown",
     ),
   );
-  const chromeGeometryStamp = viewportChromeProfile
-    ? [
-        viewportChromeProfile.totalWidth,
-        viewportChromeProfile.totalHeight,
-        viewportChromeProfile.screenX,
-        viewportChromeProfile.screenY,
-        viewportChromeProfile.screenWidth,
-        viewportChromeProfile.screenHeight,
-      ]
-        .map((value) => Math.round(value))
-        .join("x")
-    : "";
+  const chromeGeometryStamp = buildChromeProfileAssetStamp(
+    viewportChromeProfile,
+  );
   const chromeAssetStamp = [
     selectedSimulator?.deviceTypeIdentifier,
     selectedSimulator?.deviceTypeName,
@@ -1718,18 +1762,10 @@ export function AppShell({
   const chromeScreenStyle =
     viewportChromeProfile && chromeScreenRect
       ? ({
-          left: viewportChromeProfile.hasScreenMask
-            ? `calc(${(chromeScreenRect.x / viewportChromeProfile.totalWidth) * 100}% - 1px)`
-            : `${(chromeScreenRect.x / viewportChromeProfile.totalWidth) * 100}%`,
-          top: viewportChromeProfile.hasScreenMask
-            ? `calc(${(chromeScreenRect.y / viewportChromeProfile.totalHeight) * 100}% - 1px)`
-            : `${(chromeScreenRect.y / viewportChromeProfile.totalHeight) * 100}%`,
-          width: viewportChromeProfile.hasScreenMask
-            ? `calc(${(chromeScreenRect.width / viewportChromeProfile.totalWidth) * 100}% + 2px)`
-            : `${(chromeScreenRect.width / viewportChromeProfile.totalWidth) * 100}%`,
-          height: viewportChromeProfile.hasScreenMask
-            ? `calc(${(chromeScreenRect.height / viewportChromeProfile.totalHeight) * 100}% + 2px)`
-            : `${(chromeScreenRect.height / viewportChromeProfile.totalHeight) * 100}%`,
+          left: `${(chromeScreenRect.x / viewportChromeProfile.totalWidth) * 100}%`,
+          top: `${(chromeScreenRect.y / viewportChromeProfile.totalHeight) * 100}%`,
+          width: `${(chromeScreenRect.width / viewportChromeProfile.totalWidth) * 100}%`,
+          height: `${(chromeScreenRect.height / viewportChromeProfile.totalHeight) * 100}%`,
           borderRadius: viewportChromeProfile.hasScreenMask
             ? "0"
             : (chromeScreenBorderRadius ?? "0"),

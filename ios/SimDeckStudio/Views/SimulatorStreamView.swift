@@ -1185,7 +1185,7 @@ private struct DeviceViewportLayout {
             let profileSize = CGSize(width: CGFloat(chromeProfile.totalWidth), height: CGFloat(chromeProfile.totalHeight))
             let shell = profileSize.aspectFit(in: viewport)
             let scale = shell.width / profileSize.width
-            let screenRect = Self.chromeScreenRect(profile: chromeProfile, videoSize: videoSize)
+            let screenRect = Self.chromeScreenRect(profile: chromeProfile)
             shellFrame = shell
             chromeCoordinateScale = scale
             screenFrame = CGRect(
@@ -1195,7 +1195,7 @@ private struct DeviceViewportLayout {
                 height: screenRect.height * scale
             )
             screenBackingFrame = screenFrame.insetBy(dx: -2, dy: -2)
-            videoFrame = screenFrame.insetBy(dx: -1, dy: -1)
+            videoFrame = screenFrame
             screenCornerRadius = Self.screenCornerRadius(
                 profile: chromeProfile,
                 profileScreenRect: screenRect,
@@ -1228,46 +1228,13 @@ private struct DeviceViewportLayout {
         )
     }
 
-    private static func chromeScreenRect(profile: ChromeProfile, videoSize: CGSize) -> CGRect {
-        let profileScreenWidth = profile.screenWidth
-        let profileScreenHeight = profile.screenHeight
-        let profileScreenX = profile.screenX
-        let profileScreenY = profile.screenY
-        let profileAspect = profileScreenWidth / profileScreenHeight
-        let videoAspect = videoSize.width > 0 && videoSize.height > 0
-            ? Double(videoSize.width / videoSize.height)
-            : profileAspect
-        guard profileAspect.isFinite, profileAspect > 0, videoAspect.isFinite, videoAspect > 0 else {
-            return CGRect(
-                x: CGFloat(profileScreenX),
-                y: CGFloat(profileScreenY),
-                width: CGFloat(profileScreenWidth),
-                height: CGFloat(profileScreenHeight)
-            )
-        }
-
-        let aspectDelta = abs(videoAspect - profileAspect) / profileAspect
-        if aspectDelta <= 0.01 {
-            return CGRect(
-                x: CGFloat(profileScreenX),
-                y: CGFloat(profileScreenY),
-                width: CGFloat(profileScreenWidth),
-                height: CGFloat(profileScreenHeight)
-            )
-        }
-
-        var width = profileScreenWidth
-        var height = width / videoAspect
-        var x = profileScreenX
-        var y = profileScreenY
-        if height > profileScreenHeight {
-            height = profileScreenHeight
-            width = height * videoAspect
-            x += (profileScreenWidth - width) / 2
-        } else {
-            y += (profileScreenHeight - height) / 2
-        }
-        return CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height))
+    private static func chromeScreenRect(profile: ChromeProfile) -> CGRect {
+        CGRect(
+            x: CGFloat(profile.screenX),
+            y: CGFloat(profile.screenY),
+            width: CGFloat(profile.screenWidth),
+            height: CGFloat(profile.screenHeight)
+        )
     }
 
     private static func screenCornerRadius(profile: ChromeProfile, profileScreenRect: CGRect, scale: CGFloat) -> CGFloat {

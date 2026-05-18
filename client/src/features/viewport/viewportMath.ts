@@ -88,44 +88,29 @@ export function mapDisplayedPointToNaturalOrientation(
 
 export function computeChromeScreenRect(
   chromeProfile: ChromeProfile | null,
-  deviceNaturalSize: Size | null,
+  _deviceNaturalSize: Size | null,
 ): ScreenRect | null {
   if (!chromeProfile) {
     return null;
   }
 
-  const profileAspect = chromeProfile.screenWidth / chromeProfile.screenHeight;
-  const deviceAspect = deviceNaturalSize
-    ? deviceNaturalSize.width / deviceNaturalSize.height
-    : profileAspect;
-  if (!deviceAspect || !Number.isFinite(deviceAspect)) {
+  if (
+    !Number.isFinite(chromeProfile.screenX) ||
+    !Number.isFinite(chromeProfile.screenY) ||
+    !Number.isFinite(chromeProfile.screenWidth) ||
+    !Number.isFinite(chromeProfile.screenHeight) ||
+    chromeProfile.screenWidth <= 0 ||
+    chromeProfile.screenHeight <= 0
+  ) {
     return null;
   }
 
-  const aspectDelta = Math.abs(deviceAspect - profileAspect) / profileAspect;
-  if (aspectDelta <= 0.01) {
-    return {
-      height: chromeProfile.screenHeight,
-      width: chromeProfile.screenWidth,
-      x: chromeProfile.screenX,
-      y: chromeProfile.screenY,
-    };
-  }
-
-  let width = chromeProfile.screenWidth;
-  let height = width / deviceAspect;
-  let x = chromeProfile.screenX;
-  let y = chromeProfile.screenY;
-
-  if (height > chromeProfile.screenHeight) {
-    height = chromeProfile.screenHeight;
-    width = height * deviceAspect;
-    x += (chromeProfile.screenWidth - width) / 2;
-  } else {
-    y += (chromeProfile.screenHeight - height) / 2;
-  }
-
-  return { x, y, width, height };
+  return {
+    height: chromeProfile.screenHeight,
+    width: chromeProfile.screenWidth,
+    x: chromeProfile.screenX,
+    y: chromeProfile.screenY,
+  };
 }
 
 export function computeChromeScreenBorderRadius(

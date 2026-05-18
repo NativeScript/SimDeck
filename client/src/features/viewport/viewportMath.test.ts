@@ -43,7 +43,7 @@ describe("viewportMath", () => {
     expect(clamped).toEqual({ x: 0, y: -60 });
   });
 
-  it("fits device aspect inside chrome screen rect", () => {
+  it("uses the exact chrome screen rect even when stream aspect differs", () => {
     const rect = computeChromeScreenRect(
       {
         cornerRadius: 40,
@@ -58,8 +58,12 @@ describe("viewportMath", () => {
     );
 
     expect(rect).not.toBeNull();
-    expect(rect?.x).toBeGreaterThanOrEqual(50);
-    expect(rect?.y).toBeGreaterThanOrEqual(25);
+    expect(rect).toEqual({
+      height: 600,
+      width: 300,
+      x: 50,
+      y: 25,
+    });
   });
 
   it("uses the full chrome screen when stream and profile aspect nearly match", () => {
