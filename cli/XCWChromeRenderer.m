@@ -12,7 +12,12 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
 + (nullable NSDictionary *)inputNamed:(NSString *)buttonName
                          chromeInfo:(NSDictionary *)chromeInfo
                               error:(NSError * _Nullable __autoreleasing *)error;
-+ (NSEdgeInsets)devicePaddingForChromeInfo:(NSDictionary *)chromeInfo;
++ (NSEdgeInsets)devicePaddingForChromeInfo:(NSDictionary *)chromeInfo
+                                chromeSize:(CGSize)chromeSize;
++ (CGFloat)inputScaleForChromeInfo:(NSDictionary *)chromeInfo
+                         chromeSize:(CGSize)chromeSize;
++ (CGSize)scaledInputAssetSize:(CGSize)assetSize scale:(CGFloat)scale;
++ (BOOL)input:(NSDictionary *)input shouldDrawOnTopForChromeInfo:(NSDictionary *)chromeInfo;
 @end
 
 @implementation XCWChromeRenderer
@@ -750,7 +755,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
             continue;
         }
         NSDictionary *input = inputValue;
-        BOOL onTop = [input[@"onTop"] respondsToSelector:@selector(boolValue)] && [input[@"onTop"] boolValue];
+        BOOL onTop = [self input:input shouldDrawOnTopForChromeInfo:chromeInfo];
         if (onTop != onlyOnTop) {
             continue;
         }
@@ -759,12 +764,17 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
             continue;
         }
         NSString *assetPath = [self resolvedChromeAssetPathForName:assetName chromePath:chromePath];
-        CGSize assetSize = [self PDFPageSizeAtPath:assetPath];
+        CGFloat inputScale = [self inputScaleForChromeInfo:chromeInfo chromeSize:size];
+        CGSize assetSize = [self scaledInputAssetSize:[self PDFPageSizeAtPath:assetPath]
+                                                scale:inputScale];
         if (assetSize.width <= 0.0 || assetSize.height <= 0.0) {
             continue;
         }
 
-        CGRect rect = [self inputFrameForInput:input assetSize:assetSize inSize:size];
+        CGRect rect = [self inputFrameForInput:input
+                                     assetSize:assetSize
+                                        inSize:size
+                                         scale:inputScale];
         if (![self drawPDFAtPath:assetPath inRect:rect context:context error:error]) {
             return NO;
         }
@@ -774,7 +784,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
 
 + (CGRect)fullFrameForChromeInfo:(NSDictionary *)chromeInfo
                        chromeSize:(CGSize)chromeSize {
-    NSEdgeInsets padding = [self devicePaddingForChromeInfo:chromeInfo];
+    NSEdgeInsets padding = [self devicePaddingForChromeInfo:chromeInfo chromeSize:chromeSize];
     if (padding.top != 0.0 || padding.left != 0.0 || padding.bottom != 0.0 || padding.right != 0.0) {
         return CGRectMake(-padding.left,
                           -padding.top,
@@ -793,7 +803,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
             continue;
         }
         NSDictionary *input = inputValue;
-        BOOL onTop = [input[@"onTop"] respondsToSelector:@selector(boolValue)] && [input[@"onTop"] boolValue];
+        BOOL onTop = [self input:input shouldDrawOnTopForChromeInfo:chromeInfo];
         if (hasComposite && watchProfile && !onTop) {
             continue;
         }
@@ -802,17 +812,21 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
             continue;
         }
         NSString *assetPath = [self resolvedChromeAssetPathForName:assetName chromePath:chromePath];
-        CGSize assetSize = [self PDFPageSizeAtPath:assetPath];
+        CGFloat inputScale = [self inputScaleForChromeInfo:chromeInfo chromeSize:chromeSize];
+        CGSize assetSize = [self scaledInputAssetSize:[self PDFPageSizeAtPath:assetPath]
+                                                scale:inputScale];
         if (assetSize.width <= 0.0 || assetSize.height <= 0.0) {
             continue;
         }
         bounds = CGRectUnion(bounds, [self inputFrameForInput:input
                                                     assetSize:assetSize
                                                        inSize:chromeSize
+                                                        scale:inputScale
                                                    offsetName:@"normal"]);
         bounds = CGRectUnion(bounds, [self inputFrameForInput:input
                                                     assetSize:assetSize
                                                        inSize:chromeSize
+                                                        scale:inputScale
                                                    offsetName:@"rollover"]);
     }
     return CGRectIntegral(bounds);
@@ -821,12 +835,31 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
 + (CGRect)inputFrameForInput:(NSDictionary *)input
                    assetSize:(CGSize)assetSize
                       inSize:(CGSize)size {
-    return [self inputFrameForInput:input assetSize:assetSize inSize:size offsetName:@"normal"];
+    return [self inputFrameForInput:input assetSize:assetSize inSize:size scale:1.0 offsetName:@"normal"];
 }
 
 + (CGRect)inputFrameForInput:(NSDictionary *)input
                    assetSize:(CGSize)assetSize
                       inSize:(CGSize)size
+                       scale:(CGFloat)scale {
+    return [self inputFrameForInput:input assetSize:assetSize inSize:size scale:scale offsetName:@"normal"];
+}
+
++ (CGRect)inputFrameForInput:(NSDictionary *)input
+                   assetSize:(CGSize)assetSize
+                      inSize:(CGSize)size
+                  offsetName:(NSString *)offsetName {
+    return [self inputFrameForInput:input
+                          assetSize:assetSize
+                             inSize:size
+                              scale:1.0
+                         offsetName:offsetName];
+}
+
++ (CGRect)inputFrameForInput:(NSDictionary *)input
+                   assetSize:(CGSize)assetSize
+                      inSize:(CGSize)size
+                       scale:(CGFloat)scale
                   offsetName:(NSString *)offsetName {
     NSDictionary *offsets = [input[@"offsets"] isKindOfClass:[NSDictionary class]] ? input[@"offsets"] : @{};
     NSDictionary *normalOffset = [offsets[@"normal"] isKindOfClass:[NSDictionary class]] ? offsets[@"normal"] : nil;
@@ -834,10 +867,11 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     NSDictionary *requestedOffset = [offsets[offsetName] isKindOfClass:[NSDictionary class]] ? offsets[offsetName] : nil;
     NSDictionary *primaryOffset = normalOffset ?: rolloverOffset ?: requestedOffset ?: @{};
     NSDictionary *secondaryOffset = rolloverOffset ?: normalOffset ?: requestedOffset ?: @{};
-    CGFloat normalX = [self numberValue:primaryOffset[@"x"]];
-    CGFloat normalY = [self numberValue:primaryOffset[@"y"]];
-    CGFloat rolloverX = [self numberValue:secondaryOffset[@"x"]];
-    CGFloat rolloverY = [self numberValue:secondaryOffset[@"y"]];
+    CGFloat coordinateScale = MAX(scale, 1.0);
+    CGFloat normalX = [self numberValue:primaryOffset[@"x"]] * coordinateScale;
+    CGFloat normalY = [self numberValue:primaryOffset[@"y"]] * coordinateScale;
+    CGFloat rolloverX = [self numberValue:secondaryOffset[@"x"]] * coordinateScale;
+    CGFloat rolloverY = [self numberValue:secondaryOffset[@"y"]] * coordinateScale;
     CGFloat restX = normalX;
     CGFloat restY = normalY;
     NSString *anchor = [input[@"anchor"] isKindOfClass:[NSString class]] ? input[@"anchor"] : @"";
@@ -898,14 +932,16 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     return CGRectMake(x, y, assetSize.width, assetSize.height);
 }
 
-+ (NSEdgeInsets)devicePaddingForChromeInfo:(NSDictionary *)chromeInfo {
++ (NSEdgeInsets)devicePaddingForChromeInfo:(NSDictionary *)chromeInfo
+                                chromeSize:(CGSize)chromeSize {
     NSDictionary *json = chromeInfo[@"json"];
     NSDictionary *images = [json[@"images"] isKindOfClass:[NSDictionary class]] ? json[@"images"] : @{};
     NSDictionary *padding = [images[@"devicePadding"] isKindOfClass:[NSDictionary class]] ? images[@"devicePadding"] : @{};
-    return NSEdgeInsetsMake([self numberValue:padding[@"top"]],
-                            [self numberValue:padding[@"left"]],
-                            [self numberValue:padding[@"bottom"]],
-                            [self numberValue:padding[@"right"]]);
+    CGFloat inputScale = [self inputScaleForChromeInfo:chromeInfo chromeSize:chromeSize];
+    return NSEdgeInsetsMake([self numberValue:padding[@"top"]] * inputScale,
+                            [self numberValue:padding[@"left"]] * inputScale,
+                            [self numberValue:padding[@"bottom"]] * inputScale,
+                            [self numberValue:padding[@"right"]] * inputScale);
 }
 
 + (NSArray<NSDictionary<NSString *, id> *> *)buttonProfilesForChromeInfo:(NSDictionary *)chromeInfo
@@ -928,12 +964,17 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         }
 
         NSString *assetPath = [self resolvedChromeAssetPathForName:assetName chromePath:chromePath];
-        CGSize assetSize = [self PDFPageSizeAtPath:assetPath];
+        CGFloat inputScale = [self inputScaleForChromeInfo:chromeInfo chromeSize:chromeSize];
+        CGSize assetSize = [self scaledInputAssetSize:[self PDFPageSizeAtPath:assetPath]
+                                                scale:inputScale];
         if (assetSize.width <= 0.0 || assetSize.height <= 0.0) {
             continue;
         }
 
-        CGRect rect = [self inputFrameForInput:input assetSize:assetSize inSize:chromeSize];
+        CGRect rect = [self inputFrameForInput:input
+                                     assetSize:assetSize
+                                        inSize:chromeSize
+                                         scale:inputScale];
         rect = CGRectOffset(rect, chromeOffset.x, chromeOffset.y);
         if (CGRectGetWidth(rect) <= 0.0 || CGRectGetHeight(rect) <= 0.0) {
             continue;
@@ -948,7 +989,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         NSString *align = [input[@"align"] isKindOfClass:[NSString class]] ? input[@"align"] : @"";
         NSString *imageDownName = [input[@"imageDown"] isKindOfClass:[NSString class]] ? input[@"imageDown"] : @"";
         NSString *imageDownDrawMode = [input[@"imageDownDrawMode"] isKindOfClass:[NSString class]] ? input[@"imageDownDrawMode"] : @"";
-        BOOL onTop = [input[@"onTop"] respondsToSelector:@selector(boolValue)] && [input[@"onTop"] boolValue];
+        BOOL onTop = [self input:input shouldDrawOnTopForChromeInfo:chromeInfo];
 
         NSMutableDictionary<NSString *, id> *button = [@{
             @"name": name,
@@ -963,12 +1004,12 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
             @"align": align,
             @"onTop": @(onTop),
             @"normalOffset": @{
-                @"x": @([self numberValue:normalOffset[@"x"]]),
-                @"y": @([self numberValue:normalOffset[@"y"]]),
+                @"x": @([self numberValue:normalOffset[@"x"]] * inputScale),
+                @"y": @([self numberValue:normalOffset[@"y"]] * inputScale),
             },
             @"rolloverOffset": @{
-                @"x": @([self numberValue:rolloverOffset[@"x"]]),
-                @"y": @([self numberValue:rolloverOffset[@"y"]]),
+                @"x": @([self numberValue:rolloverOffset[@"x"]] * inputScale),
+                @"y": @([self numberValue:rolloverOffset[@"y"]] * inputScale),
             },
         } mutableCopy];
 
@@ -1031,6 +1072,53 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     }
 
     return CGSizeMake(rawWidth, rawHeight);
+}
+
++ (CGFloat)inputScaleForChromeInfo:(NSDictionary *)chromeInfo
+                         chromeSize:(CGSize)chromeSize {
+    NSDictionary *plist = chromeInfo[@"plist"];
+    if (![self isWatchProfile:plist]) {
+        return 1.0;
+    }
+    // watchOS profiles expose screen geometry in raw pixels, while input PDFs
+    // and chrome offsets are authored against DeviceKit's nominal screen slot.
+    CGFloat screenScale = MAX([self numberValue:plist[@"mainScreenScale"]], 1.0);
+    NSDictionary *json = chromeInfo[@"json"];
+    NSDictionary *images = [json[@"images"] isKindOfClass:[NSDictionary class]] ? json[@"images"] : @{};
+    NSDictionary *sizing = [images[@"sizing"] isKindOfClass:[NSDictionary class]] ? images[@"sizing"] : @{};
+    NSDictionary *stand = [images[@"stand"] isKindOfClass:[NSDictionary class]] ? images[@"stand"] : @{};
+    CGFloat nominalWidth = chromeSize.width -
+        [self numberValue:sizing[@"leftWidth"]] -
+        [self numberValue:sizing[@"rightWidth"]];
+    CGFloat nominalHeight = chromeSize.height -
+        [self numberValue:stand[@"height"]] -
+        [self numberValue:sizing[@"topHeight"]] -
+        [self numberValue:sizing[@"bottomHeight"]];
+    CGFloat screenWidth = [self numberValue:plist[@"mainScreenWidth"]];
+    CGFloat screenHeight = [self numberValue:plist[@"mainScreenHeight"]];
+    if (nominalWidth <= 0.0 || nominalHeight <= 0.0 || screenWidth <= 0.0 || screenHeight <= 0.0) {
+        return screenScale;
+    }
+    CGFloat fitScale = MIN(screenWidth / nominalWidth, screenHeight / nominalHeight);
+    if (!isfinite(fitScale) || fitScale <= 0.0) {
+        return screenScale;
+    }
+    return screenScale * MIN(fitScale, 1.0);
+}
+
++ (CGSize)scaledInputAssetSize:(CGSize)assetSize scale:(CGFloat)scale {
+    CGFloat inputScale = MAX(scale, 1.0);
+    return CGSizeMake(assetSize.width * inputScale, assetSize.height * inputScale);
+}
+
++ (BOOL)input:(NSDictionary *)input shouldDrawOnTopForChromeInfo:(NSDictionary *)chromeInfo {
+    if ([input[@"onTop"] respondsToSelector:@selector(boolValue)] && [input[@"onTop"] boolValue]) {
+        return YES;
+    }
+    NSString *type = [input[@"type"] isKindOfClass:[NSString class]] ? input[@"type"] : @"";
+    NSString *name = [input[@"name"] isKindOfClass:[NSString class]] ? input[@"name"] : @"";
+    return [self isWatchProfile:chromeInfo[@"plist"]] &&
+        ([type isEqualToString:@"crown"] || [name isEqualToString:@"digital-crown"]);
 }
 
 + (BOOL)drawRasterizedPDFAtPath:(NSString *)path
