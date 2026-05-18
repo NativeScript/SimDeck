@@ -8,20 +8,27 @@
     "url": "https://github.com/NativeScript/SimDeck",
     "directory": "packages/nativescript-inspector"
   },
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./index.js",
+  "module": "./index.mjs",
+  "types": "./index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
+      "types": "./index.d.ts",
+      "import": "./index.mjs",
+      "require": "./index.js",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "prepack": "npm run build"
+    "build": "node ./scripts/build.mjs",
+    "clean": "node ./scripts/clean.mjs",
+    "prepack": "npm run clean && npm run build"
   },
   "files": [
-    "dist",
+    "index.js",
+    "index.mjs",
+    "index.d.ts",
     "README.md",
     "src"
   ],

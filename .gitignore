@@ -7,7 +7,11 @@ server/target/
 client/dist/
 packages/inspector-agent/.build/
 packages/inspector-agent/.swiftpm/
+packages/nativescript-inspector/build/
 packages/nativescript-inspector/dist/
+packages/nativescript-inspector/index.js
+packages/nativescript-inspector/index.mjs
+packages/nativescript-inspector/index.d.ts
 packages/react-native-inspector/dist/
 packages/flutter-inspector/.dart_tool/
 packages/flutter-inspector/pubspec.lock
