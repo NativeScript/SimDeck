@@ -929,17 +929,14 @@ export function AppShell({
     selectedSimulator?.runtimeName,
     selectedSimulator?.udid,
     chromeGeometryStamp,
-    chromeHasInteractiveButtons ? "buttons" : "no-buttons",
+    chromeHasInteractiveButtons ? "baked-buttons" : "no-buttons",
     chromeHasCrown ? "crown" : "no-crown",
   ]
     .filter(Boolean)
     .join(":");
+  const chromeButtonsRenderedInChrome = chromeHasInteractiveButtons;
   const chromeUrl = selectedSimulator
-    ? buildChromeUrl(
-        selectedSimulator.udid,
-        chromeAssetStamp,
-        !chromeHasInteractiveButtons,
-      )
+    ? buildChromeUrl(selectedSimulator.udid, chromeAssetStamp, true)
     : "";
   const chromeButtonUrl = useCallback(
     (button: string, pressed = false) =>
@@ -968,10 +965,12 @@ export function AppShell({
     if (viewportChromeProfile.hasScreenMask) {
       urls.add(buildScreenMaskUrl(selectedSimulator.udid, chromeAssetStamp));
     }
-    for (const button of viewportChromeProfile.buttons ?? []) {
-      urls.add(chromeButtonUrl(button.name, false));
-      if (button.imageDownName) {
-        urls.add(chromeButtonUrl(button.name, true));
+    if (!chromeButtonsRenderedInChrome) {
+      for (const button of viewportChromeProfile.buttons ?? []) {
+        urls.add(chromeButtonUrl(button.name, false));
+        if (button.imageDownName) {
+          urls.add(chromeButtonUrl(button.name, true));
+        }
       }
     }
     return [...urls].filter(Boolean);
@@ -980,6 +979,7 @@ export function AppShell({
     chromeRequired,
     chromeUrl,
     chromeAssetStamp,
+    chromeButtonsRenderedInChrome,
     selectedSimulator?.udid,
     viewportChromeProfile,
   ]);
@@ -1693,10 +1693,18 @@ export function AppShell({
   const chromeScreenStyle =
     viewportChromeProfile && chromeScreenRect
       ? ({
-          left: `${(chromeScreenRect.x / viewportChromeProfile.totalWidth) * 100}%`,
-          top: `${(chromeScreenRect.y / viewportChromeProfile.totalHeight) * 100}%`,
-          width: `${(chromeScreenRect.width / viewportChromeProfile.totalWidth) * 100}%`,
-          height: `${(chromeScreenRect.height / viewportChromeProfile.totalHeight) * 100}%`,
+          left: viewportChromeProfile.hasScreenMask
+            ? `calc(${(chromeScreenRect.x / viewportChromeProfile.totalWidth) * 100}% - 1px)`
+            : `${(chromeScreenRect.x / viewportChromeProfile.totalWidth) * 100}%`,
+          top: viewportChromeProfile.hasScreenMask
+            ? `calc(${(chromeScreenRect.y / viewportChromeProfile.totalHeight) * 100}% - 1px)`
+            : `${(chromeScreenRect.y / viewportChromeProfile.totalHeight) * 100}%`,
+          width: viewportChromeProfile.hasScreenMask
+            ? `calc(${(chromeScreenRect.width / viewportChromeProfile.totalWidth) * 100}% + 2px)`
+            : `${(chromeScreenRect.width / viewportChromeProfile.totalWidth) * 100}%`,
+          height: viewportChromeProfile.hasScreenMask
+            ? `calc(${(chromeScreenRect.height / viewportChromeProfile.totalHeight) * 100}% + 2px)`
+            : `${(chromeScreenRect.height / viewportChromeProfile.totalHeight) * 100}%`,
           borderRadius: viewportChromeProfile.hasScreenMask
             ? "0"
             : (chromeScreenBorderRadius ?? "0"),
@@ -2729,6 +2737,7 @@ export function AppShell({
         chromeLoaded={chromeLoaded}
         chromeProfile={viewportChromeProfile}
         chromeRequired={chromeRequired}
+        chromeButtonsRenderedInChrome={chromeButtonsRenderedInChrome}
         chromeScreenStyle={viewportScreenStyle}
         chromeUrl={chromeUrl}
         chromeButtonUrl={chromeButtonUrl}
