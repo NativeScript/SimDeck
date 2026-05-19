@@ -195,6 +195,18 @@ final class WebRTCClient: NSObject {
         sendJSON(["type": "edgeTouch", "x": x, "y": y, "phase": phase, "edge": edge])
     }
 
+    func sendMultiTouch(x1: Double, y1: Double, x2: Double, y2: Double, phase: String) {
+        markUserActivity()
+        sendJSON([
+            "type": "multiTouch",
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "phase": phase
+        ])
+    }
+
     @discardableResult
     func sendKey(keyCode: Int, modifiers: Int) -> Bool {
         markUserActivity()

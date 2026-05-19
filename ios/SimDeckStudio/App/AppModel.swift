@@ -756,6 +756,10 @@ final class AppModel {
         streamClient?.sendEdgeTouch(x: Double(point.x), y: Double(point.y), phase: phase, edge: edge)
     }
 
+    func sendEdgeTouch(x: Double, y: Double, phase: String, edge: String) {
+        streamClient?.sendEdgeTouch(x: x, y: y, phase: phase, edge: edge)
+    }
+
     func normalizedTouchPoint(location: CGPoint, in screenFrame: CGRect) -> CGPoint? {
         guard screenFrame.width > 0, screenFrame.height > 0 else { return nil }
         let x = ((location.x - screenFrame.minX) / screenFrame.width).clamped(to: 0...1)
@@ -784,6 +788,10 @@ final class AppModel {
 
     func sendTouch(x: Double, y: Double, phase: String) {
         streamClient?.sendTouch(x: x, y: y, phase: phase)
+    }
+
+    func sendMultiTouch(x1: Double, y1: Double, x2: Double, y2: Double, phase: String) {
+        streamClient?.sendMultiTouch(x1: x1, y1: y1, x2: x2, y2: y2, phase: phase)
     }
 
     func sendKeyboardText(_ text: String) {

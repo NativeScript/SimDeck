@@ -4,8 +4,6 @@ import UIKit
 struct SimulatorStreamView: View {
     @Bindable var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
-    @State private var activeTouchKind: StreamTouchKind?
-    @State private var activeTouchIndicatorID: UUID?
     @State private var touchIndicators: [StreamTouchIndicator] = []
     @State private var touchOverlayRemovalTask: Task<Void, Never>?
     @State private var presentedSheet: StreamSheet?
@@ -42,13 +40,13 @@ struct SimulatorStreamView: View {
         }
         .onChange(of: model.selectedSimulatorID) { _, _ in
             keyboardCaptureActive = false
-            clearTouchOverlay()
+            clearTouchInteractionState()
             applyOrientationPolicy()
         }
         .onChange(of: model.selectedSimulator?.isBooted == true) { _, isBooted in
             if !isBooted {
                 keyboardCaptureActive = false
-                clearTouchOverlay()
+                clearTouchInteractionState()
             }
         }
         .onChange(of: model.touchOverlayVisible) { _, isVisible in
@@ -279,6 +277,14 @@ struct SimulatorStreamView: View {
                     HardwareButtonLayer(model: model, chromeProfile: chromeProfile, layout: layout)
                 }
 
+                if model.selectedSimulator?.isBooted == true {
+                    StreamTouchInputLayer { event in
+                        handleTouchEvent(event)
+                    }
+                    .frame(width: layout.screenFrame.width, height: layout.screenFrame.height)
+                    .position(x: layout.screenFrame.midX, y: layout.screenFrame.midY)
+                }
+
                 if model.selectedSimulator?.isBooted == true,
                    model.touchOverlayVisible,
                    !touchIndicators.isEmpty {
@@ -314,7 +320,6 @@ struct SimulatorStreamView: View {
                 }
             }
             .contentShape(Rectangle())
-            .streamTouchGesture(model.selectedSimulator?.isBooted == true, gesture: touchGesture(in: layout.screenFrame))
             .animation(.snappy(duration: 0.3), value: keyboardCaptureActive)
             .animation(.smooth(duration: 0.28), value: keyboardHeight)
         }
@@ -341,75 +346,78 @@ struct SimulatorStreamView: View {
         return model.streamState == .failed || model.streamState == .disconnected
     }
 
-    private func touchGesture(in screenFrame: CGRect) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                if activeTouchKind == nil {
-                    guard screenFrame.contains(value.startLocation),
-                          let point = model.normalizedTouchPoint(location: value.startLocation, in: screenFrame) else {
-                        return
-                    }
-                    activeTouchKind = point.y >= 0.93 ? .bottomEdge : .single
-                    sendActiveTouch(location: value.location, in: screenFrame, phase: "began")
-                    return
-                }
-                sendActiveTouch(location: value.location, in: screenFrame, phase: "moved")
-            }
-            .onEnded { value in
-                sendActiveTouch(location: value.location, in: screenFrame, phase: "ended")
-                activeTouchKind = nil
-            }
-    }
-
-    private func sendActiveTouch(location: CGPoint, in screenFrame: CGRect, phase: String) {
-        updateTouchOverlay(location: location, in: screenFrame, phase: phase)
-        switch activeTouchKind {
-        case .bottomEdge:
-            model.sendEdgeTouch(location: location, in: screenFrame, phase: phase, edge: "bottom")
+    private func handleTouchEvent(_ event: StreamTouchEvent) {
+        updateTouchOverlay(event)
+        switch event.kind {
         case .single:
-            model.sendTouch(location: location, in: screenFrame, phase: phase)
-        case nil:
-            break
+            guard let point = event.points.first else { return }
+            model.sendTouch(x: Double(point.normalized.x), y: Double(point.normalized.y), phase: event.phase)
+        case .bottomEdge:
+            guard let point = event.points.first else { return }
+            model.sendEdgeTouch(
+                x: Double(point.normalized.x),
+                y: Double(point.normalized.y),
+                phase: event.phase,
+                edge: "bottom"
+            )
+        case .multi:
+            guard event.points.count >= 2 else { return }
+            model.sendMultiTouch(
+                x1: Double(event.points[0].normalized.x),
+                y1: Double(event.points[0].normalized.y),
+                x2: Double(event.points[1].normalized.x),
+                y2: Double(event.points[1].normalized.y),
+                phase: event.phase
+            )
         }
     }
 
-    private func updateTouchOverlay(location: CGPoint, in screenFrame: CGRect, phase: String) {
+    private func updateTouchOverlay(_ event: StreamTouchEvent) {
         guard model.touchOverlayVisible else {
             clearTouchOverlay()
             return
         }
 
-        let clampedLocation = clampedTouchPoint(location, in: screenFrame)
-        switch phase {
+        let locations = event.points.map(\.local)
+        switch event.phase {
         case "began":
             touchOverlayRemovalTask?.cancel()
-            let id = UUID()
-            activeTouchIndicatorID = id
             withAnimation(.snappy(duration: 0.12)) {
-                touchIndicators = [
-                    StreamTouchIndicator(id: id, start: clampedLocation, current: clampedLocation, isEnding: false)
-                ]
+                touchIndicators = locations.map {
+                    StreamTouchIndicator(id: UUID(), start: $0, current: $0, isEnding: false)
+                }
             }
         case "moved":
-            guard let activeTouchIndicatorID,
-                  let index = touchIndicators.firstIndex(where: { $0.id == activeTouchIndicatorID }) else {
+            guard !locations.isEmpty else { return }
+            if touchIndicators.count != locations.count {
+                touchIndicators = locations.map {
+                    StreamTouchIndicator(id: UUID(), start: $0, current: $0, isEnding: false)
+                }
+            } else {
+                for index in locations.indices {
+                    touchIndicators[index].current = locations[index]
+                }
+            }
+        case "ended", "cancelled":
+            guard !locations.isEmpty else {
+                clearTouchOverlay()
                 return
             }
-            touchIndicators[index].current = clampedLocation
-        case "ended":
-            guard let activeTouchIndicatorID,
-                  let index = touchIndicators.firstIndex(where: { $0.id == activeTouchIndicatorID }) else {
-                return
+            if touchIndicators.count != locations.count {
+                touchIndicators = locations.map {
+                    StreamTouchIndicator(id: UUID(), start: $0, current: $0, isEnding: false)
+                }
             }
-            let endingID = activeTouchIndicatorID
-            touchIndicators[index].current = clampedLocation
-            touchIndicators[index].isEnding = true
-            self.activeTouchIndicatorID = nil
+            for index in locations.indices {
+                touchIndicators[index].current = locations[index]
+                touchIndicators[index].isEnding = true
+            }
+            let endingIDs = Set(touchIndicators.map(\.id))
             touchOverlayRemovalTask?.cancel()
             touchOverlayRemovalTask = Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(240))
                 withAnimation(.easeOut(duration: 0.16)) {
-                    touchIndicators.removeAll { $0.id == endingID }
+                    touchIndicators.removeAll { endingIDs.contains($0.id) }
                 }
             }
         default:
@@ -417,18 +425,14 @@ struct SimulatorStreamView: View {
         }
     }
 
-    private func clampedTouchPoint(_ location: CGPoint, in screenFrame: CGRect) -> CGPoint {
-        CGPoint(
-            x: min(max(location.x - screenFrame.minX, 0), screenFrame.width),
-            y: min(max(location.y - screenFrame.minY, 0), screenFrame.height)
-        )
-    }
-
     private func clearTouchOverlay() {
         touchOverlayRemovalTask?.cancel()
         touchOverlayRemovalTask = nil
-        activeTouchIndicatorID = nil
         touchIndicators = []
+    }
+
+    private func clearTouchInteractionState() {
+        clearTouchOverlay()
     }
 
     private func updateKeyboardHeight(_ notification: Notification) {
@@ -446,9 +450,10 @@ struct SimulatorStreamView: View {
     }
 }
 
-private enum StreamTouchKind {
+private enum StreamTouchEventKind {
     case single
     case bottomEdge
+    case multi
 }
 
 private enum StreamSheet: Identifiable {
@@ -456,6 +461,214 @@ private enum StreamSheet: Identifiable {
     case debugInfo
 
     var id: Self { self }
+}
+
+private struct StreamTouchPoint {
+    let local: CGPoint
+    let normalized: CGPoint
+}
+
+private struct StreamTouchEvent {
+    let kind: StreamTouchEventKind
+    let phase: String
+    let points: [StreamTouchPoint]
+}
+
+private struct StreamTouchInputLayer: UIViewRepresentable {
+    let onEvent: (StreamTouchEvent) -> Void
+
+    func makeUIView(context: Context) -> StreamTouchInputView {
+        let view = StreamTouchInputView()
+        view.onEvent = onEvent
+        return view
+    }
+
+    func updateUIView(_ view: StreamTouchInputView, context: Context) {
+        view.onEvent = onEvent
+    }
+}
+
+private final class StreamTouchInputView: UIView {
+    var onEvent: ((StreamTouchEvent) -> Void)?
+
+    private enum ActiveGesture {
+        case single(kind: StreamTouchEventKind, touch: UITouch)
+        case multi(touches: [UITouch])
+    }
+
+    private var activeTouches: [UITouch] = []
+    private var activeGesture: ActiveGesture?
+    private var lastMultiPoints: [StreamTouchPoint] = []
+    private var suppressSingleUntilAllTouchesEnd = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = .clear
+        isUserInteractionEnabled = true
+        isMultipleTouchEnabled = true
+        isExclusiveTouch = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        addTouches(touches)
+        reconcileAfterTouchStart()
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        sendCurrentGesture(phase: "moved")
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        finishTouches(touches, phase: "ended")
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        finishTouches(touches, phase: "cancelled")
+    }
+
+    private func addTouches(_ touches: Set<UITouch>) {
+        for touch in touches where containsStartingPoint(touch) && !activeTouches.contains(where: { $0 === touch }) {
+            activeTouches.append(touch)
+        }
+    }
+
+    private func reconcileAfterTouchStart() {
+        guard !suppressSingleUntilAllTouchesEnd else { return }
+
+        switch activeGesture {
+        case nil:
+            if activeTouches.count >= 2 {
+                beginMultiTouch()
+            } else if let touch = activeTouches.first {
+                beginSingleTouch(touch)
+            }
+        case .single:
+            if activeTouches.count >= 2 {
+                promoteSingleTouchToMultiTouch()
+            }
+        case .multi:
+            return
+        }
+    }
+
+    private func finishTouches(_ touches: Set<UITouch>, phase: String) {
+        switch activeGesture {
+        case .single(let kind, let touch):
+            if touches.contains(where: { $0 === touch }) {
+                sendSingleTouch(kind: kind, touch: touch, phase: phase)
+                activeGesture = nil
+            }
+        case .multi(let gestureTouches):
+            if touches.contains(where: { endingTouch in
+                gestureTouches.contains { $0 === endingTouch }
+            }) {
+                sendMultiTouch(touches: gestureTouches, phase: phase)
+                activeGesture = nil
+                lastMultiPoints = []
+                suppressSingleUntilAllTouchesEnd = true
+            }
+        case nil:
+            break
+        }
+
+        removeTouches(touches)
+
+        if activeTouches.isEmpty {
+            suppressSingleUntilAllTouchesEnd = false
+            activeGesture = nil
+            lastMultiPoints = []
+        } else if activeGesture == nil, !suppressSingleUntilAllTouchesEnd {
+            reconcileAfterTouchStart()
+        }
+    }
+
+    private func beginSingleTouch(_ touch: UITouch) {
+        guard let point = touchPoint(for: touch) else { return }
+        let kind: StreamTouchEventKind = point.normalized.y >= 0.93 ? .bottomEdge : .single
+        activeGesture = .single(kind: kind, touch: touch)
+        onEvent?(StreamTouchEvent(kind: kind, phase: "began", points: [point]))
+    }
+
+    private func promoteSingleTouchToMultiTouch() {
+        if case .single(let kind, let touch) = activeGesture {
+            sendSingleTouch(kind: kind, touch: touch, phase: "cancelled")
+        }
+        beginMultiTouch()
+    }
+
+    private func beginMultiTouch() {
+        let touches = Array(activeTouches.prefix(2))
+        guard touches.count == 2 else { return }
+        activeGesture = .multi(touches: touches)
+        sendMultiTouch(touches: touches, phase: "began")
+    }
+
+    private func sendCurrentGesture(phase: String) {
+        switch activeGesture {
+        case .single(let kind, let touch):
+            sendSingleTouch(kind: kind, touch: touch, phase: phase)
+        case .multi(let touches):
+            sendMultiTouch(touches: touches, phase: phase)
+        case nil:
+            if !suppressSingleUntilAllTouchesEnd {
+                reconcileAfterTouchStart()
+            }
+        }
+    }
+
+    private func sendSingleTouch(kind: StreamTouchEventKind, touch: UITouch, phase: String) {
+        guard let point = touchPoint(for: touch) else { return }
+        onEvent?(StreamTouchEvent(kind: kind, phase: phase, points: [point]))
+    }
+
+    private func sendMultiTouch(touches: [UITouch], phase: String) {
+        let points = touches.prefix(2).compactMap { touchPoint(for: $0) }
+        guard points.count == 2 else {
+            if (phase == "ended" || phase == "cancelled"), lastMultiPoints.count == 2 {
+                onEvent?(StreamTouchEvent(kind: .multi, phase: phase, points: lastMultiPoints))
+            }
+            return
+        }
+        lastMultiPoints = points
+        onEvent?(StreamTouchEvent(kind: .multi, phase: phase, points: points))
+    }
+
+    private func containsStartingPoint(_ touch: UITouch) -> Bool {
+        guard bounds.width > 0, bounds.height > 0 else { return false }
+        let location = touch.location(in: self)
+        return location.x >= 0
+            && location.x <= bounds.width
+            && location.y >= 0
+            && location.y <= bounds.height
+    }
+
+    private func removeTouches(_ touches: Set<UITouch>) {
+        activeTouches.removeAll { activeTouch in
+            touches.contains { $0 === activeTouch }
+        }
+    }
+
+    private func touchPoint(for touch: UITouch) -> StreamTouchPoint? {
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        let location = touch.location(in: self)
+        let local = CGPoint(
+            x: min(max(location.x, 0), bounds.width),
+            y: min(max(location.y, 0), bounds.height)
+        )
+        return StreamTouchPoint(
+            local: local,
+            normalized: CGPoint(
+                x: min(max(local.x / bounds.width, 0), 1),
+                y: min(max(local.y / bounds.height, 0), 1)
+            )
+        )
+    }
 }
 
 private struct StreamTouchIndicator: Identifiable, Equatable {
@@ -1786,12 +1999,4 @@ private extension View {
         }
     }
 
-    @ViewBuilder
-    func streamTouchGesture<G: Gesture>(_ enabled: Bool, gesture: G) -> some View {
-        if enabled {
-            self.gesture(gesture)
-        } else {
-            self
-        }
-    }
 }
