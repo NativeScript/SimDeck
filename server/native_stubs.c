@@ -321,6 +321,17 @@ bool xcw_native_input_send_touch(void *handle, double x, double y,
   return xcw_unsupported(error_message);
 }
 
+bool xcw_native_input_send_edge_touch(void *handle, double x, double y,
+                                      const char *phase, uint32_t edge,
+                                      char **error_message) {
+  (void)handle;
+  (void)x;
+  (void)y;
+  (void)phase;
+  (void)edge;
+  return xcw_unsupported(error_message);
+}
+
 bool xcw_native_input_send_multitouch(void *handle, double x1, double y1,
                                       double x2, double y2,
                                       const char *phase,
