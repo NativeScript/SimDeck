@@ -36,7 +36,7 @@ use qrcode::{render::unicode, QrCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use simulators::registry::SessionRegistry;
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -1060,10 +1060,13 @@ fn ensure_project_daemon_with_status(
 ) -> anyhow::Result<(DaemonMetadata, bool)> {
     if let Some(metadata) = read_daemon_metadata().ok().flatten() {
         if daemon_is_healthy(&metadata) && daemon_matches_launch_options(&metadata, &options) {
+            cleanup_orphaned_workspace_daemons_for_root(Some(&metadata.project_root));
             return Ok((metadata, false));
         }
         let _ = terminate_daemon_metadata(&metadata);
     }
+    let project_root = project_root()?;
+    cleanup_orphaned_workspace_daemons_for_root(Some(&project_root));
     Ok((start_project_daemon(options)?, true))
 }
 
@@ -1271,6 +1274,14 @@ fn kill_all_project_daemons() -> anyhow::Result<()> {
             stale.push(metadata_path);
         }
     }
+    for process in cleanup_orphaned_workspace_daemons(None)? {
+        killed.push(serde_json::json!({
+            "pid": process.pgid,
+            "projectRoot": process.project_root,
+            "metadataPath": process.metadata_path,
+            "orphaned": true,
+        }));
+    }
     let killed_count = killed.len();
     let stale_count = stale.len();
     println_json(&serde_json::json!({
@@ -1279,6 +1290,117 @@ fn kill_all_project_daemons() -> anyhow::Result<()> {
         "killedCount": killed_count,
         "staleCount": stale_count,
     }))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkspaceDaemonProcess {
+    pid: u32,
+    ppid: u32,
+    pgid: u32,
+    project_root: PathBuf,
+    metadata_path: PathBuf,
+}
+
+fn cleanup_orphaned_workspace_daemons_for_root(project_root: Option<&Path>) {
+    match cleanup_orphaned_workspace_daemons(project_root) {
+        Ok(killed) if !killed.is_empty() => {
+            warn!(
+                count = killed.len(),
+                "Cleaned orphaned SimDeck workspace daemons"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            warn!(%error, "Failed to clean orphaned SimDeck workspace daemons");
+        }
+    }
+}
+
+fn cleanup_orphaned_workspace_daemons(
+    project_root: Option<&Path>,
+) -> anyhow::Result<Vec<WorkspaceDaemonProcess>> {
+    let metadata_by_path = daemon_metadata_by_path()?;
+    let mut killed = Vec::new();
+    let mut killed_groups = HashSet::new();
+
+    for process in workspace_daemon_processes()? {
+        if project_root.is_some_and(|root| process.project_root != root) {
+            continue;
+        }
+        if workspace_daemon_process_is_current(&process, &metadata_by_path) {
+            continue;
+        }
+        if killed_groups.insert(process.pgid) {
+            terminate_process_group(process.pgid, Duration::from_secs(3));
+            killed.push(process);
+        }
+    }
+
+    Ok(killed)
+}
+
+fn workspace_daemon_process_is_current(
+    process: &WorkspaceDaemonProcess,
+    metadata_by_path: &HashMap<PathBuf, DaemonMetadata>,
+) -> bool {
+    metadata_by_path
+        .get(&process.metadata_path)
+        .is_some_and(|metadata| {
+            metadata.project_root == process.project_root && metadata.pid == process.pgid
+        })
+}
+
+fn workspace_daemon_processes() -> anyhow::Result<Vec<WorkspaceDaemonProcess>> {
+    let output = ProcessCommand::new("ps")
+        .args(["-axo", "pid=,ppid=,pgid=,command="])
+        .output()
+        .context("list SimDeck daemon processes")?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .filter_map(parse_workspace_daemon_process_line)
+        .collect())
+}
+
+fn parse_workspace_daemon_process_line(line: &str) -> Option<WorkspaceDaemonProcess> {
+    let (pid, rest) = take_ps_field(line)?;
+    let (ppid, rest) = take_ps_field(rest)?;
+    let (pgid, command) = take_ps_field(rest)?;
+    if !command.contains(" daemon run ")
+        || !command.contains(" --server-kind workspace")
+        || !command.contains(" --metadata-path ")
+    {
+        return None;
+    }
+
+    let project_root = command_arg_after(command, "--project-root")?;
+    let metadata_path = command_arg_after(command, "--metadata-path")?;
+    Some(WorkspaceDaemonProcess {
+        pid: pid.parse().ok()?,
+        ppid: ppid.parse().ok()?,
+        pgid: pgid.parse().ok()?,
+        project_root: PathBuf::from(project_root),
+        metadata_path: PathBuf::from(metadata_path),
+    })
+}
+
+fn take_ps_field(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim_start();
+    let split_at = trimmed.find(char::is_whitespace)?;
+    let field = &trimmed[..split_at];
+    let rest = &trimmed[split_at..];
+    Some((field, rest))
+}
+
+fn command_arg_after(command: &str, flag: &str) -> Option<String> {
+    let marker = format!(" {flag} ");
+    let start = command.find(&marker)? + marker.len();
+    let value = &command[start..];
+    let end = value.find(" --").unwrap_or(value.len());
+    Some(value[..end].trim().to_owned()).filter(|value| !value.is_empty())
 }
 
 fn terminate_process_group(pid: u32, timeout: Duration) {
@@ -1673,6 +1795,20 @@ fn daemon_metadata_paths() -> anyhow::Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+fn daemon_metadata_by_path() -> anyhow::Result<HashMap<PathBuf, DaemonMetadata>> {
+    let mut metadata_by_path = HashMap::new();
+    for path in daemon_metadata_paths()? {
+        let Some(metadata) = fs::read_to_string(&path)
+            .ok()
+            .and_then(|data| serde_json::from_str::<DaemonMetadata>(&data).ok())
+        else {
+            continue;
+        };
+        metadata_by_path.insert(path, metadata);
+    }
+    Ok(metadata_by_path)
+}
+
 fn project_root() -> anyhow::Result<PathBuf> {
     let mut current = env::current_dir().context("resolve current directory")?;
     loop {
@@ -1845,6 +1981,7 @@ fn pair_global_service(options: PairGlobalServiceOptions) -> anyhow::Result<()> 
     });
 
     print_pair_progress("starting or reusing the global SimDeck service");
+    cleanup_orphaned_workspace_daemons_for_root(None);
     let result = service::pair(ServiceOptions {
         port: requested_port,
         bind,
@@ -2642,18 +2779,24 @@ fn main() -> anyhow::Result<()> {
                 stream_quality,
                 local_stream_fps,
                 access_token,
-            } => service::enable(ServiceOptions {
-                port,
-                bind,
-                advertise_host,
-                client_root,
-                video_codec,
-                low_latency,
-                stream_quality_profile: local_stream_quality_profile(low_latency, stream_quality),
-                local_stream_fps,
-                access_token,
-                pairing_code: None,
-            }),
+            } => {
+                cleanup_orphaned_workspace_daemons_for_root(None);
+                service::enable(ServiceOptions {
+                    port,
+                    bind,
+                    advertise_host,
+                    client_root,
+                    video_codec,
+                    low_latency,
+                    stream_quality_profile: local_stream_quality_profile(
+                        low_latency,
+                        stream_quality,
+                    ),
+                    local_stream_fps,
+                    access_token,
+                    pairing_code: None,
+                })
+            }
             ServiceCommand::Restart {
                 port,
                 bind,
@@ -2664,18 +2807,24 @@ fn main() -> anyhow::Result<()> {
                 stream_quality,
                 local_stream_fps,
                 access_token,
-            } => service::restart(ServiceOptions {
-                port,
-                bind,
-                advertise_host,
-                client_root,
-                video_codec,
-                low_latency,
-                stream_quality_profile: local_stream_quality_profile(low_latency, stream_quality),
-                local_stream_fps,
-                access_token,
-                pairing_code: None,
-            }),
+            } => {
+                cleanup_orphaned_workspace_daemons_for_root(None);
+                service::restart(ServiceOptions {
+                    port,
+                    bind,
+                    advertise_host,
+                    client_root,
+                    video_codec,
+                    low_latency,
+                    stream_quality_profile: local_stream_quality_profile(
+                        low_latency,
+                        stream_quality,
+                    ),
+                    local_stream_fps,
+                    access_token,
+                    pairing_code: None,
+                })
+            }
             ServiceCommand::Reset {
                 port,
                 bind,
@@ -2686,18 +2835,24 @@ fn main() -> anyhow::Result<()> {
                 stream_quality,
                 local_stream_fps,
                 access_token,
-            } => service::reset(ServiceOptions {
-                port,
-                bind,
-                advertise_host,
-                client_root,
-                video_codec,
-                low_latency,
-                stream_quality_profile: local_stream_quality_profile(low_latency, stream_quality),
-                local_stream_fps,
-                access_token,
-                pairing_code: None,
-            }),
+            } => {
+                cleanup_orphaned_workspace_daemons_for_root(None);
+                service::reset(ServiceOptions {
+                    port,
+                    bind,
+                    advertise_host,
+                    client_root,
+                    video_codec,
+                    low_latency,
+                    stream_quality_profile: local_stream_quality_profile(
+                        low_latency,
+                        stream_quality,
+                    ),
+                    local_stream_fps,
+                    access_token,
+                    pairing_code: None,
+                })
+            }
             ServiceCommand::Off => service::disable(),
         },
         Command::CoreSimulator { command } => match command {
@@ -6721,14 +6876,16 @@ fn default_client_root() -> anyhow::Result<PathBuf> {
 mod tests {
     use super::{
         batch_line_to_json_step, daemon_matches_launch_options, http_url_for_host, is_tailscale_ip,
-        normalize_accessibility_point_for_display, render_qr_code,
-        server_health_watchdog_should_restart, service_post_error_is_retryable, simdeck_pair_url,
-        studio_daemon_restart_args, Cli, Command, DaemonCommand, DaemonLaunchOptions,
-        DaemonMetadata, PairingAddress, ServiceCommand, StreamQualityProfileArg,
-        StudioExposeOptions, VideoCodecMode, DEFAULT_LOCAL_STREAM_QUALITY_PROFILE,
+        normalize_accessibility_point_for_display, parse_workspace_daemon_process_line,
+        render_qr_code, server_health_watchdog_should_restart, service_post_error_is_retryable,
+        simdeck_pair_url, studio_daemon_restart_args, workspace_daemon_process_is_current, Cli,
+        Command, DaemonCommand, DaemonLaunchOptions, DaemonMetadata, PairingAddress,
+        ServiceCommand, StreamQualityProfileArg, StudioExposeOptions, VideoCodecMode,
+        WorkspaceDaemonProcess, DEFAULT_LOCAL_STREAM_QUALITY_PROFILE,
         SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD, SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
     };
     use clap::Parser;
+    use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr};
     use std::path::PathBuf;
 
@@ -6913,6 +7070,73 @@ mod tests {
         };
         assert_eq!(port, 4315);
         assert_eq!(access_token.as_deref(), Some("explicit-token"));
+    }
+
+    #[test]
+    fn workspace_daemon_process_parser_reads_supervised_command_paths() {
+        let process = parse_workspace_daemon_process_line(
+            " 8327 1 8327 /bin/sh -c script simdeck-supervisor /tmp/simdeck-bin daemon run --project-root /Users/dj/Developer/Flutter App Design --metadata-path /tmp/simdeck/flutter.json --port 4318 --bind 127.0.0.1 --access-token token --pairing-code 123456 --video-codec auto --server-kind workspace",
+        )
+        .expect("parse supervised daemon");
+
+        assert_eq!(process.pid, 8327);
+        assert_eq!(process.ppid, 1);
+        assert_eq!(process.pgid, 8327);
+        assert_eq!(
+            process.project_root,
+            PathBuf::from("/Users/dj/Developer/Flutter App Design")
+        );
+        assert_eq!(
+            process.metadata_path,
+            PathBuf::from("/tmp/simdeck/flutter.json")
+        );
+    }
+
+    #[test]
+    fn workspace_daemon_current_metadata_keeps_only_current_process_group() {
+        let metadata_path = PathBuf::from("/tmp/simdeck/project.json");
+        let metadata = DaemonMetadata {
+            project_root: PathBuf::from("/tmp/project"),
+            pid: 200,
+            http_url: "http://127.0.0.1:4310".to_owned(),
+            port: 4310,
+            bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            advertise_host: None,
+            client_root: None,
+            access_token: "token".to_owned(),
+            pairing_code: Some("123456".to_owned()),
+            binary_path: PathBuf::from("/tmp/simdeck-bin"),
+            started_at: 1,
+            log_path: None,
+            video_codec: Some(VideoCodecMode::Auto.as_env_value().to_owned()),
+            low_latency: false,
+            realtime_stream: true,
+            stream_quality_profile: Some(DEFAULT_LOCAL_STREAM_QUALITY_PROFILE.to_owned()),
+            local_stream_fps: None,
+        };
+        let mut metadata_by_path = HashMap::new();
+        metadata_by_path.insert(metadata_path.clone(), metadata);
+
+        let current = WorkspaceDaemonProcess {
+            pid: 201,
+            ppid: 200,
+            pgid: 200,
+            project_root: PathBuf::from("/tmp/project"),
+            metadata_path: metadata_path.clone(),
+        };
+        let orphaned = WorkspaceDaemonProcess {
+            pgid: 199,
+            ..current.clone()
+        };
+
+        assert!(workspace_daemon_process_is_current(
+            &current,
+            &metadata_by_path
+        ));
+        assert!(!workspace_daemon_process_is_current(
+            &orphaned,
+            &metadata_by_path
+        ));
     }
 
     #[test]

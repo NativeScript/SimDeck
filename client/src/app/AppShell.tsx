@@ -115,6 +115,7 @@ import {
   writePersistedUiState,
   writeStoredFlag,
 } from "./uiState";
+import { isMoveControlMessage } from "./controlMessages";
 
 const ACCESSIBILITY_REFRESH_MS = 1500;
 const REACT_NATIVE_ACCESSIBILITY_REFRESH_MS = 500;
@@ -578,11 +579,11 @@ export function AppShell({
     socket: WebSocket;
     pending: string[];
   } | null>(null);
-  const pendingTouchMoveRef = useRef<{
-    coords: Point;
+  const pendingControlMoveRef = useRef<{
+    message: ControlMessage;
     udid: string;
   } | null>(null);
-  const touchMoveFrameRef = useRef(0);
+  const controlMoveFrameRef = useRef(0);
   const refreshRef = useRef(refresh);
   const previousAndroidDisplayKeyRef = useRef("");
   const previousAndroidViewportSizeKeyRef = useRef("");
@@ -2057,51 +2058,41 @@ export function AppShell({
   }, []);
 
   function sendControl(udid: string, message: ControlMessage): boolean {
-    if (message.type === "touch") {
-      sendTouchControl(udid, message.phase, { x: message.x, y: message.y });
+    if (isMoveControlMessage(message)) {
+      pendingControlMoveRef.current = { message, udid };
+      if (!controlMoveFrameRef.current) {
+        controlMoveFrameRef.current = window.requestAnimationFrame(() => {
+          controlMoveFrameRef.current = 0;
+          flushPendingControlMove();
+        });
+      }
       return true;
     }
+    flushPendingControlMove();
     return sendControlNow(udid, message);
   }
 
   function sendTouchControl(udid: string, phase: TouchPhase, coords: Point) {
-    if (phase === "moved") {
-      pendingTouchMoveRef.current = { coords, udid };
-      if (!touchMoveFrameRef.current) {
-        touchMoveFrameRef.current = window.requestAnimationFrame(() => {
-          touchMoveFrameRef.current = 0;
-          flushPendingTouchMove();
-        });
-      }
-      return;
-    }
-
-    flushPendingTouchMove();
-    sendControlNow(udid, { type: "touch", ...coords, phase });
+    sendControl(udid, { type: "touch", ...coords, phase });
   }
 
-  function flushPendingTouchMove() {
-    const pending = pendingTouchMoveRef.current;
-    pendingTouchMoveRef.current = null;
-    if (touchMoveFrameRef.current) {
-      window.cancelAnimationFrame(touchMoveFrameRef.current);
-      touchMoveFrameRef.current = 0;
+  function flushPendingControlMove() {
+    const pending = pendingControlMoveRef.current;
+    pendingControlMoveRef.current = null;
+    if (controlMoveFrameRef.current) {
+      window.cancelAnimationFrame(controlMoveFrameRef.current);
+      controlMoveFrameRef.current = 0;
     }
     if (!pending) {
       return;
     }
-    sendControlNow(pending.udid, {
-      type: "touch",
-      ...pending.coords,
-      phase: "moved",
-    });
+    sendControlNow(pending.udid, pending.message);
   }
 
   function sendControlNow(udid: string, message: ControlMessage): boolean {
     setLocalError("");
     const encoded = JSON.stringify(message);
-    const dropIfBacklogged =
-      message.type === "touch" && message.phase === "moved";
+    const dropIfBacklogged = isMoveControlMessage(message);
     if (sendWebRtcControlMessage(encoded, { dropIfBacklogged })) {
       return true;
     }
@@ -2132,11 +2123,11 @@ export function AppShell({
 
   useEffect(() => {
     return () => {
-      if (touchMoveFrameRef.current) {
-        window.cancelAnimationFrame(touchMoveFrameRef.current);
-        touchMoveFrameRef.current = 0;
+      if (controlMoveFrameRef.current) {
+        window.cancelAnimationFrame(controlMoveFrameRef.current);
+        controlMoveFrameRef.current = 0;
       }
-      pendingTouchMoveRef.current = null;
+      pendingControlMoveRef.current = null;
       closeControlSocket();
     };
   }, [closeControlSocket]);
