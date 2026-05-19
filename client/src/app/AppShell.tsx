@@ -109,6 +109,7 @@ import {
   readStoredAccessibilitySource,
   readStoredFlag,
   sanitizeAccessibilitySources,
+  shouldRetainAccessibilityTreeDuringRefresh,
   TOUCH_OVERLAY_VISIBLE_STORAGE_KEY,
   viewportStateForUDID,
   writePersistedUiState,
@@ -568,6 +569,7 @@ export function AppShell({
   >(() => {});
   const accessibilityRequestIdRef = useRef(0);
   const accessibilityLoadingRef = useRef(false);
+  const accessibilityRootsRef = useRef<AccessibilityNode[]>([]);
   const streamConfigRequestIdRef = useRef(0);
   const streamConfigUserChangeAtRef = useRef(0);
   const streamConfigUserTouchedRef = useRef(false);
@@ -587,6 +589,11 @@ export function AppShell({
   const canvasSize = useElementSize(outerCanvasElement);
   const zoomDockSize = useElementSize(zoomDockElement);
   refreshRef.current = refresh;
+
+  const updateAccessibilityRoots = useCallback((roots: AccessibilityNode[]) => {
+    accessibilityRootsRef.current = roots;
+    setAccessibilityRoots(roots);
+  }, []);
 
   const handleOuterCanvasRef = useCallback((node: HTMLDivElement | null) => {
     outerCanvasRef.current = node;
@@ -1160,7 +1167,7 @@ export function AppShell({
       setChromeProfile(null);
       setChromeProfileReady(false);
       setLocalError("");
-      setAccessibilityRoots([]);
+      updateAccessibilityRoots([]);
       setAccessibilitySelectedId("");
       setAccessibilityHoveredId(null);
       setAccessibilityPickerActive(false);
@@ -1210,7 +1217,7 @@ export function AppShell({
         : nextViewportState.rotationQuarterTurns,
     );
     setLocalError("");
-    setAccessibilityRoots([]);
+    updateAccessibilityRoots([]);
     setAccessibilitySelectedId(
       persistedState.accessibilitySelectedByUDID?.[selectedSimulator.udid] ??
         "",
@@ -1231,7 +1238,7 @@ export function AppShell({
     }
 
     if (providerDisconnected) {
-      setAccessibilityRoots([]);
+      updateAccessibilityRoots([]);
       setAccessibilitySelectedId("");
       setAccessibilityHoveredId(null);
       setAccessibilityAvailableSources([]);
@@ -1242,7 +1249,7 @@ export function AppShell({
     }
 
     if (!selectedSimulator?.isBooted) {
-      setAccessibilityRoots([]);
+      updateAccessibilityRoots([]);
       setAccessibilitySelectedId("");
       setAccessibilityAvailableSources([]);
       setAccessibilitySource("");
@@ -1281,40 +1288,76 @@ export function AppShell({
         sanitizeAccessibilitySources(snapshot.availableSources),
         snapshot.source,
       );
-      setAccessibilityRoots(roots);
-      setAccessibilityAvailableSources(availableSources);
-      setAccessibilitySource(snapshot.source);
-      setAccessibilityError(
-        roots.length === 0
-          ? userFacingAccessibilityError(snapshot.fallbackReason ?? "")
-          : "",
-      );
-      const nextPreferredSource = nextAccessibilitySourcePreference(
+      const retainCurrentTree = shouldRetainAccessibilityTreeDuringRefresh(
         accessibilityPreferredSource,
+        accessibilitySource,
         snapshot.source,
-        availableSources,
+        roots.length,
+        accessibilityRootsRef.current.length,
       );
-      if (nextPreferredSource) {
-        setAccessibilityPreferredSource(nextPreferredSource);
-      }
-      if (roots.length === 0) {
-        setAccessibilitySelectedId("");
+      if (retainCurrentTree) {
+        setAccessibilityAvailableSources(
+          mergeAccessibilitySources(
+            availableSources,
+            accessibilitySource,
+            accessibilityPreferredSource,
+          ),
+        );
+        setAccessibilityError("");
+      } else {
+        updateAccessibilityRoots(roots);
+        setAccessibilityAvailableSources(availableSources);
+        setAccessibilitySource(snapshot.source);
+        setAccessibilityError(
+          roots.length === 0
+            ? userFacingAccessibilityError(snapshot.fallbackReason ?? "")
+            : "",
+        );
+        const nextPreferredSource = nextAccessibilitySourcePreference(
+          accessibilityPreferredSource,
+          snapshot.source,
+          availableSources,
+        );
+        if (nextPreferredSource) {
+          setAccessibilityPreferredSource(nextPreferredSource);
+        }
+        if (roots.length === 0) {
+          setAccessibilitySelectedId("");
+        }
       }
     } catch (snapshotError) {
       if (accessibilityRequestIdRef.current !== requestId) {
         return;
       }
-      setAccessibilityError(
-        snapshotError instanceof Error
-          ? userFacingAccessibilityError(snapshotError.message)
-          : "Failed to load accessibility hierarchy.",
+      const retainCurrentTree = shouldRetainAccessibilityTreeDuringRefresh(
+        accessibilityPreferredSource,
+        accessibilitySource,
+        "native-ax",
+        0,
+        accessibilityRootsRef.current.length,
       );
-      setAccessibilityRoots([]);
-      setAccessibilitySelectedId("");
-      setAccessibilityHoveredId(null);
-      setAccessibilitySource("");
-      if (accessibilityPreferredSource !== "auto") {
-        setAccessibilityPreferredSource("auto");
+      if (retainCurrentTree) {
+        setAccessibilityAvailableSources((current) =>
+          mergeAccessibilitySources(
+            current,
+            accessibilitySource,
+            accessibilityPreferredSource,
+          ),
+        );
+        setAccessibilityError("");
+      } else {
+        setAccessibilityError(
+          snapshotError instanceof Error
+            ? userFacingAccessibilityError(snapshotError.message)
+            : "Failed to load accessibility hierarchy.",
+        );
+        updateAccessibilityRoots([]);
+        setAccessibilitySelectedId("");
+        setAccessibilityHoveredId(null);
+        setAccessibilitySource("");
+        if (accessibilityPreferredSource !== "auto") {
+          setAccessibilityPreferredSource("auto");
+        }
       }
     } finally {
       if (accessibilityRequestIdRef.current === requestId) {
@@ -1322,7 +1365,13 @@ export function AppShell({
         setAccessibilityLoading(false);
       }
     }
-  }, [accessibilityPreferredSource, providerDisconnected, selectedSimulator]);
+  }, [
+    accessibilityPreferredSource,
+    accessibilitySource,
+    providerDisconnected,
+    selectedSimulator,
+    updateAccessibilityRoots,
+  ]);
 
   const changeAccessibilitySource = useCallback(
     (source: AccessibilitySource) => {
@@ -1332,14 +1381,14 @@ export function AppShell({
       accessibilityRequestIdRef.current += 1;
       accessibilityLoadingRef.current = false;
       setAccessibilityPreferredSource(source);
-      setAccessibilityRoots([]);
+      updateAccessibilityRoots([]);
       setAccessibilitySelectedId("");
       setAccessibilityHoveredId(null);
       setAccessibilityError("");
       setAccessibilitySource("");
       setAccessibilityLoading(false);
     },
-    [accessibilityPreferredSource],
+    [accessibilityPreferredSource, updateAccessibilityRoots],
   );
 
   useEffect(() => {

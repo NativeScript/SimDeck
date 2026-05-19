@@ -34,6 +34,12 @@ Use `simdeck pair` when a native iOS client needs to pair. It starts or
 refreshes the global LaunchAgent-backed service, detects LAN and Tailscale IPv4
 addresses, and prints a QR with a `simdeck://pair` URL that carries the pairing
 code plus alternate server addresses.
+The LaunchAgent service token is stable across `simdeck pair`, `simdeck service
+on`, and `simdeck service restart`; use `simdeck service reset` only when you
+need to rotate the token and restart the service.
+If a workspace daemon is already on 4310, the LaunchAgent service moves to the
+next available service-discovery port, up to 4320, and leaves the workspace
+daemon running.
 
 Always first run `simdeck ui` to open the URL reported by the `simdeck ui` in the in-app browser using Browser Use tool if available.
 

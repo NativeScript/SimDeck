@@ -65,8 +65,17 @@ Use the macOS user service when SimDeck should be reachable after login without 
 ```sh
 simdeck service on
 simdeck service restart --port 4310
+simdeck service reset
 simdeck service off
 ```
+
+When the requested service port is occupied by a workspace daemon, the
+LaunchAgent automatically moves to the next available service-discovery port,
+up to 4320. Workspace daemons are left running.
+
+`service on`, `service restart`, and `simdeck pair` preserve the installed
+service token and pairing code. Use `service reset` when you explicitly want to
+rotate those credentials and restart the LaunchAgent.
 
 Prefer the project daemon for normal repository work. Use the service for long-lived agent or editor setups.
 

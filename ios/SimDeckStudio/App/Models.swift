@@ -32,7 +32,7 @@ enum EndpointSource: String, Codable, CaseIterable, Sendable {
 }
 
 struct SimDeckEndpoint: Identifiable, Hashable, Codable, Sendable {
-    var id: String { baseURL.absoluteString }
+    var id: String { hostIdentityKey ?? serverID ?? baseURL.absoluteString }
 
     var name: String
     var baseURL: URL
@@ -41,7 +41,85 @@ struct SimDeckEndpoint: Identifiable, Hashable, Codable, Sendable {
     var requiresPairing: Bool
     var preferredSimulatorID: String?
     var serverID: String?
+    var hostID: String?
+    var hostName: String?
+    var serverKind: String?
     var alternateBaseURLs: [URL]
+
+    var displayName: String {
+        hostName?.nilIfBlank ?? name
+    }
+
+    var listSubtitle: String {
+        var parts: [String] = []
+        if let label = serverKindLabel {
+            parts.append(label)
+        }
+        let count = allBaseURLs.count
+        if count > 1 || hostName?.nilIfBlank != nil {
+            parts.append(count == 1 ? "1 address" : "\(count) addresses")
+        } else if let host = baseURL.host(percentEncoded: false)?.nilIfBlank {
+            parts.append(host)
+        } else {
+            parts.append(baseURL.absoluteString)
+        }
+        if requiresPairing {
+            parts.append("Pairing required")
+        }
+        return parts.joined(separator: " • ")
+    }
+
+    var allBaseURLs: [URL] {
+        var seen = Set<URL>()
+        var result: [URL] = []
+        for url in ([baseURL] + alternateBaseURLs).map({ $0.normalizedSimDeckBaseURL() }) where seen.insert(url).inserted {
+            result.append(url)
+        }
+        return result
+    }
+
+    var hostIdentityKey: String? {
+        if let hostID = normalizedHostID {
+            return "host-id:\(hostID)"
+        }
+        if let hostName = normalizedHostName {
+            return "host-name:\(hostName)"
+        }
+        return nil
+    }
+
+    var hostIdentityKeys: Set<String> {
+        if let hostID = normalizedHostID {
+            return ["host-id:\(hostID)"]
+        }
+        if let hostName = normalizedHostName {
+            return ["host-name:\(hostName)"]
+        }
+        return []
+    }
+
+    var normalizedHostID: String? {
+        hostID?.nilIfBlank?.lowercased()
+    }
+
+    var normalizedHostName: String? {
+        hostName?.normalizedSimDeckHostName
+    }
+
+    var serverKindRank: Int {
+        switch serverKind?.normalizedSimDeckServerKind {
+        case "launchagent":
+            return 0
+        case "foreground":
+            return 1
+        case "workspace":
+            return 2
+        case "standalone":
+            return 3
+        default:
+            return 4
+        }
+    }
 
     init(
         name: String,
@@ -51,6 +129,9 @@ struct SimDeckEndpoint: Identifiable, Hashable, Codable, Sendable {
         requiresPairing: Bool = false,
         preferredSimulatorID: String? = nil,
         serverID: String? = nil,
+        hostID: String? = nil,
+        hostName: String? = nil,
+        serverKind: String? = nil,
         alternateBaseURLs: [URL] = []
     ) {
         let normalizedBaseURL = baseURL.normalizedSimDeckBaseURL()
@@ -61,6 +142,9 @@ struct SimDeckEndpoint: Identifiable, Hashable, Codable, Sendable {
         self.requiresPairing = requiresPairing
         self.preferredSimulatorID = preferredSimulatorID?.nilIfBlank
         self.serverID = serverID?.nilIfBlank
+        self.hostID = hostID?.nilIfBlank
+        self.hostName = hostName?.nilIfBlank
+        self.serverKind = serverKind?.nilIfBlank
         self.alternateBaseURLs = alternateBaseURLs
             .map { $0.normalizedSimDeckBaseURL() }
             .filter { $0 != normalizedBaseURL }
@@ -74,6 +158,9 @@ struct SimDeckEndpoint: Identifiable, Hashable, Codable, Sendable {
         case requiresPairing
         case preferredSimulatorID
         case serverID
+        case hostID = "hostId"
+        case hostName
+        case serverKind
         case alternateBaseURLs
     }
 
@@ -87,8 +174,26 @@ struct SimDeckEndpoint: Identifiable, Hashable, Codable, Sendable {
             requiresPairing: try container.decodeIfPresent(Bool.self, forKey: .requiresPairing) ?? false,
             preferredSimulatorID: try container.decodeIfPresent(String.self, forKey: .preferredSimulatorID),
             serverID: try container.decodeIfPresent(String.self, forKey: .serverID),
+            hostID: try container.decodeIfPresent(String.self, forKey: .hostID),
+            hostName: try container.decodeIfPresent(String.self, forKey: .hostName),
+            serverKind: try container.decodeIfPresent(String.self, forKey: .serverKind),
             alternateBaseURLs: try container.decodeIfPresent([URL].self, forKey: .alternateBaseURLs) ?? []
         )
+    }
+
+    var serverKindLabel: String? {
+        switch serverKind?.normalizedSimDeckServerKind {
+        case "launchagent":
+            return "LaunchAgent"
+        case "foreground":
+            return "Foreground"
+        case "workspace":
+            return "Workspace"
+        case "standalone":
+            return "Standalone"
+        default:
+            return nil
+        }
     }
 }
 
@@ -239,7 +344,7 @@ struct StreamDiagnostics: Hashable, Sendable {
     }
 }
 
-struct ChromeProfile: Hashable, Decodable, Sendable {
+struct ChromeProfile: Hashable, Codable, Sendable {
     let totalWidth: Double
     let totalHeight: Double
     let screenX: Double
@@ -284,7 +389,7 @@ struct ChromeProfile: Hashable, Decodable, Sendable {
     }
 }
 
-struct ChromeButtonProfile: Hashable, Decodable, Sendable {
+struct ChromeButtonProfile: Hashable, Codable, Sendable {
     let name: String
     let label: String?
     let type: String?
@@ -417,7 +522,10 @@ struct HealthResponse: Decodable, Sendable {
     let ok: Bool
     let serverId: String?
     let advertiseHost: String?
+    let hostId: String?
+    let hostName: String?
     let httpPort: Int?
+    let serverKind: String?
     let videoCodec: String?
     let realtimeStream: Bool?
     let webRtc: WebRTCConfigurationResponse?
@@ -591,5 +699,20 @@ extension String {
             value.removeLast()
         }
         return value
+    }
+
+    var normalizedSimDeckHostName: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingTrailingSlashes()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard !trimmed.isEmpty else { return nil }
+        let withoutLocal = trimmed.lowercased().hasSuffix(".local")
+            ? String(trimmed.dropLast(".local".count))
+            : trimmed
+        return withoutLocal.split(separator: ".").first.map { String($0).lowercased() }?.nilIfBlank
+    }
+
+    var normalizedSimDeckServerKind: String {
+        lowercased().filter { $0.isLetter || $0.isNumber }
     }
 }

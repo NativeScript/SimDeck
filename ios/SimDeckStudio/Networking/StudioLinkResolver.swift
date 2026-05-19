@@ -4,28 +4,34 @@ enum StudioLinkResolver {
     static func route(for url: URL) -> AppRoute? {
         if url.scheme?.lowercased() == "simdeck" {
             if let pairingLink = pairingLinkFromCustomScheme(url) {
-                return .pairing(pairingLink, autoStart: true)
+                return .pairing(pairingLink, autoStart: shouldAutoStart(url, endpoint: pairingLink.endpoint))
             }
             if let endpoint = endpointFromCustomScheme(url) {
-                return .endpoint(endpoint, autoStart: true)
+                return .endpoint(endpoint, autoStart: shouldAutoStart(url, endpoint: endpoint))
             }
         }
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
             return nil
         }
         if let endpoint = endpointFromStudioURL(url) {
-            return .endpoint(endpoint, autoStart: true)
+            return .endpoint(endpoint, autoStart: shouldAutoStart(url, endpoint: endpoint))
         }
         let serverID = queryValue("serverId", in: url) ?? queryValue("sid", in: url) ?? queryValue("s", in: url)
+        let hostID = queryValue("hostId", in: url) ?? queryValue("hid", in: url)
+        let hostName = queryValue("hostName", in: url) ?? queryValue("hname", in: url)
+        let serverKind = queryValue("serverKind", in: url) ?? queryValue("kind", in: url)
         return .endpoint(
             SimDeckEndpoint(
                 name: url.host ?? "SimDeck",
                 baseURL: url,
                 source: source(for: url.host),
                 preferredSimulatorID: queryValue("device", in: url) ?? queryValue("udid", in: url),
-                serverID: serverID
+                serverID: serverID,
+                hostID: hostID,
+                hostName: hostName,
+                serverKind: serverKind
             ),
-            autoStart: true
+            autoStart: shouldAutoStart(url)
         )
     }
 
@@ -43,13 +49,19 @@ enum StudioLinkResolver {
             name: url.host ?? "SimDeck",
             baseURL: url,
             source: source(for: url.host),
-            token: token
+            token: token,
+            hostID: queryValue("hostId", in: url) ?? queryValue("hid", in: url),
+            hostName: queryValue("hostName", in: url) ?? queryValue("hname", in: url),
+            serverKind: queryValue("serverKind", in: url) ?? queryValue("kind", in: url)
         )
     }
 
     private static func endpointFromCustomScheme(_ url: URL) -> SimDeckEndpoint? {
         guard url.scheme?.lowercased() == "simdeck" else { return nil }
         let serverID = queryValue("serverId", in: url) ?? queryValue("sid", in: url) ?? queryValue("s", in: url)
+        let hostID = queryValue("hostId", in: url) ?? queryValue("hid", in: url)
+        let hostName = queryValue("hostName", in: url) ?? queryValue("hname", in: url)
+        let serverKind = queryValue("serverKind", in: url) ?? queryValue("kind", in: url)
         if let rawURL = queryValue("url", in: url) ?? queryValue("u", in: url),
            var endpoint = endpointFromAddress(rawURL) {
             if let token = queryValue("token", in: url) {
@@ -57,6 +69,9 @@ enum StudioLinkResolver {
             }
             endpoint.preferredSimulatorID = queryValue("device", in: url) ?? queryValue("udid", in: url)
             endpoint.serverID = serverID
+            endpoint.hostID = hostID ?? endpoint.hostID
+            endpoint.hostName = hostName ?? endpoint.hostName
+            endpoint.serverKind = serverKind ?? endpoint.serverKind
             return endpoint
         }
         guard let host = queryValue("host", in: url) ?? url.host else { return nil }
@@ -72,7 +87,10 @@ enum StudioLinkResolver {
             source: source(for: host),
             token: queryValue("token", in: url),
             preferredSimulatorID: queryValue("device", in: url) ?? queryValue("udid", in: url),
-            serverID: serverID
+            serverID: serverID,
+            hostID: hostID,
+            hostName: hostName,
+            serverKind: serverKind
         )
     }
 
@@ -92,6 +110,9 @@ enum StudioLinkResolver {
             guard var alternate = endpointFromAddress(rawValue, token: endpoint.token) else { return nil }
             alternate.preferredSimulatorID = endpoint.preferredSimulatorID
             alternate.serverID = endpoint.serverID
+            alternate.hostID = endpoint.hostID
+            alternate.hostName = endpoint.hostName
+            alternate.serverKind = endpoint.serverKind
             return alternate
         }
         .filter { $0.baseURL != endpoint.baseURL }
@@ -123,7 +144,10 @@ enum StudioLinkResolver {
             source: .studioLink,
             token: queryValue("simdeckToken", in: url) ?? queryValue("token", in: url),
             preferredSimulatorID: queryValue("device", in: url) ?? queryValue("udid", in: url),
-            serverID: queryValue("serverId", in: url) ?? queryValue("sid", in: url) ?? queryValue("s", in: url)
+            serverID: queryValue("serverId", in: url) ?? queryValue("sid", in: url) ?? queryValue("s", in: url),
+            hostID: queryValue("hostId", in: url) ?? queryValue("hid", in: url),
+            hostName: queryValue("hostName", in: url) ?? queryValue("hname", in: url),
+            serverKind: queryValue("serverKind", in: url) ?? queryValue("kind", in: url)
         )
     }
 
@@ -148,6 +172,18 @@ enum StudioLinkResolver {
             + Array(queryValues("url", in: url).dropFirst())
             + queryValues("lan", in: url)
             + queryValues("tailscale", in: url)
+    }
+
+    private static func shouldAutoStart(_ url: URL, endpoint: SimDeckEndpoint? = nil) -> Bool {
+        if let explicitValue = queryValue("autoStart", in: url)
+            ?? queryValue("autostart", in: url)
+            ?? queryValue("start", in: url)
+            ?? queryValue("open", in: url) {
+            return ["1", "true", "yes", "y", "on"].contains(explicitValue.lowercased())
+        }
+        return endpoint?.preferredSimulatorID?.nilIfBlank != nil
+            || queryValue("device", in: url) != nil
+            || queryValue("udid", in: url) != nil
     }
 
     private static func uniquedEndpoints(_ endpoints: [SimDeckEndpoint]) -> [SimDeckEndpoint] {

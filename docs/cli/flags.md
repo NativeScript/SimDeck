@@ -18,17 +18,17 @@ simdeck daemon start --help
 
 Used by `simdeck ui`, `daemon start`, `daemon restart`, `service on`, and `service restart`.
 
-| Flag                         | Default        | Notes                                                                             |
-| ---------------------------- | -------------- | --------------------------------------------------------------------------------- | ------ | ------------ |
-| `--port <port>`              | `4310`         | HTTP port                                                                         |
-| `--bind <ip>`                | `127.0.0.1`    | Use `0.0.0.0` or `::` for LAN access                                              |
-| `--advertise-host <host>`    | detected       | Host printed for remote browsers                                                  |
-| `--client-root <path>`       | bundled client | Static client directory                                                           |
-| `--video-codec auto          | hardware       | software`                                                                         | `auto` | Encoder mode |
-| `--stream-quality <profile>` | `full`         | `full`, `balanced`, `economy`, `low`, `tiny`, `ci-software`, and related profiles |
-| `--local-stream-fps <fps>`   | `60`           | Local stream frame target                                                         |
-| `--low-latency`              | off            | Conservative software H.264 profile                                               |
-| `--open`                     | off            | `ui` only                                                                         |
+| Flag                         | Default        | Notes                                                                               |
+| ---------------------------- | -------------- | ----------------------------------------------------------------------------------- | ------ | ------------ |
+| `--port <port>`              | `4310`         | HTTP port. LaunchAgent service commands probe up to 4320 when this port is occupied |
+| `--bind <ip>`                | `127.0.0.1`    | Use `0.0.0.0` or `::` for LAN access                                                |
+| `--advertise-host <host>`    | detected       | Host printed for remote browsers                                                    |
+| `--client-root <path>`       | bundled client | Static client directory                                                             |
+| `--video-codec auto          | hardware       | software`                                                                           | `auto` | Encoder mode |
+| `--stream-quality <profile>` | `full`         | `full`, `balanced`, `economy`, `low`, `tiny`, `ci-software`, and related profiles   |
+| `--local-stream-fps <fps>`   | `60`           | Local stream frame target                                                           |
+| `--low-latency`              | off            | Conservative software H.264 profile                                                 |
+| `--open`                     | off            | `ui` only                                                                           |
 
 ## `describe`
 

@@ -325,4 +325,39 @@ describe("findAccessibilityItemAtPoint", () => {
     expect(item?.node.type).toBe("FilledButton");
     expect(item?.id).toBe("0.0");
   });
+
+  it("ignores Flutter composited followers that cover selectable content", () => {
+    const roots: AccessibilityNode[] = [
+      {
+        source: "flutter",
+        type: "View",
+        frame: { x: 0, y: 0, width: 402, height: 874 },
+        children: [
+          {
+            source: "flutter",
+            type: "Text",
+            title: "Daily budget",
+            AXLabel: "Daily budget",
+            frame: { x: 24, y: 180, width: 180, height: 32 },
+          },
+          {
+            source: "flutter",
+            type: "CompositedTransformFollower",
+            title: "CompositedTransformFollower",
+            frame: { x: 0, y: 0, width: 402, height: 874 },
+            sourceLocation: {
+              file: "file:///Users/dj/Developer/flutter/packages/flutter/lib/src/material/slider.dart",
+              line: 1057,
+              column: 35,
+            },
+          },
+        ],
+      },
+    ];
+
+    const item = findAccessibilityItemAtPoint(roots, { x: 0.2, y: 0.224 });
+
+    expect(item?.node.type).toBe("Text");
+    expect(item?.id).toBe("0.0");
+  });
 });

@@ -31,6 +31,10 @@ private struct KeyControlPayload: Encodable {
     let modifiers: Int
 }
 
+private struct CrownControlPayload: Encodable {
+    let delta: Double
+}
+
 private struct EmptyControlPayload: Encodable {}
 
 private struct ChromeAssets {
@@ -53,6 +57,7 @@ final class AppModel {
     private static let streamConfigKey = "streamConfig"
     private static let hapticsEnabledKey = "hapticsEnabled"
     private static let touchOverlayVisibleKey = "touchOverlayVisible"
+    private static let chromeCacheDirectoryName = "ChromeAssets"
     private static let lastFrameCacheDirectoryName = "LastStreamFrames"
 
     var endpoint: SimDeckEndpoint?
@@ -74,6 +79,7 @@ final class AppModel {
     var streamReconnects = 0
     var streamReconnectReason = ""
     var bootingSimulatorID: String?
+    var simulatorLifecycleID: String?
     var streamDisplayToken = 0
     var hasCurrentStreamFrame = false
     var lastStreamFrame: UIImage?
@@ -98,6 +104,7 @@ final class AppModel {
     @ObservationIgnored private var chromeCache: [String: ChromeAssets] = [:]
     @ObservationIgnored private var chromeCacheOrder: [String] = []
     @ObservationIgnored private var lastStreamFrameKey: String?
+    @ObservationIgnored private var lastSimulatorRefreshAt = Date.distantPast
     private static let chromeCacheLimit = 24
 
     init() {
@@ -113,12 +120,17 @@ final class AppModel {
     }
 
     var currentStreamClient: WebRTCClient? { streamClient }
-    var canStopStream: Bool {
-        streamState != .idle || streamClient != nil
-    }
 
     var isSelectedSimulatorBooting: Bool {
         bootingSimulatorID == selectedSimulatorID
+    }
+
+    var isSelectedSimulatorLifecycleBusy: Bool {
+        simulatorLifecycleID == selectedSimulatorID || bootingSimulatorID == selectedSimulatorID
+    }
+
+    func isSimulatorLifecycleBusy(_ simulator: SimulatorMetadata) -> Bool {
+        simulatorLifecycleID == simulator.udid || bootingSimulatorID == simulator.udid
     }
 
     var availableEndpoints: [SimDeckEndpoint] {
@@ -138,15 +150,15 @@ final class AppModel {
     }
 
     var selectedEndpointTitle: String {
-        endpoint?.name ?? "Select Server"
+        endpoint?.displayName ?? "Select Server"
     }
 
     var selectedEndpointSubtitle: String {
-        endpoint?.baseURL.host(percentEncoded: false) ?? "No SimDeck connected"
+        endpoint?.listSubtitle ?? "No SimDeck connected"
     }
 
     var streamNavigationSubtitle: String {
-        endpoint?.name ?? "No SimDeck connected"
+        endpoint?.displayName ?? "No SimDeck connected"
     }
 
     func start() {
@@ -203,7 +215,7 @@ final class AppModel {
     ) async -> Bool {
         let connectionEndpoint = endpointWithReusableToken(endpoint)
         isBusy = true
-        status = "Connecting to \(connectionEndpoint.name)"
+        status = "Connecting to \(connectionEndpoint.displayName)"
         defer { isBusy = false }
 
         var pendingAuthEndpoint: SimDeckEndpoint?
@@ -211,9 +223,20 @@ final class AppModel {
         for candidate in connectionCandidates(for: connectionEndpoint) {
             do {
                 let api = SimDeckAPI(endpoint: candidate)
-                let health = try await api.health()
-                var resolvedCandidate = candidate
-                resolvedCandidate.serverID = health.serverId ?? resolvedCandidate.serverID
+                let (health, requiresPairing) = try await api.healthStatus()
+                if requiresPairing {
+                    var pendingEndpoint = endpointByApplyingHealth(candidate, health)
+                    pendingEndpoint.requiresPairing = true
+                    pendingEndpoint.token = nil
+                    pendingAuthEndpoint = pendingAuthEndpoint.map { mergedEndpoint($0, pendingEndpoint) } ?? pendingEndpoint
+                    discovery.upsert(pendingEndpoint)
+                    lastError = SimDeckAPIError.authRequired
+                    continue
+                }
+                guard let health else {
+                    throw SimDeckAPIError.invalidResponse
+                }
+                var resolvedCandidate = endpointByApplyingHealth(candidate, health)
                 resolvedCandidate.alternateBaseURLs = uniquedURLs(
                     resolvedCandidate.alternateBaseURLs + alternateURLs(from: health, fallbackPort: normalizedPort(for: resolvedCandidate.baseURL))
                 ).filter { $0 != resolvedCandidate.baseURL }
@@ -226,7 +249,7 @@ final class AppModel {
                     ? resolvedCandidate.preferredSimulatorID
                         ?? simulators.first(where: \.isBooted)?.udid
                         ?? simulators.first?.udid
-                    : resolvedCandidate.preferredSimulatorID
+                    : nil
                 if saveEndpoint {
                     saveUserEndpoint(resolvedCandidate)
                 }
@@ -240,7 +263,8 @@ final class AppModel {
             } catch SimDeckAPIError.authRequired {
                 var pendingEndpoint = candidate
                 pendingEndpoint.requiresPairing = true
-                pendingAuthEndpoint = pendingEndpoint
+                pendingEndpoint.token = nil
+                pendingAuthEndpoint = pendingAuthEndpoint.map { mergedEndpoint($0, pendingEndpoint) } ?? pendingEndpoint
                 discovery.upsert(pendingEndpoint)
                 lastError = SimDeckAPIError.authRequired
             } catch {
@@ -249,18 +273,13 @@ final class AppModel {
         }
 
         if let pendingAuthEndpoint {
-            status = "Pairing required."
-            hapticWarning()
             guard presentPairingOnAuth else {
+                status = "Ready"
                 return false
             }
-            self.endpoint = pendingAuthEndpoint
-            self.authEndpoint = pendingAuthEndpoint
-            self.simulators = []
-            self.selectedSimulatorID = nil
-            manualAddress = pendingAuthEndpoint.baseURL.absoluteString
-            manualToken = pendingAuthEndpoint.token ?? ""
-            saveSelectedEndpoint(pendingAuthEndpoint)
+            status = "Pairing required."
+            hapticWarning()
+            presentPairing(for: pendingAuthEndpoint)
             return false
         }
 
@@ -274,6 +293,46 @@ final class AppModel {
         hapticWarning()
         return false
 
+    }
+
+    private func endpointByApplyingHealth(_ endpoint: SimDeckEndpoint, _ health: HealthResponse?) -> SimDeckEndpoint {
+        guard let health else { return endpoint }
+        var updated = endpoint
+        updated.serverID = health.serverId ?? updated.serverID
+        updated.hostID = health.hostId ?? updated.hostID
+        updated.hostName = health.hostName ?? updated.hostName
+        updated.serverKind = health.serverKind ?? updated.serverKind
+        if let hostName = updated.hostName?.nilIfBlank {
+            updated.name = hostName
+        }
+        updated.alternateBaseURLs = uniquedURLs(
+            updated.alternateBaseURLs + alternateURLs(from: health, fallbackPort: normalizedPort(for: updated.baseURL))
+        )
+        .filter { $0 != updated.baseURL }
+        return updated
+    }
+
+    private func presentPairing(for endpoint: SimDeckEndpoint) {
+        var pendingEndpoint = endpoint
+        pendingEndpoint.requiresPairing = true
+        pendingEndpoint.token = nil
+        if let existing = savedEndpoints.first(where: { endpointsRepresentSameServer($0, pendingEndpoint) }) {
+            pendingEndpoint = mergedEndpoint(existing, pendingEndpoint)
+            pendingEndpoint.requiresPairing = true
+            pendingEndpoint.token = nil
+            savedEndpoints.removeAll { endpointsRepresentSameServer($0, pendingEndpoint) }
+            savedEndpoints.insert(pendingEndpoint, at: 0)
+            savedEndpoints = Array(uniqued(savedEndpoints).prefix(12))
+            persistSavedEndpoints()
+        }
+        discovery.upsert(pendingEndpoint)
+        self.endpoint = pendingEndpoint
+        self.authEndpoint = pendingEndpoint
+        self.simulators = []
+        self.selectedSimulatorID = nil
+        manualAddress = pendingEndpoint.baseURL.absoluteString
+        manualToken = ""
+        saveSelectedEndpoint(pendingEndpoint)
     }
 
     @discardableResult
@@ -297,7 +356,14 @@ final class AppModel {
             return false
         }
         guard let code = link.pairingCode?.nilIfBlank else {
-            authEndpoint = link.endpoint
+            var pendingEndpoint = link.endpoint
+            pendingEndpoint.alternateBaseURLs = uniquedURLs(
+                [pendingEndpoint.baseURL]
+                    + pendingEndpoint.alternateBaseURLs
+                    + link.alternateEndpoints.flatMap { [$0.baseURL] + $0.alternateBaseURLs }
+            )
+            .filter { $0 != pendingEndpoint.baseURL }
+            presentPairing(for: pendingEndpoint)
             pairingCode = ""
             status = "Pairing code missing."
             hapticWarning()
@@ -353,16 +419,16 @@ final class AppModel {
         return connected
     }
 
-    func handleScannedPairingPayload(_ value: String) {
+    @discardableResult
+    func handleScannedPairingPayload(_ value: String) async -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if let url = URL(string: trimmed), let route = StudioLinkResolver.route(for: url) {
             switch route {
             case let .pairing(link, autoStart):
-                Task { await pair(link, autoStart: autoStart) }
+                return await pair(link, autoStart: autoStart)
             case let .endpoint(endpoint, autoStart):
-                Task { await connect(endpoint, autoStart: autoStart, saveEndpoint: true) }
+                return await connect(endpoint, autoStart: autoStart, saveEndpoint: true)
             }
-            return
         }
         let digits = trimmed.filter(\.isNumber)
         if !digits.isEmpty {
@@ -372,21 +438,47 @@ final class AppModel {
             status = "That QR code is not a SimDeck pairing link."
             hapticWarning()
         }
+        return false
     }
 
-    func refreshSimulators() async {
+    func refreshSimulators(silent: Bool = false) async {
         guard let endpoint else { return }
+        lastSimulatorRefreshAt = Date()
+        let previousSelectedID = selectedSimulatorID
+        let wasSelectedBooted = selectedSimulator?.isBooted == true
         do {
-            simulators = try await SimDeckAPI(endpoint: endpoint).simulators()
-            if selectedSimulatorID == nil {
-                selectedSimulatorID = simulators.first(where: \.isBooted)?.udid ?? simulators.first?.udid
+            let refreshedSimulators = try await SimDeckAPI(endpoint: endpoint).simulators()
+            simulators = refreshedSimulators
+            if let previousSelectedID,
+               !refreshedSimulators.contains(where: { $0.udid == previousSelectedID }) {
+                selectedSimulatorID = nil
+                stopCurrentStream(resetState: true)
+                streamState = .idle
+            } else if previousSelectedID != nil {
+                let isSelectedBooted = selectedSimulator?.isBooted == true
+                if wasSelectedBooted && !isSelectedBooted {
+                    stopCurrentStream(resetState: true)
+                    streamState = .idle
+                } else if !wasSelectedBooted && isSelectedBooted && streamClient == nil {
+                    _ = await startStream(automaticReconnect: true)
+                }
             }
-            status = "Updated."
-            hapticSelection()
+            if !silent {
+                status = "Updated."
+                hapticSelection()
+            }
         } catch {
-            status = error.localizedDescription
-            hapticWarning()
+            if !silent {
+                status = error.localizedDescription
+                hapticWarning()
+            }
         }
+    }
+
+    func refreshSimulatorsIfStale(maxAge: TimeInterval = 5, silent: Bool = true) async {
+        guard endpoint != nil else { return }
+        guard Date().timeIntervalSince(lastSimulatorRefreshAt) >= maxAge else { return }
+        await refreshSimulators(silent: silent)
     }
 
     func selectSimulator(_ udid: String?) {
@@ -513,31 +605,90 @@ final class AppModel {
         let loadedChromeAssets = await chromeAssets(api: api, endpoint: endpoint, simulatorID: selectedSimulatorID, forceRefresh: true)
         guard isCurrentStreamRequest(generation, simulatorID: selectedSimulatorID) else { return }
         applyChromeAssets(loadedChromeAssets)
-        status = selectedSimulator?.isBooted == true ? "Ready." : "Ready to boot."
+        status = selectedSimulator?.isBooted == true ? "Ready." : "Ready to start."
     }
 
     func bootSelectedSimulator() async {
-        guard let endpoint, let selectedSimulatorID, let selectedSimulator else { return }
+        guard let selectedSimulator else { return }
         guard !selectedSimulator.isBooted else {
             await startStream()
             return
         }
-        bootingSimulatorID = selectedSimulatorID
-        streamState = .connecting
-        status = "Booting \(selectedSimulator.name)."
+        await startSimulator(selectedSimulator, autoStreamIfSelected: true)
+    }
+
+    func shutdownSelectedSimulator() async {
+        guard let selectedSimulator else { return }
+        await stopSimulator(selectedSimulator)
+    }
+
+    func toggleSimulatorLifecycle(_ simulator: SimulatorMetadata) async {
+        if simulator.isBooted {
+            await stopSimulator(simulator)
+        } else {
+            await startSimulator(simulator, autoStreamIfSelected: simulator.udid == selectedSimulatorID)
+        }
+    }
+
+    func startSimulator(_ simulator: SimulatorMetadata, autoStreamIfSelected: Bool = false) async {
+        guard let endpoint else { return }
+        guard !simulator.isBooted else {
+            if autoStreamIfSelected, simulator.udid == selectedSimulatorID {
+                await startStream()
+            }
+            return
+        }
+        simulatorLifecycleID = simulator.udid
+        if simulator.udid == selectedSimulatorID {
+            bootingSimulatorID = simulator.udid
+            streamState = .connecting
+        }
+        status = "Starting \(simulator.name)."
         hapticSelection()
         do {
             let api = SimDeckAPI(endpoint: endpoint)
-            try await api.bootSimulator(udid: selectedSimulatorID)
+            try await api.bootSimulator(udid: simulator.udid)
             simulators = try await api.simulators()
-            status = "Booted."
+            lastSimulatorRefreshAt = Date()
+            status = "Started."
+            simulatorLifecycleID = nil
             bootingSimulatorID = nil
             hapticSuccess()
-            await startStream()
+            if autoStreamIfSelected, simulator.udid == selectedSimulatorID {
+                await startStream()
+            }
         } catch {
-            streamState = .failed
+            streamState = simulator.udid == selectedSimulatorID ? .failed : streamState
             status = error.localizedDescription
+            simulatorLifecycleID = nil
             bootingSimulatorID = nil
+            hapticWarning()
+        }
+    }
+
+    func stopSimulator(_ simulator: SimulatorMetadata) async {
+        guard let endpoint else { return }
+        guard simulator.isBooted else { return }
+        simulatorLifecycleID = simulator.udid
+        status = "Stopping \(simulator.name)."
+        hapticSelection()
+        if simulator.udid == selectedSimulatorID {
+            stopStream()
+        }
+        do {
+            let api = SimDeckAPI(endpoint: endpoint)
+            try await api.shutdownSimulator(udid: simulator.udid)
+            simulators = try await api.simulators()
+            lastSimulatorRefreshAt = Date()
+            status = "Stopped."
+            simulatorLifecycleID = nil
+            hapticSuccess()
+            if simulator.udid == selectedSimulatorID {
+                await loadSelectedSimulatorChrome()
+            }
+        } catch {
+            status = error.localizedDescription
+            simulatorLifecycleID = nil
             hapticWarning()
         }
     }
@@ -749,6 +900,16 @@ final class AppModel {
         }
     }
 
+    func rotateCrown(delta: Double) {
+        guard selectedSimulatorID != nil, delta.isFinite else { return }
+        hapticCrownTick()
+        let sent = streamClient?.sendCrown(delta: delta) ?? false
+        guard !sent else { return }
+        Task {
+            await postCrown(delta: delta)
+        }
+    }
+
     func requestKeyframe() {
         hapticImpact()
         streamClient?.requestKeyframe()
@@ -829,6 +990,7 @@ final class AppModel {
         switch phase {
         case .active:
             streamClient?.appDidBecomeActive()
+            Task { await refreshSimulatorsIfStale(maxAge: 1, silent: true) }
             if streamClient == nil, streamState == .disconnected || streamState == .failed {
                 scheduleStreamReconnect(reason: "foreground")
             }
@@ -936,6 +1098,21 @@ final class AppModel {
         }
     }
 
+    private func postCrown(delta: Double) async {
+        guard let endpoint, let selectedSimulatorID else { return }
+        do {
+            let payload = CrownControlPayload(delta: delta)
+            let encodedID = selectedSimulatorID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? selectedSimulatorID
+            try await SimDeckAPI(endpoint: endpoint).postControl(
+                payload,
+                path: "/api/simulators/\(encodedID)/crown"
+            )
+        } catch {
+            status = error.localizedDescription
+            hapticWarning()
+        }
+    }
+
     private func resetStreamPresentation() {
         streamDisplayToken &+= 1
         if !applyCachedChromeAssetsForSelection() {
@@ -960,20 +1137,29 @@ final class AppModel {
         simulatorID: String,
         forceRefresh: Bool = false
     ) async -> ChromeAssets {
-        if !forceRefresh, let cached = cachedChromeAssets(endpoint: endpoint, simulatorID: simulatorID) {
+        let cached = cachedChromeAssets(endpoint: endpoint, simulatorID: simulatorID)
+        if !forceRefresh, let cached {
             return cached
         }
 
         let loadedProfile = try? await api.chromeProfile(udid: simulatorID)
-        let assetStamp = loadedProfile?.assetStamp
+        let effectiveProfile = loadedProfile ?? cached?.profile
+        let assetStamp = effectiveProfile?.assetStamp
         let loadedImage = try? await api.chromeImage(udid: simulatorID, stamp: assetStamp)
         let loadedScreenMask: UIImage?
-        if loadedProfile?.hasScreenMask == true {
+        if effectiveProfile?.hasScreenMask == true {
             loadedScreenMask = try? await api.screenMaskImage(udid: simulatorID, stamp: assetStamp)
         } else {
             loadedScreenMask = nil
         }
-        let loadedAssets = ChromeAssets(profile: loadedProfile, image: loadedImage, screenMask: loadedScreenMask)
+        let loadedAssets = ChromeAssets(
+            profile: effectiveProfile,
+            image: loadedImage ?? cached?.image,
+            screenMask: effectiveProfile?.hasScreenMask == true ? (loadedScreenMask ?? cached?.screenMask) : nil
+        )
+        guard !loadedAssets.isEmpty else {
+            return cached ?? loadedAssets
+        }
         cacheChromeAssets(loadedAssets, endpoint: endpoint, simulatorID: simulatorID)
         return loadedAssets
     }
@@ -996,7 +1182,14 @@ final class AppModel {
 
     private func cachedChromeAssets(endpoint: SimDeckEndpoint, simulatorID: String) -> ChromeAssets? {
         let key = chromeCacheKey(endpoint: endpoint, simulatorID: simulatorID)
-        guard let cached = chromeCache[key] else { return nil }
+        if let cached = chromeCache[key] {
+            markChromeCacheKeyUsed(key)
+            return cached
+        }
+        guard let cached = loadChromeAssets(endpoint: endpoint, simulatorID: simulatorID) else {
+            return nil
+        }
+        chromeCache[key] = cached
         markChromeCacheKeyUsed(key)
         return cached
     }
@@ -1006,6 +1199,7 @@ final class AppModel {
         let key = chromeCacheKey(endpoint: endpoint, simulatorID: simulatorID)
         chromeCache[key] = assets
         markChromeCacheKeyUsed(key)
+        persistChromeAssets(assets, endpoint: endpoint, simulatorID: simulatorID)
         while chromeCacheOrder.count > Self.chromeCacheLimit, let evictedKey = chromeCacheOrder.first {
             chromeCacheOrder.removeFirst()
             chromeCache[evictedKey] = nil
@@ -1018,7 +1212,75 @@ final class AppModel {
     }
 
     private func chromeCacheKey(endpoint: SimDeckEndpoint, simulatorID: String) -> String {
-        "\(endpoint.baseURL.absoluteString)|\(simulatorID)"
+        let source = "\(chromeCacheHostIdentity(endpoint))|\(simulatorID)"
+        let digest = SHA256.hash(data: Data(source.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func chromeCacheHostIdentity(_ endpoint: SimDeckEndpoint) -> String {
+        if let hostID = endpoint.hostID?.nilIfBlank {
+            return "host-id:\(hostID.lowercased())"
+        }
+        if let hostName = endpoint.hostName?.normalizedSimDeckHostName {
+            return "host-name:\(hostName)"
+        }
+        if let serverID = endpoint.serverID?.nilIfBlank {
+            return "server-id:\(serverID.lowercased())"
+        }
+        return endpoint.baseURL.absoluteString
+    }
+
+    private func loadChromeAssets(endpoint: SimDeckEndpoint, simulatorID: String) -> ChromeAssets? {
+        guard let directory = chromeCacheDirectoryURL(endpoint: endpoint, simulatorID: simulatorID) else {
+            return nil
+        }
+        let profileURL = directory.appendingPathComponent("profile.json")
+        let chromeURL = directory.appendingPathComponent("chrome.png")
+        let screenMaskURL = directory.appendingPathComponent("screen-mask.png")
+        let profile = (try? Data(contentsOf: profileURL))
+            .flatMap { try? JSONDecoder().decode(ChromeProfile.self, from: $0) }
+        let image = (try? Data(contentsOf: chromeURL)).flatMap { UIImage(data: $0) }
+        let screenMask = profile?.hasScreenMask == true
+            ? (try? Data(contentsOf: screenMaskURL)).flatMap { UIImage(data: $0) }
+            : nil
+        let assets = ChromeAssets(profile: profile, image: image, screenMask: screenMask)
+        return assets.isEmpty ? nil : assets
+    }
+
+    private func persistChromeAssets(_ assets: ChromeAssets, endpoint: SimDeckEndpoint, simulatorID: String) {
+        guard let directory = chromeCacheDirectoryURL(endpoint: endpoint, simulatorID: simulatorID) else {
+            return
+        }
+        let profileData = assets.profile.flatMap { try? JSONEncoder().encode($0) }
+        let imageData = assets.image?.pngData()
+        let screenMaskData = assets.screenMask?.pngData()
+        Task.detached(priority: .utility) {
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                if let profileData {
+                    try profileData.write(to: directory.appendingPathComponent("profile.json"), options: [.atomic])
+                }
+                if let imageData {
+                    try imageData.write(to: directory.appendingPathComponent("chrome.png"), options: [.atomic])
+                }
+                if let screenMaskData {
+                    try screenMaskData.write(to: directory.appendingPathComponent("screen-mask.png"), options: [.atomic])
+                }
+            } catch {
+                #if DEBUG
+                print("Unable to persist SimDeck chrome cache: \(error.localizedDescription)")
+                #endif
+            }
+        }
+    }
+
+    private func chromeCacheDirectoryURL(endpoint: SimDeckEndpoint, simulatorID: String) -> URL? {
+        guard let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return baseURL
+            .appendingPathComponent(Self.chromeCacheDirectoryName, isDirectory: true)
+            .appendingPathComponent(chromeCacheKey(endpoint: endpoint, simulatorID: simulatorID), isDirectory: true)
     }
 
     @discardableResult
@@ -1190,11 +1452,63 @@ final class AppModel {
 
     func deleteSavedEndpoint(_ endpoint: SimDeckEndpoint) {
         savedEndpoints.removeAll { endpointsRepresentSameServer($0, endpoint) }
-        if let current = self.endpoint, endpointsRepresentSameServer(current, endpoint) {
+        if let selectedEndpoint = loadSelectedEndpoint(),
+           endpointsRepresentSameServer(selectedEndpoint, endpoint) {
             UserDefaults.standard.removeObject(forKey: Self.selectedEndpointKey)
+        }
+        scrubDiscoveredCredentials(matching: endpoint)
+        if self.endpoint.map({ endpointsRepresentSameServer($0, endpoint) }) == true {
+            clearCurrentConnection()
+            status = "Connection deleted."
+        } else if authEndpoint.map({ endpointsRepresentSameServer($0, endpoint) }) == true {
+            authEndpoint = nil
+            pairingCode = ""
+            manualToken = ""
         }
         persistSavedEndpoints()
         hapticSelection()
+    }
+
+    func resetConnections() {
+        savedEndpoints = []
+        UserDefaults.standard.removeObject(forKey: Self.savedEndpointsKey)
+        UserDefaults.standard.removeObject(forKey: Self.legacyRecentEndpointsKey)
+        UserDefaults.standard.removeObject(forKey: Self.selectedEndpointKey)
+        scrubDiscoveredCredentials()
+        clearCurrentConnection()
+        manualAddress = ""
+        manualToken = ""
+        pairingCode = ""
+        status = "Connections reset."
+        hapticWarning()
+    }
+
+    private func clearCurrentConnection() {
+        streamRequestGeneration += 1
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        streamClient?.disconnect()
+        streamClient = nil
+        endpoint = nil
+        authEndpoint = nil
+        simulators = []
+        selectedSimulatorID = nil
+        bootingSimulatorID = nil
+        simulatorLifecycleID = nil
+        streamState = .idle
+        lastSimulatorRefreshAt = Date.distantPast
+        resetStreamPresentation()
+    }
+
+    private func scrubDiscoveredCredentials(matching endpoint: SimDeckEndpoint? = nil) {
+        discovery.endpoints = discovery.endpoints.map { discovered in
+            if let endpoint, !endpointsRepresentSameServer(discovered, endpoint) {
+                return discovered
+            }
+            var scrubbed = discovered
+            scrubbed.token = nil
+            return scrubbed
+        }
     }
 
     private func savePairedEndpoints(primary: SimDeckEndpoint, alternates: [SimDeckEndpoint], token: String) {
@@ -1298,9 +1612,19 @@ final class AppModel {
     }
 
     private func endpointsRepresentSameServer(_ lhs: SimDeckEndpoint, _ rhs: SimDeckEndpoint) -> Bool {
+        if let lhsHostID = lhs.normalizedHostID,
+           let rhsHostID = rhs.normalizedHostID {
+            return lhsHostID == rhsHostID
+        }
         if let lhsID = lhs.serverID?.nilIfBlank,
            let rhsID = rhs.serverID?.nilIfBlank {
             return lhsID == rhsID
+        }
+        if lhs.normalizedHostID == nil,
+           rhs.normalizedHostID == nil,
+           let lhsHostName = lhs.normalizedHostName,
+           let rhsHostName = rhs.normalizedHostName {
+            return lhsHostName == rhsHostName
         }
         return lhs.baseURL == rhs.baseURL
             || lhs.alternateBaseURLs.contains(rhs.baseURL)
@@ -1308,18 +1632,37 @@ final class AppModel {
     }
 
     private func mergedEndpoint(_ lhs: SimDeckEndpoint, _ rhs: SimDeckEndpoint) -> SimDeckEndpoint {
-        let preferred = endpointSourceRank(lhs.source) <= endpointSourceRank(rhs.source) ? lhs : rhs
+        let preferred = preferredEndpoint(lhs, rhs)
         let other = preferred.baseURL == lhs.baseURL ? rhs : lhs
         var merged = preferred
         merged.serverID = preferred.serverID ?? other.serverID
+        merged.hostID = preferred.hostID ?? other.hostID
+        merged.hostName = preferred.hostName ?? other.hostName
+        merged.serverKind = preferred.serverKind ?? other.serverKind
         merged.token = preferred.token ?? other.token
         merged.preferredSimulatorID = preferred.preferredSimulatorID ?? other.preferredSimulatorID
         merged.requiresPairing = preferred.requiresPairing && other.requiresPairing
+        if let hostName = merged.hostName?.nilIfBlank {
+            merged.name = hostName
+        }
         merged.alternateBaseURLs = uniquedURLs(
             [lhs.baseURL, rhs.baseURL] + lhs.alternateBaseURLs + rhs.alternateBaseURLs
         )
         .filter { $0 != merged.baseURL }
         return merged
+    }
+
+    private func preferredEndpoint(_ lhs: SimDeckEndpoint, _ rhs: SimDeckEndpoint) -> SimDeckEndpoint {
+        if lhs.serverKindRank != rhs.serverKindRank {
+            return lhs.serverKindRank < rhs.serverKindRank ? lhs : rhs
+        }
+        if lhs.requiresPairing != rhs.requiresPairing {
+            return lhs.requiresPairing ? rhs : lhs
+        }
+        if endpointSourceRank(lhs.source) != endpointSourceRank(rhs.source) {
+            return endpointSourceRank(lhs.source) < endpointSourceRank(rhs.source) ? lhs : rhs
+        }
+        return lhs
     }
 
     private func uniquedURLs(_ urls: [URL]) -> [URL] {
@@ -1376,6 +1719,11 @@ final class AppModel {
     }
 
     private func persistSavedEndpoints() {
+        UserDefaults.standard.removeObject(forKey: Self.legacyRecentEndpointsKey)
+        guard !savedEndpoints.isEmpty else {
+            UserDefaults.standard.removeObject(forKey: Self.savedEndpointsKey)
+            return
+        }
         if let data = try? JSONEncoder().encode(savedEndpoints) {
             UserDefaults.standard.set(data, forKey: Self.savedEndpointsKey)
         }
@@ -1436,6 +1784,11 @@ final class AppModel {
     func hapticImpact() {
         guard hapticsEnabled else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    func hapticCrownTick() {
+        guard hapticsEnabled else { return }
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.55)
     }
 
     func hapticSuccess() {

@@ -7,6 +7,7 @@ import {
   readStoredFlag,
   sanitizeAccessibilitySources,
   sanitizePersistedUiState,
+  shouldRetainAccessibilityTreeDuringRefresh,
   viewportStateForUDID,
   type PersistedViewportState,
 } from "./uiState";
@@ -58,6 +59,63 @@ describe("uiState", () => {
         "native-ax",
       ]),
     ).toBe("in-app-inspector");
+  });
+
+  it("keeps an explicit Flutter preference through transient native fallback", () => {
+    expect(
+      nextAccessibilitySourcePreference("flutter", "native-ax", [
+        "in-app-inspector",
+        "native-ax",
+      ]),
+    ).toBeNull();
+  });
+
+  it("retains the current Flutter tree during empty or fallback refreshes", () => {
+    expect(
+      shouldRetainAccessibilityTreeDuringRefresh(
+        "auto",
+        "flutter",
+        "flutter",
+        0,
+        3,
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetainAccessibilityTreeDuringRefresh(
+        "flutter",
+        "flutter",
+        "native-ax",
+        12,
+        3,
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetainAccessibilityTreeDuringRefresh(
+        "auto",
+        "flutter",
+        "flutter",
+        4,
+        3,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRetainAccessibilityTreeDuringRefresh(
+        "native-ax",
+        "native-ax",
+        "flutter",
+        4,
+        3,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRetainAccessibilityTreeDuringRefresh(
+        "flutter",
+        "native-ax",
+        "native-ax",
+        4,
+        3,
+      ),
+    ).toBe(false);
   });
 
   it("sanitizes persisted viewport state and falls back to defaults", () => {

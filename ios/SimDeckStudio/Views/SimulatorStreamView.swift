@@ -13,21 +13,8 @@ struct SimulatorStreamView: View {
     @State private var keyboardHeight: CGFloat = 0
 
     var body: some View {
-        ZStack {
-            if model.selectedSimulator == nil {
-                ContentUnavailableView("No Simulator", systemImage: "iphone.slash")
-            } else {
-                streamViewport
-            }
-
-            KeyboardCaptureView(
-                isActive: $keyboardCaptureActive,
-                onText: { model.sendKeyboardText($0) },
-                onDelete: { model.sendKeyboardBackspace() }
-            )
-            .frame(width: 1, height: 1)
-            .opacity(0.01)
-            .accessibilityHidden(true)
+        GeometryReader { proxy in
+            streamContent(usesSideControls: usesSideControls(in: proxy.size))
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
@@ -39,90 +26,7 @@ struct SimulatorStreamView: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Section("Stream") {
-                        Text(model.streamConfig.summary)
-                        Menu("Encoder") {
-                            ForEach(StreamEncoder.allCases, id: \.self) { encoder in
-                                Button {
-                                    model.setStreamEncoder(encoder)
-                                } label: {
-                                    if model.streamConfig.encoder == encoder {
-                                        Label(encoder.label, systemImage: "checkmark")
-                                    } else {
-                                        Text(encoder.label)
-                                    }
-                                }
-                            }
-                        }
-                        Menu("Frame Rate") {
-                            ForEach([15, 30, 60, 120], id: \.self) { fps in
-                                Button {
-                                    model.setStreamFPS(fps)
-                                } label: {
-                                    if model.streamConfig.fps == fps {
-                                        Label("\(fps) fps", systemImage: "checkmark")
-                                    } else {
-                                        Text("\(fps) fps")
-                                    }
-                                }
-                            }
-                        }
-                        Menu("Resolution") {
-                            ForEach(StreamQualityPreset.allCases, id: \.self) { quality in
-                                Button {
-                                    model.setStreamQuality(quality)
-                                } label: {
-                                    if model.streamConfig.quality == quality {
-                                        Label(quality.label, systemImage: "checkmark")
-                                    } else {
-                                        Text(quality.label)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Section("Interaction") {
-                        Toggle(isOn: Binding(
-                            get: { model.touchOverlayVisible },
-                            set: { model.setTouchOverlayVisible($0) }
-                        )) {
-                            Label("Show Touch Overlay", systemImage: "hand.tap")
-                        }
-                        Button {
-                            model.hapticSelection()
-                            presentedSheet = .debugInfo
-                        } label: {
-                            Label("Debug Info", systemImage: "info.circle")
-                        }
-                    }
-                    Divider()
-                    Button {
-                        model.hapticSelection()
-                        Task { await model.refreshSimulators() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                    Button {
-                        if model.selectedSimulator?.isBooted == true {
-                            model.hapticSelection()
-                            Task { await model.startStream() }
-                        } else {
-                            Task { await model.bootSelectedSimulator() }
-                        }
-                    } label: {
-                        Label(model.selectedSimulator?.isBooted == true ? "Start Stream" : "Boot", systemImage: "play.circle")
-                    }
-                    .disabled(model.selectedSimulatorID == nil || model.endpoint == nil)
-                    Button {
-                        model.stopStream()
-                    } label: {
-                        Label("Stop", systemImage: "stop.circle")
-                    }
-                    .disabled(!model.canStopStream)
-                } label: {
-                    Label("Stream Settings", systemImage: "gearshape")
-                }
+                streamSettingsMenu
             }
         }
         .sheet(item: $presentedSheet) { sheet in
@@ -133,14 +37,13 @@ struct SimulatorStreamView: View {
                 StreamDebugInfoSheet(model: model)
             }
         }
-        .safeAreaInset(edge: .bottom) {
-            if model.selectedSimulator?.isBooted == true {
-                StreamControlBar(model: model, keyboardCaptureActive: $keyboardCaptureActive)
-            }
+        .onAppear {
+            applyOrientationPolicy()
         }
         .onChange(of: model.selectedSimulatorID) { _, _ in
             keyboardCaptureActive = false
             clearTouchOverlay()
+            applyOrientationPolicy()
         }
         .onChange(of: model.selectedSimulator?.isBooted == true) { _, isBooted in
             if !isBooted {
@@ -159,6 +62,155 @@ struct SimulatorStreamView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
             updateKeyboardHeight(notification)
         }
+    }
+
+    private func streamContent(usesSideControls: Bool) -> some View {
+        ZStack {
+            if model.selectedSimulator == nil {
+                ContentUnavailableView("No Simulator", systemImage: "iphone.slash")
+            } else {
+                streamViewport
+            }
+
+            KeyboardCaptureView(
+                isActive: $keyboardCaptureActive,
+                onText: { model.sendKeyboardText($0) },
+                onDelete: { model.sendKeyboardBackspace() }
+            )
+            .frame(width: 1, height: 1)
+            .opacity(0.01)
+            .accessibilityHidden(true)
+        }
+        .safeAreaInset(edge: .bottom) {
+            if model.selectedSimulator != nil, !usesSideControls {
+                StreamControlBar(
+                    model: model,
+                    keyboardCaptureActive: $keyboardCaptureActive,
+                    placement: .bottom
+                )
+            }
+        }
+        .safeAreaInset(edge: .leading, spacing: 0) {
+            if model.selectedSimulator != nil, usesSideControls {
+                StreamControlBar(
+                    model: model,
+                    keyboardCaptureActive: $keyboardCaptureActive,
+                    placement: .leadingSide
+                )
+            }
+        }
+        .safeAreaInset(edge: .trailing, spacing: 0) {
+            if model.selectedSimulator != nil, usesSideControls {
+                StreamControlBar(
+                    model: model,
+                    keyboardCaptureActive: $keyboardCaptureActive,
+                    placement: .trailingSide
+                )
+            }
+        }
+    }
+
+    private var streamSettingsMenu: some View {
+        Menu {
+            Section {
+                Button(role: model.selectedSimulator?.isBooted == true ? .destructive : nil) {
+                    if let simulator = model.selectedSimulator {
+                        Task { await model.toggleSimulatorLifecycle(simulator) }
+                    }
+                } label: {
+                    if model.isSelectedSimulatorLifecycleBusy {
+                        HStack {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(model.selectedSimulator?.isBooted == true ? "Stopping Simulator" : "Starting Simulator")
+                        }
+                    } else {
+                        Label(
+                            model.selectedSimulator?.isBooted == true ? "Stop Simulator" : "Start Simulator",
+                            systemImage: model.selectedSimulator?.isBooted == true ? "stop.circle" : "play.circle"
+                        )
+                    }
+                }
+                .disabled(model.selectedSimulator == nil || model.endpoint == nil || model.isSelectedSimulatorLifecycleBusy)
+
+                Button {
+                    model.hapticSelection()
+                    Task { await model.refreshSimulators() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+            }
+            Section("Stream") {
+                Text(model.streamConfig.summary)
+                Menu("Encoder") {
+                    ForEach(StreamEncoder.allCases, id: \.self) { encoder in
+                        Button {
+                            model.setStreamEncoder(encoder)
+                        } label: {
+                            if model.streamConfig.encoder == encoder {
+                                Label(encoder.label, systemImage: "checkmark")
+                            } else {
+                                Text(encoder.label)
+                            }
+                        }
+                    }
+                }
+                Menu("Frame Rate") {
+                    ForEach([15, 30, 60, 120], id: \.self) { fps in
+                        Button {
+                            model.setStreamFPS(fps)
+                        } label: {
+                            if model.streamConfig.fps == fps {
+                                Label("\(fps) fps", systemImage: "checkmark")
+                            } else {
+                                Text("\(fps) fps")
+                            }
+                        }
+                    }
+                }
+                Menu("Resolution") {
+                    ForEach(StreamQualityPreset.allCases, id: \.self) { quality in
+                        Button {
+                            model.setStreamQuality(quality)
+                        } label: {
+                            if model.streamConfig.quality == quality {
+                                Label(quality.label, systemImage: "checkmark")
+                            } else {
+                                Text(quality.label)
+                            }
+                        }
+                    }
+                }
+            }
+            Section("Interaction") {
+                Toggle(isOn: Binding(
+                    get: { model.touchOverlayVisible },
+                    set: { model.setTouchOverlayVisible($0) }
+                )) {
+                    Label("Show Touch Overlay", systemImage: "hand.tap")
+                }
+                Button {
+                    model.hapticSelection()
+                    presentedSheet = .debugInfo
+                } label: {
+                    Label("Debug Info", systemImage: "info.circle")
+                }
+            }
+        } label: {
+            Label("Stream Settings", systemImage: "gearshape")
+        }
+    }
+
+    private func usesSideControls(in size: CGSize) -> Bool {
+        selectedControlFamily.usesLandscapeSideControls && size.width > size.height
+    }
+
+    private var selectedControlFamily: StreamControlFamily {
+        model.selectedSimulator?.streamControlFamily ?? .iOS
+    }
+
+    private func applyOrientationPolicy() {
+        AppOrientationPolicy.apply(selectedControlFamily.allowedHostOrientations)
     }
 
     private var streamViewport: some View {
@@ -419,13 +471,6 @@ private struct TouchInteractionOverlay: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             ForEach(indicators) { indicator in
-                Path { path in
-                    path.move(to: indicator.start)
-                    path.addLine(to: indicator.current)
-                }
-                .stroke(.white.opacity(indicator.isEnding ? 0.25 : 0.62), style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                .shadow(color: .black.opacity(0.28), radius: 4)
-
                 Circle()
                     .fill(.white.opacity(indicator.isEnding ? 0.18 : 0.36))
                     .stroke(.white.opacity(indicator.isEnding ? 0.36 : 0.86), lineWidth: 2)
@@ -468,7 +513,7 @@ private struct BootSimulatorOverlay: View {
             .buttonStyle(.plain)
             .disabled(model.isSelectedSimulatorBooting)
             .modifier(StreamGlassCircleModifier(interactive: !model.isSelectedSimulatorBooting))
-            .accessibilityLabel(model.isSelectedSimulatorBooting ? "Booting \(simulator.name)" : "Boot \(simulator.name)")
+            .accessibilityLabel(model.isSelectedSimulatorBooting ? "Starting \(simulator.name)" : "Start \(simulator.name)")
         }
     }
 }
@@ -541,9 +586,15 @@ private struct StreamTitleButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 7, height: 7)
+                if model.isSelectedSimulatorLifecycleBusy {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 12, height: 12)
+                } else {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 7, height: 7)
+                }
                 Spacer(minLength: 4)
                 VStack(alignment: .center, spacing: 1) {
                     Text(model.selectedSimulator?.name ?? "Select Simulator")
@@ -604,7 +655,10 @@ private struct StreamSimulatorSelectionSheet: View {
                         dismiss()
                     } label: {
                         HStack(spacing: 12) {
-                            SimulatorRow(simulator: simulator)
+                            SimulatorRow(
+                                simulator: simulator,
+                                isBusy: model.isSimulatorLifecycleBusy(simulator)
+                            )
                             Spacer()
                             if model.selectedSimulatorID == simulator.udid {
                                 Image(systemName: "checkmark")
@@ -614,7 +668,13 @@ private struct StreamSimulatorSelectionSheet: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        SimulatorLifecycleMenuItems(model: model, simulator: simulator)
+                    }
                 }
+            }
+            .refreshable {
+                await model.refreshSimulators()
             }
             .navigationTitle("Simulators")
             .navigationBarTitleDisplayMode(.inline)
@@ -781,13 +841,41 @@ private struct StreamBadge: View {
 private struct StreamControlBar: View {
     @Bindable var model: AppModel
     @Binding var keyboardCaptureActive: Bool
+    let placement: StreamControlPlacement
 
     var body: some View {
-        if #available(iOS 26.0, *) {
-            LiquidGlassStreamControlBar(model: model, keyboardCaptureActive: $keyboardCaptureActive)
-        } else {
-            LegacyStreamControlBar(model: model, keyboardCaptureActive: $keyboardCaptureActive)
+        Group {
+            if #available(iOS 26.0, *) {
+                LiquidGlassStreamControlBar(
+                    model: model,
+                    keyboardCaptureActive: $keyboardCaptureActive,
+                    placement: placement
+                )
+            } else {
+                LegacyStreamControlBar(
+                    model: model,
+                    keyboardCaptureActive: $keyboardCaptureActive,
+                    placement: placement
+                )
+            }
         }
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.38)
+        .animation(.snappy(duration: 0.18), value: isEnabled)
+    }
+
+    private var isEnabled: Bool {
+        model.endpoint != nil && model.selectedSimulator?.isBooted == true
+    }
+}
+
+private enum StreamControlPlacement {
+    case bottom
+    case leadingSide
+    case trailingSide
+
+    var isSide: Bool {
+        self != .bottom
     }
 }
 
@@ -795,50 +883,326 @@ private struct StreamControlBar: View {
 private struct LiquidGlassStreamControlBar: View {
     @Bindable var model: AppModel
     @Binding var keyboardCaptureActive: Bool
+    let placement: StreamControlPlacement
 
     var body: some View {
         GlassEffectContainer(spacing: 14) {
-            StreamControlButtons(model: model, keyboardCaptureActive: $keyboardCaptureActive)
+            StreamControlButtons(
+                model: model,
+                keyboardCaptureActive: $keyboardCaptureActive,
+                placement: placement
+            )
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, placement.isSide ? 10 : 16)
+        .padding(.vertical, placement.isSide ? 16 : 10)
     }
 }
 
 private struct LegacyStreamControlBar: View {
     @Bindable var model: AppModel
     @Binding var keyboardCaptureActive: Bool
+    let placement: StreamControlPlacement
 
     var body: some View {
-        StreamControlButtons(model: model, keyboardCaptureActive: $keyboardCaptureActive)
+        StreamControlButtons(
+            model: model,
+            keyboardCaptureActive: $keyboardCaptureActive,
+            placement: placement
+        )
             .buttonStyle(StreamToolbarButtonStyle())
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .padding(.horizontal, placement.isSide ? 10 : 16)
+            .padding(.vertical, placement.isSide ? 16 : 10)
     }
 }
 
 private struct StreamControlButtons: View {
     @Bindable var model: AppModel
     @Binding var keyboardCaptureActive: Bool
+    let placement: StreamControlPlacement
 
     var body: some View {
-        HStack(spacing: 8) {
-            StreamHardwareControlButton("Home", systemImage: "house", buttonName: "home", model: model)
-
-            StreamControlButton("Switcher", systemImage: "square.on.square") { model.sendAppSwitcher() }
-
-            Spacer(minLength: 4)
-
-            StreamControlButton("Appearance", systemImage: "circle.lefthalf.filled") { model.toggleAppearance() }
-
-            StreamControlButton("Rotate Right", systemImage: "rotate.right") { model.rotateRight() }
-
-            Spacer(minLength: 4)
-
-            StreamHardwareControlButton("Lock", systemImage: "lock", buttonName: "power", model: model)
-
-            StreamKeyboardControlButton(model: model, isActive: $keyboardCaptureActive)
+        if placement.isSide {
+            VStack(spacing: 8) {
+                controls
+            }
+        } else {
+            HStack(spacing: 8) {
+                controls
+            }
         }
+    }
+
+    @ViewBuilder
+    private var controls: some View {
+        switch model.selectedSimulator?.streamControlFamily ?? .iOS {
+        case .iOS:
+            iosControls
+        case .appleWatch:
+            watchControls
+        case .appleTV:
+            tvControls
+        case .appleVision:
+            visionControls
+        case .android:
+            androidControls
+        }
+    }
+
+    @ViewBuilder
+    private var iosControls: some View {
+        StreamHardwareControlButton("Home", systemImage: "house", buttonName: "home", model: model)
+
+        StreamControlButton("Switcher", systemImage: "square.on.square") { model.sendAppSwitcher() }
+
+        Spacer(minLength: 4)
+
+        StreamControlButton("Appearance", systemImage: "circle.lefthalf.filled") { model.toggleAppearance() }
+
+        StreamControlButton("Rotate Right", systemImage: "rotate.right") { model.rotateRight() }
+
+        Spacer(minLength: 4)
+
+        StreamHardwareControlButton("Lock", systemImage: "lock", buttonName: "power", model: model)
+
+        StreamKeyboardControlButton(model: model, isActive: $keyboardCaptureActive)
+    }
+
+    @ViewBuilder
+    private var watchControls: some View {
+        switch placement {
+        case .bottom:
+            StreamCrownControlButton("Crown Up", systemImage: "arrow.up.circle", delta: -48, model: model)
+
+            StreamCrownControlButton("Crown Down", systemImage: "arrow.down.circle", delta: 48, model: model)
+
+            StreamHardwareControlButton("Crown Press", systemImage: "circle.circle", buttonName: "digital-crown", model: model)
+
+            Spacer(minLength: 4)
+
+            StreamHardwareControlButton("Side Button", systemImage: "button.programmable", buttonName: "side-button", model: model)
+        case .leadingSide:
+            StreamCrownControlButton("Crown Up", systemImage: "arrow.up.circle", delta: -48, model: model)
+
+            StreamHardwareControlButton("Crown Press", systemImage: "circle.circle", buttonName: "digital-crown", model: model)
+
+            StreamCrownControlButton("Crown Down", systemImage: "arrow.down.circle", delta: 48, model: model)
+        case .trailingSide:
+            StreamHardwareControlButton("Side Button", systemImage: "button.programmable", buttonName: "side-button", model: model)
+        }
+    }
+
+    @ViewBuilder
+    private var tvControls: some View {
+        switch placement {
+        case .bottom:
+            StreamKeyControlButton("Back", systemImage: "chevron.backward", keyCode: 41, model: model)
+
+            StreamKeyControlButton("Up", systemImage: "chevron.up", keyCode: 82, model: model)
+
+            StreamKeyControlButton("Left", systemImage: "chevron.left", keyCode: 80, model: model)
+
+            StreamKeyControlButton("Select", systemImage: "smallcircle.filled.circle", keyCode: 40, model: model)
+
+            StreamKeyControlButton("Right", systemImage: "chevron.right", keyCode: 79, model: model)
+
+            StreamKeyControlButton("Down", systemImage: "chevron.down", keyCode: 81, model: model)
+        case .leadingSide:
+            StreamKeyControlButton("Back", systemImage: "chevron.backward", keyCode: 41, model: model)
+        case .trailingSide:
+            StreamTVRemotePad(model: model)
+        }
+    }
+
+    @ViewBuilder
+    private var visionControls: some View {
+        StreamHardwareControlButton("Home", systemImage: "house", buttonName: "home", model: model)
+
+        StreamControlButton("Switcher", systemImage: "square.on.square") { model.sendAppSwitcher() }
+
+        Spacer(minLength: 4)
+
+        StreamControlButton("Appearance", systemImage: "circle.lefthalf.filled") { model.toggleAppearance() }
+
+        StreamKeyboardControlButton(model: model, isActive: $keyboardCaptureActive)
+    }
+
+    @ViewBuilder
+    private var androidControls: some View {
+        StreamHardwareControlButton("Back", systemImage: "chevron.backward", buttonName: "back", model: model)
+
+        StreamHardwareControlButton("Home", systemImage: "house", buttonName: "home", model: model)
+
+        StreamControlButton("Switcher", systemImage: "square.on.square") { model.sendAppSwitcher() }
+
+        Spacer(minLength: 4)
+
+        StreamControlButton("Rotate Right", systemImage: "rotate.right") { model.rotateRight() }
+
+        StreamKeyboardControlButton(model: model, isActive: $keyboardCaptureActive)
+
+        StreamHardwareControlButton("Power", systemImage: "lock", buttonName: "lock", model: model)
+    }
+}
+
+private enum StreamControlFamily {
+    case iOS
+    case appleWatch
+    case appleTV
+    case appleVision
+    case android
+
+    var usesLandscapeSideControls: Bool {
+        switch self {
+        case .appleWatch, .appleTV:
+            return true
+        case .iOS, .appleVision, .android:
+            return false
+        }
+    }
+
+    var allowedHostOrientations: UIInterfaceOrientationMask {
+        usesLandscapeSideControls ? .allButUpsideDown : .portrait
+    }
+}
+
+private extension SimulatorMetadata {
+    var streamControlFamily: StreamControlFamily {
+        let metadata = [
+            platform,
+            runtimeIdentifier,
+            runtimeName,
+            deviceTypeIdentifier,
+            deviceTypeName,
+            name,
+            android?.avdName
+        ]
+        .compactMap { $0?.lowercased() }
+        .joined(separator: " ")
+
+        if android != nil || metadata.contains("android") || metadata.contains("pixel") {
+            return .android
+        }
+        if metadata.contains("apple-tv") || metadata.contains("apple tv") || metadata.contains("tvos") {
+            return .appleTV
+        }
+        if metadata.contains("apple-watch") || metadata.contains("apple watch") || metadata.contains("watchos") {
+            return .appleWatch
+        }
+        if metadata.contains("vision") || metadata.contains("xros") {
+            return .appleVision
+        }
+        return .iOS
+    }
+}
+
+private struct StreamKeyControlButton: View {
+    let title: LocalizedStringKey
+    let systemImage: String
+    let keyCode: Int
+    @Bindable var model: AppModel
+
+    init(_ title: LocalizedStringKey, systemImage: String, keyCode: Int, model: AppModel) {
+        self.title = title
+        self.systemImage = systemImage
+        self.keyCode = keyCode
+        self.model = model
+    }
+
+    var body: some View {
+        Button {
+            model.hapticSelection()
+            _ = model.sendKey(keyCode: keyCode)
+        } label: {
+            StreamControlIconLabel(title: title, systemImage: systemImage)
+        }
+        .buttonStyle(.plain)
+        .buttonBorderShape(.circle)
+        .accessibilityLabel(title)
+    }
+}
+
+private struct StreamTVRemotePad: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 8) {
+            StreamKeyControlButton("Up", systemImage: "chevron.up", keyCode: 82, model: model)
+
+            HStack(spacing: 8) {
+                StreamKeyControlButton("Left", systemImage: "chevron.left", keyCode: 80, model: model)
+
+                StreamKeyControlButton("Select", systemImage: "smallcircle.filled.circle", keyCode: 40, model: model)
+
+                StreamKeyControlButton("Right", systemImage: "chevron.right", keyCode: 79, model: model)
+            }
+
+            StreamKeyControlButton("Down", systemImage: "chevron.down", keyCode: 81, model: model)
+        }
+    }
+}
+
+private struct StreamCrownControlButton: View {
+    let title: LocalizedStringKey
+    let systemImage: String
+    let delta: Double
+    @Bindable var model: AppModel
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var repeatTask: Task<Void, Never>?
+    @State private var isPressed = false
+
+    init(_ title: LocalizedStringKey, systemImage: String, delta: Double, model: AppModel) {
+        self.title = title
+        self.systemImage = systemImage
+        self.delta = delta
+        self.model = model
+    }
+
+    var body: some View {
+        StreamControlIconLabel(title: title, systemImage: systemImage)
+            .opacity(isPressed ? 0.55 : 1)
+            .scaleEffect(isPressed ? 0.96 : 1)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in beginRepeating() }
+                    .onEnded { _ in endRepeating() }
+            )
+            .onDisappear {
+                endRepeating()
+            }
+            .animation(.snappy(duration: 0.12), value: isPressed)
+        .buttonStyle(.plain)
+        .buttonBorderShape(.circle)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction {
+            if isEnabled {
+                sendTick()
+            }
+        }
+    }
+
+    private func beginRepeating() {
+        guard isEnabled, repeatTask == nil else { return }
+        isPressed = true
+        sendTick()
+        repeatTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(260))
+            while !Task.isCancelled {
+                sendTick()
+                try? await Task.sleep(for: .milliseconds(78))
+            }
+        }
+    }
+
+    private func endRepeating() {
+        repeatTask?.cancel()
+        repeatTask = nil
+        isPressed = false
+    }
+
+    private func sendTick() {
+        guard isEnabled else { return }
+        model.rotateCrown(delta: delta)
     }
 }
 
@@ -867,6 +1231,7 @@ private struct StreamHardwareControlButton: View {
     let systemImage: String
     let buttonName: String
     @Bindable var model: AppModel
+    @Environment(\.isEnabled) private var isEnabled
     @State private var isPressed = false
 
     init(_ title: LocalizedStringKey, systemImage: String, buttonName: String, model: AppModel) {
@@ -890,12 +1255,14 @@ private struct StreamHardwareControlButton: View {
             .accessibilityLabel(title)
             .accessibilityAddTraits(.isButton)
             .accessibilityAction {
-                model.tapHardwareButton(named: buttonName)
+                if isEnabled {
+                    model.tapHardwareButton(named: buttonName)
+                }
             }
     }
 
     private func pressDown() {
-        guard !isPressed else { return }
+        guard isEnabled, !isPressed else { return }
         isPressed = true
         model.sendHardwareButton(named: buttonName, phase: .down)
     }
@@ -979,19 +1346,22 @@ private struct HardwareButtonHitArea: View {
     let buttonName: String
     let frame: CGRect
     @State private var isPressed = false
+    @State private var previousCrownDragLocation: CGPoint?
+    @State private var accumulatedCrownDrag: CGFloat = 0
+    @State private var totalCrownDragDistance: CGFloat = 0
 
     var body: some View {
         Color.clear
             .frame(width: hitFrame.width, height: hitFrame.height)
             .contentShape(Rectangle())
             .position(x: hitFrame.midX, y: hitFrame.midY)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in pressDown() }
-                    .onEnded { _ in pressUp() }
-            )
+            .gesture(hitGesture)
             .onDisappear {
-                pressUp()
+                if isDigitalCrown {
+                    resetCrownDrag()
+                } else {
+                    pressUp()
+                }
             }
             .accessibilityLabel(Text(button.label ?? button.name))
             .accessibilityAddTraits(.isButton)
@@ -1010,6 +1380,28 @@ private struct HardwareButtonHitArea: View {
             width: width,
             height: height
         )
+    }
+
+    private var isDigitalCrown: Bool {
+        buttonName == "digital-crown"
+    }
+
+    private var hitGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if isDigitalCrown {
+                    updateCrownDrag(value)
+                } else {
+                    pressDown()
+                }
+            }
+            .onEnded { _ in
+                if isDigitalCrown {
+                    finishCrownDrag()
+                } else {
+                    pressUp()
+                }
+            }
     }
 
     private func pressDown() {
@@ -1032,6 +1424,41 @@ private struct HardwareButtonHitArea: View {
             usagePage: button.usagePage,
             usage: button.usage
         )
+    }
+
+    private func updateCrownDrag(_ value: DragGesture.Value) {
+        let location = value.location
+        guard let previousCrownDragLocation else {
+            self.previousCrownDragLocation = location
+            accumulatedCrownDrag = 0
+            totalCrownDragDistance = 0
+            return
+        }
+
+        let verticalDelta = location.y - previousCrownDragLocation.y
+        self.previousCrownDragLocation = location
+        accumulatedCrownDrag += verticalDelta
+        totalCrownDragDistance += abs(verticalDelta)
+
+        let pointsPerTick: CGFloat = 7
+        while abs(accumulatedCrownDrag) >= pointsPerTick {
+            let direction = accumulatedCrownDrag > 0 ? 1.0 : -1.0
+            model.rotateCrown(delta: direction * 32)
+            accumulatedCrownDrag -= CGFloat(direction) * pointsPerTick
+        }
+    }
+
+    private func finishCrownDrag() {
+        if totalCrownDragDistance < 4 {
+            model.tapHardwareButton(named: buttonName, usagePage: button.usagePage, usage: button.usage)
+        }
+        resetCrownDrag()
+    }
+
+    private func resetCrownDrag() {
+        previousCrownDragLocation = nil
+        accumulatedCrownDrag = 0
+        totalCrownDragDistance = 0
     }
 }
 

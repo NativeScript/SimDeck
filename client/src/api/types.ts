@@ -188,6 +188,17 @@ export interface ChromeDevToolsTargetDiscovery {
 
 export interface HealthResponse {
   ok: boolean;
+  serverId?: string;
+  advertiseHost?: string;
+  hostId?: string;
+  hostName?: string;
+  httpPort?: number;
+  serverKind?:
+    | "launchAgent"
+    | "workspace"
+    | "foreground"
+    | "standalone"
+    | string;
   videoCodec?: string;
   webRtc?: {
     iceServers?: RTCIceServer[];

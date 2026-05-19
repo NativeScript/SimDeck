@@ -232,6 +232,13 @@ final class WebRTCClient: NSObject {
     }
 
     @discardableResult
+    func sendCrown(delta: Double) -> Bool {
+        guard delta.isFinite else { return false }
+        markUserActivity()
+        return sendJSON(["type": "crown", "delta": delta], allowQueue: false)
+    }
+
+    @discardableResult
     func sendToggleAppearance() -> Bool {
         markUserActivity()
         return sendJSON(["type": "toggleAppearance"], allowQueue: false)

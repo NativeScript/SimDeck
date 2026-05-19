@@ -106,7 +106,10 @@ pub fn unauthorized_response(config: &Config, headers: &HeaderMap) -> Response {
             "ok": false,
             "serverId": server_identity(config),
             "advertiseHost": config.advertise_host,
+            "hostId": config.host_id,
+            "hostName": config.host_name,
             "httpPort": config.http_port,
+            "serverKind": config.server_kind.as_str(),
         })),
     )
         .into_response();
@@ -274,7 +277,7 @@ fn chrono_free_now_nanos() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::{api_request_authorized, ACCESS_TOKEN_HEADER};
-    use crate::config::Config;
+    use crate::config::{Config, ServerKind};
     use axum::http::{header, HeaderMap, HeaderValue, Method};
     use std::net::{IpAddr, Ipv4Addr};
     use std::path::PathBuf;
@@ -285,6 +288,7 @@ mod tests {
             PathBuf::from("client/dist"),
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             None,
+            ServerKind::Standalone,
             "auto".to_owned(),
             false,
             Some("secret-token".to_owned()),
@@ -353,6 +357,7 @@ mod tests {
             PathBuf::from("client/dist"),
             IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             Some("10.0.0.245".to_owned()),
+            ServerKind::Standalone,
             "auto".to_owned(),
             false,
             Some("secret-token".to_owned()),
@@ -384,6 +389,7 @@ mod tests {
             PathBuf::from("client/dist"),
             IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             Some("192.168.1.50".to_owned()),
+            ServerKind::Standalone,
             "auto".to_owned(),
             false,
             Some("secret-token".to_owned()),

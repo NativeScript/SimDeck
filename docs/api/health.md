@@ -13,7 +13,12 @@ Example:
 ```json
 {
   "ok": true,
+  "serverId": "2e640c5a06a9b732",
+  "advertiseHost": "192.168.1.50",
+  "hostId": "5163434b8c5e3fa4",
+  "hostName": "Dj-MacBook-Pro",
   "httpPort": 4310,
+  "serverKind": "launchAgent",
   "timestamp": 1714094761.234,
   "videoCodec": "auto",
   "lowLatency": false,
@@ -31,13 +36,20 @@ Example:
 
 Important fields:
 
-| Field           | Meaning                                                 |
-| --------------- | ------------------------------------------------------- |
-| `ok`            | Server is alive                                         |
-| `httpPort`      | Port serving UI and API                                 |
-| `videoCodec`    | Requested codec mode: `auto`, `hardware`, or `software` |
-| `streamQuality` | Active stream profile and limits                        |
-| `webRtc`        | ICE settings the browser should use                     |
+| Field           | Meaning                                                   |
+| --------------- | --------------------------------------------------------- |
+| `ok`            | Server is alive                                           |
+| `serverId`      | Stable identity for the current daemon token              |
+| `advertiseHost` | Host/IP the daemon advertises for non-local clients       |
+| `hostId`        | Stable hashed identity for the Mac hardware host          |
+| `hostName`      | Local host name for grouping LAN/Tailscale/Bonjour URLs   |
+| `httpPort`      | Port serving UI and API                                   |
+| `serverKind`    | `launchAgent`, `workspace`, `foreground`, or `standalone` |
+| `videoCodec`    | Requested codec mode: `auto`, `hardware`, or `software`   |
+| `streamQuality` | Active stream profile and limits                          |
+| `webRtc`        | ICE settings the browser should use                       |
+
+When auth is required, the `401` JSON body still includes `serverId`, `advertiseHost`, `hostId`, `hostName`, `httpPort`, and `serverKind` so native clients can group endpoints before pairing.
 
 ## Metrics
 

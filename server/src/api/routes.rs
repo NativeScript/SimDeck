@@ -995,7 +995,10 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "ok": true,
         "serverId": crate::auth::server_identity(&state.config),
         "advertiseHost": state.config.advertise_host,
+        "hostId": state.config.host_id,
+        "hostName": state.config.host_name,
         "httpPort": state.config.http_port,
+        "serverKind": state.config.server_kind.as_str(),
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64(),
         "videoCodec": video_codec,
         "lowLatency": state.config.low_latency,
@@ -5326,6 +5329,9 @@ async fn registry_inspector_session(
 fn inspector_session_from_published(inspector: PublishedInspector) -> InspectorSession {
     let mut available_sources = inspector_available_sources(&inspector.info);
     for source in inspector.available_sources {
+        if source == SOURCE_UIKIT && !inspector_info_allows_uikit(&inspector.info) {
+            continue;
+        }
         push_unique_source(&mut available_sources, &source);
     }
     InspectorSession {
@@ -6028,11 +6034,43 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         .get("uikit")
         .and_then(|value| value.get("available"))
         .and_then(Value::as_bool)
-        .unwrap_or(!(react_native_available || flutter_available));
+        .unwrap_or_else(|| {
+            !(react_native_available
+                || flutter_available
+                || app_hierarchy_source == SOURCE_REACT_NATIVE
+                || app_hierarchy_source == SOURCE_FLUTTER)
+        });
     if uikit_available {
         sources.push(SOURCE_UIKIT.to_owned());
     }
     sources
+}
+
+fn inspector_info_allows_uikit(info: &Value) -> bool {
+    info.get("uikit")
+        .and_then(|value| value.get("available"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            let app_hierarchy_source = info
+                .get("appHierarchy")
+                .and_then(|value| value.get("source"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let react_native_available = info
+                .get("reactNative")
+                .and_then(|value| value.get("available"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let flutter_available = info
+                .get("flutter")
+                .and_then(|value| value.get("available"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            !(react_native_available
+                || flutter_available
+                || app_hierarchy_source == SOURCE_REACT_NATIVE
+                || app_hierarchy_source == SOURCE_FLUTTER)
+        })
 }
 
 fn push_unique_source(sources: &mut Vec<String>, source: &str) {
@@ -7208,7 +7246,7 @@ mod tests {
     }
 
     #[test]
-    fn published_inspector_session_merges_sources_from_info() {
+    fn published_inspector_session_filters_disallowed_uikit_source() {
         let session = inspector_session_from_published(PublishedInspector {
             access_token: "secret-token".to_owned(),
             available_sources: vec![SOURCE_UIKIT.to_owned()],
@@ -7225,11 +7263,17 @@ mod tests {
             updated_at_unix_ms: 1,
         });
 
-        assert_eq!(
-            session.available_sources,
-            vec![SOURCE_FLUTTER.to_owned(), SOURCE_UIKIT.to_owned()]
-        );
+        assert_eq!(session.available_sources, vec![SOURCE_FLUTTER.to_owned()]);
         assert_eq!(inspector_session_score(&session), 1);
+    }
+
+    #[test]
+    fn inspector_source_detection_does_not_invent_uikit_for_flutter_hierarchy() {
+        let sources = inspector_available_sources(&json!({
+            "appHierarchy": { "available": true, "source": SOURCE_FLUTTER }
+        }));
+
+        assert_eq!(sources, vec![SOURCE_FLUTTER.to_owned()]);
     }
 
     #[test]

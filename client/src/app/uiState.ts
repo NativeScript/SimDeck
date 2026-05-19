@@ -138,6 +138,13 @@ export function nextAccessibilitySourcePreference(
 ): AccessibilitySourcePreference | null {
   const richerSource = preferredRicherAccessibilitySource(availableSources);
   if (
+    currentPreference === "flutter" &&
+    snapshotSource !== "flutter" &&
+    !availableSources.includes("flutter")
+  ) {
+    return null;
+  }
+  if (
     snapshotSource === "native-ax" &&
     currentPreference !== "native-ax" &&
     richerSource &&
@@ -152,6 +159,27 @@ export function nextAccessibilitySourcePreference(
     return richerSource ?? snapshotSource;
   }
   return null;
+}
+
+export function shouldRetainAccessibilityTreeDuringRefresh(
+  currentPreference: AccessibilitySourcePreference,
+  currentSource: AccessibilitySource | "",
+  snapshotSource: AccessibilitySource,
+  nextRootCount: number,
+  currentRootCount: number,
+): boolean {
+  if (currentRootCount <= 0) {
+    return false;
+  }
+  const retainedSource =
+    currentPreference === "auto" ? currentSource : currentPreference;
+  if (retainedSource !== "flutter" && retainedSource !== "react-native") {
+    return false;
+  }
+  if (currentSource !== retainedSource) {
+    return false;
+  }
+  return snapshotSource !== retainedSource || nextRootCount === 0;
 }
 
 export function isAccessibilitySource(

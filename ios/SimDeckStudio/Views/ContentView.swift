@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @Bindable var model: AppModel
@@ -22,7 +23,13 @@ struct ContentView: View {
                 usesSearchAccessory: usesSearchAccessory
             )
         } detail: {
-            SimulatorStreamView(model: model)
+            if model.endpoint != nil,
+               model.authEndpoint == nil,
+               model.selectedSimulator != nil {
+                SimulatorStreamView(model: model)
+            } else {
+                Color.clear
+            }
         }
     }
 }
@@ -33,15 +40,31 @@ private struct SidebarView: View {
     @Binding var searchExpanded: Bool
     let usesSearchAccessory: Bool
     @State private var presentedSheet: SidebarSheet?
+    @State private var isScanningPairingQR = false
+    @State private var selectedSimulatorTypeFilter: SimulatorTypeFilter?
+
+    private let simulatorFilterHeaderHeight: CGFloat = 48
+
+    private var usesIPadSidebarLayout: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
 
     private var filteredSimulators: [SimulatorMetadata] {
+        var simulators = model.simulators
+        if let selectedSimulatorTypeFilter {
+            simulators = simulators.filter { selectedSimulatorTypeFilter.matches($0) }
+        }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return model.simulators }
-        return model.simulators.filter { simulator in
+        guard !query.isEmpty else { return simulators }
+        return simulators.filter { simulator in
             simulator.name.localizedCaseInsensitiveContains(query)
                 || simulator.subtitle.localizedCaseInsensitiveContains(query)
                 || simulator.udid.localizedCaseInsensitiveContains(query)
         }
+    }
+
+    private var showsSimulatorTypeFilters: Bool {
+        model.endpoint != nil && !model.simulators.isEmpty
     }
 
     var body: some View {
@@ -60,6 +83,11 @@ private struct SidebarView: View {
                     NewSimulatorSheet(model: model)
                 }
             }
+            .sheet(isPresented: $isScanningPairingQR) {
+                QRCodeScannerSheet(model: model) {
+                    presentedSheet = nil
+                }
+            }
             .onChange(of: model.authEndpoint?.id) { _, endpointID in
                 if endpointID != nil {
                     presentedSheet = .pair
@@ -75,7 +103,16 @@ private struct SidebarView: View {
                     SimulatorSearchDock(
                         model: model,
                         text: $searchText,
-                        isExpanded: $searchExpanded
+                        isExpanded: $searchExpanded,
+                        showsSidebarActions: usesIPadSidebarLayout,
+                        onSettings: {
+                            model.hapticSelection()
+                            presentedSheet = .settings
+                        },
+                        onConnect: {
+                            model.hapticSelection()
+                            presentedSheet = .connect
+                        }
                     ) {
                         presentedSheet = .newSimulator
                     }
@@ -86,10 +123,23 @@ private struct SidebarView: View {
     }
 
     private var sidebarList: some View {
-        List(selection: simulatorSelection) {
-            ForEach(filteredSimulators) { simulator in
-                SimulatorRow(simulator: simulator)
-                    .tag(simulator.udid)
+        ZStack(alignment: .top) {
+            simulatorList
+            if showsSimulatorTypeFilters {
+                SimulatorTypeFilterBar(
+                    selectedFilter: $selectedSimulatorTypeFilter,
+                    hapticSelection: model.hapticSelection
+                )
+                .frame(height: simulatorFilterHeaderHeight, alignment: .top)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .zIndex(1)
+            }
+        }
+        .task(id: model.endpoint?.id) {
+            await model.refreshSimulatorsIfStale(maxAge: 0, silent: true)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(6))
+                await model.refreshSimulatorsIfStale(maxAge: 5, silent: true)
             }
         }
         .navigationTitle("")
@@ -98,7 +148,24 @@ private struct SidebarView: View {
             if model.isBusy && model.simulators.isEmpty {
                 ProgressView()
             } else if model.endpoint == nil {
-                ContentUnavailableView("Select a Server", systemImage: "server.rack")
+                NoServerActionsView(
+                    canSelectServer: !model.availableEndpoints.isEmpty,
+                    selectServer: {
+                        model.hapticSelection()
+                        presentedSheet = .servers
+                    },
+                    pairServer: {
+                        model.hapticSelection()
+                        presentedSheet = .pair
+                    },
+                    scanQR: {
+                        model.hapticSelection()
+                        isScanningPairingQR = true
+                    },
+                    copyInstallCommands: {
+                        model.hapticSuccess()
+                    }
+                )
             } else if model.authEndpoint != nil {
                 VStack(spacing: 16) {
                     ContentUnavailableView("Pair Server", systemImage: "lock")
@@ -111,35 +178,84 @@ private struct SidebarView: View {
                 }
             } else if filteredSimulators.isEmpty {
                 ContentUnavailableView(
-                    searchText.isEmpty ? "No Simulators" : "No Results",
-                    systemImage: searchText.isEmpty ? "iphone.slash" : "magnifyingglass"
+                    emptySimulatorTitle,
+                    systemImage: emptySimulatorSystemImage
                 )
             }
         }
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    model.hapticSelection()
-                    presentedSheet = .settings
-                } label: {
-                    Label("Settings", systemImage: "gearshape")
+            if !usesIPadSidebarLayout {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        model.hapticSelection()
+                        presentedSheet = .settings
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
                 }
             }
             ToolbarItem(placement: .principal) {
-                ServerTitleButton(model: model) {
+                ServerTitleButton(model: model, usesGlass: !usesIPadSidebarLayout) {
                     model.hapticSelection()
                     presentedSheet = .servers
                 }
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.hapticSelection()
-                    presentedSheet = .connect
-                } label: {
-                    Label("Connect", systemImage: "personalhotspot")
+            if !usesIPadSidebarLayout {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        model.hapticSelection()
+                        presentedSheet = .connect
+                    } label: {
+                        Label("Connect", systemImage: "personalhotspot")
+                    }
                 }
             }
         }
+        .modifier(SidebarNavigationBarBackgroundModifier(hidden: usesIPadSidebarLayout))
+    }
+
+    private var simulatorList: some View {
+        List(selection: simulatorSelection) {
+            simulatorRows
+        }
+        .refreshable {
+            await model.refreshSimulators()
+        }
+        .contentMargins(
+            .top,
+            showsSimulatorTypeFilters ? simulatorFilterHeaderHeight : 0,
+            for: .scrollContent
+        )
+        .background {
+            RefreshControlOffsetProbe(offset: showsSimulatorTypeFilters ? simulatorFilterHeaderHeight : 0)
+        }
+    }
+
+    @ViewBuilder
+    private var simulatorRows: some View {
+        ForEach(filteredSimulators) { simulator in
+            SimulatorRow(
+                simulator: simulator,
+                isBusy: model.isSimulatorLifecycleBusy(simulator)
+            )
+                .tag(simulator.udid)
+                .contextMenu {
+                    SimulatorLifecycleMenuItems(model: model, simulator: simulator)
+                }
+        }
+    }
+
+    private var emptySimulatorTitle: String {
+        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || selectedSimulatorTypeFilter != nil {
+            return "No Results"
+        }
+        return "No Simulators"
+    }
+
+    private var emptySimulatorSystemImage: String {
+        selectedSimulatorTypeFilter?.systemImage
+            ?? (searchText.isEmpty ? "iphone.slash" : "magnifyingglass")
     }
 
     private var simulatorSelection: Binding<String?> {
@@ -148,6 +264,95 @@ private struct SidebarView: View {
         } set: { udid in
             model.selectSimulator(udid)
         }
+    }
+
+}
+
+private struct RefreshControlOffsetProbe: UIViewRepresentable {
+    let offset: CGFloat
+
+    func makeUIView(context: Context) -> RefreshControlOffsetProbeView {
+        let view = RefreshControlOffsetProbeView()
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ uiView: RefreshControlOffsetProbeView, context: Context) {
+        uiView.offset = offset
+    }
+}
+
+private final class RefreshControlOffsetProbeView: UIView {
+    var offset: CGFloat = 0 {
+        didSet {
+            scheduleRefreshControlUpdate()
+        }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        scheduleRefreshControlUpdate()
+    }
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        scheduleRefreshControlUpdate()
+    }
+
+    private func scheduleRefreshControlUpdate(attemptsRemaining: Int = 6) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
+            guard let self else { return }
+            if self.applyRefreshControlOffset() || attemptsRemaining <= 0 {
+                return
+            }
+            self.scheduleRefreshControlUpdate(attemptsRemaining: attemptsRemaining - 1)
+        }
+    }
+
+    @discardableResult
+    private func applyRefreshControlOffset() -> Bool {
+        guard let refreshControl = nearbyRefreshControl() else {
+            return false
+        }
+        refreshControl.transform = CGAffineTransform(translationX: 0, y: offset)
+        return true
+    }
+
+    private func nearbyRefreshControl() -> UIRefreshControl? {
+        var ancestor: UIView? = self
+        while let view = ancestor {
+            if let scrollView = view as? UIScrollView,
+               let refreshControl = scrollView.refreshControl {
+                return refreshControl
+            }
+            ancestor = view.superview
+        }
+
+        ancestor = superview
+        while let view = ancestor {
+            if let refreshControl = view.firstDescendantRefreshControl() {
+                return refreshControl
+            }
+            ancestor = view.superview
+        }
+        return nil
+    }
+}
+
+private extension UIView {
+    func firstDescendantRefreshControl() -> UIRefreshControl? {
+        if let scrollView = self as? UIScrollView,
+           let refreshControl = scrollView.refreshControl,
+           scrollView.alwaysBounceVertical || scrollView.contentSize.height > scrollView.bounds.height {
+            return refreshControl
+        }
+        for subview in subviews {
+            if let refreshControl = subview.firstDescendantRefreshControl() {
+                return refreshControl
+            }
+        }
+        return nil
     }
 }
 
@@ -161,8 +366,248 @@ private enum SidebarSheet: Identifiable {
     var id: Self { self }
 }
 
+private enum SimulatorTypeFilter: String, CaseIterable, Identifiable {
+    case iPhone
+    case iPad
+    case appleWatch
+    case appleTV
+    case appleVision
+    case android
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .iPhone: "iPhone"
+        case .iPad: "iPad"
+        case .appleWatch: "Watch"
+        case .appleTV: "TV"
+        case .appleVision: "Vision"
+        case .android: "Android"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .iPhone: "iphone"
+        case .iPad: "ipad"
+        case .appleWatch: "applewatch"
+        case .appleTV: "appletv"
+        case .appleVision: "visionpro"
+        case .android: "rectangle.portrait"
+        }
+    }
+
+    func matches(_ simulator: SimulatorMetadata) -> Bool {
+        simulator.typeFilter == self
+    }
+}
+
+private struct SimulatorTypeFilterBar: View {
+    @Binding var selectedFilter: SimulatorTypeFilter?
+    let hapticSelection: () -> Void
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            if #available(iOS 26.0, *) {
+                GlassEffectContainer(spacing: 8) {
+                    pillRow
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            } else {
+                pillRow
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+            }
+        }
+        .scrollIndicators(.hidden)
+        .padding(.bottom, 4)
+    }
+
+    private var pillRow: some View {
+        HStack(spacing: 8) {
+            ForEach(SimulatorTypeFilter.allCases) { filter in
+                SimulatorTypeFilterPill(
+                    filter: filter,
+                    isSelected: selectedFilter == filter
+                ) {
+                    hapticSelection()
+                    withAnimation(.snappy(duration: 0.18)) {
+                        selectedFilter = selectedFilter == filter ? nil : filter
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct SimulatorTypeFilterPill: View {
+    let filter: SimulatorTypeFilter
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(filter.title, systemImage: filter.systemImage)
+                .font(.caption.weight(isSelected ? .bold : .semibold))
+                .imageScale(.small)
+                .lineLimit(1)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .foregroundStyle(isSelected ? .primary : .secondary)
+                .contentShape(Capsule())
+                .modifier(GlassCapsuleModifier(interactive: true))
+                .overlay {
+                    Capsule()
+                        .strokeBorder(
+                            Color.primary.opacity(isSelected ? 0.36 : 0.12),
+                            lineWidth: isSelected ? 1.5 : 1
+                        )
+                }
+                .scaleEffect(isSelected ? 1.03 : 1)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .animation(.snappy(duration: 0.18), value: isSelected)
+    }
+}
+
+private extension SimulatorMetadata {
+    var typeFilter: SimulatorTypeFilter {
+        let metadata = [
+            platform,
+            runtimeIdentifier,
+            runtimeName,
+            deviceTypeIdentifier,
+            deviceTypeName,
+            name,
+            android?.avdName
+        ]
+        .compactMap { $0?.lowercased() }
+        .joined(separator: " ")
+
+        if android != nil || metadata.contains("android") || metadata.contains("pixel") {
+            return .android
+        }
+        if metadata.contains("apple-tv") || metadata.contains("apple tv") || metadata.contains("tvos") {
+            return .appleTV
+        }
+        if metadata.contains("apple-watch") || metadata.contains("apple watch") || metadata.contains("watchos") {
+            return .appleWatch
+        }
+        if metadata.contains("vision") || metadata.contains("xros") {
+            return .appleVision
+        }
+        if metadata.contains("ipad") {
+            return .iPad
+        }
+        return .iPhone
+    }
+}
+
+private struct NoServerActionsView: View {
+    private static let installCommands = "npm i -g simdeck\nsimdeck pair"
+
+    @State private var isCopiedToastVisible = false
+    @State private var copiedToastGeneration = 0
+
+    let canSelectServer: Bool
+    let selectServer: () -> Void
+    let pairServer: () -> Void
+    let scanQR: () -> Void
+    let copyInstallCommands: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            onboardingStack
+            if isCopiedToastVisible {
+                copiedToast
+                    .offset(y: -52)
+                    .transition(.opacity.combined(with: .scale(scale: 0.94)))
+            }
+        }
+        .controlSize(.large)
+        .frame(maxWidth: 300)
+        .padding(.horizontal, 24)
+        .animation(.snappy(duration: 0.18), value: isCopiedToastVisible)
+        .task(id: copiedToastGeneration) {
+            guard isCopiedToastVisible else { return }
+            try? await Task.sleep(for: .milliseconds(1_250))
+            guard !Task.isCancelled else { return }
+            withAnimation(.snappy(duration: 0.18)) {
+                isCopiedToastVisible = false
+            }
+        }
+    }
+
+    private var onboardingStack: some View {
+        VStack(spacing: 24) {
+            installCommandBlock
+            VStack(spacing: 14) {
+                if canSelectServer {
+                    neutralActionButton("Select a Server", systemImage: "server.rack", action: selectServer)
+                }
+                neutralActionButton("Pair New Server", systemImage: "checkmark.seal", action: pairServer)
+                neutralActionButton("Scan QR", systemImage: "qrcode.viewfinder", action: scanQR)
+            }
+        }
+    }
+
+    private var installCommandBlock: some View {
+        Button {
+            UIPasteboard.general.string = Self.installCommands
+            copyInstallCommands()
+            copiedToastGeneration += 1
+            withAnimation(.snappy(duration: 0.18)) {
+                isCopiedToastVisible = true
+            }
+        } label: {
+            Text(verbatim: Self.installCommands)
+                .font(.system(.callout, design: .monospaced).weight(.semibold))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .contentShape(.rect(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .modifier(GlassRoundedRectangleModifier(cornerRadius: 12, interactive: true))
+        .accessibilityLabel("Install command npm i dash g simdeck, then simdeck pair")
+        .accessibilityHint("Copies the commands")
+    }
+
+    private var copiedToast: some View {
+        Text("Copied")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16)
+            .frame(height: 38)
+            .contentShape(Capsule())
+            .modifier(GlassCapsuleModifier(interactive: false))
+    }
+
+    private func neutralActionButton(
+        _ title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .modifier(GlassCapsuleModifier(interactive: true))
+    }
+}
+
 private struct ServerTitleButton: View {
     @Bindable var model: AppModel
+    let usesGlass: Bool
     let action: () -> Void
 
     var body: some View {
@@ -196,7 +641,7 @@ private struct ServerTitleButton: View {
         .buttonStyle(.plain)
         .frame(minWidth: 170, maxWidth: 240)
         .frame(height: 42)
-        .modifier(GlassCapsuleModifier(interactive: true))
+        .modifier(ServerTitleChromeModifier(usesGlass: usesGlass))
     }
 
     private var titleColor: Color {
@@ -207,59 +652,53 @@ private struct ServerTitleButton: View {
     }
 }
 
+private struct ServerTitleChromeModifier: ViewModifier {
+    let usesGlass: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if usesGlass {
+            content.modifier(GlassCapsuleModifier(interactive: true))
+        } else {
+            content
+        }
+    }
+}
+
+private struct SidebarNavigationBarBackgroundModifier: ViewModifier {
+    let hidden: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if hidden {
+            content.toolbarBackground(.hidden, for: .navigationBar)
+        } else {
+            content
+        }
+    }
+}
+
+private struct ServerDetailPresentation: Identifiable {
+    var id: String { endpoint.id }
+
+    let endpoint: SimDeckEndpoint
+    let saveEndpoint: Bool
+}
+
 private struct ServerSelectionSheet: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var detailPresentation: ServerDetailPresentation?
     @State private var renamingEndpoint: SimDeckEndpoint?
     @State private var renameText = ""
 
+    private var hasServers: Bool {
+        !model.savedEndpoints.isEmpty || !model.automaticEndpoints.isEmpty
+    }
+
     var body: some View {
         NavigationStack {
-            List {
-                if model.savedEndpoints.isEmpty && model.automaticEndpoints.isEmpty {
-                    ContentUnavailableView("No Servers", systemImage: "server.rack")
-                } else {
-                    if !model.savedEndpoints.isEmpty {
-                        Section("Saved") {
-                            ForEach(model.savedEndpoints) { endpoint in
-                                serverButton(endpoint, saveEndpoint: false)
-                                    .swipeActions(edge: .trailing) {
-                                        Button(role: .destructive) {
-                                            model.deleteSavedEndpoint(endpoint)
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
-                                        }
-                                        Button {
-                                            beginRenaming(endpoint)
-                                        } label: {
-                                            Label("Rename", systemImage: "pencil")
-                                        }
-                                    }
-                                    .contextMenu {
-                                        Button {
-                                            beginRenaming(endpoint)
-                                        } label: {
-                                            Label("Rename", systemImage: "pencil")
-                                        }
-                                        Button(role: .destructive) {
-                                            model.deleteSavedEndpoint(endpoint)
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
-                                        }
-                                    }
-                            }
-                        }
-                    }
-
-                    if !model.automaticEndpoints.isEmpty {
-                        Section("Auto-Detected") {
-                            ForEach(model.automaticEndpoints) { endpoint in
-                                serverButton(endpoint, saveEndpoint: false)
-                            }
-                        }
-                    }
-                }
-            }
+            serverContent
             .alert("Rename Server", isPresented: renameAlertBinding) {
                 TextField("Name", text: $renameText)
                 Button("Cancel", role: .cancel) {
@@ -292,18 +731,82 @@ private struct ServerSelectionSheet: View {
                     .disabled(model.discovery.isScanning)
                 }
             }
+            .sheet(item: $detailPresentation) { presentation in
+                ServerDetailSheet(
+                    endpoint: presentation.endpoint,
+                    isConnected: model.endpoint.map {
+                        $0.baseURL == presentation.endpoint.baseURL
+                    } ?? false
+                ) { endpoint in
+                    let connected = await model.connect(
+                        endpoint,
+                        autoStart: false,
+                        saveEndpoint: presentation.saveEndpoint
+                    )
+                    if connected {
+                        dismiss()
+                    }
+                    return connected
+                }
+            }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    @ViewBuilder
+    private var serverContent: some View {
+        if hasServers {
+            List {
+                if !model.savedEndpoints.isEmpty {
+                    Section("Saved") {
+                        ForEach(model.savedEndpoints) { endpoint in
+                            serverButton(endpoint, saveEndpoint: false)
+                                .swipeActions(edge: .trailing) {
+                                    Button(role: .destructive) {
+                                        model.deleteSavedEndpoint(endpoint)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                    Button {
+                                        beginRenaming(endpoint)
+                                    } label: {
+                                        Label("Rename", systemImage: "pencil")
+                                    }
+                                }
+                                .contextMenu {
+                                    Button {
+                                        beginRenaming(endpoint)
+                                    } label: {
+                                        Label("Rename", systemImage: "pencil")
+                                    }
+                                    Button(role: .destructive) {
+                                        model.deleteSavedEndpoint(endpoint)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                        }
+                    }
+                }
+
+                if !model.automaticEndpoints.isEmpty {
+                    Section("Auto-Detected") {
+                        ForEach(model.automaticEndpoints) { endpoint in
+                            serverButton(endpoint, saveEndpoint: false)
+                        }
+                    }
+                }
+            }
+        } else {
+            ContentUnavailableView("No Servers", systemImage: "server.rack")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 
     private func serverButton(_ endpoint: SimDeckEndpoint, saveEndpoint: Bool) -> some View {
         Button {
             model.hapticSelection()
-            Task {
-                if await model.connect(endpoint, autoStart: false, saveEndpoint: saveEndpoint) {
-                    dismiss()
-                }
-            }
+            detailPresentation = ServerDetailPresentation(endpoint: endpoint, saveEndpoint: saveEndpoint)
         } label: {
             HStack(spacing: 12) {
                 EndpointRow(endpoint: endpoint)
@@ -313,6 +816,9 @@ private struct ServerSelectionSheet: View {
                         .font(.headline)
                         .foregroundStyle(.tint)
                 }
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
         }
         .buttonStyle(.plain)
@@ -335,6 +841,129 @@ private struct ServerSelectionSheet: View {
     }
 }
 
+private struct ServerDetailSheet: View {
+    let endpoint: SimDeckEndpoint
+    let isConnected: Bool
+    let connect: (SimDeckEndpoint) async -> Bool
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var isConnecting = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Server") {
+                    LabeledContent("Name", value: endpoint.displayName)
+                    if let serverKindLabel = endpoint.serverKindLabel {
+                        LabeledContent("Service", value: serverKindLabel)
+                    }
+                    LabeledContent("Source", value: endpoint.source.label)
+                    LabeledContent("Status", value: statusLabel)
+                    if let hostName = endpoint.hostName?.nilIfBlank {
+                        LabeledContent("Host", value: hostName)
+                    }
+                }
+
+                Section("App IPs") {
+                    ForEach(Array(endpoint.allBaseURLs.enumerated()), id: \.element) { index, url in
+                        ServerAddressRow(
+                            url: url,
+                            title: index == 0 ? "Active" : "Alternate \(index)"
+                        )
+                    }
+                }
+
+                if endpoint.serverID?.nilIfBlank != nil || endpoint.hostID?.nilIfBlank != nil {
+                    Section("Identifiers") {
+                        if let serverID = endpoint.serverID?.nilIfBlank {
+                            LabeledContent("Server ID", value: serverID)
+                        }
+                        if let hostID = endpoint.hostID?.nilIfBlank {
+                            LabeledContent("Host ID", value: hostID)
+                        }
+                    }
+                }
+
+                Section {
+                    Button {
+                        connectToEndpoint()
+                    } label: {
+                        if isConnecting {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label(isConnected ? "Reconnect" : "Connect", systemImage: "bolt.horizontal")
+                        }
+                    }
+                    .disabled(isConnecting)
+                }
+            }
+            .navigationTitle(endpoint.displayName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var statusLabel: String {
+        if endpoint.requiresPairing {
+            "Pairing required"
+        } else if endpoint.token?.nilIfBlank != nil {
+            "Paired"
+        } else {
+            "Available"
+        }
+    }
+
+    private func connectToEndpoint() {
+        guard !isConnecting else { return }
+        isConnecting = true
+        Task {
+            if await connect(endpoint) {
+                dismiss()
+            }
+            isConnecting = false
+        }
+    }
+}
+
+private struct ServerAddressRow: View {
+    let url: URL
+    let title: String
+
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(displayURL)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+            }
+        } icon: {
+            Image(systemName: "network")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var displayURL: String {
+        guard let host = url.host(percentEncoded: false)?.nilIfBlank else {
+            return url.absoluteString
+        }
+        if let port = url.port {
+            return "\(host):\(port)"
+        }
+        return host
+    }
+}
+
 private struct PairServerSheet: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -342,87 +971,59 @@ private struct PairServerSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let endpoint = model.authEndpoint {
-                    Section("Server") {
-                        EndpointRow(endpoint: endpoint)
-                    }
-                }
-
-                Section("Pair") {
-                    TextField("Pairing Code", text: $model.pairingCode)
-                        .keyboardType(.numberPad)
-                    Button {
-                        model.hapticSelection()
-                        isScanning = true
-                    } label: {
-                        Label("Scan QR Code", systemImage: "qrcode.viewfinder")
-                    }
-                    Button {
-                        model.hapticSelection()
-                        Task {
-                            if await model.pair() {
-                                dismiss()
-                            }
+            pairContent
+                .navigationTitle("Pair Server")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") {
+                            model.hapticSelection()
+                            dismiss()
                         }
-                    } label: {
-                        Label("Pair", systemImage: "checkmark.seal")
-                    }
-                    .disabled(model.pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-
-                Section("Token") {
-                    SecureField("Token", text: $model.manualToken)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    Button {
-                        model.hapticSelection()
-                        isScanning = true
-                    } label: {
-                        Label("Scan Pairing QR", systemImage: "qrcode.viewfinder")
-                    }
-                    Button {
-                        model.hapticSelection()
-                        Task {
-                            if await model.useToken() {
-                                dismiss()
-                            }
-                        }
-                    } label: {
-                        Label("Use Token", systemImage: "key")
-                    }
-                    .disabled(model.manualToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-
-                if !model.status.isEmpty {
-                    Section {
-                        Text(model.status)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
                     }
                 }
-            }
-            .navigationTitle("Pair Server")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
-                        model.hapticSelection()
-                        dismiss()
-                    }
-                }
-            }
         }
         .sheet(isPresented: $isScanning) {
-            QRCodeScannerSheet(model: model)
+            QRCodeScannerSheet(model: model) {
+                dismiss()
+            }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.medium])
+    }
+
+    @ViewBuilder
+    private var pairContent: some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 0) {
+                centeredPairButton
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            centeredPairButton
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var centeredPairButton: some View {
+        Button {
+            model.hapticSelection()
+            isScanning = true
+        } label: {
+            Text("Pair")
+                .font(.headline)
+                .foregroundStyle(.primary)
+                .frame(width: 180, height: 52)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .modifier(GlassCapsuleModifier(interactive: true))
     }
 }
 
 private struct SettingsSheet: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var isResetConnectionsConfirmationPresented = false
 
     var body: some View {
         NavigationStack {
@@ -435,6 +1036,16 @@ private struct SettingsSheet: View {
                             }
                         }
                 }
+                Section {
+                    Button(role: .destructive) {
+                        model.hapticSelection()
+                        isResetConnectionsConfirmationPresented = true
+                    } label: {
+                        Label("Reset Connections", systemImage: "trash")
+                    }
+                } footer: {
+                    Text("Clears saved servers and pairing credentials from this iPhone.")
+                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -445,6 +1056,18 @@ private struct SettingsSheet: View {
                         dismiss()
                     }
                 }
+            }
+            .confirmationDialog(
+                "Reset Connections?",
+                isPresented: $isResetConnectionsConfirmationPresented,
+                titleVisibility: .visible
+            ) {
+                Button("Reset Connections", role: .destructive) {
+                    model.resetConnections()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("All saved servers and pairing credentials will be removed.")
             }
         }
         .presentationDetents([.medium])
@@ -946,7 +1569,9 @@ private struct ConnectServerSheet: View {
             }
         }
         .sheet(isPresented: $isScanning) {
-            QRCodeScannerSheet(model: model)
+            QRCodeScannerSheet(model: model) {
+                dismiss()
+            }
         }
         .presentationDetents([.medium, .large])
     }
@@ -956,6 +1581,9 @@ private struct SimulatorSearchDock: View {
     @Bindable var model: AppModel
     @Binding var text: String
     @Binding var isExpanded: Bool
+    let showsSidebarActions: Bool
+    let onSettings: () -> Void
+    let onConnect: () -> Void
     let onCreateSimulator: () -> Void
     @FocusState private var isFocused: Bool
 
@@ -963,28 +1591,34 @@ private struct SimulatorSearchDock: View {
         isExpanded || !text.isEmpty
     }
 
+    private var visibleActionButtonCount: Int {
+        showsSidebarActions ? 3 : 1
+    }
+
     var body: some View {
         GeometryReader { proxy in
+            let reservedWidth = CGFloat(visibleActionButtonCount) * 56 + 32
             let width = isSearchBarVisible
-                ? max(48, proxy.size.width - 88)
+                ? max(48, proxy.size.width - reservedWidth)
                 : 48.0
 
             HStack(spacing: 8) {
                 searchControl(width: width)
 
-                Button {
-                    model.hapticSelection()
-                    onCreateSimulator()
-                } label: {
-                    Label("New Simulator", systemImage: "plus")
-                        .labelStyle(.iconOnly)
-                        .foregroundStyle(.primary)
-                        .frame(width: 48, height: 48)
-                        .contentShape(Circle())
+                if showsSidebarActions {
+                    dockIconButton("Settings", systemImage: "gearshape", action: onSettings)
+                    dockIconButton("Connect Server", systemImage: "personalhotspot", action: onConnect)
                 }
-                .buttonStyle(.plain)
-                .modifier(GlassCircleModifier(interactive: true))
-                .disabled(model.endpoint == nil || model.authEndpoint != nil)
+
+                dockIconButton(
+                    "New Simulator",
+                    systemImage: "plus",
+                    isDisabled: model.endpoint == nil || model.authEndpoint != nil,
+                    action: {
+                        model.hapticSelection()
+                        onCreateSimulator()
+                    }
+                )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
             .padding(.horizontal, 16)
@@ -1054,6 +1688,25 @@ private struct SimulatorSearchDock: View {
         .contentShape(Capsule())
         .modifier(GlassCapsuleModifier(interactive: true))
     }
+
+    private func dockIconButton(
+        _ title: String,
+        systemImage: String,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .labelStyle(.iconOnly)
+                .foregroundStyle(.primary)
+                .frame(width: 48, height: 48)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .modifier(GlassCircleModifier(interactive: true))
+        .disabled(isDisabled)
+        .accessibilityLabel(title)
+    }
 }
 
 private struct GlassCapsuleModifier: ViewModifier {
@@ -1088,15 +1741,43 @@ private struct GlassCircleModifier: ViewModifier {
     }
 }
 
+private struct GlassRoundedRectangleModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    let interactive: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            if interactive {
+                content.glassEffect(.regular.interactive(), in: .rect(cornerRadius: cornerRadius))
+            } else {
+                content.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+            }
+        } else {
+            content.background(
+                .ultraThinMaterial,
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+        }
+    }
+}
+
 private struct QRCodeScannerSheet: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    let onCompleted: () -> Void
+    @State private var didScan = false
 
     var body: some View {
         NavigationStack {
             QRCodeScannerView { value in
-                model.handleScannedPairingPayload(value)
+                guard !didScan else { return }
+                didScan = true
                 dismiss()
+                Task { @MainActor in
+                    if await model.handleScannedPairingPayload(value) {
+                        onCompleted()
+                    }
+                }
             }
             .ignoresSafeArea(edges: .bottom)
             .navigationTitle("Scan Pairing QR")
@@ -1111,6 +1792,7 @@ private struct QRCodeScannerSheet: View {
             }
         }
     }
+
 }
 
 private struct QRCodeScannerView: UIViewControllerRepresentable {
@@ -1256,9 +1938,9 @@ private struct EndpointRow: View {
     var body: some View {
         Label {
             VStack(alignment: .leading, spacing: 2) {
-                Text(endpoint.name)
+                Text(endpoint.displayName)
                     .lineLimit(1)
-                Text(endpoint.baseURL.absoluteString)
+                Text(endpoint.listSubtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -1272,6 +1954,7 @@ private struct EndpointRow: View {
 
 struct SimulatorRow: View {
     let simulator: SimulatorMetadata
+    var isBusy = false
 
     var body: some View {
         Label {
@@ -1286,8 +1969,41 @@ struct SimulatorRow: View {
                 }
             }
         } icon: {
-            Image(systemName: simulator.systemImage)
-                .foregroundStyle(simulator.isBooted ? .green : .secondary)
+            if isBusy {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: simulator.systemImage)
+                    .foregroundStyle(simulator.isBooted ? .green : .secondary)
+            }
+        }
+    }
+}
+
+struct SimulatorLifecycleMenuItems: View {
+    @Bindable var model: AppModel
+    let simulator: SimulatorMetadata
+
+    var body: some View {
+        if model.isSimulatorLifecycleBusy(simulator) {
+            Button {} label: {
+                Label(simulator.isBooted ? "Stopping" : "Starting", systemImage: "hourglass")
+            }
+            .disabled(true)
+        } else if simulator.isBooted {
+            Button(role: .destructive) {
+                Task { await model.stopSimulator(simulator) }
+            } label: {
+                Label("Stop", systemImage: "stop.circle")
+            }
+            .disabled(model.endpoint == nil || model.simulatorLifecycleID == simulator.udid)
+        } else {
+            Button {
+                Task { await model.startSimulator(simulator) }
+            } label: {
+                Label("Start", systemImage: "play.circle")
+            }
+            .disabled(model.endpoint == nil || model.simulatorLifecycleID == simulator.udid)
         }
     }
 }

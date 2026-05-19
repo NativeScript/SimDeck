@@ -315,6 +315,8 @@ const flutterTransparentContainerTypes = new Set([
   "ClipRRect",
   "ClipRect",
   "Column",
+  "CompositedTransformFollower",
+  "CompositedTransformTarget",
   "ConstrainedBox",
   "Container",
   "CustomMultiChildLayout",

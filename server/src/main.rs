@@ -21,7 +21,7 @@ use anyhow::Context;
 use api::routes::{router, AppState};
 use axum::Router;
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
-use config::Config;
+use config::{Config, ServerKind};
 use inspector::{InspectorHub, InspectorRegistryAdvertisement};
 use logs::LogRegistry;
 use metrics::counters::Metrics;
@@ -160,6 +160,8 @@ enum Command {
         access_token: Option<String>,
         #[arg(long)]
         pairing_code: Option<String>,
+        #[arg(long, hide = true, value_enum, default_value_t = ServerKindArg::Standalone)]
+        server_kind: ServerKindArg,
     },
     Service {
         #[command(subcommand)]
@@ -553,6 +555,8 @@ enum DaemonCommand {
         access_token: String,
         #[arg(long)]
         pairing_code: Option<String>,
+        #[arg(long, hide = true, value_enum, default_value_t = ServerKindArg::Workspace)]
+        server_kind: ServerKindArg,
     },
 }
 
@@ -659,6 +663,26 @@ enum ServiceCommand {
         #[arg(long)]
         access_token: Option<String>,
     },
+    Reset {
+        #[arg(long, default_value_t = 4310)]
+        port: u16,
+        #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
+        bind: IpAddr,
+        #[arg(long)]
+        advertise_host: Option<String>,
+        #[arg(long)]
+        client_root: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
+        video_codec: VideoCodecMode,
+        #[arg(long)]
+        low_latency: bool,
+        #[arg(long, value_enum)]
+        stream_quality: Option<StreamQualityProfileArg>,
+        #[arg(long, value_parser = clap::value_parser!(u32).range(15..=240))]
+        local_stream_fps: Option<u32>,
+        #[arg(long)]
+        access_token: Option<String>,
+    },
     Off,
 }
 
@@ -720,6 +744,25 @@ enum VideoCodecMode {
     Hardware,
     #[value(alias = "h264-software")]
     Software,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum ServerKindArg {
+    LaunchAgent,
+    Workspace,
+    Foreground,
+    Standalone,
+}
+
+impl From<ServerKindArg> for ServerKind {
+    fn from(value: ServerKindArg) -> Self {
+        match value {
+            ServerKindArg::LaunchAgent => ServerKind::LaunchAgent,
+            ServerKindArg::Workspace => ServerKind::Workspace,
+            ServerKindArg::Foreground => ServerKind::Foreground,
+            ServerKindArg::Standalone => ServerKind::Standalone,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -1053,6 +1096,8 @@ fn start_project_daemon(options: DaemonLaunchOptions) -> anyhow::Result<DaemonMe
         pairing_code.clone(),
         "--video-codec".to_owned(),
         options.video_codec.as_env_value().to_owned(),
+        "--server-kind".to_owned(),
+        "workspace".to_owned(),
     ];
     if options.low_latency {
         args.push("--low-latency".to_owned());
@@ -1196,12 +1241,7 @@ fn stop_project_daemon() -> anyhow::Result<()> {
 }
 
 fn terminate_daemon_metadata(metadata: &DaemonMetadata) -> anyhow::Result<()> {
-    let _ = ProcessCommand::new("kill")
-        .arg(metadata.pid.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    wait_for_process_exit(metadata.pid, Duration::from_secs(3));
+    terminate_process_group(metadata.pid, Duration::from_secs(5));
     let _ = fs::remove_file(daemon_metadata_path_for_root(&metadata.project_root)?);
     Ok(())
 }
@@ -1241,14 +1281,44 @@ fn kill_all_project_daemons() -> anyhow::Result<()> {
     }))
 }
 
-fn wait_for_process_exit(pid: u32, timeout: Duration) {
+fn terminate_process_group(pid: u32, timeout: Duration) {
+    signal_process_group(pid, "TERM");
+    signal_process(pid, "TERM");
+    if wait_for_process_exit(pid, timeout) {
+        return;
+    }
+    signal_process_group(pid, "KILL");
+    signal_process(pid, "KILL");
+    let _ = wait_for_process_exit(pid, Duration::from_secs(2));
+}
+
+fn signal_process(pid: u32, signal: &str) {
+    let _ = ProcessCommand::new("kill")
+        .args([format!("-{signal}"), pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn signal_process_group(pgid: u32, signal: &str) {
+    let _ = ProcessCommand::new("kill")
+        .arg(format!("-{signal}"))
+        .arg("--")
+        .arg(format!("-{pgid}"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if !process_exists(pid) {
-            return;
+            return true;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+    !process_exists(pid)
 }
 
 fn process_exists(pid: u32) -> bool {
@@ -1394,6 +1464,7 @@ fn print_pairing_result(target: &PairingTarget, started: bool, json: bool) -> an
     println!("{:>12}   {}", "Pair:", format_pairing_code(pairing_code));
     println!();
     println!("Scan this with SimDeck for iOS:");
+    println!();
     println!("{}", render_qr_code(&pair_url)?);
     println!("{:>12}   {}", "Deep Link:", pair_url);
     Ok(())
@@ -1760,11 +1831,11 @@ fn pair_global_service(options: PairGlobalServiceOptions) -> anyhow::Result<()> 
     if port.is_none() {
         print_pair_progress("checking the installed service port");
     }
-    let port = match port {
+    let requested_port = match port {
         Some(port) => port,
-        None => service::installed_port()?.unwrap_or(choose_daemon_port_for_bind(4310, bind)?),
+        None => service::installed_port()?.unwrap_or(4310),
     };
-    print_pair_progress(format!("using port {port}"));
+    print_pair_progress(format!("requesting port {requested_port}"));
 
     print_pair_progress("detecting LAN and Tailscale addresses");
     let advertise_host = advertise_host.or_else(|| {
@@ -1772,15 +1843,10 @@ fn pair_global_service(options: PairGlobalServiceOptions) -> anyhow::Result<()> 
             .or_else(detect_tailscale_ip)
             .map(|ip| ip.to_string())
     });
-    if let Some(host) = advertise_host.as_deref() {
-        print_pair_progress(format!("advertising {host}:{port}"));
-    } else {
-        print_pair_progress("no LAN or Tailscale address detected; local pairing only");
-    }
 
-    print_pair_progress("starting the global SimDeck service");
+    print_pair_progress("starting or reusing the global SimDeck service");
     let result = service::pair(ServiceOptions {
-        port,
+        port: requested_port,
         bind,
         advertise_host,
         client_root,
@@ -1791,17 +1857,34 @@ fn pair_global_service(options: PairGlobalServiceOptions) -> anyhow::Result<()> 
         access_token: None,
         pairing_code: None,
     })?;
-    print_pair_progress(format!(
-        "installed {}; logs: {}, {}",
-        result.service,
-        result.stdout_log.display(),
-        result.stderr_log.display()
-    ));
+    if result.reused {
+        print_pair_progress(format!(
+            "using {} on port {}; logs: {}, {}",
+            result.service,
+            result.port,
+            result.stdout_log.display(),
+            result.stderr_log.display()
+        ));
+    } else {
+        print_pair_progress(format!(
+            "installed {} on port {}; logs: {}, {}",
+            result.service,
+            result.port,
+            result.stdout_log.display(),
+            result.stderr_log.display()
+        ));
+    }
+    let reused = result.reused;
     let target = PairingTarget::from_service(result)?;
+    if let Some(host) = target.advertise_host.as_deref() {
+        print_pair_progress(format!("advertising {host}:{}", target.port));
+    } else {
+        print_pair_progress("no LAN or Tailscale address detected; local pairing only");
+    }
     print_pair_progress(format!("waiting for service health at {}", target.http_url));
     wait_for_pairing_target(&target, Duration::from_secs(15))?;
     print_pair_progress("service is ready; rendering pairing QR");
-    print_pairing_result(&target, true, json)
+    print_pairing_result(&target, !reused, json)
 }
 
 fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
@@ -1864,6 +1947,7 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
         low_latency,
         stream_quality_profile,
         None,
+        ServerKind::Foreground,
         Some(access_token),
         Some(pairing_code),
     );
@@ -2448,6 +2532,7 @@ fn main() -> anyhow::Result<()> {
                 local_stream_fps,
                 access_token,
                 pairing_code,
+                server_kind,
             } => {
                 if let Some(local_stream_fps) = local_stream_fps {
                     env::set_var("SIMDECK_LOCAL_STREAM_FPS", local_stream_fps.to_string());
@@ -2488,6 +2573,7 @@ fn main() -> anyhow::Result<()> {
                     low_latency,
                     env::var("SIMDECK_STREAM_QUALITY_PROFILE").ok(),
                     local_stream_fps,
+                    server_kind.into(),
                     Some(access_token),
                     pairing_code,
                 );
@@ -2531,6 +2617,7 @@ fn main() -> anyhow::Result<()> {
             local_stream_fps,
             access_token,
             pairing_code,
+            server_kind,
         } => serve_with_appkit(
             port,
             bind,
@@ -2540,6 +2627,7 @@ fn main() -> anyhow::Result<()> {
             low_latency,
             local_stream_quality_profile(low_latency, stream_quality),
             local_stream_fps,
+            server_kind.into(),
             access_token,
             pairing_code,
         ),
@@ -2577,6 +2665,28 @@ fn main() -> anyhow::Result<()> {
                 local_stream_fps,
                 access_token,
             } => service::restart(ServiceOptions {
+                port,
+                bind,
+                advertise_host,
+                client_root,
+                video_codec,
+                low_latency,
+                stream_quality_profile: local_stream_quality_profile(low_latency, stream_quality),
+                local_stream_fps,
+                access_token,
+                pairing_code: None,
+            }),
+            ServiceCommand::Reset {
+                port,
+                bind,
+                advertise_host,
+                client_root,
+                video_codec,
+                low_latency,
+                stream_quality,
+                local_stream_fps,
+                access_token,
+            } => service::reset(ServiceOptions {
                 port,
                 bind,
                 advertise_host,
@@ -3537,6 +3647,7 @@ fn serve_with_appkit(
     low_latency: bool,
     stream_quality_profile: Option<String>,
     local_stream_fps: Option<u32>,
+    server_kind: ServerKind,
     access_token: Option<String>,
     pairing_code: Option<String>,
 ) -> anyhow::Result<()> {
@@ -3583,6 +3694,7 @@ fn serve_with_appkit(
                 client_root,
                 video_codec,
                 low_latency,
+                server_kind,
                 access_token,
                 pairing_code,
             )),
@@ -6324,6 +6436,7 @@ async fn serve(
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
     low_latency: bool,
+    server_kind: ServerKind,
     access_token: Option<String>,
     pairing_code: Option<String>,
 ) -> anyhow::Result<()> {
@@ -6336,6 +6449,7 @@ async fn serve(
         root,
         bind,
         advertise_host,
+        server_kind,
         video_codec.as_env_value().to_owned(),
         low_latency,
         access_token,
@@ -6398,15 +6512,50 @@ async fn serve(
         }
     };
     tokio::pin!(quit_key_signal);
+    let termination_signal = shutdown_signal();
+    tokio::pin!(termination_signal);
 
     tokio::select! {
         result = http_task => result??,
         result = health_task => result.context("server health heartbeat task panicked")?,
         _ = tokio::signal::ctrl_c() => {}
         _ = &mut quit_key_signal => {}
+        _ = &mut termination_signal => {}
     }
 
     Ok(())
+}
+
+#[cfg(unix)]
+async fn shutdown_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut terminate = match signal(SignalKind::terminate()) {
+        Ok(signal) => signal,
+        Err(error) => {
+            warn!("Unable to install SIGTERM handler: {error}");
+            std::future::pending::<()>().await;
+            return;
+        }
+    };
+    let mut hangup = match signal(SignalKind::hangup()) {
+        Ok(signal) => signal,
+        Err(error) => {
+            warn!("Unable to install SIGHUP handler: {error}");
+            std::future::pending::<()>().await;
+            return;
+        }
+    };
+
+    tokio::select! {
+        _ = terminate.recv() => {}
+        _ = hangup.recv() => {}
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    std::future::pending::<()>().await
 }
 
 struct BonjourAdvertisement {
@@ -6420,6 +6569,7 @@ impl BonjourAdvertisement {
         }
         let service_name = bonjour_service_name(&config.advertise_host);
         let server_id = auth::server_identity(config);
+        let server_kind = config.server_kind.as_str();
         match ProcessCommand::new("dns-sd")
             .args([
                 "-R",
@@ -6429,6 +6579,9 @@ impl BonjourAdvertisement {
                 &config.http_port.to_string(),
                 &format!("sid={server_id}"),
                 &format!("host={}", config.advertise_host),
+                &format!("hid={}", config.host_id),
+                &format!("hname={}", config.host_name),
+                &format!("kind={server_kind}"),
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -6571,8 +6724,8 @@ mod tests {
         normalize_accessibility_point_for_display, render_qr_code,
         server_health_watchdog_should_restart, service_post_error_is_retryable, simdeck_pair_url,
         studio_daemon_restart_args, Cli, Command, DaemonCommand, DaemonLaunchOptions,
-        DaemonMetadata, PairingAddress, StreamQualityProfileArg, StudioExposeOptions,
-        VideoCodecMode, DEFAULT_LOCAL_STREAM_QUALITY_PROFILE,
+        DaemonMetadata, PairingAddress, ServiceCommand, StreamQualityProfileArg,
+        StudioExposeOptions, VideoCodecMode, DEFAULT_LOCAL_STREAM_QUALITY_PROFILE,
         SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD, SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
     };
     use clap::Parser;
@@ -6736,6 +6889,30 @@ mod tests {
         };
         assert_eq!(port, None);
         assert_eq!(bind, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    }
+
+    #[test]
+    fn service_reset_command_accepts_service_options() {
+        let cli = Cli::parse_from([
+            "simdeck",
+            "service",
+            "reset",
+            "--port",
+            "4315",
+            "--access-token",
+            "explicit-token",
+        ]);
+
+        let Command::Service {
+            command: ServiceCommand::Reset {
+                port, access_token, ..
+            },
+        } = cli.command
+        else {
+            panic!("expected service reset command");
+        };
+        assert_eq!(port, 4315);
+        assert_eq!(access_token.as_deref(), Some("explicit-token"));
     }
 
     #[test]

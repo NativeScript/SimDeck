@@ -551,9 +551,6 @@ class SimDeckFlutterInspector {
     final renderObject = element.findRenderObject();
     final frame = _frameFor(renderObject);
     final semantics = _semanticsInfo(renderObject);
-    final sourceLocation = _shouldReadSourceLocation(element, semantics)
-        ? _sourceLocation(element)
-        : null;
     final transparent = _isTransparentWrapper(element, semantics);
     final transparentHitTarget = _isTransparentHitTarget(element, semantics);
     final childDepth = transparent ? depth : depth + 1;
@@ -577,6 +574,9 @@ class SimDeckFlutterInspector {
       return children.single;
     }
 
+    final sourceLocation = _shouldReadSourceLocation(element, semantics)
+        ? _sourceLocation(element)
+        : null;
     final id = _objectId(element);
     final title = _nodeTitle(element, semantics);
     return <String, Object?>{
@@ -909,18 +909,18 @@ class SimDeckFlutterInspector {
 
   String _nodeTitle(Element element, Map<String, Object?>? semantics) {
     final widget = element.widget;
-    final properties = _diagnosticProperties(widget);
+    final type = widget.runtimeType.toString();
+    final semanticTitle = _firstString(<Object?>[semantics?['label']]);
+    if (semanticTitle != null) {
+      return semanticTitle;
+    }
+    if (_isTransparentContainerType(type)) {
+      return _firstString(<Object?>[widget.key?.toString(), type]) ?? '';
+    }
     return _firstString(<Object?>[
-          semantics?['label'],
-          properties['label'],
-          properties['text'],
-          properties['data'],
-          properties['message'],
-          properties['tooltip'],
-          properties['semanticLabel'],
-          properties['value'],
+          _diagnosticTitle(widget),
           widget.key?.toString(),
-          widget.runtimeType.toString(),
+          type,
         ]) ??
         '';
   }
@@ -1018,6 +1018,32 @@ class SimDeckFlutterInspector {
     return properties;
   }
 
+  String? _diagnosticTitle(Object object) {
+    if (object is! Diagnosticable) {
+      return null;
+    }
+    final properties = <String, Object?>{};
+    for (final property in object.toDiagnosticsNode().getProperties()) {
+      final name = property.name;
+      if (name == null || !_titleDiagnosticPropertyNames.contains(name)) {
+        continue;
+      }
+      properties[name] = _encodeDiagnosticsValue(
+        property.value,
+        property.toDescription(),
+      );
+    }
+    return _firstString(<Object?>[
+      properties['label'],
+      properties['text'],
+      properties['data'],
+      properties['message'],
+      properties['tooltip'],
+      properties['semanticLabel'],
+      properties['value'],
+    ]);
+  }
+
   Map<String, Object?>? _renderObjectProperties(RenderObject? renderObject) {
     if (renderObject == null) {
       return null;
@@ -1060,6 +1086,16 @@ class _FrameCacheEntry {
 }
 
 final Object _noSourceLocation = Object();
+
+const Set<String> _titleDiagnosticPropertyNames = <String>{
+  'label',
+  'text',
+  'data',
+  'message',
+  'tooltip',
+  'semanticLabel',
+  'value',
+};
 
 const Set<String> _frameworkWrapperTypes = <String>{
   'Actions',
@@ -1128,6 +1164,8 @@ const Set<String> _flutterPassThroughWidgetTypes = <String>{
   'ClipRRect',
   'ClipRect',
   'Column',
+  'CompositedTransformFollower',
+  'CompositedTransformTarget',
   'ConstrainedBox',
   'Container',
   'CustomMultiChildLayout',

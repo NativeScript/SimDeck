@@ -1,3 +1,5 @@
+use sha2::{Digest, Sha256};
+use std::ffi::CStr;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
@@ -5,6 +7,9 @@ use std::path::PathBuf;
 pub struct Config {
     pub access_token: String,
     pub advertise_host: String,
+    pub host_id: String,
+    pub host_name: String,
+    pub server_kind: ServerKind,
     pub bind_ip: IpAddr,
     pub http_port: u16,
     pub pairing_code: Option<String>,
@@ -20,6 +25,7 @@ impl Config {
         client_root: PathBuf,
         bind_ip: IpAddr,
         advertise_host: Option<String>,
+        server_kind: ServerKind,
         video_codec: String,
         low_latency: bool,
         access_token: Option<String>,
@@ -30,9 +36,14 @@ impl Config {
             IpAddr::V6(ip) if ip.is_unspecified() => Ipv4Addr::LOCALHOST.to_string(),
             _ => bind_ip.to_string(),
         });
+        let host_name = local_host_name();
+        let host_id = host_identity(&host_name);
         Self {
             access_token: access_token.unwrap_or_else(crate::auth::generate_access_token),
             advertise_host,
+            host_id,
+            host_name,
+            server_kind,
             bind_ip,
             http_port,
             pairing_code,
@@ -47,9 +58,103 @@ impl Config {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServerKind {
+    LaunchAgent,
+    Workspace,
+    Foreground,
+    Standalone,
+}
+
+impl ServerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LaunchAgent => "launchAgent",
+            Self::Workspace => "workspace",
+            Self::Foreground => "foreground",
+            Self::Standalone => "standalone",
+        }
+    }
+}
+
+fn local_host_name() -> String {
+    let mut buffer = [0 as libc::c_char; 256];
+    let name = unsafe {
+        if libc::gethostname(buffer.as_mut_ptr(), buffer.len()) != 0 {
+            None
+        } else {
+            buffer[buffer.len() - 1] = 0;
+            CStr::from_ptr(buffer.as_ptr()).to_str().ok()
+        }
+    };
+
+    name.and_then(|value| {
+        value
+            .trim()
+            .trim_end_matches(".local")
+            .trim_end_matches('.')
+            .split('.')
+            .next()
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+    .unwrap_or_else(|| "localhost".to_owned())
+}
+
+fn host_identity(host_name: &str) -> String {
+    let source = machine_identity_source()
+        .unwrap_or_else(|| format!("hostname:{}", normalized_host_name(host_name)));
+    host_identity_from_source(&source)
+}
+
+fn normalized_host_name(host_name: &str) -> String {
+    host_name.trim().to_ascii_lowercase()
+}
+
+fn host_identity_from_source(source: &str) -> String {
+    let digest = hex::encode(Sha256::digest(source.as_bytes()));
+    digest[..16].to_owned()
+}
+
+#[cfg(target_os = "macos")]
+fn machine_identity_source() -> Option<String> {
+    io_platform_uuid().map(|uuid| format!("ioplatformuuid:{}", uuid.to_ascii_lowercase()))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn machine_identity_source() -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn io_platform_uuid() -> Option<String> {
+    let output = std::process::Command::new("/usr/sbin/ioreg")
+        .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_io_platform_uuid(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_io_platform_uuid(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let (_, value) = line.split_once("\"IOPlatformUUID\"")?;
+        let (_, value) = value.split_once('=')?;
+        value
+            .trim()
+            .trim_matches('"')
+            .split_whitespace()
+            .next()
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{host_identity_from_source, parse_io_platform_uuid, Config, ServerKind};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::path::PathBuf;
 
@@ -59,6 +164,7 @@ mod tests {
             PathBuf::from("client/dist"),
             bind_ip,
             advertise_host,
+            ServerKind::Standalone,
             "auto".to_owned(),
             false,
             Some("token".to_owned()),
@@ -103,5 +209,34 @@ mod tests {
         let config = config(IpAddr::V4(Ipv4Addr::LOCALHOST), None);
 
         assert_eq!(config.http_addr().to_string(), "127.0.0.1:4310");
+    }
+
+    #[test]
+    fn server_kind_serializes_for_health_contract() {
+        assert_eq!(ServerKind::LaunchAgent.as_str(), "launchAgent");
+        assert_eq!(ServerKind::Workspace.as_str(), "workspace");
+        assert_eq!(ServerKind::Foreground.as_str(), "foreground");
+        assert_eq!(ServerKind::Standalone.as_str(), "standalone");
+    }
+
+    #[test]
+    fn host_identity_changes_with_machine_source() {
+        assert_ne!(
+            host_identity_from_source("ioplatformuuid:machine-a"),
+            host_identity_from_source("ioplatformuuid:machine-b")
+        );
+    }
+
+    #[test]
+    fn parses_io_platform_uuid_from_ioreg_output() {
+        let output = r#"
+        +-o IOPlatformExpertDevice  <class IOPlatformExpertDevice, id 0x100000100, registered, matched, active, busy 0 (0 ms), retain 41>
+            "IOPlatformUUID" = "01234567-89AB-CDEF-0123-456789ABCDEF"
+        "#;
+
+        assert_eq!(
+            parse_io_platform_uuid(output).as_deref(),
+            Some("01234567-89AB-CDEF-0123-456789ABCDEF")
+        );
     }
 }

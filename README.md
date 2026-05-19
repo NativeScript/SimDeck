@@ -82,6 +82,12 @@ local, LAN, and Tailscale URLs when available, and shows a QR code with a
 `simdeck://pair` link. The QR contains the pairing code plus all detected
 non-loopback addresses, so pairing once can save both the LAN and Tailscale
 routes with the same service token.
+Normal service restarts preserve that token so paired clients stay connected.
+Use `simdeck service reset` only when you want to rotate the service token and
+restart the LaunchAgent.
+If port 4310 is already owned by a workspace daemon, the LaunchAgent uses the
+next available service-discovery port, up to 4320, instead of stopping that
+daemon.
 
 CLI commands automatically use the same warm daemon:
 

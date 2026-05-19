@@ -26,6 +26,18 @@ struct SimDeckAPI: Sendable {
         try await decode(path: "/api/health", timeout: timeout)
     }
 
+    func healthStatus(timeout: TimeInterval = 5) async throws -> (health: HealthResponse?, requiresPairing: Bool) {
+        let (data, response) = try await requestWithHTTPResponse(
+            path: "/api/health",
+            method: "GET",
+            body: Optional<String>.none,
+            timeout: timeout,
+            allowUnauthorized: true
+        )
+        let health = try? JSONDecoder().decode(HealthResponse.self, from: data)
+        return (health, response.statusCode == 401)
+    }
+
     func simulators() async throws -> [SimulatorMetadata] {
         let response: SimulatorsResponse = try await decode(path: "/api/simulators")
         return response.simulators
@@ -57,6 +69,15 @@ struct SimDeckAPI: Sendable {
             method: "POST",
             body: Optional<String>.none,
             timeout: 300
+        )
+    }
+
+    func shutdownSimulator(udid: String) async throws {
+        let _: EmptyResponse = try await decode(
+            path: "/api/simulators/\(udid.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? udid)/shutdown",
+            method: "POST",
+            body: Optional<String>.none,
+            timeout: 120
         )
     }
 
@@ -150,7 +171,8 @@ struct SimDeckAPI: Sendable {
         body: (some Encodable)?,
         timeout: TimeInterval,
         queryItems: [URLQueryItem] = [],
-        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
+        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy,
+        allowUnauthorized: Bool = false
     ) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: url(for: path, queryItems: queryItems), cachePolicy: cachePolicy, timeoutInterval: timeout)
         request.httpMethod = method
@@ -169,6 +191,9 @@ struct SimDeckAPI: Sendable {
             throw SimDeckAPIError.invalidResponse
         }
         if httpResponse.statusCode == 401 {
+            if allowUnauthorized {
+                return (data, httpResponse)
+            }
             throw SimDeckAPIError.authRequired
         }
         guard (200..<300).contains(httpResponse.statusCode) else {

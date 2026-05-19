@@ -8,6 +8,9 @@ final class SimDeckDiscovery {
     var endpoints: [SimDeckEndpoint] = []
     var isScanning = false
 
+    private static let launchAgentDiscoveryPorts = Array(4310...4320)
+    private static let priorityDiscoveryPorts = [4313] + launchAgentDiscoveryPorts.filter { $0 != 4313 }
+
     @ObservationIgnored private let bonjour = BonjourDiscovery()
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored var onEndpoint: ((SimDeckEndpoint) -> Void)?
@@ -56,32 +59,49 @@ final class SimDeckDiscovery {
     func upsert(_ endpoint: SimDeckEndpoint) {
         let isNewEndpoint: Bool
         let shouldNotify: Bool
+        let notifiedEndpoint: SimDeckEndpoint
         if let index = endpoints.firstIndex(where: { Self.sameServer($0, endpoint) }) {
             let previous = endpoints[index]
             endpoints[index] = Self.mergedEndpoint(previous, endpoint)
             isNewEndpoint = false
+            notifiedEndpoint = endpoints[index]
             shouldNotify = previous.baseURL != endpoints[index].baseURL
                 || (previous.requiresPairing && !endpoints[index].requiresPairing)
+                || previous.hostIdentityKey != endpoints[index].hostIdentityKey
         } else {
             endpoints.append(endpoint)
             isNewEndpoint = true
             shouldNotify = true
+            notifiedEndpoint = endpoint
         }
         endpoints.sort {
-            if $0.source == $1.source {
-                return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            if $0.displayName != $1.displayName {
+                return $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+            }
+            if $0.serverKindRank != $1.serverKindRank {
+                return $0.serverKindRank < $1.serverKindRank
             }
             return sourceRank($0.source) < sourceRank($1.source)
         }
         if isNewEndpoint || shouldNotify {
-            onEndpoint?(endpoint)
+            onEndpoint?(notifiedEndpoint)
         }
     }
 
     private static func sameServer(_ lhs: SimDeckEndpoint, _ rhs: SimDeckEndpoint) -> Bool {
+        if let lhsHostID = lhs.normalizedHostID,
+           let rhsHostID = rhs.normalizedHostID {
+            return lhsHostID == rhsHostID
+        }
         if let lhsID = lhs.serverID?.nilIfBlank,
            let rhsID = rhs.serverID?.nilIfBlank {
             return lhsID == rhsID
+        }
+        if lhs.normalizedHostID == nil,
+           rhs.normalizedHostID == nil,
+           let lhsHostName = lhs.normalizedHostName,
+           let rhsHostName = rhs.normalizedHostName {
+            return lhsHostName == rhsHostName
         }
         return lhs.baseURL == rhs.baseURL
             || lhs.alternateBaseURLs.contains(rhs.baseURL)
@@ -93,9 +113,15 @@ final class SimDeckDiscovery {
         let other = preferred.baseURL == lhs.baseURL ? rhs : lhs
         var merged = preferred
         merged.serverID = preferred.serverID ?? other.serverID
+        merged.hostID = preferred.hostID ?? other.hostID
+        merged.hostName = preferred.hostName ?? other.hostName
+        merged.serverKind = preferred.serverKind ?? other.serverKind
         merged.token = preferred.token ?? other.token
         merged.requiresPairing = preferred.requiresPairing && other.requiresPairing
         merged.preferredSimulatorID = preferred.preferredSimulatorID ?? other.preferredSimulatorID
+        if let hostName = merged.hostName?.nilIfBlank {
+            merged.name = hostName
+        }
         merged.alternateBaseURLs = uniquedURLs(
             [lhs.baseURL, rhs.baseURL] + lhs.alternateBaseURLs + rhs.alternateBaseURLs
         )
@@ -104,6 +130,9 @@ final class SimDeckDiscovery {
     }
 
     private static func preferredEndpoint(_ lhs: SimDeckEndpoint, _ rhs: SimDeckEndpoint) -> SimDeckEndpoint {
+        if lhs.serverKindRank != rhs.serverKindRank {
+            return lhs.serverKindRank < rhs.serverKindRank ? lhs : rhs
+        }
         if lhs.requiresPairing != rhs.requiresPairing {
             return lhs.requiresPairing ? rhs : lhs
         }
@@ -139,21 +168,22 @@ final class SimDeckDiscovery {
 
     private static func scanLikelyHosts() async -> [SimDeckEndpoint] {
         let candidates = IPv4Interface.discoveryCandidates()
-        let ports = [4310, 4311, 4312, 4313, 4314, 4320]
-        return await scan(candidates: candidates, ports: ports)
+        return await scan(candidates: candidates, ports: launchAgentDiscoveryPorts)
     }
 
     private static func scanPriorityHosts() async -> [SimDeckEndpoint] {
-        for port in [4313, 4310, 4311, 4312, 4314, 4320] {
+        for port in priorityDiscoveryPorts {
             if let endpoint = await probe(host: "127.0.0.1", port: port, source: .manual) {
                 return [endpoint]
             }
         }
-        if let endpoint = await probe(host: "localhost", port: 4313, source: .manual) {
-            return [endpoint]
-        }
-        if let endpoint = await probe(host: "simdeck.local", port: 4310, source: .bonjour) {
-            return [endpoint]
+        for host in ["localhost", "simdeck.local"] {
+            for port in priorityDiscoveryPorts {
+                let source: EndpointSource = host == "simdeck.local" ? .bonjour : .manual
+                if let endpoint = await probe(host: host, port: port, source: source) {
+                    return [endpoint]
+                }
+            }
         }
         return []
     }
@@ -199,11 +229,14 @@ final class SimDeckDiscovery {
             if http.statusCode == 401 {
                 let health = try? JSONDecoder().decode(HealthResponse.self, from: data)
                 return SimDeckEndpoint(
-                    name: endpointName(for: host),
+                    name: endpointName(for: host, health: health),
                     baseURL: baseURL,
                     source: source,
                     requiresPairing: true,
                     serverID: health?.serverId,
+                    hostID: health?.hostId,
+                    hostName: health?.hostName,
+                    serverKind: health?.serverKind,
                     alternateBaseURLs: alternateURLs(from: health, fallbackPort: port)
                 )
             }
@@ -213,10 +246,13 @@ final class SimDeckDiscovery {
                 return nil
             }
             return SimDeckEndpoint(
-                name: endpointName(for: host),
+                name: endpointName(for: host, health: health),
                 baseURL: baseURL,
                 source: source,
                 serverID: health.serverId,
+                hostID: health.hostId,
+                hostName: health.hostName,
+                serverKind: health.serverKind,
                 alternateBaseURLs: alternateURLs(from: health, fallbackPort: port)
             )
         } catch {
@@ -238,6 +274,10 @@ final class SimDeckDiscovery {
             return "Local SimDeck"
         }
         return "SimDeck \(host)"
+    }
+
+    private static func endpointName(for host: String, health: HealthResponse?) -> String {
+        health?.hostName?.nilIfBlank ?? endpointName(for: host)
     }
 }
 
@@ -270,6 +310,12 @@ private final class BonjourDiscovery: NSObject, NetServiceBrowserDelegate, NetSe
         let host = sender.hostName?.trimmingTrailingSlashes() ?? "\(sender.name).local"
         let txt = NetService.dictionary(fromTXTRecord: sender.txtRecordData() ?? Data())
         let serverID = txt["sid"].flatMap { String(data: $0, encoding: .utf8) }?.nilIfBlank
+        let hostID = txt["hid"].flatMap { String(data: $0, encoding: .utf8) }?.nilIfBlank
+            ?? txt["hostId"].flatMap { String(data: $0, encoding: .utf8) }?.nilIfBlank
+        let hostName = txt["hname"].flatMap { String(data: $0, encoding: .utf8) }?.nilIfBlank
+            ?? txt["hostName"].flatMap { String(data: $0, encoding: .utf8) }?.nilIfBlank
+        let serverKind = txt["kind"].flatMap { String(data: $0, encoding: .utf8) }?.nilIfBlank
+            ?? txt["serverKind"].flatMap { String(data: $0, encoding: .utf8) }?.nilIfBlank
         let advertisedHost = txt["host"].flatMap { String(data: $0, encoding: .utf8) }?.nilIfBlank
         var components = URLComponents()
         components.scheme = "http"
@@ -288,10 +334,13 @@ private final class BonjourDiscovery: NSObject, NetServiceBrowserDelegate, NetSe
         }
         onEndpoint?(
             SimDeckEndpoint(
-                name: sender.name.isEmpty ? "SimDeck \(host)" : sender.name,
+                name: hostName ?? (sender.name.isEmpty ? "SimDeck \(host)" : sender.name),
                 baseURL: url,
                 source: .bonjour,
                 serverID: serverID,
+                hostID: hostID,
+                hostName: hostName,
+                serverKind: serverKind,
                 alternateBaseURLs: alternateURLs
             )
         )

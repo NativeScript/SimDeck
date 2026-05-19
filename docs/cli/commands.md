@@ -30,7 +30,13 @@ simdeck daemon restart --video-codec software --stream-quality low
 `simdeck pair` uses the global LaunchAgent-backed service instead of a
 project-local daemon. It binds the service for LAN access, preserves an existing
 service token and pairing code when present, detects LAN and Tailscale IPv4
-addresses, and prints a `simdeck://pair` QR for the native iOS app.
+addresses, and prints a `simdeck://pair` QR for the native iOS app. If the
+requested service port is already in use by a workspace daemon, the LaunchAgent
+uses the next available port after it.
+
+`simdeck service restart` also preserves the installed service token so native
+clients remain paired across service restarts. Use `simdeck service reset` to
+rotate the token and pairing code, then restart the LaunchAgent.
 
 ## Device Lifecycle
 

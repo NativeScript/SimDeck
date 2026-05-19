@@ -643,7 +643,12 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         .get("uikit")
         .and_then(|value| value.get("available"))
         .and_then(Value::as_bool)
-        .unwrap_or(!(react_native_available || flutter_available));
+        .unwrap_or_else(|| {
+            !(react_native_available
+                || flutter_available
+                || app_hierarchy_source == "react-native"
+                || app_hierarchy_source == "flutter")
+        });
     if uikit_available {
         sources.push("in-app-inspector".to_owned());
     }
@@ -908,6 +913,35 @@ mod tests {
         let entries = registry.read_live_entries().await;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].process_identifier, 456);
+        assert_eq!(entries[0].available_sources, vec!["flutter".to_owned()]);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("json.lock"));
+    }
+
+    #[tokio::test]
+    async fn registry_advertisement_does_not_invent_uikit_for_flutter_hierarchy() {
+        let path = registry_test_path("publish-flutter-without-flag");
+        let registry = registry_entry(&path);
+
+        registry
+            .upsert(
+                456,
+                json!({
+                    "protocolVersion": "1.0",
+                    "bundleIdentifier": "com.example.FlutterApp",
+                    "processIdentifier": 456,
+                    "appHierarchy": {
+                        "available": true,
+                        "source": "flutter"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+
+        let entries = registry.read_live_entries().await;
+        assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].available_sources, vec!["flutter".to_owned()]);
 
         let _ = fs::remove_file(&path);
