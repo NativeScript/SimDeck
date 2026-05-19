@@ -1,8 +1,22 @@
 import { defineConfig } from "vitepress";
+import {
+  describePage,
+  ogImageOutPath,
+  ogImageRelPath,
+  writeOgImage,
+  type OgPageInfo,
+} from "./og-image.mts";
 
 const repoName = "SimDeck";
 const githubUrl = `https://github.com/NativeScript/${repoName}`;
 const siteUrl = "https://simdeck.nativescript.org";
+
+type CollectedPage = OgPageInfo & {
+  slug: string;
+  urlPath: string;
+};
+
+const collectedPages = new Map<string, CollectedPage>();
 
 export default defineConfig({
   title: "SimDeck",
@@ -11,22 +25,88 @@ export default defineConfig({
   lang: "en-US",
   cleanUrls: true,
   lastUpdated: true,
+  srcExclude: ["**/public/**"],
 
   head: [
     ["meta", { name: "theme-color", content: "#0a84ff" }],
     ["meta", { property: "og:type", content: "website" }],
-    ["meta", { property: "og:title", content: "SimDeck" }],
-    [
-      "meta",
-      {
-        property: "og:description",
-        content:
-          "Stream, inspect, and automate iOS Simulators and Android emulators from a browser, CLI, or test.",
-      },
-    ],
-    ["meta", { property: "og:url", content: `${siteUrl}/` }],
-    ["link", { rel: "canonical", href: `${siteUrl}/` }],
+    ["meta", { property: "og:site_name", content: "SimDeck" }],
+    ["meta", { name: "twitter:card", content: "summary_large_image" }],
+    ["meta", { name: "twitter:site", content: "@NativeScript" }],
   ],
+
+  transformPageData(pageData) {
+    if (pageData.relativePath === "404.md") return;
+
+    const { slug, urlPath, category } = describePage(pageData.relativePath);
+
+    const isHome = pageData.frontmatter.layout === "home";
+    const hero = (pageData.frontmatter.hero ?? {}) as {
+      name?: string;
+      text?: string;
+      tagline?: string;
+    };
+
+    const title = isHome
+      ? hero.text || hero.name || "SimDeck"
+      : pageData.title || "SimDeck";
+
+    const description =
+      (pageData.frontmatter.description as string | undefined) ||
+      (isHome ? hero.tagline : undefined) ||
+      pageData.description ||
+      "Stream, inspect, and automate iOS Simulators and Android emulators from a browser, CLI, or test.";
+
+    collectedPages.set(slug, {
+      slug,
+      urlPath,
+      title,
+      description,
+      category: isHome ? undefined : category,
+    });
+
+    const pageUrl = `${siteUrl}${urlPath}`;
+    const imageUrl = `${siteUrl}/${ogImageRelPath(slug)}`;
+
+    pageData.frontmatter.head ??= [];
+    pageData.frontmatter.head.push(
+      ["link", { rel: "canonical", href: pageUrl }],
+      ["meta", { property: "og:title", content: title }],
+      ["meta", { property: "og:description", content: description }],
+      ["meta", { property: "og:url", content: pageUrl }],
+      ["meta", { property: "og:image", content: imageUrl }],
+      ["meta", { property: "og:image:width", content: "1200" }],
+      ["meta", { property: "og:image:height", content: "630" }],
+      ["meta", { property: "og:image:alt", content: title }],
+      ["meta", { name: "twitter:title", content: title }],
+      ["meta", { name: "twitter:description", content: description }],
+      ["meta", { name: "twitter:image", content: imageUrl }],
+    );
+  },
+
+  async buildEnd(siteConfig) {
+    const outDir = siteConfig.outDir;
+    if (collectedPages.size === 0) {
+      console.warn("[og-image] No pages collected; skipping image generation.");
+      return;
+    }
+
+    const tasks: Array<Promise<void>> = [];
+    for (const page of collectedPages.values()) {
+      tasks.push(
+        writeOgImage(
+          {
+            title: page.title,
+            description: page.description,
+            category: page.category,
+          },
+          ogImageOutPath(outDir, page.slug),
+        ),
+      );
+    }
+    await Promise.all(tasks);
+    console.log(`[og-image] Generated ${tasks.length} social card images.`);
+  },
 
   themeConfig: {
     siteTitle: "SimDeck",

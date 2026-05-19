@@ -93,9 +93,12 @@
     "prepack": "npm run build:cli && npm run build:client && npm run build:simdeck-test"
   },
   "devDependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^22.10.2",
     "@vscode/vsce": "^3.6.2",
     "prettier": "^3.6.2",
+    "satori": "^0.26.0",
     "typescript": "^5.9.2",
     "vitepress": "^1.6.4"
   },
