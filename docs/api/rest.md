@@ -171,22 +171,24 @@ Response:
 
 ## Input
 
-| Method | Path                                      | Body                                       |
-| ------ | ----------------------------------------- | ------------------------------------------ |
-| `POST` | `/api/simulators/{udid}/tap`              | Selector or coordinate tap                 |
-| `POST` | `/api/simulators/{udid}/touch`            | `{ "x": 120, "y": 240, "phase": "began" }` |
-| `POST` | `/api/simulators/{udid}/touch-sequence`   | Multiple touch phases                      |
-| `POST` | `/api/simulators/{udid}/key`              | `{ "keyCode": 4, "modifiers": 0 }`         |
-| `POST` | `/api/simulators/{udid}/key-sequence`     | `{ "keyCodes": [11,8,15], "delayMs": 5 }`  |
-| `POST` | `/api/simulators/{udid}/button`           | `{ "button": "lock", "durationMs": 50 }`   |
-| `POST` | `/api/simulators/{udid}/crown`            | `{ "delta": 50 }`                          |
-| `POST` | `/api/simulators/{udid}/dismiss-keyboard` | Dismiss the software keyboard              |
-| `POST` | `/api/simulators/{udid}/home`             | Press Home                                 |
-| `POST` | `/api/simulators/{udid}/app-switcher`     | Open app switcher                          |
-| `POST` | `/api/simulators/{udid}/rotate-left`      | Rotate left                                |
-| `POST` | `/api/simulators/{udid}/rotate-right`     | Rotate right                               |
+| Method | Path                                      | Body                                                                 |
+| ------ | ----------------------------------------- | -------------------------------------------------------------------- |
+| `POST` | `/api/simulators/{udid}/tap`              | Selector or coordinate tap                                           |
+| `POST` | `/api/simulators/{udid}/touch`            | `{ "x": 0.5, "y": 0.5, "phase": "began" }`                           |
+| `POST` | `/api/simulators/{udid}/edge-touch`       | `{ "x": 0.5, "y": 0.98, "phase": "began", "edge": "bottom" }`        |
+| `POST` | `/api/simulators/{udid}/multi-touch`      | `{ "x1": 0.35, "y1": 0.5, "x2": 0.65, "y2": 0.5, "phase": "began" }` |
+| `POST` | `/api/simulators/{udid}/touch-sequence`   | Multiple touch phases                                                |
+| `POST` | `/api/simulators/{udid}/key`              | `{ "keyCode": 4, "modifiers": 0 }`                                   |
+| `POST` | `/api/simulators/{udid}/key-sequence`     | `{ "keyCodes": [11,8,15], "delayMs": 5 }`                            |
+| `POST` | `/api/simulators/{udid}/button`           | `{ "button": "lock", "durationMs": 50 }`                             |
+| `POST` | `/api/simulators/{udid}/crown`            | `{ "delta": 50 }`                                                    |
+| `POST` | `/api/simulators/{udid}/dismiss-keyboard` | Dismiss the software keyboard                                        |
+| `POST` | `/api/simulators/{udid}/home`             | Press Home                                                           |
+| `POST` | `/api/simulators/{udid}/app-switcher`     | Open app switcher                                                    |
+| `POST` | `/api/simulators/{udid}/rotate-left`      | Rotate left                                                          |
+| `POST` | `/api/simulators/{udid}/rotate-right`     | Rotate right                                                         |
 
-Touch coordinates are screen points unless the endpoint body explicitly uses normalized values.
+Touch, edge-touch, and multi-touch coordinates are normalized from `0.0` to `1.0`.
 
 ## UI State And Inspection
 

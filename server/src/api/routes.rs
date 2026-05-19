@@ -227,6 +227,25 @@ struct TouchPayload {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EdgeTouchPayload {
+    x: f64,
+    y: f64,
+    phase: String,
+    edge: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MultiTouchPayload {
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    phase: String,
+}
+
+#[derive(Deserialize)]
 struct TouchSequencePayload {
     events: Vec<TouchSequenceEvent>,
 }
@@ -845,6 +864,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulators/{udid}/assert", post(assert_element))
         .route("/api/simulators/{udid}/batch", post(run_batch))
         .route("/api/simulators/{udid}/touch", post(send_touch))
+        .route("/api/simulators/{udid}/edge-touch", post(send_edge_touch))
+        .route("/api/simulators/{udid}/multi-touch", post(send_multi_touch))
         .route("/api/simulators/{udid}/control", get(control_socket))
         .route("/api/simulators/{udid}/input", get(control_socket))
         .route("/api/simulators/{udid}/h264", get(h264_socket))
@@ -2651,6 +2672,78 @@ async fn send_touch(
         }
         let input = bridge.create_input_session(&udid)?;
         input.send_touch(x, y, &phase)
+    })
+    .await?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
+async fn send_edge_touch(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<EdgeTouchPayload>,
+) -> Result<Json<Value>, AppError> {
+    if !payload.x.is_finite() || !payload.y.is_finite() {
+        return Err(AppError::bad_request(
+            "`x` and `y` must be finite normalized numbers.",
+        ));
+    }
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Edge touch input is not supported for Android devices.",
+        ));
+    }
+    let edge = edge_name_to_hid_value(payload.edge.as_str()).ok_or_else(|| {
+        AppError::bad_request("`edge` must be `left`, `top`, `bottom`, `right`, or `none`.")
+    })?;
+    let x = payload.x.clamp(0.0, 1.0);
+    let y = payload.y.clamp(0.0, 1.0);
+    let phase = payload.phase;
+    run_bridge_action(state, move |bridge| {
+        if bridge_simulator_is_tvos(&bridge, &udid) {
+            return Err(AppError::bad_request(
+                "Edge touch input is not supported for tvOS simulators.",
+            ));
+        }
+        let input = bridge.create_input_session(&udid)?;
+        input.send_edge_touch(x, y, &phase, edge)
+    })
+    .await?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
+async fn send_multi_touch(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+    Json(payload): Json<MultiTouchPayload>,
+) -> Result<Json<Value>, AppError> {
+    if !payload.x1.is_finite()
+        || !payload.y1.is_finite()
+        || !payload.x2.is_finite()
+        || !payload.y2.is_finite()
+    {
+        return Err(AppError::bad_request(
+            "`x1`, `y1`, `x2`, and `y2` must be finite normalized numbers.",
+        ));
+    }
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Multi-touch input is not supported for Android devices.",
+        ));
+    }
+
+    let x1 = payload.x1.clamp(0.0, 1.0);
+    let y1 = payload.y1.clamp(0.0, 1.0);
+    let x2 = payload.x2.clamp(0.0, 1.0);
+    let y2 = payload.y2.clamp(0.0, 1.0);
+    let phase = payload.phase;
+    run_bridge_action(state, move |bridge| {
+        if bridge_simulator_is_tvos(&bridge, &udid) {
+            return Err(AppError::bad_request(
+                "Multi-touch input is not supported for tvOS simulators.",
+            ));
+        }
+        let input = bridge.create_input_session(&udid)?;
+        input.send_multitouch(x1, y1, x2, y2, &phase)
     })
     .await?;
     Ok(json(json_value!({ "ok": true })))
