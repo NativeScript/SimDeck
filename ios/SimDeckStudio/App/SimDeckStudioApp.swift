@@ -37,17 +37,62 @@ enum AppOrientationPolicy {
 struct SimDeckStudioApp: App {
     @UIApplicationDelegateAdaptor(AppOrientationDelegate.self) private var orientationDelegate
     @State private var model = AppModel()
+    @State private var handledDebugLaunchURL = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
-            ContentView(model: model)
-                .onOpenURL { url in
-                    model.handle(url: url)
-                }
-                .onChange(of: scenePhase) { _, phase in
-                    model.handleScenePhase(phase)
-                }
+            rootContent
         }
     }
+
+    @ViewBuilder
+    private var rootContent: some View {
+        #if DEBUG
+        if CommandLine.arguments.contains("--simdeck-touch-input-test") {
+            StreamTouchInputDebugHarness()
+        } else {
+            mainContent
+        }
+        #else
+        mainContent
+        #endif
+    }
+
+    private var mainContent: some View {
+        ContentView(model: model)
+            .onOpenURL { url in
+                model.handle(url: url)
+            }
+            .onChange(of: scenePhase) { _, phase in
+                model.handleScenePhase(phase)
+            }
+            .task {
+                handleDebugLaunchURLIfNeeded()
+            }
+    }
+
+    private func handleDebugLaunchURLIfNeeded() {
+        #if DEBUG
+        guard !handledDebugLaunchURL, let url = Self.debugLaunchURL else { return }
+        handledDebugLaunchURL = true
+        model.handle(url: url)
+        #endif
+    }
+
+    #if DEBUG
+    private static var debugLaunchURL: URL? {
+        let arguments = CommandLine.arguments
+        for argument in arguments {
+            if argument.hasPrefix("--simdeck-open-url=") {
+                return URL(string: String(argument.dropFirst("--simdeck-open-url=".count)))
+            }
+        }
+        if let index = arguments.firstIndex(of: "--simdeck-open-url"),
+           arguments.indices.contains(index + 1) {
+            return URL(string: arguments[index + 1])
+        }
+        return nil
+    }
+    #endif
 }

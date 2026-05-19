@@ -75,6 +75,7 @@ void * _Nullable xcw_native_input_create(const char * _Nonnull udid, char * _Nul
 void xcw_native_input_destroy(void * _Nullable handle);
 bool xcw_native_input_display_size(void * _Nonnull handle, double * _Nullable width, double * _Nullable height);
 bool xcw_native_input_send_touch(void * _Nonnull handle, double x, double y, const char * _Nonnull phase, char * _Nullable * _Nullable error_message);
+bool xcw_native_input_send_edge_touch(void * _Nonnull handle, double x, double y, const char * _Nonnull phase, uint32_t edge, char * _Nullable * _Nullable error_message);
 bool xcw_native_input_send_multitouch(void * _Nonnull handle, double x1, double y1, double x2, double y2, const char * _Nonnull phase, char * _Nullable * _Nullable error_message);
 bool xcw_native_input_send_key(void * _Nonnull handle, uint16_t key_code, uint32_t modifiers, char * _Nullable * _Nullable error_message);
 bool xcw_native_input_send_key_event(void * _Nonnull handle, uint16_t key_code, bool down, char * _Nullable * _Nullable error_message);

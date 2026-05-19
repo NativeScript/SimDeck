@@ -186,6 +186,14 @@ unsafe extern "C" {
         phase: *const c_char,
         error_message: *mut *mut c_char,
     ) -> bool;
+    pub fn xcw_native_input_send_edge_touch(
+        handle: *mut c_void,
+        x: f64,
+        y: f64,
+        phase: *const c_char,
+        edge: u32,
+        error_message: *mut *mut c_char,
+    ) -> bool;
     pub fn xcw_native_input_send_multitouch(
         handle: *mut c_void,
         x1: f64,

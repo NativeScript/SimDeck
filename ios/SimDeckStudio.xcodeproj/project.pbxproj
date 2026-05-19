@@ -15,14 +15,40 @@
 		32F600000000000000000106 /* SimDeckAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000206 /* SimDeckAPI.swift */; };
 		32F600000000000000000107 /* StudioLinkResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000207 /* StudioLinkResolver.swift */; };
 		32F600000000000000000108 /* SimDeckDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000208 /* SimDeckDiscovery.swift */; };
-			32F600000000000000000109 /* WebRTCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000209 /* WebRTCClient.swift */; };
-			32F600000000000000000110 /* WebRTCVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000210 /* WebRTCVideoView.swift */; };
-			32F600000000000000000111 /* WebRTC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000213 /* WebRTC.xcframework */; };
-			32F600000000000000000112 /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000213 /* WebRTC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-			32F600000000000000000113 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000214 /* Assets.xcassets */; };
+		32F600000000000000000109 /* WebRTCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000209 /* WebRTCClient.swift */; };
+		32F600000000000000000110 /* WebRTCVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000210 /* WebRTCVideoView.swift */; };
+		32F600000000000000000111 /* WebRTC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000213 /* WebRTC.xcframework */; };
+		32F600000000000000000112 /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000213 /* WebRTC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		32F600000000000000000113 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 32F600000000000000000214 /* Assets.xcassets */; };
+		3A9C4A6B3C766B562D6CABB1 /* TouchInputUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E0830E7B93C7BF012325210 /* TouchInputUITests.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		80C82F87D478C192C26D8DFB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 32F600000000000000000701 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 32F600000000000000000501;
+			remoteInfo = SimDeckStudio;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		32F600000000000000000603 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				32F600000000000000000112 /* WebRTC.xcframework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		0E0830E7B93C7BF012325210 /* TouchInputUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TouchInputUITests.swift; sourceTree = "<group>"; };
 		32F600000000000000000201 /* SimDeckStudioApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimDeckStudioApp.swift; sourceTree = "<group>"; };
 		32F600000000000000000202 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		32F600000000000000000203 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
@@ -33,11 +59,12 @@
 		32F600000000000000000208 /* SimDeckDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimDeckDiscovery.swift; sourceTree = "<group>"; };
 		32F600000000000000000209 /* WebRTCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCClient.swift; sourceTree = "<group>"; };
 		32F600000000000000000210 /* WebRTCVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCVideoView.swift; sourceTree = "<group>"; };
-			32F600000000000000000211 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-			32F600000000000000000212 /* SimDeckStudio.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SimDeckStudio.entitlements; sourceTree = "<group>"; };
-			32F600000000000000000213 /* WebRTC.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = WebRTC.xcframework; sourceTree = "<group>"; };
-			32F600000000000000000214 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-			32F600000000000000000301 /* SimDeckStudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SimDeckStudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		32F600000000000000000211 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		32F600000000000000000212 /* SimDeckStudio.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SimDeckStudio.entitlements; sourceTree = "<group>"; };
+		32F600000000000000000213 /* WebRTC.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = WebRTC.xcframework; sourceTree = "<group>"; };
+		32F600000000000000000214 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		32F600000000000000000301 /* SimDeckStudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SimDeckStudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		50797D45D5460B6BC5704020 /* SimDeckStudioUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SimDeckStudioUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -46,6 +73,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				32F600000000000000000111 /* WebRTC.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B151EB5A933CD8C86DFBE10E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -58,6 +92,7 @@
 				32F600000000000000000002 /* SimDeckStudio */,
 				32F600000000000000000004 /* Vendor */,
 				32F600000000000000000003 /* Products */,
+				5FB41460231279272C52D5A3 /* SimDeckStudioUITests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -68,10 +103,10 @@
 				32F600000000000000000012 /* Discovery */,
 				32F600000000000000000013 /* Networking */,
 				32F600000000000000000014 /* Streaming */,
-					32F600000000000000000015 /* Views */,
-					32F600000000000000000214 /* Assets.xcassets */,
-					32F600000000000000000211 /* Info.plist */,
-					32F600000000000000000212 /* SimDeckStudio.entitlements */,
+				32F600000000000000000015 /* Views */,
+				32F600000000000000000214 /* Assets.xcassets */,
+				32F600000000000000000211 /* Info.plist */,
+				32F600000000000000000212 /* SimDeckStudio.entitlements */,
 			);
 			path = SimDeckStudio;
 			sourceTree = "<group>";
@@ -80,6 +115,7 @@
 			isa = PBXGroup;
 			children = (
 				32F600000000000000000301 /* SimDeckStudio.app */,
+				50797D45D5460B6BC5704020 /* SimDeckStudioUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -137,6 +173,14 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
+		5FB41460231279272C52D5A3 /* SimDeckStudioUITests */ = {
+			isa = PBXGroup;
+			children = (
+				0E0830E7B93C7BF012325210 /* TouchInputUITests.swift */,
+			);
+			path = SimDeckStudioUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -154,11 +198,27 @@
 			dependencies = (
 			);
 			name = SimDeckStudio;
-			packageProductDependencies = (
-			);
 			productName = SimDeckStudio;
 			productReference = 32F600000000000000000301 /* SimDeckStudio.app */;
 			productType = "com.apple.product-type.application";
+		};
+		FBC7735647E9A44A486C2DF2 /* SimDeckStudioUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1C52AE8DD226FCCDC41EDFDF /* Build configuration list for PBXNativeTarget "SimDeckStudioUITests" */;
+			buildPhases = (
+				D3831B1DC69C672F90A8606C /* Sources */,
+				B151EB5A933CD8C86DFBE10E /* Frameworks */,
+				1567F8BCE4681DE66E798E61 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				72AC10AEFEAC1B1C2E36620C /* PBXTargetDependency */,
+			);
+			name = SimDeckStudioUITests;
+			productName = SimDeckStudioUITests;
+			productReference = 50797D45D5460B6BC5704020 /* SimDeckStudioUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
 
@@ -184,39 +244,31 @@
 				Base,
 			);
 			mainGroup = 32F600000000000000000001;
-			packageReferences = (
-			);
 			productRefGroup = 32F600000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				32F600000000000000000501 /* SimDeckStudio */,
+				FBC7735647E9A44A486C2DF2 /* SimDeckStudioUITests */,
 			);
 		};
 /* End PBXProject section */
 
-/* Begin PBXCopyFilesBuildPhase section */
-		32F600000000000000000603 /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
+/* Begin PBXResourcesBuildPhase section */
+		1567F8BCE4681DE66E798E61 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
 			files = (
-				32F600000000000000000112 /* WebRTC.xcframework in Embed Frameworks */,
 			);
-			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXCopyFilesBuildPhase section */
-
-/* Begin PBXResourcesBuildPhase section */
-			32F600000000000000000602 /* Resources */ = {
-				isa = PBXResourcesBuildPhase;
-				buildActionMask = 2147483647;
-				files = (
-					32F600000000000000000113 /* Assets.xcassets in Resources */,
-				);
-				runOnlyForDeploymentPostprocessing = 0;
+		32F600000000000000000602 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				32F600000000000000000113 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
@@ -238,9 +290,43 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D3831B1DC69C672F90A8606C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3A9C4A6B3C766B562D6CABB1 /* TouchInputUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		72AC10AEFEAC1B1C2E36620C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = SimDeckStudio;
+			target = 32F600000000000000000501 /* SimDeckStudio */;
+			targetProxy = 80C82F87D478C192C26D8DFB /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		0F82A76D64D109A47DE7A06D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = CS838V553Y;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.nativescript.simdeck.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = SimDeckStudio;
+			};
+			name = Debug;
+		};
 		32F600000000000000000801 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -358,14 +444,14 @@
 			name = Release;
 		};
 		32F600000000000000000803 /* Debug */ = {
-				isa = XCBuildConfiguration;
-				buildSettings = {
-					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-					CODE_SIGN_ENTITLEMENTS = SimDeckStudio/SimDeckStudio.entitlements;
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = SimDeckStudio/SimDeckStudio.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20260519032641;
+				CURRENT_PROJECT_VERSION = 202605191259;
 				DEVELOPMENT_ASSET_PATHS = "";
-					DEVELOPMENT_TEAM = CS838V553Y;
+				DEVELOPMENT_TEAM = CS838V553Y;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = SimDeckStudio/Info.plist;
@@ -374,8 +460,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
-					PRODUCT_BUNDLE_IDENTIFIER = org.nativescript.simdeck;
+				MARKETING_VERSION = 0.1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = org.nativescript.simdeck;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -387,14 +473,14 @@
 			name = Debug;
 		};
 		32F600000000000000000804 /* Release */ = {
-				isa = XCBuildConfiguration;
-				buildSettings = {
-					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-					CODE_SIGN_ENTITLEMENTS = SimDeckStudio/SimDeckStudio.entitlements;
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = SimDeckStudio/SimDeckStudio.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20260519032641;
+				CURRENT_PROJECT_VERSION = 202605191259;
 				DEVELOPMENT_ASSET_PATHS = "";
-					DEVELOPMENT_TEAM = CS838V553Y;
+				DEVELOPMENT_TEAM = CS838V553Y;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = SimDeckStudio/Info.plist;
@@ -403,8 +489,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
-					PRODUCT_BUNDLE_IDENTIFIER = org.nativescript.simdeck;
+				MARKETING_VERSION = 0.1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = org.nativescript.simdeck;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -415,9 +501,36 @@
 			};
 			name = Release;
 		};
+		A1D98B14A0CE37C8026D77DE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = CS838V553Y;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.nativescript.simdeck.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = SimDeckStudio;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		1C52AE8DD226FCCDC41EDFDF /* Build configuration list for PBXNativeTarget "SimDeckStudioUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1D98B14A0CE37C8026D77DE /* Release */,
+				0F82A76D64D109A47DE7A06D /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		32F600000000000000000702 /* Build configuration list for PBXNativeTarget "SimDeckStudio" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -437,7 +550,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = 32F600000000000000000701 /* Project object */;
 }

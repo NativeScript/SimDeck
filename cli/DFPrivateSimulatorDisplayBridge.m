@@ -159,7 +159,7 @@ typedef struct {
     double value;
 } DFUnitAngleMeasurement;
 
-static DFIndigoMessage *DFCreateIndigoMultiTouchMessage(CGPoint normalizedPoint1, CGPoint normalizedPoint2, NSSize displaySize, BOOL touchDown, uint32_t target, NSError **error);
+static DFIndigoMessage *DFCreateIndigoMultiTouchMessage(CGPoint normalizedPoint1, CGPoint normalizedPoint2, NSSize displaySize, DFPrivateSimulatorTouchPhase phase, uint32_t target, NSError **error);
 
 typedef NS_ENUM(NSInteger, DFPrivateSimulatorErrorCode) {
     DFPrivateSimulatorErrorCodeFrameworkLoadFailed = 1,
@@ -1435,7 +1435,7 @@ static DFIndigoMessage *DFCreateIndigoTouchMessage(CGPoint normalizedPoint,
 static DFIndigoMessage *DFCreateIndigoMultiTouchMessage(CGPoint normalizedPoint1,
                                                         CGPoint normalizedPoint2,
                                                         NSSize displaySize,
-                                                        BOOL touchDown,
+                                                        DFPrivateSimulatorTouchPhase phase,
                                                         uint32_t target,
                                                         NSError **error) {
     DFIndigoHIDMessageForMouseNSEventFn mouseMessage = (DFIndigoHIDMessageForMouseNSEventFn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
@@ -1449,7 +1449,7 @@ static DFIndigoMessage *DFCreateIndigoMultiTouchMessage(CGPoint normalizedPoint1
         return NULL;
     }
 
-    NSEventType eventType = touchDown ? NSEventTypeLeftMouseDown : NSEventTypeLeftMouseUp;
+    NSEventType eventType = (NSEventType)DFIndigoMouseEventTypeForPhase(phase);
     CGPoint ratioPoint = CGPointMake(
         fmax(0.0, fmin(1.0, normalizedPoint1.x)),
         fmax(0.0, fmin(1.0, normalizedPoint1.y))
@@ -4096,21 +4096,20 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         }
 
         uint32_t target = DFIndigoDigitizerTarget;
-        BOOL touchDown = phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved;
-        IndigoHIDMessage *message = (IndigoHIDMessage *)DFCreateIndigoMultiTouchMessage(CGPointMake(x1, y1),
-                                                                                        CGPointMake(x2, y2),
-                                                                                        displaySize,
-                                                                                        touchDown,
-                                                                                        target,
-                                                                                        &dispatchError);
+        IndigoHIDMessage *message = DFCreateIndigoMultiTouchMessageDirect(CGPointMake(x1, y1),
+                                                                          CGPointMake(x2, y2),
+                                                                          displaySize,
+                                                                          phase,
+                                                                          target);
         if (message == NULL) {
             const NSUInteger maxAttempts = phase == DFPrivateSimulatorTouchPhaseMoved ? 12 : 3;
             for (NSUInteger attempt = 0; attempt < maxAttempts; attempt++) {
-                message = DFCreateIndigoMultiTouchMessageDirect(CGPointMake(x1, y1),
-                                                                CGPointMake(x2, y2),
-                                                                displaySize,
-                                                                phase,
-                                                                target);
+                message = (IndigoHIDMessage *)DFCreateIndigoMultiTouchMessage(CGPointMake(x1, y1),
+                                                                               CGPointMake(x2, y2),
+                                                                               displaySize,
+                                                                               phase,
+                                                                               target,
+                                                                               &dispatchError);
                 if (message != NULL) {
                     break;
                 }

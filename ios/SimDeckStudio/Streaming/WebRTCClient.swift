@@ -185,26 +185,29 @@ final class WebRTCClient: NSObject {
         peerConnection = nil
     }
 
-    func sendTouch(x: Double, y: Double, phase: String) {
+    @discardableResult
+    func sendTouch(x: Double, y: Double, phase: String) -> Bool {
         markUserActivity()
-        sendJSON(["type": "touch", "x": x, "y": y, "phase": phase])
+        return sendJSON(["type": "touch", "x": x, "y": y, "phase": phase], allowQueue: false)
     }
 
-    func sendEdgeTouch(x: Double, y: Double, phase: String, edge: String) {
+    @discardableResult
+    func sendEdgeTouch(x: Double, y: Double, phase: String, edge: String) -> Bool {
         markUserActivity()
-        sendJSON(["type": "edgeTouch", "x": x, "y": y, "phase": phase, "edge": edge])
+        return sendJSON(["type": "edgeTouch", "x": x, "y": y, "phase": phase, "edge": edge], allowQueue: false)
     }
 
-    func sendMultiTouch(x1: Double, y1: Double, x2: Double, y2: Double, phase: String) {
+    @discardableResult
+    func sendMultiTouch(x1: Double, y1: Double, x2: Double, y2: Double, phase: String) -> Bool {
         markUserActivity()
-        sendJSON([
+        return sendJSON([
             "type": "multiTouch",
             "x1": x1,
             "y1": y1,
             "x2": x2,
             "y2": y2,
             "phase": phase
-        ])
+        ], allowQueue: false)
     }
 
     @discardableResult

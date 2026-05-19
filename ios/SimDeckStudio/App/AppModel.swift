@@ -35,7 +35,71 @@ private struct CrownControlPayload: Encodable {
     let delta: Double
 }
 
+private struct TouchControlPayload: Encodable {
+    let x: Double
+    let y: Double
+    let phase: String
+}
+
+private struct EdgeTouchControlPayload: Encodable {
+    let x: Double
+    let y: Double
+    let phase: String
+    let edge: String
+}
+
+private struct MultiTouchControlPayload: Encodable {
+    let x1: Double
+    let y1: Double
+    let x2: Double
+    let y2: Double
+    let phase: String
+}
+
 private struct EmptyControlPayload: Encodable {}
+
+private enum SimulatorInputControl {
+    case touch(TouchControlPayload)
+    case edgeTouch(EdgeTouchControlPayload)
+    case multiTouch(MultiTouchControlPayload)
+
+    var isMove: Bool {
+        switch self {
+        case .touch(let payload):
+            return payload.phase == "moved"
+        case .edgeTouch(let payload):
+            return payload.phase == "moved"
+        case .multiTouch(let payload):
+            return payload.phase == "moved"
+        }
+    }
+
+    var coalescingKey: String {
+        switch self {
+        case .touch:
+            return "touch"
+        case .edgeTouch(let payload):
+            return "edgeTouch:\(payload.edge)"
+        case .multiTouch:
+            return "multiTouch"
+        }
+    }
+}
+
+private struct QueuedSimulatorInputControl {
+    let endpoint: SimDeckEndpoint
+    let simulatorID: String
+    let control: SimulatorInputControl
+    let reportErrors: Bool
+
+    func canCoalesce(with next: QueuedSimulatorInputControl) -> Bool {
+        control.isMove
+            && next.control.isMove
+            && endpoint.baseURL == next.endpoint.baseURL
+            && simulatorID == next.simulatorID
+            && control.coalescingKey == next.control.coalescingKey
+    }
+}
 
 private struct ChromeAssets {
     var profile: ChromeProfile?
@@ -98,7 +162,10 @@ final class AppModel {
     @ObservationIgnored private var streamClient: WebRTCClient?
     @ObservationIgnored private var hasAutoConnected = false
     @ObservationIgnored private var isAutoConnecting = false
+    @ObservationIgnored private var connectionGeneration = 0
     @ObservationIgnored private var streamRequestGeneration = 0
+    @ObservationIgnored private var inputControlQueue: [QueuedSimulatorInputControl] = []
+    @ObservationIgnored private var isDrainingInputControlQueue = false
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
     @ObservationIgnored private var lastReconnectStartedAt = Date.distantPast
     @ObservationIgnored private var chromeCache: [String: ChromeAssets] = [:]
@@ -198,6 +265,8 @@ final class AppModel {
             status = "Unsupported link."
             return
         }
+        hasAutoConnected = true
+        isAutoConnecting = false
         switch route {
         case let .endpoint(endpoint, autoStart):
             Task { await connect(endpoint, autoStart: autoStart, saveEndpoint: true) }
@@ -213,10 +282,16 @@ final class AppModel {
         saveEndpoint: Bool = false,
         presentPairingOnAuth: Bool = true
     ) async -> Bool {
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
         let connectionEndpoint = endpointWithReusableToken(endpoint)
         isBusy = true
         status = "Connecting to \(connectionEndpoint.displayName)"
-        defer { isBusy = false }
+        defer {
+            if generation == connectionGeneration {
+                isBusy = false
+            }
+        }
 
         var pendingAuthEndpoint: SimDeckEndpoint?
         var lastError: Error?
@@ -241,6 +316,7 @@ final class AppModel {
                     resolvedCandidate.alternateBaseURLs + alternateURLs(from: health, fallbackPort: normalizedPort(for: resolvedCandidate.baseURL))
                 ).filter { $0 != resolvedCandidate.baseURL }
                 let simulators = try await SimDeckAPI(endpoint: resolvedCandidate).simulators()
+                guard generation == connectionGeneration else { return false }
                 stopStream()
                 self.endpoint = resolvedCandidate
                 self.authEndpoint = nil
@@ -271,6 +347,8 @@ final class AppModel {
                 lastError = error
             }
         }
+
+        guard generation == connectionGeneration else { return false }
 
         if let pendingAuthEndpoint {
             guard presentPairingOnAuth else {
@@ -484,6 +562,7 @@ final class AppModel {
     func selectSimulator(_ udid: String?) {
         guard selectedSimulatorID != udid else { return }
         hapticSelection()
+        cancelQueuedInputControls()
         selectedSimulatorID = udid
         resetStreamPresentation()
         guard endpoint != nil, udid != nil else {
@@ -738,6 +817,7 @@ final class AppModel {
     }
 
     private func stopCurrentStream(resetState: Bool) {
+        cancelQueuedInputControls()
         streamClient?.disconnect()
         streamClient = nil
         if resetState {
@@ -748,16 +828,19 @@ final class AppModel {
 
     func sendTouch(location: CGPoint, in screenFrame: CGRect, phase: String) {
         guard let point = normalizedTouchPoint(location: location, in: screenFrame) else { return }
-        streamClient?.sendTouch(x: Double(point.x), y: Double(point.y), phase: phase)
+        sendTouch(x: Double(point.x), y: Double(point.y), phase: phase)
     }
 
     func sendEdgeTouch(location: CGPoint, in screenFrame: CGRect, phase: String, edge: String) {
         guard let point = normalizedTouchPoint(location: location, in: screenFrame) else { return }
-        streamClient?.sendEdgeTouch(x: Double(point.x), y: Double(point.y), phase: phase, edge: edge)
+        sendEdgeTouch(x: Double(point.x), y: Double(point.y), phase: phase, edge: edge)
     }
 
     func sendEdgeTouch(x: Double, y: Double, phase: String, edge: String) {
-        streamClient?.sendEdgeTouch(x: x, y: y, phase: phase, edge: edge)
+        enqueueInputControl(
+            .edgeTouch(EdgeTouchControlPayload(x: x, y: y, phase: phase, edge: edge)),
+            reportErrors: phase != "moved"
+        )
     }
 
     func normalizedTouchPoint(location: CGPoint, in screenFrame: CGRect) -> CGPoint? {
@@ -787,11 +870,17 @@ final class AppModel {
     }
 
     func sendTouch(x: Double, y: Double, phase: String) {
-        streamClient?.sendTouch(x: x, y: y, phase: phase)
+        enqueueInputControl(
+            .touch(TouchControlPayload(x: x, y: y, phase: phase)),
+            reportErrors: phase != "moved"
+        )
     }
 
     func sendMultiTouch(x1: Double, y1: Double, x2: Double, y2: Double, phase: String) {
-        streamClient?.sendMultiTouch(x1: x1, y1: y1, x2: x2, y2: y2, phase: phase)
+        enqueueInputControl(
+            .multiTouch(MultiTouchControlPayload(x1: x1, y1: y1, x2: x2, y2: y2, phase: phase)),
+            reportErrors: phase != "moved"
+        )
     }
 
     func sendKeyboardText(_ text: String) {
@@ -1075,6 +1164,58 @@ final class AppModel {
         } catch {
             status = error.localizedDescription
             hapticWarning()
+        }
+    }
+
+    private func enqueueInputControl(_ control: SimulatorInputControl, reportErrors: Bool) {
+        guard let endpoint, let selectedSimulatorID else { return }
+        let item = QueuedSimulatorInputControl(
+            endpoint: endpoint,
+            simulatorID: selectedSimulatorID,
+            control: control,
+            reportErrors: reportErrors
+        )
+        if let last = inputControlQueue.last,
+           last.canCoalesce(with: item) {
+            inputControlQueue[inputControlQueue.count - 1] = item
+        } else {
+            inputControlQueue.append(item)
+        }
+        guard !isDrainingInputControlQueue else { return }
+        Task { await drainInputControlQueue() }
+    }
+
+    private func drainInputControlQueue() async {
+        guard !isDrainingInputControlQueue else { return }
+        isDrainingInputControlQueue = true
+        defer { isDrainingInputControlQueue = false }
+
+        while !inputControlQueue.isEmpty {
+            let item = inputControlQueue.removeFirst()
+            do {
+                try await postInputControl(item)
+            } catch {
+                guard item.reportErrors else { continue }
+                status = error.localizedDescription
+                hapticWarning()
+            }
+        }
+    }
+
+    private func cancelQueuedInputControls() {
+        inputControlQueue.removeAll()
+    }
+
+    private func postInputControl(_ item: QueuedSimulatorInputControl) async throws {
+        let api = SimDeckAPI(endpoint: item.endpoint)
+        let encodedID = item.simulatorID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? item.simulatorID
+        switch item.control {
+        case .touch(let payload):
+            try await api.postControl(payload, path: "/api/simulators/\(encodedID)/touch")
+        case .edgeTouch(let payload):
+            try await api.postControl(payload, path: "/api/simulators/\(encodedID)/edge-touch")
+        case .multiTouch(let payload):
+            try await api.postControl(payload, path: "/api/simulators/\(encodedID)/multi-touch")
         }
     }
 

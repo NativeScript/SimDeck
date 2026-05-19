@@ -926,6 +926,24 @@ impl NativeInputSession {
         }
     }
 
+    pub fn send_edge_touch(&self, x: f64, y: f64, phase: &str, edge: u32) -> Result<(), AppError> {
+        let phase = CString::new(phase).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_input_send_edge_touch(
+                    self.handle,
+                    x,
+                    y,
+                    phase.as_ptr(),
+                    edge,
+                    &mut error,
+                ),
+                error,
+            )
+        }
+    }
+
     pub fn send_multitouch(
         &self,
         x1: f64,
