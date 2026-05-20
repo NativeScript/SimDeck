@@ -38,6 +38,57 @@
           "name": "07-create-pairs",
           "x": 8664,
           "y": 0
+        },
+        {
+          "name": "08-filter-iphone",
+          "x": 10108,
+          "y": 0
+        },
+        {
+          "name": "09-stream-tools",
+          "x": 11552,
+          "y": 0
+        },
+        {
+          "name": "10-server-status",
+          "x": 12996,
+          "y": 0
+        }
+      ]
+    },
+    {
+      "id": "ipad-portrait",
+      "name": "iPad Portrait Deck",
+      "screens": [
+        {
+          "name": "01-ipad-pocket-console",
+          "x": 0,
+          "y": 0
+        },
+        {
+          "name": "02-ipad-pair-fast",
+          "x": 2224,
+          "y": 0
+        },
+        {
+          "name": "03-ipad-device-fleet",
+          "x": 4448,
+          "y": 0
+        },
+        {
+          "name": "04-ipad-switch-simulators",
+          "x": 6672,
+          "y": 0
+        },
+        {
+          "name": "05-ipad-every-platform",
+          "x": 8896,
+          "y": 0
+        },
+        {
+          "name": "06-ipad-create-pairs",
+          "x": 11120,
+          "y": 0
         }
       ]
     }

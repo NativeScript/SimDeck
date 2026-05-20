@@ -12,25 +12,12 @@
     position="absolute"
     x="152"
     y="112">
-    Create new\nsimulators
-  </Text>
-  <Text
-    size="46"
-    weight="500"
-    color="#a8aea4"
-    align="center"
-    lineHeight="1.28"
-    maxWidth="1320"
-    width="1320"
-    position="absolute"
-    x="372"
-    y="410">
-    Spin up an iPhone, maybe with a matching Apple Watch.
+    Switch simulators\nwithout losing flow
   </Text>
   <Device
     model="ipad-pro-13-inch-m5-ipad17-4"
     width="1620"
-    screenshot="../ipad-shots/07-create-pairs-loaded.png"
+    screenshot="../ipad-shots/05-switch-simulators.png"
     position="absolute"
     x="222"
     y="585" />

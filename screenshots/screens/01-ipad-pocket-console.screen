@@ -1,0 +1,24 @@
+<Screen size="2064x2752">
+  <Background color="#f4f1e8" />
+  <Text
+    size="150"
+    weight="800"
+    color="#111312"
+    align="center"
+    tracking="-4"
+    lineHeight="1"
+    maxWidth="1760"
+    width="1760"
+    position="absolute"
+    x="152"
+    y="132">
+    Simulators, across your desk
+  </Text>
+  <Device
+    model="ipad-pro-13-inch-m5-ipad17-4"
+    width="1620"
+    screenshot="../ipad-shots/01-pocket-console.png"
+    position="absolute"
+    x="222"
+    y="500" />
+</Screen>

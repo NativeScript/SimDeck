@@ -19,20 +19,21 @@
     width="610"
     screenshot="../shots/IMG_5170.PNG"
     position="absolute"
-    x="74"
-    y="1360" />
+    x="22"
+    y="1497" />
   <Device
     model="iphone-17-pro-iphone18-1"
-    width="860"
+    width="800"
     screenshot="../shots/IMG_5177.PNG"
     position="absolute"
-    x="602"
-    y="500" />
+    x="632"
+    y="508"
+    height="1597" />
   <Device
     model="iphone-17-pro-iphone18-1"
     width="600"
     screenshot="../shots/IMG_5175.PNG"
     position="absolute"
-    x="1386"
-    y="1030" />
+    x="1432"
+    y="1114" />
 </Screen>

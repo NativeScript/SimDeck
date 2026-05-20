@@ -1,9 +1,9 @@
 <Screen size="2064x2752">
-  <Background color="#111312" />
+  <Background color="#f4f1e8" />
   <Text
     size="150"
     weight="800"
-    color="#ffffff"
+    color="#111312"
     align="center"
     tracking="-4"
     lineHeight="1"
@@ -12,12 +12,12 @@
     position="absolute"
     x="152"
     y="112">
-    Create new\nsimulators
+    Live control that\nfeels native
   </Text>
   <Text
     size="46"
     weight="500"
-    color="#a8aea4"
+    color="#5b5a52"
     align="center"
     lineHeight="1.28"
     maxWidth="1320"
@@ -25,12 +25,12 @@
     position="absolute"
     x="372"
     y="410">
-    Spin up an iPhone, maybe with a matching Apple Watch.
+    Home, app switcher, orientation, lock, and keyboard stay close to the stream.
   </Text>
   <Device
     model="ipad-pro-13-inch-m5-ipad17-4"
     width="1620"
-    screenshot="../ipad-shots/07-create-pairs-loaded.png"
+    screenshot="../ipad-shots/04-live-control.png"
     position="absolute"
     x="222"
     y="585" />
