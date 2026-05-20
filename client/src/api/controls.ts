@@ -31,13 +31,7 @@ export type ControlMessage =
 async function postSimulatorAction(
   udid: string,
   action: string,
-  payload?:
-    | ButtonPayload
-    | CrownPayload
-    | KeyPayload
-    | LaunchPayload
-    | OpenUrlPayload
-    | TouchPayload,
+  payload?: LaunchPayload | OpenUrlPayload,
 ): Promise<SimulatorMetadata | null> {
   const response = await apiRequest<SimulatorResponse | { ok: boolean }>(
     `/api/simulators/${udid}/${action}`,
@@ -56,10 +50,6 @@ export function bootSimulator(udid: string) {
 
 export function shutdownSimulator(udid: string) {
   return postSimulatorAction(udid, "shutdown");
-}
-
-export function toggleAppearance(udid: string) {
-  return postSimulatorAction(udid, "toggle-appearance");
 }
 
 export function openSimulatorUrl(udid: string, payload: OpenUrlPayload) {
@@ -87,14 +77,6 @@ export function uploadSimulatorApp(
   );
 }
 
-export function sendTouch(udid: string, payload: TouchPayload) {
-  return postSimulatorAction(udid, "touch", payload);
-}
-
-export function sendKey(udid: string, payload: KeyPayload) {
-  return postSimulatorAction(udid, "key", payload);
-}
-
 export function simulatorControlSocketUrl(udid: string) {
   const url = new URL(
     apiUrl(`/api/simulators/${encodeURIComponent(udid)}/control`),
@@ -106,34 +88,6 @@ export function simulatorControlSocketUrl(udid: string) {
   }
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
-}
-
-export function dismissKeyboard(udid: string) {
-  return postSimulatorAction(udid, "dismiss-keyboard");
-}
-
-export function pressHome(udid: string) {
-  return postSimulatorAction(udid, "home");
-}
-
-export function pressSimulatorButton(udid: string, payload: ButtonPayload) {
-  return postSimulatorAction(udid, "button", payload);
-}
-
-export function rotateDigitalCrown(udid: string, payload: CrownPayload) {
-  return postSimulatorAction(udid, "crown", payload);
-}
-
-export function openAppSwitcher(udid: string) {
-  return postSimulatorAction(udid, "app-switcher");
-}
-
-export function rotateLeft(udid: string) {
-  return postSimulatorAction(udid, "rotate-left");
-}
-
-export function rotateRight(udid: string) {
-  return postSimulatorAction(udid, "rotate-right");
 }
 
 async function fetchSimulatorBlob(

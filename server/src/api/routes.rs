@@ -3444,6 +3444,11 @@ async fn run_control_queue(
             message if session.is_tvos() => {
                 run_tvos_control_message(session.clone(), message, &mut tvos_touch).await
             }
+            message @ (ControlMessage::Touch { .. }
+            | ControlMessage::EdgeTouch { .. }
+            | ControlMessage::MultiTouch { .. }) => {
+                run_bridge_input_control_message(bridge.clone(), udid.clone(), message).await
+            }
             message => run_control_message(session.clone(), message).await,
         };
         if let Err(error) = result {
@@ -3556,6 +3561,75 @@ pub(crate) async fn run_control_message(
     })
     .await
     .map_err(|error| AppError::internal(format!("Failed to join control task: {error}")))?
+}
+
+pub(crate) async fn run_bridge_input_control_message(
+    bridge: NativeBridge,
+    udid: String,
+    message: ControlMessage,
+) -> Result<(), AppError> {
+    task::spawn_blocking(move || match message {
+        ControlMessage::Touch { x, y, phase } => {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(AppError::bad_request(
+                    "`x` and `y` must be finite normalized numbers.",
+                ));
+            }
+            if bridge_simulator_is_tvos(&bridge, &udid) {
+                return handle_tvos_touch_phase(&bridge, &udid, &phase);
+            }
+            let input = bridge.create_input_session(&udid)?;
+            input.send_touch(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), &phase)
+        }
+        ControlMessage::EdgeTouch { x, y, phase, edge } => {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(AppError::bad_request(
+                    "`x` and `y` must be finite normalized numbers.",
+                ));
+            }
+            if bridge_simulator_is_tvos(&bridge, &udid) {
+                return Err(AppError::bad_request(
+                    "Edge touch input is not supported for tvOS simulators.",
+                ));
+            }
+            let edge = edge_name_to_hid_value(edge.as_str()).ok_or_else(|| {
+                AppError::bad_request("`edge` must be `left`, `top`, `bottom`, `right`, or `none`.")
+            })?;
+            let input = bridge.create_input_session(&udid)?;
+            input.send_edge_touch(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), &phase, edge)
+        }
+        ControlMessage::MultiTouch {
+            x1,
+            y1,
+            x2,
+            y2,
+            phase,
+        } => {
+            if !x1.is_finite() || !y1.is_finite() || !x2.is_finite() || !y2.is_finite() {
+                return Err(AppError::bad_request(
+                    "`x1`, `y1`, `x2`, and `y2` must be finite normalized numbers.",
+                ));
+            }
+            if bridge_simulator_is_tvos(&bridge, &udid) {
+                return Err(AppError::bad_request(
+                    "Multi-touch input is not supported for tvOS simulators.",
+                ));
+            }
+            let input = bridge.create_input_session(&udid)?;
+            input.send_multitouch(
+                x1.clamp(0.0, 1.0),
+                y1.clamp(0.0, 1.0),
+                x2.clamp(0.0, 1.0),
+                y2.clamp(0.0, 1.0),
+                &phase,
+            )
+        }
+        _ => Err(AppError::bad_request(
+            "Bridge input control only supports touch messages.",
+        )),
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("Failed to join bridge input task: {error}")))?
 }
 
 pub(crate) async fn run_tvos_control_message(

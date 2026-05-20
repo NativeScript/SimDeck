@@ -283,6 +283,11 @@ struct SimulatorStreamView: View {
                     }
                     .frame(width: layout.screenFrame.width, height: layout.screenFrame.height)
                     .position(x: layout.screenFrame.midX, y: layout.screenFrame.midY)
+
+                    NavigationPopGestureBlocker()
+                        .frame(width: layout.screenFrame.width, height: layout.screenFrame.height)
+                        .position(x: layout.screenFrame.midX, y: layout.screenFrame.midY)
+                        .allowsHitTesting(false)
                 }
 
                 if model.selectedSimulator?.isBooted == true,
@@ -1949,6 +1954,190 @@ private struct HardwareButtonHitArea: View {
         previousCrownDragLocation = nil
         accumulatedCrownDrag = 0
         totalCrownDragDistance = 0
+    }
+}
+
+private struct NavigationPopGestureBlocker: UIViewRepresentable {
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIView(context: Context) -> NavigationPopGestureBlockerView {
+        let view = NavigationPopGestureBlockerView()
+        view.coordinator = context.coordinator
+        return view
+    }
+
+    func updateUIView(_ view: NavigationPopGestureBlockerView, context: Context) {
+        view.coordinator = context.coordinator
+        view.refreshPopGestureBlock()
+    }
+
+    static func dismantleUIView(_ view: NavigationPopGestureBlockerView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    final class Coordinator {
+        private var proxy: InteractivePopGestureDelegateProxy?
+
+        func attach(to navigationController: UINavigationController, blockedFrame: CGRect) {
+            guard let gestureRecognizer = navigationController.interactivePopGestureRecognizer else {
+                detach()
+                return
+            }
+
+            if let proxy, proxy.gestureRecognizer === gestureRecognizer {
+                proxy.navigationController = navigationController
+                proxy.blockedFrame = blockedFrame
+                return
+            }
+
+            detach()
+            let originalDelegate = (gestureRecognizer.delegate as? InteractivePopGestureDelegateProxy)?.originalDelegate
+                ?? gestureRecognizer.delegate
+            let proxy = InteractivePopGestureDelegateProxy(
+                navigationController: navigationController,
+                gestureRecognizer: gestureRecognizer,
+                originalDelegate: originalDelegate,
+                blockedFrame: blockedFrame
+            )
+            self.proxy = proxy
+            gestureRecognizer.delegate = proxy
+        }
+
+        func detach() {
+            proxy?.restoreDelegate()
+            proxy = nil
+        }
+    }
+}
+
+private final class NavigationPopGestureBlockerView: UIView {
+    weak var coordinator: NavigationPopGestureBlocker.Coordinator?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        refreshPopGestureBlock()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        refreshPopGestureBlock()
+    }
+
+    func refreshPopGestureBlock() {
+        guard let navigationController,
+              let navigationView = navigationController.view,
+              window != nil else {
+            return
+        }
+        let blockedFrame = convert(bounds, to: navigationView)
+        coordinator?.attach(to: navigationController, blockedFrame: blockedFrame)
+    }
+
+    private var navigationController: UINavigationController? {
+        sequence(first: next, next: { $0?.next })
+            .compactMap { responder -> UINavigationController? in
+                if let navigationController = responder as? UINavigationController {
+                    return navigationController
+                }
+                if let viewController = responder as? UIViewController {
+                    return viewController.navigationController
+                }
+                return nil
+            }
+            .first
+    }
+}
+
+private final class InteractivePopGestureDelegateProxy: NSObject, UIGestureRecognizerDelegate {
+    weak var navigationController: UINavigationController?
+    weak var gestureRecognizer: UIGestureRecognizer?
+    weak var originalDelegate: UIGestureRecognizerDelegate?
+    var blockedFrame: CGRect
+
+    init(
+        navigationController: UINavigationController,
+        gestureRecognizer: UIGestureRecognizer,
+        originalDelegate: UIGestureRecognizerDelegate?,
+        blockedFrame: CGRect
+    ) {
+        self.navigationController = navigationController
+        self.gestureRecognizer = gestureRecognizer
+        self.originalDelegate = originalDelegate
+        self.blockedFrame = blockedFrame
+        super.init()
+    }
+
+    func restoreDelegate() {
+        if gestureRecognizer?.delegate === self {
+            gestureRecognizer?.delegate = originalDelegate
+        }
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if let navigationView = navigationController?.view,
+           blockedFrame.contains(gestureRecognizer.location(in: navigationView)) {
+            return false
+        }
+        if let decision = originalDelegate?.gestureRecognizerShouldBegin?(gestureRecognizer) {
+            return decision
+        }
+        return (navigationController?.viewControllers.count ?? 0) > 1
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        originalDelegate?.gestureRecognizer?(
+            gestureRecognizer,
+            shouldRecognizeSimultaneouslyWith: otherGestureRecognizer
+        ) ?? false
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRequireFailureOf otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        originalDelegate?.gestureRecognizer?(
+            gestureRecognizer,
+            shouldRequireFailureOf: otherGestureRecognizer
+        ) ?? false
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        originalDelegate?.gestureRecognizer?(
+            gestureRecognizer,
+            shouldBeRequiredToFailBy: otherGestureRecognizer
+        ) ?? false
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        originalDelegate?.gestureRecognizer?(gestureRecognizer, shouldReceive: touch) ?? true
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive press: UIPress) -> Bool {
+        originalDelegate?.gestureRecognizer?(gestureRecognizer, shouldReceive: press) ?? true
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
+        originalDelegate?.gestureRecognizer?(gestureRecognizer, shouldReceive: event) ?? true
     }
 }
 

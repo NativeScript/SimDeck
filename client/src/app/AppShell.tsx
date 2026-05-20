@@ -18,18 +18,11 @@ import { apiUrl, configureSimDeckClient } from "../api/config";
 import {
   bootSimulator,
   captureSimulatorScreenshot,
-  dismissKeyboard,
   launchSimulatorBundle,
-  openAppSwitcher,
   openSimulatorUrl,
-  pressHome,
-  pressSimulatorButton,
   recordSimulatorScreen,
-  rotateDigitalCrown,
-  rotateRight,
   simulatorControlSocketUrl,
   shutdownSimulator,
-  toggleAppearance,
   uploadSimulatorApp,
   type ControlMessage,
 } from "../api/controls";
@@ -2057,6 +2050,19 @@ export function AppShell({
     return state;
   }, []);
 
+  useEffect(() => {
+    if (!selectedSimulator?.isBooted) {
+      closeControlSocket();
+      return;
+    }
+    ensureControlSocket(selectedSimulator.udid);
+  }, [
+    closeControlSocket,
+    ensureControlSocket,
+    selectedSimulator?.isBooted,
+    selectedSimulator?.udid,
+  ]);
+
   function sendControl(udid: string, message: ControlMessage): boolean {
     if (isMoveControlMessage(message)) {
       pendingControlMoveRef.current = { message, udid };
@@ -2096,9 +2102,20 @@ export function AppShell({
     if (sendWebRtcControlMessage(encoded, { dropIfBacklogged })) {
       return true;
     }
+    if (sendControlSocketMessage(udid, encoded, dropIfBacklogged)) {
+      return true;
+    }
     if (remoteStream) {
       return false;
     }
+    return false;
+  }
+
+  function sendControlSocketMessage(
+    udid: string,
+    encoded: string,
+    dropIfBacklogged: boolean,
+  ): boolean {
     const state = ensureControlSocket(udid);
     if (state.socket.readyState === WebSocket.OPEN) {
       if (
@@ -2405,16 +2422,7 @@ export function AppShell({
         usage,
       })
     ) {
-      void runAction(
-        () =>
-          pressSimulatorButton(selectedSimulator.udid, {
-            button,
-            phase,
-            usagePage,
-            usage,
-          }),
-        false,
-      );
+      setLocalError("Simulator control stream disconnected.");
     }
   }
 
@@ -2430,10 +2438,7 @@ export function AppShell({
         delta,
       })
     ) {
-      void runAction(
-        () => rotateDigitalCrown(selectedSimulator.udid, { delta }),
-        false,
-      );
+      setLocalError("Simulator control stream disconnected.");
     }
   }
 
@@ -2703,10 +2708,7 @@ export function AppShell({
           if (
             !sendControl(selectedSimulator.udid, { type: "dismissKeyboard" })
           ) {
-            void runAction(
-              () => dismissKeyboard(selectedSimulator.udid),
-              false,
-            );
+            setLocalError("Simulator control stream disconnected.");
           }
         }}
         onHome={() => {
@@ -2716,7 +2718,7 @@ export function AppShell({
           setAccessibilitySelectedId("");
           setAccessibilityHoveredId(null);
           if (!sendControl(selectedSimulator.udid, { type: "home" })) {
-            void runAction(() => pressHome(selectedSimulator.udid), false);
+            setLocalError("Simulator control stream disconnected.");
           }
         }}
         onInstallAppPrompt={openInstallAppPicker}
@@ -2727,10 +2729,7 @@ export function AppShell({
           setAccessibilitySelectedId("");
           setAccessibilityHoveredId(null);
           if (!sendControl(selectedSimulator.udid, { type: "appSwitcher" })) {
-            void runAction(
-              () => openAppSwitcher(selectedSimulator.udid),
-              false,
-            );
+            setLocalError("Simulator control stream disconnected.");
           }
         }}
         onOpenBundlePrompt={promptForBundleID}
@@ -2748,23 +2747,18 @@ export function AppShell({
           }
           const androidViewport = isAndroidSimulator(selectedSimulator);
           beginZoomAnimation();
-          if (androidViewport) {
-            void runAction(async () => {
-              await rotateRight(selectedSimulator.udid);
-              setRotationQuarterTurns(0);
-              beginZoomAnimation();
-              await refresh();
-            }, false);
-            return;
-          }
           if (sendControl(selectedSimulator.udid, { type: "rotateRight" })) {
-            setRotationQuarterTurns((current) => (current + 1) % 4);
+            if (androidViewport) {
+              setRotationQuarterTurns(0);
+              window.setTimeout(() => {
+                void refresh();
+              }, 250);
+            } else {
+              setRotationQuarterTurns((current) => (current + 1) % 4);
+            }
             return;
           }
-          void runAction(async () => {
-            await rotateRight(selectedSimulator.udid);
-            setRotationQuarterTurns((current) => (current + 1) % 4);
-          }, false);
+          setLocalError("Simulator control stream disconnected.");
         }}
         onRecordScreen={() => {
           void downloadSimulatorRecording();
@@ -2789,10 +2783,7 @@ export function AppShell({
           if (
             !sendControl(selectedSimulator.udid, { type: "toggleAppearance" })
           ) {
-            void runAction(
-              () => toggleAppearance(selectedSimulator.udid),
-              false,
-            );
+            setLocalError("Simulator control stream disconnected.");
           }
         }}
         onToggleDebug={() => setDebugVisible((current) => !current)}
