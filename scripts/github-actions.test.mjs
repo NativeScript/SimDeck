@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
 const iosAction = readFileSync(
@@ -24,6 +35,8 @@ function stepSlice(action, name, nextName) {
   assert(endIndex > startIndex, `${nextName} should run after ${name}`);
   return action.slice(startIndex, endIndex);
 }
+
+const darwinTest = process.platform === "darwin" ? test : test.skip;
 
 test("iOS PR comment waits for public simulator list access", () => {
   const prebootIndex = iosAction.indexOf(
@@ -149,33 +162,20 @@ for (const [platform, action, startStep, waitStep] of [
     );
   });
 
-  test(`${platform} PR comment supervises recoverable daemon exits`, () => {
+  test(`${platform} PR comment relies on the packaged CLI daemon supervisor`, () => {
     const startStepBody = stepSlice(
       action,
       "Install tools, start SimDeck and tunnel",
       "Resolve PR head",
     );
 
-    assert.match(
+    assert.doesNotMatch(
       startStepBody,
       /simdeck-daemon-supervisor\.sh/,
-      "action should run SimDeck through a local supervisor",
+      "action should not carry a second workflow-local daemon supervisor",
     );
-    assert.match(
-      startStepBody,
-      /"\$\{status\}" -eq 75/,
-      "supervisor should restart recoverable SimDeck exits",
-    );
-    assert.match(
-      startStepBody,
-      /"\$\{status\}" -ge 128/,
-      "supervisor should restart signal-terminated daemon children",
-    );
-    assert.match(
-      startStepBody,
-      /simdeck-child\.pid/,
-      "supervisor should expose the active child pid for cleanup diagnostics",
-    );
+    assert.match(startStepBody, /simdeck daemon run/);
+    assert.match(startStepBody, /echo "\$!" > simdeck\.pid/);
   });
 
   test(`${platform} PR comment keepalive tolerates transient daemon restarts`, () => {
@@ -207,3 +207,97 @@ for (const [platform, action, startStep, waitStep] of [
     );
   });
 }
+
+darwinTest(
+  "npm CLI wrapper restarts daemon run after recoverable native exit",
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "simdeck-wrapper-test-"));
+    try {
+      mkdirSync(join(root, "bin"), { recursive: true });
+      mkdirSync(join(root, "build"), { recursive: true });
+      const wrapperPath = join(root, "bin", "simdeck.mjs");
+      const nativePath = join(root, "build", "simdeck-bin");
+      const logPath = join(root, "native.log");
+      const countPath = join(root, "count");
+
+      copyFileSync(new URL("../bin/simdeck.mjs", import.meta.url), wrapperPath);
+      chmodSync(wrapperPath, 0o755);
+      writeFileSync(
+        nativePath,
+        `#!/usr/bin/env bash
+set -euo pipefail
+count="$(cat "${countPath}" 2>/dev/null || echo 0)"
+count="$((count + 1))"
+echo "$count" > "${countPath}"
+echo "$$:\${SIMDECK_DAEMON_METADATA_PID:-}:\$*" >> "${logPath}"
+if [[ "$count" == "1" ]]; then
+  exit 75
+fi
+exit 0
+`,
+      );
+      chmodSync(nativePath, 0o755);
+
+      const result = spawnSync(
+        process.execPath,
+        [wrapperPath, "daemon", "run", "--port", "4310"],
+        {
+          encoding: "utf8",
+        },
+      );
+
+      assert.equal(result.status, 0, result.stderr);
+      const logLines = readFileSync(logPath, "utf8").trim().split("\n");
+      assert.equal(logLines.length, 2, "daemon run should be retried once");
+
+      const entries = logLines.map((line) => {
+        const [pid, metadataPid, args] = line.split(":");
+        return { pid, metadataPid, args };
+      });
+      assert.notEqual(entries[0].pid, entries[1].pid);
+      assert.match(entries[0].metadataPid, /^\d+$/);
+      assert.equal(entries[0].metadataPid, entries[1].metadataPid);
+      assert.notEqual(entries[0].pid, entries[0].metadataPid);
+      assert.equal(entries[0].args, "daemon run --port 4310");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
+darwinTest(
+  "npm CLI wrapper does not restart non-daemon commands on exit 75",
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "simdeck-wrapper-test-"));
+    try {
+      mkdirSync(join(root, "bin"), { recursive: true });
+      mkdirSync(join(root, "build"), { recursive: true });
+      const wrapperPath = join(root, "bin", "simdeck.mjs");
+      const nativePath = join(root, "build", "simdeck-bin");
+      const logPath = join(root, "native.log");
+
+      copyFileSync(new URL("../bin/simdeck.mjs", import.meta.url), wrapperPath);
+      chmodSync(wrapperPath, 0o755);
+      writeFileSync(
+        nativePath,
+        `#!/usr/bin/env bash
+set -euo pipefail
+echo "$$:\${SIMDECK_DAEMON_METADATA_PID:-}:\$*" >> "${logPath}"
+exit 75
+`,
+      );
+      chmodSync(nativePath, 0o755);
+
+      const result = spawnSync(process.execPath, [wrapperPath, "list"], {
+        encoding: "utf8",
+      });
+
+      assert.equal(result.status, 75);
+      const logLines = readFileSync(logPath, "utf8").trim().split("\n");
+      assert.equal(logLines.length, 1);
+      assert.equal(logLines[0].split(":")[1], "");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);

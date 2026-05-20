@@ -289,36 +289,6 @@ runs:
           exit 1
         fi
 
-        cat > simdeck-daemon-supervisor.sh <<'EOF'
-        #!/usr/bin/env bash
-        set +e
-        terminating=0
-        child=""
-        trap 'terminating=1; if [[ -n "${child}" ]]; then kill "${child}" 2>/dev/null; wait "${child}" 2>/dev/null; fi; exit 0' TERM INT HUP
-
-        while true; do
-          "$@" >> simdeck-daemon.log 2>&1 &
-          child="$!"
-          echo "${child}" > simdeck-child.pid
-          wait "${child}"
-          status="$?"
-          child=""
-
-          if [[ "${terminating}" -eq 1 ]]; then
-            exit 0
-          fi
-          if [[ "${status}" -eq 75 || "${status}" -ge 128 ]]; then
-            echo "[simdeck-action-supervisor] daemon exited with status ${status}; restarting" >> simdeck-daemon.log
-            sleep 1
-            continue
-          fi
-
-          echo "[simdeck-action-supervisor] daemon exited with status ${status}; not restarting" >> simdeck-daemon.log
-          exit "${status}"
-        done
-        EOF
-        chmod +x simdeck-daemon-supervisor.sh
-
         SIMDECK_VIDEO_CODEC=software \
           SIMDECK_ALLOWED_ORIGINS='*' \
           SIMDECK_REALTIME_STREAM=1 \
@@ -328,7 +298,6 @@ runs:
           SIMDECK_REALTIME_MIN_BITRATE="${stream_min_bitrate}" \
           SIMDECK_REALTIME_BITS_PER_PIXEL="${stream_bits_per_pixel}" \
           SIMDECK_LOCAL_STREAM_FPS="${stream_fps}" \
-          ./simdeck-daemon-supervisor.sh \
           simdeck daemon run \
           --project-root "${GITHUB_WORKSPACE}" \
           --metadata-path "${metadata_path}" \
@@ -338,7 +307,8 @@ runs:
           --stream-quality "${SIMDECK_STREAM_PROFILE}" \
           --local-stream-fps "${stream_fps}" \
           --access-token "${access_token}" \
-          --pairing-code 000000 &
+          --pairing-code 000000 \
+          > simdeck-daemon.log 2>&1 &
         echo "$!" > simdeck.pid
 
         cloudflared tunnel --url "http://127.0.0.1:${SIMDECK_PORT}" --protocol http2 --no-autoupdate > cloudflared.log 2>&1 &
