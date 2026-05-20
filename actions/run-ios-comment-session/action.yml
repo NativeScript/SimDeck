@@ -289,6 +289,36 @@ runs:
           exit 1
         fi
 
+        cat > simdeck-daemon-supervisor.sh <<'EOF'
+        #!/usr/bin/env bash
+        set +e
+        terminating=0
+        child=""
+        trap 'terminating=1; if [[ -n "${child}" ]]; then kill "${child}" 2>/dev/null; wait "${child}" 2>/dev/null; fi; exit 0' TERM INT HUP
+
+        while true; do
+          "$@" >> simdeck-daemon.log 2>&1 &
+          child="$!"
+          echo "${child}" > simdeck-child.pid
+          wait "${child}"
+          status="$?"
+          child=""
+
+          if [[ "${terminating}" -eq 1 ]]; then
+            exit 0
+          fi
+          if [[ "${status}" -eq 75 || "${status}" -ge 128 ]]; then
+            echo "[simdeck-action-supervisor] daemon exited with status ${status}; restarting" >> simdeck-daemon.log
+            sleep 1
+            continue
+          fi
+
+          echo "[simdeck-action-supervisor] daemon exited with status ${status}; not restarting" >> simdeck-daemon.log
+          exit "${status}"
+        done
+        EOF
+        chmod +x simdeck-daemon-supervisor.sh
+
         SIMDECK_VIDEO_CODEC=software \
           SIMDECK_ALLOWED_ORIGINS='*' \
           SIMDECK_REALTIME_STREAM=1 \
@@ -298,6 +328,7 @@ runs:
           SIMDECK_REALTIME_MIN_BITRATE="${stream_min_bitrate}" \
           SIMDECK_REALTIME_BITS_PER_PIXEL="${stream_bits_per_pixel}" \
           SIMDECK_LOCAL_STREAM_FPS="${stream_fps}" \
+          ./simdeck-daemon-supervisor.sh \
           simdeck daemon run \
           --project-root "${GITHUB_WORKSPACE}" \
           --metadata-path "${metadata_path}" \
@@ -307,8 +338,7 @@ runs:
           --stream-quality "${SIMDECK_STREAM_PROFILE}" \
           --local-stream-fps "${stream_fps}" \
           --access-token "${access_token}" \
-          --pairing-code 000000 \
-          > simdeck-daemon.log 2>&1 &
+          --pairing-code 000000 &
         echo "$!" > simdeck.pid
 
         cloudflared tunnel --url "http://127.0.0.1:${SIMDECK_PORT}" --protocol http2 --no-autoupdate > cloudflared.log 2>&1 &
@@ -408,40 +438,106 @@ runs:
         sha="${{ steps.pr.outputs.sha }}"
         if [[ -n "${ARTIFACT_NAME_INPUT}" ]]; then
           artifact_name="${ARTIFACT_NAME_INPUT}"
+          artifact_candidates="${artifact_name}"
         else
           artifact_name="${ARTIFACT_PREFIX}-${sha}"
+          artifact_candidates="${artifact_name}"
+          if [[ "${ARTIFACT_PREFIX}" != "${artifact_name}" ]]; then
+            artifact_candidates+=$'\n'"${ARTIFACT_PREFIX}"
+          fi
         fi
+        printf '%s\n' "${artifact_candidates}" > /tmp/simdeck-artifact-candidates.txt
+        artifact_candidates_summary="$(python3 - <<'PY'
+        with open("/tmp/simdeck-artifact-candidates.txt", "r", encoding="utf-8") as handle:
+            names = [line.strip() for line in handle if line.strip()]
+        print(", ".join(f"`{name}`" for name in names))
+        PY
+        )"
+        echo "SIMDECK_ARTIFACT_NAME=${artifact_name}" >> "${GITHUB_ENV}"
+        echo "SIMDECK_ARTIFACT_CANDIDATES=${artifact_candidates_summary}" >> "${GITHUB_ENV}"
         mkdir -p downloaded-app
         rm -f /tmp/simdeck-artifact-download.status app-download.log
 
         (
           set +e
           {
-            run_id=""
-            for attempt in {1..30}; do
-              run_id="$(gh api -X GET "repos/${REPO}/actions/artifacts?name=${artifact_name}&per_page=100" \
-                --jq '.artifacts[] | select(.expired == false) | .workflow_run.id' \
-                | head -n 1 || true)"
+            find_artifact_by_run() {
+              local candidate_run_id="$1"
+              gh api -X GET "repos/${REPO}/actions/runs/${candidate_run_id}/artifacts?per_page=100" |
+                python3 -c '
+        import json
+        import sys
 
-              if [[ -z "${run_id}" && -n "${BUILD_WORKFLOW}" ]]; then
-                run_id="$(gh api --paginate "repos/${REPO}/actions/workflows/${BUILD_WORKFLOW}/runs?per_page=100" \
-                  --jq ".workflow_runs[] | select(.head_sha == \"${sha}\" and .conclusion == \"success\") | .id" \
-                  | head -n 1 || true)"
+        with open("/tmp/simdeck-artifact-candidates.txt", "r", encoding="utf-8") as handle:
+            names = [line.strip() for line in handle if line.strip()]
+
+        data = json.load(sys.stdin)
+        for name in names:
+            for artifact in data.get("artifacts", []):
+                if artifact.get("expired") is False and artifact.get("name") == name:
+                    print(name)
+                    raise SystemExit(0)
+        raise SystemExit(1)
+        ' || true
+            }
+
+            find_artifact_record() {
+              local artifact_record artifact_name_for_run candidate candidate_run_id
+
+              while IFS= read -r candidate; do
+                [[ -z "${candidate}" ]] && continue
+                artifact_record="$(gh api -X GET "repos/${REPO}/actions/artifacts?name=${candidate}&per_page=100" |
+                  SIMDECK_ARTIFACT_SHA="${sha}" python3 -c '
+        import json
+        import os
+        import sys
+
+        data = json.load(sys.stdin)
+        sha = os.environ["SIMDECK_ARTIFACT_SHA"]
+        for artifact in data.get("artifacts", []):
+            run = artifact.get("workflow_run") or {}
+            if artifact.get("expired") is False and run.get("head_sha") == sha:
+                print("{}\t{}".format(run.get("id"), artifact.get("name")))
+                break
+        ' || true)"
+                if [[ -n "${artifact_record}" ]]; then
+                  printf '%s\n' "${artifact_record}"
+                  return 0
+                fi
+              done < /tmp/simdeck-artifact-candidates.txt
+
+              if [[ -n "${BUILD_WORKFLOW}" ]]; then
+                while IFS= read -r candidate_run_id; do
+                  [[ -z "${candidate_run_id}" ]] && continue
+                  artifact_name_for_run="$(find_artifact_by_run "${candidate_run_id}")"
+                  if [[ -n "${artifact_name_for_run}" ]]; then
+                    printf '%s\t%s\n' "${candidate_run_id}" "${artifact_name_for_run}"
+                    return 0
+                  fi
+                done < <(gh api --paginate "repos/${REPO}/actions/workflows/${BUILD_WORKFLOW}/runs?per_page=100" \
+                  --jq ".workflow_runs[] | select(.head_sha == \"${sha}\" and .conclusion == \"success\") | .id" || true)
               fi
 
-              if [[ -n "${run_id}" ]]; then
-                echo "Using build workflow run ${run_id} for ${sha}"
-                gh run download "${run_id}" --repo "${REPO}" --name "${artifact_name}" --dir downloaded-app
+              return 1
+            }
+
+            for attempt in {1..30}; do
+              artifact_record="$(find_artifact_record || true)"
+
+              if [[ -n "${artifact_record}" ]]; then
+                IFS=$'\t' read -r run_id download_artifact_name <<< "${artifact_record}"
+                echo "Using build workflow run ${run_id} artifact '${download_artifact_name}' for ${sha}"
+                gh run download "${run_id}" --repo "${REPO}" --name "${download_artifact_name}" --dir downloaded-app
                 exit_code="$?"
                 echo "${exit_code}" > /tmp/simdeck-artifact-download.status
                 exit "${exit_code}"
               fi
 
-              echo "Waiting for artifact '${artifact_name}' for PR head ${sha} (${attempt}/30)"
+              echo "Waiting for artifact (${artifact_candidates_summary}) for PR head ${sha} (${attempt}/30)"
               sleep 20
             done
 
-            echo "No successful '${artifact_name}' artifact was found for PR head ${sha}." >&2
+            echo "No successful unexpired artifact (${artifact_candidates_summary}) was found for PR head ${sha}." >&2
             echo "1" > /tmp/simdeck-artifact-download.status
             exit 1
           } > app-download.log 2>&1
@@ -643,6 +739,37 @@ runs:
         cat app-download.log
         status="$(cat /tmp/simdeck-artifact-download.status 2>/dev/null || echo 1)"
         if [[ "${status}" -ne 0 ]]; then
+          echo "SIMDECK_SESSION_START_FAILED=1" >> "${GITHUB_ENV}"
+          commit_sha="${{ steps.pr.outputs.sha }}"
+          artifact_candidates="${SIMDECK_ARTIFACT_CANDIDATES:-${SIMDECK_ARTIFACT_NAME:-${ARTIFACT_PREFIX}-${commit_sha}}}"
+          mention=""
+          if [[ -n "${COMMAND_COMMENT_AUTHOR:-}" ]]; then
+            mention="@${COMMAND_COMMENT_AUTHOR} "
+          fi
+
+          cat > comment.md <<'EOF'
+        __MENTION__SimDeck iOS session could not start for commit `__COMMIT_SHA__`.
+
+        No unexpired simulator app artifact was available for this PR head. Expected one of: __ARTIFACT_CANDIDATES__.
+
+        Re-run the build workflow or push a new commit, then comment `simdeck run ios` again.
+        EOF
+
+          body="$(cat comment.md)"
+          body="${body/__MENTION__/${mention}}"
+          body="${body/__COMMIT_SHA__/${commit_sha}}"
+          body="${body/__ARTIFACT_CANDIDATES__/${artifact_candidates}}"
+          for attempt in {1..5}; do
+            if [[ -n "${SIMDECK_STATUS_COMMENT_ID:-}" ]]; then
+              if gh api -X PATCH "repos/${REPO}/issues/comments/${SIMDECK_STATUS_COMMENT_ID}" -f body="${body}"; then
+                break
+              fi
+            elif comment_id="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="${body}" --jq '.id')"; then
+              echo "SIMDECK_STATUS_COMMENT_ID=${comment_id}" >> "${GITHUB_ENV}"
+              break
+            fi
+            sleep $((attempt * 5))
+          done
           exit "${status}"
         fi
 
@@ -724,6 +851,7 @@ runs:
         if [[ -f /tmp/sim-boot-start && -f /tmp/sim-boot-end ]]; then
           echo "Simulator boot took $(( $(cat /tmp/sim-boot-end) - $(cat /tmp/sim-boot-start) )) seconds."
         fi
+        echo "SIMDECK_SESSION_OPEN=1" >> "${GITHUB_ENV}"
 
     - name: Save CoreSimulator device cache
       if: env.SIMDECK_SIMULATOR_CACHE == '1' && steps.coresim-cache.outputs.cache-hit != 'true'
@@ -760,10 +888,31 @@ runs:
         set -euo pipefail
         udid="${{ steps.simulator.outputs.udid }}"
         end=$((SECONDS + KEEPALIVE_SECONDS))
+        SIMDECK_DAEMON_HEALTH_GRACE_SECONDS="${SIMDECK_DAEMON_HEALTH_GRACE_SECONDS:-90}"
+        health_failure_started=""
+
+        note_daemon_health_failure() {
+          local reason="$1"
+          if [[ -z "${health_failure_started}" ]]; then
+            health_failure_started="${SECONDS}"
+          fi
+
+          if (( SECONDS - health_failure_started >= SIMDECK_DAEMON_HEALTH_GRACE_SECONDS )); then
+            echo "${reason} for ${SIMDECK_DAEMON_HEALTH_GRACE_SECONDS}s; stopping session." >&2
+            cat simdeck-health.log >&2 || true
+            cat simdeck-daemon.log >&2 || true
+            return 1
+          fi
+
+          echo "${reason}; waiting for SimDeck daemon supervisor to recover."
+          sleep 5
+          return 0
+        }
 
         while (( SECONDS < end )); do
           if [[ -f simdeck.pid ]] && ! kill -0 "$(cat simdeck.pid)" 2>/dev/null; then
             echo "SimDeck daemon process exited; stopping session."
+            cat simdeck-daemon.log >&2 || true
             exit 1
           fi
 
@@ -773,7 +922,12 @@ runs:
             exit 0
           fi
 
-          curl -fsS "http://127.0.0.1:${SIMDECK_PORT}/api/health?simdeckToken=${{ steps.stream.outputs.access_token }}" >/dev/null
+          if ! curl -fsS "http://127.0.0.1:${SIMDECK_PORT}/api/health?simdeckToken=${{ steps.stream.outputs.access_token }}" >/dev/null 2>simdeck-health.log; then
+            note_daemon_health_failure "SimDeck daemon health check failed" || exit 1
+            continue
+          fi
+
+          health_failure_started=""
           sleep 15
         done
 
@@ -794,7 +948,7 @@ runs:
         fi
 
     - name: Update status comment at end
-      if: always()
+      if: always() && env.SIMDECK_SESSION_OPEN == '1'
       shell: bash
       run: |
         set -euo pipefail
