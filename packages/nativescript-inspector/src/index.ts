@@ -24,7 +24,6 @@ declare const CGRectMake: any;
 declare const CGPointMake: any;
 declare const CGSizeMake: any;
 declare const UIEdgeInsetsMake: any;
-declare const require: any;
 declare const WebSocket: any | undefined;
 
 type JSONObject = Record<string, unknown>;
@@ -195,11 +194,26 @@ function installAngularSourceLocationCaptureShim(): void {
     return;
   }
 
+  // Resolve `@nativescript/angular` through an indirect, runtime-only require.
+  // The literal `require("@nativescript/angular")` call would otherwise be
+  // statically detected by web bundlers (Vite/esbuild/webpack/Rollup) running
+  // in non-Angular host apps (Vue, Solid, Svelte, React, vanilla), causing
+  // them to fail with "Could not resolve '@nativescript/angular'". Using a
+  // global-scope require lookup with a non-literal module id keeps the
+  // integration purely opt-in at runtime — present only when Angular is.
   const angular = safeCall(() => {
-    if (typeof require !== "function") {
+    const scope: any =
+      typeof globalThis !== "undefined"
+        ? globalThis
+        : typeof global !== "undefined"
+          ? (global as any)
+          : null;
+    const runtimeRequire: any = scope?.require;
+    if (typeof runtimeRequire !== "function") {
       return null;
     }
-    return require("@nativescript/angular");
+    const moduleId = ["@nativescript", "angular"].join("/");
+    return runtimeRequire(moduleId);
   }, null) as any;
   const viewUtilPrototype = angular?.ɵViewUtil?.ViewUtil?.prototype;
   if (

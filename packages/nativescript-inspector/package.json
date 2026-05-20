@@ -45,7 +45,13 @@
     }
   },
   "peerDependencies": {
+    "@nativescript/angular": ">=18.0.0",
     "@nativescript/core": ">=8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@nativescript/angular": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@nativescript/core": "~9.0.0",
