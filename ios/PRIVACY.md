@@ -42,4 +42,4 @@ If SimDeck's privacy practices change, we will update this policy and revise the
 
 ## Contact
 
-If you have questions about this privacy policy, contact us at support@nstudio.io.
+If you have questions about this privacy policy, contact us at support@nativescript.org.

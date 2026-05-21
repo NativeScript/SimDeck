@@ -24,6 +24,10 @@ const BACKGROUND = "#ffffff";
 const FOOTER_BORDER = "#e2e8f0";
 
 const SITE_HOSTNAME = "simdeck.nativescript.org";
+const SIMDECK_ICON_URL = new URL(
+  "../../client/public/simdeck.png",
+  import.meta.url,
+);
 
 type SatoriElement = {
   type: string;
@@ -61,6 +65,7 @@ let fontsPromise:
       Array<{ name: string; data: Buffer; weight: 400 | 700; style: "normal" }>
     >
   | undefined;
+let iconDataUrlPromise: Promise<string> | undefined;
 
 async function loadFonts() {
   if (!fontsPromise) {
@@ -92,21 +97,30 @@ async function loadFonts() {
   return fontsPromise;
 }
 
-function buildTemplate({
-  title,
-  description,
-  category,
-}: OgPageInfo): SatoriElement {
+async function loadIconDataUrl() {
+  if (!iconDataUrlPromise) {
+    iconDataUrlPromise = fs
+      .readFile(SIMDECK_ICON_URL)
+      .then((icon) => `data:image/png;base64,${icon.toString("base64")}`);
+  }
+  return iconDataUrlPromise;
+}
+
+function buildTemplate(
+  { title, description, category }: OgPageInfo,
+  iconSrc: string,
+): SatoriElement {
   const topRowChildren: SatoriChildren = [
     el("div", { style: { display: "flex", alignItems: "center" } }, [
-      el("div", {
+      el("img", {
+        src: iconSrc,
+        alt: "SimDeck icon",
         style: {
-          width: "44px",
-          height: "44px",
-          borderRadius: "10px",
-          background: `linear-gradient(135deg, ${BRAND_BLUE} 0%, #4ba3ff 100%)`,
+          width: "48px",
+          height: "48px",
+          borderRadius: "12px",
           marginRight: "18px",
-          display: "flex",
+          display: "block",
         },
       }),
       el(
@@ -244,8 +258,8 @@ function buildTemplate({
 }
 
 export async function renderOgImage(info: OgPageInfo): Promise<Buffer> {
-  const fonts = await loadFonts();
-  const svg = await satori(buildTemplate(info) as unknown as never, {
+  const [fonts, iconSrc] = await Promise.all([loadFonts(), loadIconDataUrl()]);
+  const svg = await satori(buildTemplate(info, iconSrc) as unknown as never, {
     width: WIDTH,
     height: HEIGHT,
     fonts,

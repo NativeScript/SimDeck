@@ -9,7 +9,7 @@ Need help with SimDeck Studio, the SimDeck CLI, browser streaming, pairing, or s
 
 ## Contact
 
-Email [support@nstudio.io](mailto:support@nstudio.io) for app issues, setup questions, general feedback, and feature requests.
+Email [support@nativescript.org](mailto:support@nativescript.org) for app issues, setup questions, general feedback, and feature requests.
 
 ## What To Include
 
