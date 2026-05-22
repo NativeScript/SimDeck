@@ -891,7 +891,7 @@ function createInspectorSocket(
   url: string,
   handlers: InspectorSocketHandlers,
 ): InspectorSocket {
-  if (typeof WebSocket === "function") {
+  if (isBrowserWebSocket(WebSocket)) {
     const socket = new WebSocket(url) as any;
     socket.onmessage = (event: { data: string }) => {
       handlers.onMessage(String(event.data));
@@ -909,6 +909,23 @@ function createInspectorSocket(
   throw new InspectorFailure(
     -32011,
     "No WebSocket implementation is available in this NativeScript runtime.",
+  );
+}
+
+// NativeScript exposes Objective-C class as a global "function", and
+// recent iOS SDKs ship a top-level `WebSocket` class in Network.framework.
+// `typeof WebSocket === "function"` therefore matches that native class and
+// `new WebSocket(url)` fails with "No initializer found that matches
+// constructor invocation." Require browser-style readyState constants and a
+// `send`/`close` prototype to confirm the global is a real WebSocket polyfill
+// (e.g. @valor/nativescript-websockets) before using it.
+function isBrowserWebSocket(ctor: any): boolean {
+  return (
+    typeof ctor === "function" &&
+    ctor.CONNECTING === 0 &&
+    ctor.OPEN === 1 &&
+    typeof ctor.prototype?.send === "function" &&
+    typeof ctor.prototype?.close === "function"
   );
 }
 
