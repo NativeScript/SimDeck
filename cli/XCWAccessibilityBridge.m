@@ -1419,7 +1419,10 @@ static void XCWAXNormalizeWidgetRendererPointFrames(NSMutableArray<NSDictionary 
                 break;
             }
         }
-        if (pointValue == nil) {
+        // Shallow snapshots power fast agent describe loops. Keep the expensive
+        // multi-root recovery pass for full trees, or when frontmost lookup fails.
+        BOOL shouldRecoverRoots = pointValue == nil && (translation == nil || maxDepth > 2);
+        if (shouldRecoverRoots) {
             NSMutableDictionary<NSNumber *, NSMutableDictionary *> *candidatesByKey = [NSMutableDictionary dictionary];
             if (translation != nil) {
                 NSMutableDictionary *candidate = XCWAXRootRecoveryCandidateFromTranslation(translator, translation, resolvedDisplayID ?: @0, token);
