@@ -25,6 +25,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable NSData *)screenRecordingMP4ForSimulatorUDID:(NSString *)udid
                                         durationSeconds:(NSTimeInterval)durationSeconds
                                                   error:(NSError * _Nullable * _Nullable)error;
+- (nullable NSString *)startScreenRecordingForSimulatorUDID:(NSString *)udid
+                                                      error:(NSError * _Nullable * _Nullable)error;
+- (nullable NSData *)stopScreenRecordingWithID:(NSString *)recordingID
+                                         error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)eraseSimulatorWithUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)installAppAtPath:(NSString *)appPath simulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)uninstallBundleID:(NSString *)bundleID simulatorUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error;

@@ -57,7 +57,7 @@ inputs:
   simdeck_port:
     description: Local daemon port on the runner.
     required: false
-    default: "4310"
+    default: "4311"
   stream_profile:
     description: SimDeck stream quality profile.
     required: false

@@ -37,6 +37,22 @@ static NSString * const XCWSimctlErrorDomain = @"SimDeck.Simctl";
 
 @end
 
+@interface XCWScreenRecordingSession : NSObject
+
+@property (nonatomic, copy) NSString *identifier;
+@property (nonatomic, copy) NSString *udid;
+@property (nonatomic, copy) NSString *path;
+@property (nonatomic, strong) NSTask *task;
+@property (nonatomic, strong) NSMutableData *stdoutData;
+@property (nonatomic, strong) NSMutableData *stderrData;
+@property (nonatomic, strong) NSFileHandle *stdoutHandle;
+@property (nonatomic, strong) NSFileHandle *stderrHandle;
+
+@end
+
+@implementation XCWScreenRecordingSession
+@end
+
 static NSArray *XCWArrayPayload(id payload, NSString *nestedKey) {
     if ([payload isKindOfClass:[NSArray class]]) {
         return payload;
@@ -93,6 +109,58 @@ static BOOL XCWWaitForTaskExit(NSTask *task, NSTimeInterval timeoutSeconds) {
         return YES;
     }
     return NO;
+}
+
+static NSMutableDictionary<NSString *, XCWScreenRecordingSession *> *XCWScreenRecordingSessions(void) {
+    static NSMutableDictionary<NSString *, XCWScreenRecordingSession *> *sessions = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        sessions = [NSMutableDictionary dictionary];
+    });
+    return sessions;
+}
+
+static NSString * _Nullable XCWResolveSimctlPath(NSError * _Nullable __autoreleasing *error) {
+    XCWProcessResult *resolvedSimctl = [XCWProcessRunner runLaunchPath:@"/usr/bin/xcrun"
+                                                             arguments:@[@"-f", @"simctl"]
+                                                             inputData:nil
+                                                                 error:error];
+    if (resolvedSimctl == nil) {
+        return nil;
+    }
+    NSString *simctlPath = XCWTrimmedString(XCWStringFromData(resolvedSimctl.stdoutData));
+    if (resolvedSimctl.terminationStatus != 0 || simctlPath.length == 0) {
+        if (error != NULL) {
+            NSString *message = resolvedSimctl.stderrString.length > 0 ? resolvedSimctl.stderrString : @"Unable to locate simctl.";
+            *error = [XCWSimctl errorWithDescription:message code:34];
+        }
+        return nil;
+    }
+    return simctlPath;
+}
+
+static BOOL XCWStopRecordingTask(XCWScreenRecordingSession *session, NSTimeInterval timeoutSeconds) {
+    NSTask *task = session.task;
+    if (task.running) {
+        [task interrupt];
+    }
+    if (!XCWWaitForTaskExit(task, timeoutSeconds) && task.running) {
+        [task terminate];
+        if (!XCWWaitForTaskExit(task, 2.0) && task.running) {
+            kill(task.processIdentifier, SIGKILL);
+            XCWWaitForTaskExit(task, 2.0);
+        }
+    }
+    return !task.running;
+}
+
+static void XCWCloseRecordingPipes(XCWScreenRecordingSession *session) {
+    session.stdoutHandle.readabilityHandler = nil;
+    session.stderrHandle.readabilityHandler = nil;
+    if (!session.task.running) {
+        XCWAppendAvailableData(session.stdoutHandle, session.stdoutData);
+        XCWAppendAvailableData(session.stderrHandle, session.stderrData);
+    }
 }
 
 static NSString * _Nullable XCWCreateTemporaryDirectory(NSString *prefix, NSError * _Nullable __autoreleasing *error) {
@@ -850,6 +918,194 @@ static NSString *XCWRuntimeDisplayName(NSDictionary *runtime, NSString *runtimeI
         if (!didStart && details.length == 0) {
             details = @"Simulator screen recording did not start before the timeout.";
         } else if (details.length == 0 && readError.localizedDescription.length > 0) {
+            details = readError.localizedDescription;
+        } else if (details.length == 0) {
+            details = @"Simulator screen recording command produced an empty MP4.";
+        }
+        *error = [self.class errorWithDescription:details code:34];
+    }
+    return nil;
+}
+
+- (nullable NSString *)startScreenRecordingForSimulatorUDID:(NSString *)udid
+                                                      error:(NSError * _Nullable __autoreleasing *)error {
+    if (udid.length == 0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:@"Screen recording requires a simulator UDID." code:34];
+        }
+        return nil;
+    }
+
+    NSMutableDictionary<NSString *, XCWScreenRecordingSession *> *sessions = XCWScreenRecordingSessions();
+    @synchronized(sessions) {
+        for (XCWScreenRecordingSession *session in sessions.objectEnumerator) {
+            if ([session.udid isEqualToString:udid]) {
+                if (error != NULL) {
+                    *error = [self.class errorWithDescription:@"A screen recording is already in progress for this simulator." code:34];
+                }
+                return nil;
+            }
+        }
+    }
+
+    NSString *filename = [NSString stringWithFormat:@"simdeck-%@.mp4", NSUUID.UUID.UUIDString];
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:filename];
+    NSString *simctlPath = XCWResolveSimctlPath(error);
+    if (simctlPath.length == 0) {
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        return nil;
+    }
+
+    XCWScreenRecordingSession *session = [[XCWScreenRecordingSession alloc] init];
+    session.identifier = NSUUID.UUID.UUIDString;
+    session.udid = udid;
+    session.path = path;
+    session.stdoutData = [NSMutableData data];
+    session.stderrData = [NSMutableData data];
+
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = simctlPath;
+    task.arguments = @[@"io", udid, @"recordVideo", @"--codec=h264", @"--force", path];
+    task.standardInput = NSFileHandle.fileHandleWithNullDevice;
+    NSPipe *stdoutPipe = [NSPipe pipe];
+    NSPipe *stderrPipe = [NSPipe pipe];
+    task.standardOutput = stdoutPipe;
+    task.standardError = stderrPipe;
+    session.task = task;
+    session.stdoutHandle = stdoutPipe.fileHandleForReading;
+    session.stderrHandle = stderrPipe.fileHandleForReading;
+
+    dispatch_semaphore_t recordingStartedSemaphore = dispatch_semaphore_create(0);
+    __block BOOL recordingStarted = NO;
+    __weak XCWScreenRecordingSession *weakSession = session;
+
+    session.stdoutHandle.readabilityHandler = ^(NSFileHandle *handle) {
+        XCWScreenRecordingSession *strongSession = weakSession;
+        if (strongSession == nil) {
+            return;
+        }
+        XCWAppendAvailableData(handle, strongSession.stdoutData);
+    };
+    session.stderrHandle.readabilityHandler = ^(NSFileHandle *handle) {
+        XCWScreenRecordingSession *strongSession = weakSession;
+        if (strongSession == nil) {
+            return;
+        }
+        @try {
+            NSData *chunk = [handle availableData];
+            if (chunk.length == 0) {
+                return;
+            }
+            BOOL shouldSignal = NO;
+            @synchronized(strongSession.stderrData) {
+                [strongSession.stderrData appendData:chunk];
+                NSString *text = XCWStringFromData(strongSession.stderrData);
+                if (!recordingStarted && [text rangeOfString:@"Recording started"].location != NSNotFound) {
+                    recordingStarted = YES;
+                    shouldSignal = YES;
+                }
+            }
+            if (shouldSignal) {
+                dispatch_semaphore_signal(recordingStartedSemaphore);
+            }
+        } @catch (NSException *exception) {
+        }
+    };
+
+    NSError *launchError = nil;
+    if (![task launchAndReturnError:&launchError]) {
+        XCWCloseRecordingPipes(session);
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        if (error != NULL) {
+            *error = launchError ?: [self.class errorWithDescription:@"Unable to launch simulator screen recording." code:34];
+        }
+        return nil;
+    }
+
+    NSDate *startDeadline = [NSDate dateWithTimeIntervalSinceNow:10.0];
+    BOOL didStart = NO;
+    while ([startDeadline timeIntervalSinceNow] > 0) {
+        if (dispatch_semaphore_wait(recordingStartedSemaphore, DISPATCH_TIME_NOW) == 0) {
+            didStart = YES;
+            break;
+        }
+        if (!task.running) {
+            break;
+        }
+        usleep(10 * 1000);
+    }
+
+    if (!didStart) {
+        XCWStopRecordingTask(session, 2.0);
+        XCWCloseRecordingPipes(session);
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        if (error != NULL) {
+            NSString *stderrString = XCWStringFromData(XCWDataSnapshot(session.stderrData));
+            NSString *stdoutString = XCWStringFromData(XCWDataSnapshot(session.stdoutData));
+            NSString *details = stderrString.length > 0 ? stderrString : stdoutString;
+            if (details.length == 0) {
+                details = @"Simulator screen recording did not start before the timeout.";
+            }
+            *error = [self.class errorWithDescription:details code:34];
+        }
+        return nil;
+    }
+
+    @synchronized(sessions) {
+        sessions[session.identifier] = session;
+    }
+    return session.identifier;
+}
+
+- (nullable NSData *)stopScreenRecordingWithID:(NSString *)recordingID
+                                         error:(NSError * _Nullable __autoreleasing *)error {
+    NSString *trimmedID = XCWTrimmedString(recordingID ?: @"");
+    if (trimmedID.length == 0) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:@"Screen recording stop requires a recording ID." code:34];
+        }
+        return nil;
+    }
+
+    NSMutableDictionary<NSString *, XCWScreenRecordingSession *> *sessions = XCWScreenRecordingSessions();
+    XCWScreenRecordingSession *session = nil;
+    @synchronized(sessions) {
+        session = sessions[trimmedID];
+        if (session != nil) {
+            [sessions removeObjectForKey:trimmedID];
+        }
+    }
+
+    if (session == nil) {
+        if (error != NULL) {
+            *error = [self.class errorWithDescription:@"No active simulator screen recording matched that ID." code:34];
+        }
+        return nil;
+    }
+
+    XCWStopRecordingTask(session, 10.0);
+    XCWCloseRecordingPipes(session);
+
+    NSError *readError = nil;
+    NSData *data = nil;
+    NSDate *fileDeadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
+    do {
+        data = [NSData dataWithContentsOfFile:session.path options:0 error:&readError];
+        if (data.length > 0) {
+            break;
+        }
+        usleep(50 * 1000);
+    } while ([fileDeadline timeIntervalSinceNow] > 0);
+    [[NSFileManager defaultManager] removeItemAtPath:session.path error:nil];
+    if (data.length > 0) {
+        return data;
+    }
+
+    if (error != NULL) {
+        NSString *stderrString = XCWStringFromData(XCWDataSnapshot(session.stderrData));
+        NSString *stdoutString = XCWStringFromData(XCWDataSnapshot(session.stdoutData));
+        NSString *details = stderrString.length > 0 ? stderrString : stdoutString;
+        if (details.length == 0 && readError.localizedDescription.length > 0) {
             details = readError.localizedDescription;
         } else if (details.length == 0) {
             details = @"Simulator screen recording command produced an empty MP4.";

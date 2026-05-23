@@ -42,15 +42,15 @@ This starts or reuses the daemon, then opens the authenticated local URL.
 
 `simdeck ui`, `daemon start`, `daemon restart`, and `service restart` use the same core options:
 
-| Flag                         | Default        | Use it when                                |
-| ---------------------------- | -------------- | ------------------------------------------ | ------ | ---------------------------------- |
-| `--port <port>`              | `4310`         | The default port is busy                   |
-| `--bind <ip>`                | `127.0.0.1`    | You need LAN access with `0.0.0.0` or `::` |
-| `--advertise-host <host>`    | detected       | Remote browsers need a specific host or IP |
-| `--video-codec auto          | hardware       | software`                                  | `auto` | You need to force encoder behavior |
-| `--stream-quality <profile>` | `full`         | You want lower CPU or bandwidth use        |
-| `--local-stream-fps <fps>`   | `60`           | You want a different local stream target   |
-| `--client-root <path>`       | bundled client | You are serving a custom static client     |
+| Flag                         | Default                                | Use it when                                |
+| ---------------------------- | -------------------------------------- | ------------------------------------------ |
+| `--port <port>`              | `4311` for daemons, `4310` for service | The default port is busy                   |
+| `--bind <ip>`                | `127.0.0.1`                            | You need LAN access with `0.0.0.0` or `::` |
+| `--advertise-host <host>`    | detected                               | Remote browsers need a specific host or IP |
+| `--video-codec <mode>`       | `auto`                                 | You need to force encoder behavior         |
+| `--stream-quality <profile>` | `full`                                 | You want lower CPU or bandwidth use        |
+| `--local-stream-fps <fps>`   | `60`                                   | You want a different local stream target   |
+| `--client-root <path>`       | bundled client                         | You are serving a custom static client     |
 
 Example:
 
@@ -69,9 +69,10 @@ simdeck service reset
 simdeck service off
 ```
 
-When the requested service port is occupied by a workspace daemon, the
-LaunchAgent automatically moves to the next available service-discovery port,
-up to 4320. Workspace daemons are left running.
+The LaunchAgent service uses port 4310. Workspace daemons start at 4311 and
+probe upward when the requested daemon port is busy. When the service is active,
+`simdeck` and `simdeck ui` report the service endpoints instead of launching a
+project daemon.
 
 `service on`, `service restart`, and `simdeck pair` preserve the installed
 service token and pairing code. Use `service reset` when you explicitly want to

@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 
 const SERVICE_LABEL: &str = "org.nativescript.simdeck";
 const LEGACY_SERVICE_LABELS: &[&str] = &["dev.nativescript.simdeck"];
-const DEFAULT_SERVICE_DISCOVERY_MAX_PORT: u16 = 4320;
 
 #[derive(Clone, Debug)]
 pub struct ServiceInstallResult {
@@ -90,6 +89,32 @@ fn apply_credentials(
 
 pub fn installed_port() -> anyhow::Result<Option<u16>> {
     Ok(installed_argument_value("--port")?.and_then(|value| value.parse::<u16>().ok()))
+}
+
+pub fn active() -> anyhow::Result<Option<ServiceInstallResult>> {
+    let domain = launchctl_domain()?;
+    if launchagent_pid(&domain, SERVICE_LABEL).is_none() {
+        return Ok(None);
+    }
+    let Some(arguments) = installed_arguments_for_label(SERVICE_LABEL)? else {
+        return Ok(None);
+    };
+    let plist_path = plist_path()?;
+    let log_dir = log_dir()?;
+    let port = argument_value(&arguments, "--port")
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(4310);
+    Ok(Some(ServiceInstallResult {
+        service: SERVICE_LABEL.to_owned(),
+        plist_path,
+        stdout_log: log_dir.join("simdeck.log"),
+        stderr_log: log_dir.join("simdeck.err.log"),
+        port,
+        advertise_host: argument_value(&arguments, "--advertise-host"),
+        access_token: argument_value(&arguments, "--access-token"),
+        pairing_code: argument_value(&arguments, "--pairing-code"),
+        reused: true,
+    }))
 }
 
 fn install(mut options: ServiceOptions) -> anyhow::Result<ServiceInstallResult> {
@@ -484,18 +509,11 @@ fn process_exists(pid: u32) -> bool {
 }
 
 fn choose_service_port_for_bind(preferred: u16, bind: IpAddr) -> anyhow::Result<u16> {
-    let start = preferred.max(1024);
-    let end = if start <= DEFAULT_SERVICE_DISCOVERY_MAX_PORT {
-        DEFAULT_SERVICE_DISCOVERY_MAX_PORT
-    } else {
-        start.saturating_add(10)
-    };
-    for port in start..=end {
-        if port_available(bind, port) {
-            return Ok(port);
-        }
+    let port = preferred.max(1024);
+    if port_available(bind, port) {
+        return Ok(port);
     }
-    bail!("No available SimDeck LaunchAgent port between {start} and {end}");
+    bail!("SimDeck LaunchAgent port {port} is already in use");
 }
 
 fn port_available(bind: IpAddr, port: u16) -> bool {
@@ -671,19 +689,13 @@ mod tests {
     }
 
     #[test]
-    fn service_port_selection_skips_occupied_port() {
+    fn service_port_selection_rejects_occupied_port() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind test port");
         let occupied = listener.local_addr().expect("local addr").port();
-        let selected = choose_service_port_for_bind(occupied, IpAddr::V4(Ipv4Addr::LOCALHOST))
-            .expect("choose service port");
+        let error = choose_service_port_for_bind(occupied, IpAddr::V4(Ipv4Addr::LOCALHOST))
+            .expect_err("occupied service port should fail");
 
-        assert!(selected > occupied);
-        assert!(selected <= occupied.saturating_add(10));
-    }
-
-    #[test]
-    fn default_service_port_search_matches_ios_discovery_window() {
-        assert_eq!(DEFAULT_SERVICE_DISCOVERY_MAX_PORT, 4320);
+        assert!(error.to_string().contains("already in use"));
     }
 
     #[test]

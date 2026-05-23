@@ -22,11 +22,17 @@ export type ControlMessage =
   | ({ type: "button" } & ButtonPayload)
   | ({ type: "crown" } & CrownPayload)
   | { type: "dismissKeyboard" }
+  | { type: "toggleSoftwareKeyboard" }
   | { type: "home" }
   | { type: "appSwitcher" }
   | { type: "rotateLeft" }
   | { type: "rotateRight" }
   | { type: "toggleAppearance" };
+
+export interface ScreenRecordingStartResponse {
+  ok: boolean;
+  recordingId: string;
+}
 
 async function postSimulatorAction(
   udid: string,
@@ -133,6 +139,29 @@ export function recordSimulatorScreen(
     `/api/simulators/${encodeURIComponent(udid)}/screen-recording`,
     {
       body: JSON.stringify({ seconds }),
+      method: "POST",
+    },
+  );
+}
+
+export function startSimulatorScreenRecording(
+  udid: string,
+): Promise<ScreenRecordingStartResponse> {
+  return apiRequest<ScreenRecordingStartResponse>(
+    `/api/simulators/${encodeURIComponent(udid)}/screen-recording/start`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export function stopSimulatorScreenRecording(
+  udid: string,
+  recordingId: string,
+): Promise<Blob> {
+  return fetchSimulatorBlob(
+    `/api/simulators/${encodeURIComponent(udid)}/screen-recording/${encodeURIComponent(recordingId)}/stop`,
+    {
       method: "POST",
     },
   );

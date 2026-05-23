@@ -85,9 +85,10 @@ routes with the same service token.
 Normal service restarts preserve that token so paired clients stay connected.
 Use `simdeck service reset` only when you want to rotate the service token and
 restart the LaunchAgent.
-If port 4310 is already owned by a workspace daemon, the LaunchAgent uses the
-next available service-discovery port, up to 4320, instead of stopping that
-daemon.
+The LaunchAgent service uses port 4310. Project daemons start at port 4311 and
+probe upward when that port is busy. When the service is active, `simdeck` and
+`simdeck ui` print the existing service endpoints instead of starting a project
+daemon; use the `daemon` subcommand when you explicitly want a workspace daemon.
 
 CLI commands automatically use the same warm daemon:
 
@@ -179,6 +180,7 @@ simdeck crown <udid> --delta 50
 simdeck button <udid> left-side-button
 simdeck batch <udid> --step "tap --label Continue" --step "type 'hello'" --step "wait-for --label hello"
 simdeck dismiss-keyboard <udid>
+simdeck button <udid> software-keyboard
 simdeck home <udid>
 simdeck app-switcher <udid>
 simdeck rotate-left <udid>

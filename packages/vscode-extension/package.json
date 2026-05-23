@@ -53,7 +53,7 @@
         },
         "simdeck.port": {
           "type": "number",
-          "default": 4310,
+          "default": 4311,
           "minimum": 1,
           "maximum": 65535,
           "description": "Preferred port used when the extension auto-starts the project daemon."

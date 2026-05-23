@@ -11,8 +11,8 @@ SimDeck prints a local browser URL, a LAN URL when one is available, and a pairi
 ```text
 SimDeck is ready
 
-Local:   http://127.0.0.1:4310
-Network: http://192.168.1.50:4310
+Local:   http://127.0.0.1:4311
+Network: http://192.168.1.50:4311
 Pair:    123 456
 ```
 

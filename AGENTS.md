@@ -116,21 +116,21 @@ Run the local daemon:
 
 ```sh
 ./build/simdeck
-./build/simdeck daemon start --port 4310
+./build/simdeck daemon start --port 4311
 ```
 
-Running without a subcommand starts a foreground workspace daemon, prints local and LAN HTTP URLs, prints a six-digit pairing code for LAN browsers, and stops when the command exits, when you press `q`, or when you press Ctrl-C. Pass a simulator name or UDID as the only argument to select it by default in the UI. Use `./build/simdeck -d`, `./build/simdeck -k`, and `./build/simdeck -r` as detached start, kill, and restart shortcuts.
+Running without a subcommand starts a foreground workspace daemon, prints local and LAN HTTP URLs, prints a six-digit pairing code for LAN browsers, and stops when the command exits, when you press `q`, or when you press Ctrl-C. If the always-on service is active on 4310, running without a subcommand or running `simdeck ui` prints the existing service endpoints instead of starting a project daemon. Pass a simulator name or UDID as the only argument to select it by default in the UI. Use `./build/simdeck -d`, `./build/simdeck -k`, and `./build/simdeck -r` as detached start, kill, and restart shortcuts.
 
 Use software H.264 when macOS screen recording starves the hardware encoder:
 
 ```sh
-./build/simdeck daemon start --port 4310 --video-codec h264-software
+./build/simdeck daemon start --port 4311 --video-codec h264-software
 ```
 
 For LAN access:
 
 ```sh
-./build/simdeck daemon start --port 4310 --bind 0.0.0.0 --advertise-host 192.168.1.50
+./build/simdeck daemon start --port 4311 --bind 0.0.0.0 --advertise-host 192.168.1.50
 ```
 
 Useful direct commands:

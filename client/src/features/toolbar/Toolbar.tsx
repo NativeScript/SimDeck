@@ -21,6 +21,7 @@ import type {
 } from "../stream/streamTypes";
 import { simulatorHasFixedOrientation } from "../simulators/simulatorDisplay";
 import { SimulatorMenu } from "../simulators/SimulatorMenu";
+import { SimulatorPickerMenu } from "../simulators/SimulatorPickerMenu";
 
 interface ToolbarProps {
   debugVisible: boolean;
@@ -43,7 +44,6 @@ interface ToolbarProps {
   onOpenNewSimulator: () => void;
   onOpenUrlPrompt: () => void;
   onRotateRight: () => void;
-  onRecordScreen: () => void;
   onShutdown: () => void;
   onStreamEncoderChange: (encoder: StreamEncoder) => void;
   onStreamFpsChange: (fps: StreamFps) => void;
@@ -54,7 +54,13 @@ interface ToolbarProps {
   onToggleDevTools: () => void;
   onToggleHierarchy: () => void;
   onToggleMenu: () => void;
+  onToggleRecording: () => void;
+  onToggleSimulatorMenu: () => void;
+  onToggleSoftwareKeyboard: () => void;
   onToggleTouchOverlay: () => void;
+  captureBusy: boolean;
+  recordingActive: boolean;
+  recordingStopping: boolean;
   remoteStream?: boolean;
   search: string;
   selectedSimulator: SimulatorMetadata | null;
@@ -68,9 +74,14 @@ interface ToolbarProps {
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
   closeMenu: () => void;
+  simulatorMenuOpen: boolean;
+  simulatorMenuRef: RefObject<HTMLDivElement | null>;
+  closeSimulatorMenu: () => void;
 }
 
 export function Toolbar({
+  captureBusy,
+  closeSimulatorMenu,
   closeMenu,
   debugVisible,
   devToolsVisible,
@@ -94,7 +105,6 @@ export function Toolbar({
   onOpenNewSimulator,
   onOpenUrlPrompt,
   onRotateRight,
-  onRecordScreen,
   onShutdown,
   onStreamEncoderChange,
   onStreamFpsChange,
@@ -105,7 +115,12 @@ export function Toolbar({
   onToggleDevTools,
   onToggleHierarchy,
   onToggleMenu,
+  onToggleRecording,
+  onToggleSimulatorMenu,
+  onToggleSoftwareKeyboard,
   onToggleTouchOverlay,
+  recordingActive,
+  recordingStopping,
   remoteStream = false,
   search,
   selectedSimulator,
@@ -115,6 +130,8 @@ export function Toolbar({
   showStopButton,
   streamConfig,
   streamTransport,
+  simulatorMenuOpen,
+  simulatorMenuRef,
   touchOverlayVisible,
 }: ToolbarProps) {
   const [errorCopied, setErrorCopied] = useState(false);
@@ -152,26 +169,21 @@ export function Toolbar({
           <HierarchyIcon />
         </button>
         <SimulatorMenu
+          captureBusy={captureBusy}
           debugVisible={debugVisible}
-          filteredSimulators={filteredSimulators}
-          hideSimulatorSelection={hideSimulatorSelection}
-          isLoading={isLoading}
           menuOpen={menuOpen}
           menuRef={menuRef}
           onBoot={onBoot}
           onCaptureScreenshot={onCaptureScreenshot}
           onCaptureScreenshotWithBezel={onCaptureScreenshotWithBezel}
-          onChangeSearch={onChangeSearch}
           onCloseMenu={closeMenu}
           onDismissKeyboard={onDismissKeyboard}
           onHome={onHome}
           onInstallAppPrompt={onInstallAppPrompt}
           onOpenAppSwitcher={onOpenAppSwitcher}
           onOpenBundlePrompt={onOpenBundlePrompt}
-          onOpenNewSimulator={onOpenNewSimulator}
           onOpenUrlPrompt={onOpenUrlPrompt}
           onRotateRight={onRotateRight}
-          onRecordScreen={onRecordScreen}
           onShutdown={onShutdown}
           onStreamEncoderChange={onStreamEncoderChange}
           onStreamFpsChange={onStreamFpsChange}
@@ -180,11 +192,13 @@ export function Toolbar({
           onToggleAppearance={onToggleAppearance}
           onToggleDebug={onToggleDebug}
           onToggleMenu={onToggleMenu}
+          onToggleRecording={onToggleRecording}
+          onToggleSoftwareKeyboard={onToggleSoftwareKeyboard}
           onToggleTouchOverlay={onToggleTouchOverlay}
+          recordingActive={recordingActive}
+          recordingStopping={recordingStopping}
           remoteStream={remoteStream}
-          search={search}
           selectedSimulator={selectedSimulator}
-          setSelectedUDID={setSelectedUDID}
           showBootButton={showBootButton}
           showStopButton={showStopButton}
           canInstallApp={canInstallApp}
@@ -192,27 +206,21 @@ export function Toolbar({
           streamTransport={streamTransport}
           touchOverlayVisible={touchOverlayVisible}
         />
-        {selectedSimulator ? (
-          <div className="toolbar-sim-info">
-            <div className="toolbar-sim-copy">
-              <div className="toolbar-sim-title-row">
-                <span className="toolbar-sim-name">
-                  {selectedSimulator.name}
-                </span>
-                {selectedSimulator.isBooted ? (
-                  <span className="state-dot booted toolbar-status-dot" />
-                ) : null}
-              </div>
-              <span className="toolbar-sim-detail">
-                {selectedSimulatorIdentifier}
-              </span>
-            </div>
-          </div>
-        ) : (
-          <span className="toolbar-sim-name muted">
-            {isLoading ? "Loading…" : "No simulator selected"}
-          </span>
-        )}
+        <SimulatorPickerMenu
+          filteredSimulators={filteredSimulators}
+          hideSimulatorSelection={hideSimulatorSelection}
+          isLoading={isLoading}
+          menuOpen={simulatorMenuOpen}
+          menuRef={simulatorMenuRef}
+          onChangeSearch={onChangeSearch}
+          onCloseMenu={closeSimulatorMenu}
+          onOpenNewSimulator={onOpenNewSimulator}
+          onToggleMenu={onToggleSimulatorMenu}
+          search={search}
+          selectedSimulator={selectedSimulator}
+          selectedSimulatorIdentifier={selectedSimulatorIdentifier}
+          setSelectedUDID={setSelectedUDID}
+        />
       </div>
 
       <div className="toolbar-right">

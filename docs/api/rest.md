@@ -171,22 +171,23 @@ Response:
 
 ## Input
 
-| Method | Path                                      | Body                                                                 |
-| ------ | ----------------------------------------- | -------------------------------------------------------------------- |
-| `POST` | `/api/simulators/{udid}/tap`              | Selector or coordinate tap                                           |
-| `POST` | `/api/simulators/{udid}/touch`            | `{ "x": 0.5, "y": 0.5, "phase": "began" }`                           |
-| `POST` | `/api/simulators/{udid}/edge-touch`       | `{ "x": 0.5, "y": 0.98, "phase": "began", "edge": "bottom" }`        |
-| `POST` | `/api/simulators/{udid}/multi-touch`      | `{ "x1": 0.35, "y1": 0.5, "x2": 0.65, "y2": 0.5, "phase": "began" }` |
-| `POST` | `/api/simulators/{udid}/touch-sequence`   | Multiple touch phases                                                |
-| `POST` | `/api/simulators/{udid}/key`              | `{ "keyCode": 4, "modifiers": 0 }`                                   |
-| `POST` | `/api/simulators/{udid}/key-sequence`     | `{ "keyCodes": [11,8,15], "delayMs": 5 }`                            |
-| `POST` | `/api/simulators/{udid}/button`           | `{ "button": "lock", "durationMs": 50 }`                             |
-| `POST` | `/api/simulators/{udid}/crown`            | `{ "delta": 50 }`                                                    |
-| `POST` | `/api/simulators/{udid}/dismiss-keyboard` | Dismiss the software keyboard                                        |
-| `POST` | `/api/simulators/{udid}/home`             | Press Home                                                           |
-| `POST` | `/api/simulators/{udid}/app-switcher`     | Open app switcher                                                    |
-| `POST` | `/api/simulators/{udid}/rotate-left`      | Rotate left                                                          |
-| `POST` | `/api/simulators/{udid}/rotate-right`     | Rotate right                                                         |
+| Method | Path                                              | Body                                                                 |
+| ------ | ------------------------------------------------- | -------------------------------------------------------------------- |
+| `POST` | `/api/simulators/{udid}/tap`                      | Selector or coordinate tap                                           |
+| `POST` | `/api/simulators/{udid}/touch`                    | `{ "x": 0.5, "y": 0.5, "phase": "began" }`                           |
+| `POST` | `/api/simulators/{udid}/edge-touch`               | `{ "x": 0.5, "y": 0.98, "phase": "began", "edge": "bottom" }`        |
+| `POST` | `/api/simulators/{udid}/multi-touch`              | `{ "x1": 0.35, "y1": 0.5, "x2": 0.65, "y2": 0.5, "phase": "began" }` |
+| `POST` | `/api/simulators/{udid}/touch-sequence`           | Multiple touch phases                                                |
+| `POST` | `/api/simulators/{udid}/key`                      | `{ "keyCode": 4, "modifiers": 0 }`                                   |
+| `POST` | `/api/simulators/{udid}/key-sequence`             | `{ "keyCodes": [11,8,15], "delayMs": 5 }`                            |
+| `POST` | `/api/simulators/{udid}/button`                   | `{ "button": "lock", "durationMs": 50 }`                             |
+| `POST` | `/api/simulators/{udid}/crown`                    | `{ "delta": 50 }`                                                    |
+| `POST` | `/api/simulators/{udid}/dismiss-keyboard`         | Dismiss the software keyboard                                        |
+| `POST` | `/api/simulators/{udid}/toggle-software-keyboard` | Toggle the software keyboard                                         |
+| `POST` | `/api/simulators/{udid}/home`                     | Press Home                                                           |
+| `POST` | `/api/simulators/{udid}/app-switcher`             | Open app switcher                                                    |
+| `POST` | `/api/simulators/{udid}/rotate-left`              | Rotate left                                                          |
+| `POST` | `/api/simulators/{udid}/rotate-right`             | Rotate right                                                         |
 
 Touch, edge-touch, and multi-touch coordinates are normalized from `0.0` to `1.0`.
 
@@ -234,17 +235,19 @@ For app-owned `WKWebView` on iOS 16.4 or newer, the app must set `isInspectable 
 
 ## Evidence And Chrome
 
-| Method | Path                                            | Purpose                                        |
-| ------ | ----------------------------------------------- | ---------------------------------------------- |
-| `GET`  | `/api/simulators/{udid}/screenshot.png`         | PNG screenshot, with `?bezel=true` for chrome  |
-| `POST` | `/api/simulators/{udid}/screen-recording`       | MP4 recording with `{ "seconds": 5 }`          |
-| `GET`  | `/api/simulators/{udid}/pasteboard`             | Get pasteboard text                            |
-| `POST` | `/api/simulators/{udid}/pasteboard`             | Set pasteboard text with `{ "text": "hello" }` |
-| `GET`  | `/api/simulators/{udid}/logs`                   | Recent logs                                    |
-| `GET`  | `/api/simulators/{udid}/chrome-profile`         | Screen and chrome geometry                     |
-| `GET`  | `/api/simulators/{udid}/chrome.png`             | Rendered device chrome PNG                     |
-| `GET`  | `/api/simulators/{udid}/chrome-button/{button}` | Rendered button sprite                         |
-| `GET`  | `/api/simulators/{udid}/screen-mask.png`        | Rendered screen mask PNG                       |
+| Method | Path                                                         | Purpose                                        |
+| ------ | ------------------------------------------------------------ | ---------------------------------------------- |
+| `GET`  | `/api/simulators/{udid}/screenshot.png`                      | PNG screenshot, with `?bezel=true` for chrome  |
+| `POST` | `/api/simulators/{udid}/screen-recording`                    | MP4 recording with `{ "seconds": 5 }`          |
+| `POST` | `/api/simulators/{udid}/screen-recording/start`              | Start MP4 recording and return `recordingId`   |
+| `POST` | `/api/simulators/{udid}/screen-recording/{recordingId}/stop` | Stop recording and return MP4                  |
+| `GET`  | `/api/simulators/{udid}/pasteboard`                          | Get pasteboard text                            |
+| `POST` | `/api/simulators/{udid}/pasteboard`                          | Set pasteboard text with `{ "text": "hello" }` |
+| `GET`  | `/api/simulators/{udid}/logs`                                | Recent logs                                    |
+| `GET`  | `/api/simulators/{udid}/chrome-profile`                      | Screen and chrome geometry                     |
+| `GET`  | `/api/simulators/{udid}/chrome.png`                          | Rendered device chrome PNG                     |
+| `GET`  | `/api/simulators/{udid}/chrome-button/{button}`              | Rendered button sprite                         |
+| `GET`  | `/api/simulators/{udid}/screen-mask.png`                     | Rendered screen mask PNG                       |
 
 Log query parameters:
 
