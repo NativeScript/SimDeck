@@ -5998,12 +5998,12 @@ fn run_maestro_command(
         "swipe" => {
             let direction =
                 yaml_string_or_field(value, "direction").unwrap_or_else(|| "up".to_owned());
-            let preset = match direction.as_str() {
+            let preset = match direction.to_ascii_lowercase().as_str() {
                 "up" => "scroll-up",
                 "down" => "scroll-down",
                 "left" => "scroll-left",
                 "right" => "scroll-right",
-                _ => "scroll-up",
+                _ => anyhow::bail!("Unsupported Maestro swipe direction `{direction}`."),
             };
             service_batch(
                 server_url,
@@ -6082,7 +6082,15 @@ fn maestro_selector(value: &YamlValue) -> anyhow::Result<Value> {
         anyhow::bail!("Selector must be a string or mapping.");
     };
     let text = yaml_string_field(mapping, "text");
-    let id = yaml_string_field(mapping, "id");
+    let explicit_regex = yaml_bool_field(mapping, "regex");
+    let use_regex = explicit_regex.unwrap_or_else(|| text.is_some());
+    let id = yaml_string_field(mapping, "id").map(|id| {
+        if use_regex && explicit_regex != Some(true) {
+            anchored_regex_literal(&id)
+        } else {
+            id
+        }
+    });
     Ok(serde_json::json!({
         "text": text,
         "id": id,
@@ -6094,8 +6102,12 @@ fn maestro_selector(value: &YamlValue) -> anyhow::Result<Value> {
         "checked": yaml_bool_field(mapping, "checked"),
         "focused": yaml_bool_field(mapping, "focused"),
         "selected": yaml_bool_field(mapping, "selected"),
-        "regex": text.is_some() || id.is_some(),
+        "regex": use_regex,
     }))
+}
+
+fn anchored_regex_literal(value: &str) -> String {
+    format!("^{}$", regex::escape(value))
 }
 
 fn service_wait_for(
@@ -7424,17 +7436,18 @@ mod tests {
         batch_line_to_json_step, daemon_matches_launch_options, http_url_for_host, is_tailscale_ip,
         maestro_commands_from_flow, maestro_selector, normalize_accessibility_point_for_display,
         parse_maestro_flow_yaml, parse_maestro_point, parse_workspace_daemon_process_line,
-        render_qr_code, server_health_watchdog_should_restart, service_post_error_is_retryable,
-        simdeck_pair_url, studio_daemon_restart_args, workspace_daemon_process_is_current, Cli,
-        Command, DaemonCommand, DaemonLaunchOptions, DaemonMetadata, PairingAddress,
-        ServiceCommand, StreamQualityProfileArg, StudioExposeOptions, VideoCodecMode,
-        WorkspaceDaemonProcess, YamlValue, DEFAULT_LOCAL_STREAM_QUALITY_PROFILE,
-        SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD, SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
+        render_qr_code, run_maestro_command, server_health_watchdog_should_restart,
+        service_post_error_is_retryable, simdeck_pair_url, studio_daemon_restart_args,
+        workspace_daemon_process_is_current, Cli, Command, DaemonCommand, DaemonLaunchOptions,
+        DaemonMetadata, PairingAddress, ServiceCommand, StreamQualityProfileArg,
+        StudioExposeOptions, VideoCodecMode, WorkspaceDaemonProcess, YamlValue,
+        DEFAULT_LOCAL_STREAM_QUALITY_PROFILE, SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD,
+        SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
     };
     use clap::Parser;
     use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn daemon_metadata_for_test(
         port: u16,
@@ -7921,6 +7934,49 @@ index: 1
         assert_eq!(selector["enabled"], true);
         assert_eq!(selector["index"], 1);
         assert_eq!(selector["regex"], true);
+    }
+
+    #[test]
+    fn maestro_selector_keeps_id_literals_exact_by_default() {
+        let yaml: YamlValue = serde_yaml::from_str("id: login.button").unwrap();
+        let selector = maestro_selector(&yaml).unwrap();
+
+        assert_eq!(selector["id"], "login.button");
+        assert_eq!(selector["regex"], false);
+    }
+
+    #[test]
+    fn maestro_selector_escapes_literal_ids_when_text_requires_regex() {
+        let yaml: YamlValue = serde_yaml::from_str(
+            r#"
+text: Continue.*
+id: login.button
+"#,
+        )
+        .unwrap();
+        let selector = maestro_selector(&yaml).unwrap();
+
+        assert_eq!(selector["text"], "Continue.*");
+        assert_eq!(selector["id"], "^login\\.button$");
+        assert_eq!(selector["regex"], true);
+    }
+
+    #[test]
+    fn maestro_swipe_rejects_unknown_directions() {
+        let command: YamlValue = serde_yaml::from_str(
+            r#"
+swipe:
+  direction: rigth
+"#,
+        )
+        .unwrap();
+        let error =
+            run_maestro_command("http://127.0.0.1:9", "test-udid", &command, Path::new("."))
+                .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Unsupported Maestro swipe direction `rigth`"));
     }
 
     #[test]

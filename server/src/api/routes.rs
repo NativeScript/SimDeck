@@ -4518,29 +4518,105 @@ async fn scroll_until_visible_payload(
         if timeout_ms == 0 || Instant::now() >= deadline {
             return Err(AppError::not_found("No accessibility element matched."));
         }
-        let (start_x, start_y, end_x, end_y) =
-            normalized_scroll_coordinates(payload.direction.as_deref())?;
-        let duration_ms = payload.duration_ms.unwrap_or(350);
-        let steps = payload.steps.unwrap_or(12).max(1);
-        let action_udid = udid.clone();
-        run_bridge_action(state.clone(), move |bridge| {
-            let input = bridge.create_input_session(&action_udid)?;
-            let delay = Duration::from_millis(duration_ms / u64::from(steps));
-            input.send_touch(start_x, start_y, "began")?;
-            for step in 1..steps {
-                let t = f64::from(step) / f64::from(steps);
-                input.send_touch(
-                    start_x + (end_x - start_x) * t,
-                    start_y + (end_y - start_y) * t,
-                    "moved",
-                )?;
-                std::thread::sleep(delay);
-            }
-            input.send_touch(end_x, end_y, "ended")
-        })
-        .await?;
+        let scroll_plan = scroll_input_plan_for_udid(&udid, &payload)?;
+        perform_scroll_input(state.clone(), udid.clone(), scroll_plan).await?;
         scroll_count += 1;
         tokio::time::sleep(Duration::from_millis(poll_ms)).await;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NormalizedSwipe {
+    start_x: f64,
+    start_y: f64,
+    end_x: f64,
+    end_y: f64,
+    duration_ms: u64,
+    steps: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrollInputBackend {
+    Android,
+    Native,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScrollInputPlan {
+    backend: ScrollInputBackend,
+    swipe: NormalizedSwipe,
+}
+
+fn scroll_input_plan_for_udid(
+    udid: &str,
+    payload: &ScrollUntilVisiblePayload,
+) -> Result<ScrollInputPlan, AppError> {
+    let (start_x, start_y, end_x, end_y) =
+        normalized_scroll_coordinates(payload.direction.as_deref())?;
+    Ok(ScrollInputPlan {
+        backend: if android::is_android_id(udid) {
+            ScrollInputBackend::Android
+        } else {
+            ScrollInputBackend::Native
+        },
+        swipe: NormalizedSwipe {
+            start_x,
+            start_y,
+            end_x,
+            end_y,
+            duration_ms: payload.duration_ms.unwrap_or(350),
+            steps: payload.steps.unwrap_or(12).max(1),
+        },
+    })
+}
+
+async fn perform_scroll_input(
+    state: AppState,
+    udid: String,
+    plan: ScrollInputPlan,
+) -> Result<(), AppError> {
+    let swipe = plan.swipe;
+    match plan.backend {
+        ScrollInputBackend::Android => {
+            run_android_action(state, move |android| {
+                android.send_swipe(
+                    &udid,
+                    swipe.start_x,
+                    swipe.start_y,
+                    swipe.end_x,
+                    swipe.end_y,
+                    swipe.duration_ms,
+                )
+            })
+            .await
+        }
+        ScrollInputBackend::Native => {
+            run_bridge_action(state, move |bridge| {
+                if bridge_simulator_is_tvos(&bridge, &udid) {
+                    let key_code = tvos_remote_key_for_touch_motion(
+                        swipe.start_x,
+                        swipe.start_y,
+                        swipe.end_x,
+                        swipe.end_y,
+                    );
+                    return press_tvos_remote_key(&bridge, &udid, key_code);
+                }
+                let input = bridge.create_input_session(&udid)?;
+                let delay = Duration::from_millis(swipe.duration_ms / u64::from(swipe.steps));
+                input.send_touch(swipe.start_x, swipe.start_y, "began")?;
+                for step in 1..swipe.steps {
+                    let t = f64::from(step) / f64::from(swipe.steps);
+                    input.send_touch(
+                        swipe.start_x + (swipe.end_x - swipe.start_x) * t,
+                        swipe.start_y + (swipe.end_y - swipe.start_y) * t,
+                        "moved",
+                    )?;
+                    std::thread::sleep(delay);
+                }
+                input.send_touch(swipe.end_x, swipe.end_y, "ended")
+            })
+            .await
+        }
     }
 }
 
@@ -7454,12 +7530,13 @@ mod tests {
         normalize_screen_point_from_snapshot, normalized_gesture_coordinates,
         parse_lsof_tcp_listener, parse_ui_application_service_line,
         process_identifier_from_accessibility_snapshot, resolved_stream_quality_limits,
-        split_filter_values, stream_quality_profile, suppress_native_ax_translation_error,
-        tap_point_from_snapshot, trim_tree_depth, ui_application_foreground_score,
-        AccessibilityHierarchySource, ElementSelectorPayload, InspectorSession,
-        InspectorSessionTransport, StreamClientForegroundRegistry, StreamQualityLimits,
-        StreamQualityPayload, UIKitApplicationServiceDetails, SOURCE_FLUTTER, SOURCE_NATIVE_AX,
-        SOURCE_NATIVE_SCRIPT, SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
+        scroll_input_plan_for_udid, split_filter_values, stream_quality_profile,
+        suppress_native_ax_translation_error, tap_point_from_snapshot, trim_tree_depth,
+        ui_application_foreground_score, AccessibilityHierarchySource, ElementSelectorPayload,
+        InspectorSession, InspectorSessionTransport, ScrollInputBackend, ScrollUntilVisiblePayload,
+        StreamClientForegroundRegistry, StreamQualityLimits, StreamQualityPayload,
+        UIKitApplicationServiceDetails, SOURCE_FLUTTER, SOURCE_NATIVE_AX, SOURCE_NATIVE_SCRIPT,
+        SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
     };
     use crate::inspector::PublishedInspector;
     use crate::metrics::counters::ClientStreamStats;
@@ -7682,6 +7759,29 @@ mod tests {
             (0.5, 0.975, 0.5, 0.025000000000000022, 500)
         );
         assert!(normalized_gesture_coordinates("orbit", None).is_err());
+    }
+
+    #[test]
+    fn scroll_until_visible_plans_android_swipe_for_android_ids() {
+        let payload = ScrollUntilVisiblePayload {
+            selector: ElementSelectorPayload::default(),
+            source: Some("android-uiautomator".to_owned()),
+            max_depth: None,
+            include_hidden: None,
+            timeout_ms: None,
+            poll_ms: None,
+            direction: Some("down".to_owned()),
+            duration_ms: Some(225),
+            steps: Some(7),
+        };
+
+        let plan = scroll_input_plan_for_udid("android:Pixel_8", &payload).unwrap();
+
+        assert_eq!(plan.backend, ScrollInputBackend::Android);
+        assert_eq!(plan.swipe.start_y, 0.78);
+        assert_eq!(plan.swipe.end_y, 0.22);
+        assert_eq!(plan.swipe.duration_ms, 225);
+        assert_eq!(plan.swipe.steps, 7);
     }
 
     #[test]
