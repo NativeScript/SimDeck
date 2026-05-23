@@ -68,6 +68,8 @@ const APP_UPLOAD_FILE_NAME_HEADER: &str = "x-simdeck-filename";
 const MAX_APP_UPLOAD_BYTES: usize = 1024 * 1024 * 1024;
 const FOREGROUND_PROCESS_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 const ACCESSIBILITY_TREE_CACHE_TTL: Duration = Duration::from_secs(5);
+const NATIVE_AX_SNAPSHOT_RETRY_ATTEMPTS: usize = 5;
+const NATIVE_AX_SNAPSHOT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 static FOREGROUND_APP_CACHE: OnceLock<StdMutex<HashMap<String, CachedForegroundApp>>> =
     OnceLock::new();
@@ -3882,7 +3884,7 @@ async fn native_ax_accessibility_tree_value(
     interactive_only: bool,
 ) -> Result<Value, AppError> {
     let available_sources = available_sources_with_native_ax(None);
-    match accessibility_snapshot_with_options(state, udid, None, max_depth, interactive_only).await
+    match accessibility_snapshot_with_retries(state, udid, None, max_depth, interactive_only).await
     {
         Ok(native_snapshot) => {
             let mut snapshot = attach_available_sources(
@@ -5090,6 +5092,12 @@ fn suppress_native_ax_translation_error(message: &str) -> Option<String> {
     Some(message.to_owned())
 }
 
+fn is_transient_native_ax_snapshot_error(message: &str) -> bool {
+    message.contains("No application accessibility root returned for simulator")
+        || message.contains("No translation object returned for simulator")
+        || is_core_simulator_service_mismatch(message)
+}
+
 fn is_core_simulator_service_mismatch(message: &str) -> bool {
     message.contains("CoreSimulator.framework was changed while the process was running")
         || message.contains("Service version")
@@ -5721,7 +5729,42 @@ async fn accessibility_snapshot(
     point: Option<(f64, f64)>,
     max_depth: Option<usize>,
 ) -> Result<Value, AppError> {
-    accessibility_snapshot_with_options(state, udid, point, max_depth, false).await
+    accessibility_snapshot_with_retries(state, udid, point, max_depth, false).await
+}
+
+async fn accessibility_snapshot_with_retries(
+    state: AppState,
+    udid: String,
+    point: Option<(f64, f64)>,
+    max_depth: Option<usize>,
+    interactive_only: bool,
+) -> Result<Value, AppError> {
+    let attempts = if point.is_none() {
+        NATIVE_AX_SNAPSHOT_RETRY_ATTEMPTS
+    } else {
+        1
+    };
+    for attempt in 0..attempts {
+        match accessibility_snapshot_with_options(
+            state.clone(),
+            udid.clone(),
+            point,
+            max_depth,
+            interactive_only,
+        )
+        .await
+        {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(error) => {
+                let message = error.to_string();
+                if attempt + 1 >= attempts || !is_transient_native_ax_snapshot_error(&message) {
+                    return Err(error);
+                }
+                tokio::time::sleep(NATIVE_AX_SNAPSHOT_RETRY_DELAY).await;
+            }
+        }
+    }
+    unreachable!("native AX snapshot retry loop always returns")
 }
 
 async fn accessibility_snapshot_with_options(
@@ -5745,9 +5788,9 @@ mod tests {
         compact_accessibility_snapshot, element_matches_selector, first_matching_element,
         inspector_available_sources, inspector_metadata, inspector_session_from_published,
         inspector_session_score, is_inspector_agent_transport_path,
-        logical_screen_size_from_display_pixels, normalize_inspector_node,
-        normalize_screen_point_from_snapshot, normalized_gesture_coordinates,
-        parse_lsof_tcp_listener, parse_ui_application_service_line,
+        is_transient_native_ax_snapshot_error, logical_screen_size_from_display_pixels,
+        normalize_inspector_node, normalize_screen_point_from_snapshot,
+        normalized_gesture_coordinates, parse_lsof_tcp_listener, parse_ui_application_service_line,
         process_identifier_from_accessibility_snapshot, resolved_stream_quality_limits,
         scroll_input_plan_for_udid, split_filter_values, stream_quality_profile,
         suppress_native_ax_translation_error, tap_point_from_snapshot, trim_tree_depth,
@@ -6244,6 +6287,17 @@ mod tests {
             None
         );
         assert!(suppress_native_ax_translation_error("Bridge failed").is_some());
+    }
+
+    #[test]
+    fn transient_native_ax_snapshot_errors_are_retryable() {
+        assert!(is_transient_native_ax_snapshot_error(
+            "No application accessibility root returned for simulator. The simulator may be between lifecycle states."
+        ));
+        assert!(is_transient_native_ax_snapshot_error(
+            "No translation object returned for simulator SIM"
+        ));
+        assert!(!is_transient_native_ax_snapshot_error("Bridge failed"));
     }
 
     #[test]
