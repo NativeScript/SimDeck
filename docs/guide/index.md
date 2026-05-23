@@ -32,6 +32,7 @@ simdeck install /path/to/App.ipa
 simdeck launch com.example.App
 simdeck tap --label "Continue" --wait-timeout-ms 5000
 simdeck tap "Continue"
+simdeck back
 simdeck describe --format agent --max-depth 3 --interactive
 ```
 

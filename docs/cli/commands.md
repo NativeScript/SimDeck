@@ -78,6 +78,7 @@ simdeck toggle-appearance
 simdeck describe
 simdeck describe --format agent --max-depth 4
 simdeck describe --format agent --max-depth 4 --interactive
+simdeck snapshot --format agent --max-depth 4 -i
 simdeck describe --format compact-json
 simdeck describe --source nativescript
 simdeck describe --source react-native
@@ -86,10 +87,11 @@ simdeck describe --source uikit
 simdeck describe --source native-ax
 simdeck describe --point 120,240
 simdeck wait-for --label "Welcome" --timeout-ms 5000
+simdeck wait --label "Welcome" --timeout-ms 5000
 simdeck assert --id login.button --source auto --max-depth 8
 ```
 
-Default source selection prefers a connected framework inspector, then the Swift in-app agent, then native accessibility. Use `--interactive` or `-i` to keep actionable elements and the ancestor context needed to find them. For quick agent loops, set the project default once and keep `describe` shallow.
+The default source is native accessibility for fast agent loops. Use `--source auto` when you want SimDeck to prefer a connected framework inspector, then the Swift in-app agent, then native accessibility. Use `--interactive` or `-i` to keep actionable elements and the ancestor context needed to find them. `snapshot` is an alias for `describe`. Agent-format output labels nodes with refs such as `@e3`, which can be passed back to `tap` or `press`. For quick agent loops, set the project default once and keep snapshots shallow.
 
 ## Performance
 
@@ -106,13 +108,15 @@ Performance data is simulator-only and uses host-process telemetry for matching 
 
 ## Input
 
-Coordinates are screen points unless `--normalized` is present. `tap "Continue"` is shorthand for a label tap on the selected device. Use `--device <udid>` or `SIMDECK_DEVICE=<udid>` for one-off overrides.
+Coordinates are screen points unless `--normalized` is present. `tap "Continue"` is shorthand for a label tap on the selected device. `press` is an alias for `tap`, and refs from `describe --format agent` work as direct targets. Add `--expect-id`, `--expect-label`, or another `--expect-*` selector when the tap should wait for the next screen before returning. Use `--device <udid>` or `SIMDECK_DEVICE=<udid>` for one-off overrides.
 
 ```sh
 simdeck tap 120 240
 simdeck tap 0.5 0.5 --normalized
 simdeck tap --label "Continue" --wait-timeout-ms 5000
+simdeck tap --id com.apple.settings.screenTime --expect-id BackButton
 simdeck tap "Continue"
+simdeck press @e3
 simdeck swipe 200 700 200 200
 simdeck gesture scroll-down
 simdeck pinch --start-distance 160 --end-distance 80
@@ -135,6 +139,7 @@ simdeck crown --delta 50
 simdeck dismiss-keyboard
 simdeck button software-keyboard
 simdeck home
+simdeck back
 simdeck app-switcher
 simdeck rotate-left
 simdeck rotate-right
@@ -144,9 +149,9 @@ simdeck rotate-right
 
 ```sh
 simdeck batch \
-  --step "tap --label Continue --wait-timeout-ms 5000" \
+  --step "tap --label Continue --wait-timeout-ms 5000 --expect-label Done" \
   --step "type 'hello world'" \
-  --step "wait-for --label 'hello world' --timeout-ms 5000"
+  --step "back"
 ```
 
 Use `wait-for` or `assert` steps instead of fixed sleeps when possible.

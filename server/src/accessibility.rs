@@ -1,4 +1,56 @@
+use clap::ValueEnum;
 use serde_json::{Map, Value};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum AccessibilitySource {
+    #[value(name = "auto")]
+    Auto,
+    #[value(name = "nativescript", alias = "ns")]
+    NativeScript,
+    #[value(name = "react-native", alias = "reactnative", alias = "rn")]
+    ReactNative,
+    #[value(name = "flutter", alias = "fl")]
+    Flutter,
+    #[value(name = "swiftui", alias = "swift-ui")]
+    SwiftUI,
+    #[value(name = "uikit", alias = "in-app-inspector")]
+    UIKit,
+    #[value(name = "native-ax", alias = "ax", alias = "native-accessibility")]
+    NativeAX,
+    #[value(name = "android-uiautomator")]
+    AndroidUiautomator,
+}
+
+impl AccessibilitySource {
+    pub fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value.unwrap_or("auto").trim().to_lowercase().as_str() {
+            "" | "auto" => Ok(Self::Auto),
+            "nativescript" | "ns" => Ok(Self::NativeScript),
+            "react-native" | "reactnative" | "rn" => Ok(Self::ReactNative),
+            "flutter" | "fl" => Ok(Self::Flutter),
+            "swiftui" | "swift-ui" => Ok(Self::SwiftUI),
+            "uikit" | "in-app-inspector" => Ok(Self::UIKit),
+            "ax" | "native-ax" | "native-accessibility" => Ok(Self::NativeAX),
+            "android-uiautomator" => Ok(Self::AndroidUiautomator),
+            source => Err(format!(
+                "Unsupported accessibility hierarchy source `{source}`."
+            )),
+        }
+    }
+
+    pub fn as_query_value(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::NativeScript => "nativescript",
+            Self::ReactNative => "react-native",
+            Self::Flutter => "flutter",
+            Self::SwiftUI => "swiftui",
+            Self::UIKit => "uikit",
+            Self::NativeAX => "native-ax",
+            Self::AndroidUiautomator => "android-uiautomator",
+        }
+    }
+}
 
 pub fn interactive_accessibility_snapshot(snapshot: &Value) -> Value {
     let mut output = snapshot.as_object().cloned().unwrap_or_default();

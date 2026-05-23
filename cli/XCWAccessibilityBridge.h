@@ -7,6 +7,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (nullable NSDictionary *)accessibilitySnapshotForSimulatorUDID:(NSString *)udid
                                                          atPoint:(nullable NSValue *)pointValue
                                                         maxDepth:(NSUInteger)maxDepth
+                                                 interactiveOnly:(BOOL)interactiveOnly
                                                            error:(NSError * _Nullable * _Nullable)error;
 
 @end

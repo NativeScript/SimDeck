@@ -1353,6 +1353,7 @@ static void XCWAXNormalizeWidgetRendererPointFrames(NSMutableArray<NSDictionary 
 + (nullable NSDictionary *)accessibilitySnapshotForSimulatorUDID:(NSString *)udid
                                                          atPoint:(nullable NSValue *)pointValue
                                                         maxDepth:(NSUInteger)maxDepth
+                                                 interactiveOnly:(BOOL)interactiveOnly
                                                            error:(NSError * _Nullable __autoreleasing *)error {
     if (![self.class loadAndValidate:error]) {
         return nil;
@@ -1421,7 +1422,7 @@ static void XCWAXNormalizeWidgetRendererPointFrames(NSMutableArray<NSDictionary 
         }
         // Shallow snapshots power fast agent describe loops. Keep the expensive
         // multi-root recovery pass for full trees, or when frontmost lookup fails.
-        BOOL shouldRecoverRoots = pointValue == nil && (translation == nil || maxDepth > 2);
+        BOOL shouldRecoverRoots = pointValue == nil && (translation == nil || (!interactiveOnly && maxDepth > 2));
         if (shouldRecoverRoots) {
             NSMutableDictionary<NSNumber *, NSMutableDictionary *> *candidatesByKey = [NSMutableDictionary dictionary];
             if (translation != nil) {

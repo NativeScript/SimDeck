@@ -1,4 +1,4 @@
-use crate::accessibility::interactive_accessibility_snapshot;
+use crate::accessibility::{interactive_accessibility_snapshot, AccessibilitySource};
 use crate::android::{self, AndroidBridge, AndroidEmulatorSpec};
 use crate::api::json::json;
 use crate::auth;
@@ -67,6 +67,7 @@ const FOREGROUND_APP_ROUTE_TIMEOUT: Duration = Duration::from_millis(1200);
 const APP_UPLOAD_FILE_NAME_HEADER: &str = "x-simdeck-filename";
 const MAX_APP_UPLOAD_BYTES: usize = 1024 * 1024 * 1024;
 const FOREGROUND_PROCESS_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
+const ACCESSIBILITY_TREE_CACHE_TTL: Duration = Duration::from_secs(5);
 
 static FOREGROUND_APP_CACHE: OnceLock<StdMutex<HashMap<String, CachedForegroundApp>>> =
     OnceLock::new();
@@ -81,6 +82,7 @@ pub struct AppState {
     pub performance: PerformanceRegistry,
     pub stream_clients: StreamClientForegroundRegistry,
     pub simulator_inventory: SimulatorInventoryCache,
+    pub accessibility_cache: AccessibilitySnapshotCache,
     pub android: AndroidBridge,
 }
 
@@ -88,6 +90,162 @@ pub struct AppState {
 struct CachedForegroundApp {
     cached_at: Instant,
     foreground_app: devtools::ForegroundApp,
+}
+
+#[derive(Clone, Default)]
+pub struct AccessibilitySnapshotCache {
+    inner: Arc<StdMutex<HashMap<AccessibilitySnapshotCacheKey, CachedAccessibilitySnapshot>>>,
+    generations: Arc<StdMutex<HashMap<String, u64>>>,
+    warming: Arc<StdMutex<HashMap<String, u64>>>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct AccessibilitySnapshotCacheKey {
+    udid: String,
+    source: String,
+    max_depth: Option<usize>,
+    include_hidden: bool,
+    interactive_only: bool,
+}
+
+#[derive(Clone)]
+struct CachedAccessibilitySnapshot {
+    cached_at: Instant,
+    snapshot: Value,
+}
+
+impl AccessibilitySnapshotCache {
+    fn get_compatible(
+        &self,
+        key: &AccessibilitySnapshotCacheKey,
+    ) -> Option<(AccessibilitySnapshotCacheKey, Value)> {
+        let mut cache = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = Instant::now();
+        cache.retain(|_, cached| {
+            now.duration_since(cached.cached_at) <= ACCESSIBILITY_TREE_CACHE_TTL
+        });
+        cache
+            .iter()
+            .filter(|(cached_key, _)| {
+                cached_key.udid == key.udid
+                    && cached_key.source == key.source
+                    && cached_key.include_hidden == key.include_hidden
+                    && cached_key.interactive_only == key.interactive_only
+                    && cached_depth_covers(cached_key.max_depth, key.max_depth)
+            })
+            .min_by_key(|(cached_key, _)| cached_depth_rank(cached_key.max_depth))
+            .map(|(cached_key, cached)| (cached_key.clone(), cached.snapshot.clone()))
+    }
+
+    #[cfg(test)]
+    fn insert(&self, key: AccessibilitySnapshotCacheKey, snapshot: &Value) {
+        let generation = self.generation(&key.udid);
+        self.insert_if_generation(key, snapshot, generation);
+    }
+
+    fn insert_if_generation(
+        &self,
+        key: AccessibilitySnapshotCacheKey,
+        snapshot: &Value,
+        generation: u64,
+    ) {
+        let generations = self
+            .generations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if generations.get(&key.udid).copied().unwrap_or(0) != generation {
+            return;
+        }
+        let mut cache = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.insert(
+            key,
+            CachedAccessibilitySnapshot {
+                cached_at: Instant::now(),
+                snapshot: snapshot.clone(),
+            },
+        );
+    }
+
+    fn latest_interactive(&self, udid: &str) -> Option<Value> {
+        let mut cache = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = Instant::now();
+        cache.retain(|_, cached| {
+            now.duration_since(cached.cached_at) <= ACCESSIBILITY_TREE_CACHE_TTL
+        });
+        cache
+            .iter()
+            .filter(|(key, _)| key.udid == udid && key.interactive_only && !key.include_hidden)
+            .max_by_key(|(_, cached)| cached.cached_at)
+            .map(|(_, cached)| cached.snapshot.clone())
+    }
+
+    fn invalidate(&self, udid: &str) {
+        let mut generations = self
+            .generations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let generation = generations.entry(udid.to_owned()).or_insert(0);
+        *generation = generation.saturating_add(1);
+        let mut cache = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.retain(|key, _| key.udid != udid);
+    }
+
+    fn generation(&self, udid: &str) -> u64 {
+        self.generations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(udid)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn begin_warming(&self, udid: &str, generation: u64) -> bool {
+        let mut warming = self
+            .warming
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match warming.get(udid).copied() {
+            Some(active_generation) if active_generation >= generation => false,
+            _ => {
+                warming.insert(udid.to_owned(), generation);
+                true
+            }
+        }
+    }
+
+    fn finish_warming(&self, udid: &str, generation: u64) {
+        let mut warming = self
+            .warming
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if warming.get(udid).copied() == Some(generation) {
+            warming.remove(udid);
+        }
+    }
+}
+
+fn cached_depth_covers(cached: Option<usize>, requested: Option<usize>) -> bool {
+    match (cached, requested) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(cached), Some(requested)) => cached >= requested,
+    }
+}
+
+fn cached_depth_rank(depth: Option<usize>) -> usize {
+    depth.unwrap_or(usize::MAX)
 }
 
 #[derive(Clone, Default)]
@@ -163,94 +321,6 @@ pub struct SimulatorInventoryCache {
 struct SimulatorInventoryState {
     simulators: Option<Vec<crate::native::bridge::Simulator>>,
     updated_at: Option<Instant>,
-}
-
-#[derive(Deserialize)]
-struct OpenUrlPayload {
-    url: String,
-}
-
-#[derive(Deserialize)]
-struct LaunchPayload {
-    #[serde(rename = "bundleId")]
-    bundle_id: String,
-}
-
-#[derive(Deserialize)]
-struct InstallPayload {
-    #[serde(rename = "appPath")]
-    app_path: String,
-}
-
-#[derive(Deserialize)]
-struct UninstallPayload {
-    #[serde(rename = "bundleId")]
-    bundle_id: String,
-}
-
-#[derive(Deserialize)]
-struct PasteboardPayload {
-    text: String,
-}
-
-#[derive(Deserialize)]
-struct ScreenshotPngQuery {
-    bezel: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ScreenRecordingPayload {
-    seconds: Option<f64>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateSimulatorPayload {
-    platform: Option<String>,
-    name: String,
-    device_type_identifier: String,
-    runtime_identifier: Option<String>,
-    paired_watch: Option<CreatePairedWatchPayload>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreatePairedWatchPayload {
-    name: String,
-    device_type_identifier: String,
-    runtime_identifier: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct TouchPayload {
-    x: f64,
-    y: f64,
-    phase: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EdgeTouchPayload {
-    x: f64,
-    y: f64,
-    phase: String,
-    edge: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MultiTouchPayload {
-    x1: f64,
-    y1: f64,
-    x2: f64,
-    y2: f64,
-    phase: String,
-}
-
-#[derive(Deserialize)]
-struct TouchSequencePayload {
-    events: Vec<TouchSequenceEvent>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -390,6 +460,52 @@ const VISIBLE_STREAM_QUALITY_PROFILE_IDS: &[&str] = &["full", "balanced", "econo
 
 static STREAM_CONFIG_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
 
+#[derive(Deserialize)]
+struct InstallPayload {
+    #[serde(rename = "appPath")]
+    app_path: String,
+}
+
+#[derive(Deserialize)]
+struct UninstallPayload {
+    #[serde(rename = "bundleId")]
+    bundle_id: String,
+}
+
+#[derive(Deserialize)]
+struct PasteboardPayload {
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct ScreenshotPngQuery {
+    bezel: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenRecordingPayload {
+    seconds: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateSimulatorPayload {
+    platform: Option<String>,
+    name: String,
+    device_type_identifier: String,
+    runtime_identifier: Option<String>,
+    paired_watch: Option<CreatePairedWatchPayload>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatePairedWatchPayload {
+    name: String,
+    device_type_identifier: String,
+    runtime_identifier: Option<String>,
+}
+
 #[derive(Deserialize, Clone)]
 struct TouchSequenceEvent {
     x: f64,
@@ -397,13 +513,6 @@ struct TouchSequenceEvent {
     phase: String,
     #[serde(rename = "delayMsAfter")]
     delay_ms_after: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct KeyPayload {
-    #[serde(rename = "keyCode")]
-    key_code: u16,
-    modifiers: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -542,30 +651,6 @@ fn handle_tvos_touch_phase(bridge: &NativeBridge, udid: &str, phase: &str) -> Re
 }
 
 #[derive(Deserialize)]
-struct KeySequencePayload {
-    #[serde(rename = "keyCodes")]
-    key_codes: Vec<u16>,
-    #[serde(rename = "delayMs")]
-    delay_ms: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct ButtonPayload {
-    button: String,
-    #[serde(rename = "durationMs")]
-    duration_ms: Option<u32>,
-    phase: Option<String>,
-    #[serde(rename = "usagePage")]
-    usage_page: Option<u32>,
-    usage: Option<u32>,
-}
-
-#[derive(Deserialize)]
-struct CrownPayload {
-    delta: f64,
-}
-
-#[derive(Deserialize)]
 struct ChromePngQuery {
     buttons: Option<String>,
 }
@@ -575,162 +660,7 @@ struct ChromeButtonPngQuery {
     pressed: Option<String>,
 }
 
-#[derive(Deserialize, Clone, Default)]
-#[serde(rename_all = "camelCase")]
-struct ElementSelectorPayload {
-    text: Option<String>,
-    id: Option<String>,
-    label: Option<String>,
-    value: Option<String>,
-    #[serde(alias = "type")]
-    element_type: Option<String>,
-    index: Option<usize>,
-    enabled: Option<bool>,
-    checked: Option<bool>,
-    focused: Option<bool>,
-    selected: Option<bool>,
-    regex: Option<bool>,
-}
-
-#[derive(Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct AccessibilityQueryPayload {
-    #[serde(default)]
-    selector: ElementSelectorPayload,
-    source: Option<String>,
-    max_depth: Option<usize>,
-    include_hidden: Option<bool>,
-    limit: Option<usize>,
-}
-
-#[derive(Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct WaitForPayload {
-    #[serde(default)]
-    selector: ElementSelectorPayload,
-    source: Option<String>,
-    max_depth: Option<usize>,
-    include_hidden: Option<bool>,
-    timeout_ms: Option<u64>,
-    poll_ms: Option<u64>,
-}
-
-#[derive(Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct ScrollUntilVisiblePayload {
-    #[serde(default)]
-    selector: ElementSelectorPayload,
-    source: Option<String>,
-    max_depth: Option<usize>,
-    include_hidden: Option<bool>,
-    timeout_ms: Option<u64>,
-    poll_ms: Option<u64>,
-    direction: Option<String>,
-    duration_ms: Option<u64>,
-    steps: Option<u32>,
-}
-
-#[derive(Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct TapElementPayload {
-    x: Option<f64>,
-    y: Option<f64>,
-    normalized: Option<bool>,
-    #[serde(default)]
-    selector: ElementSelectorPayload,
-    source: Option<String>,
-    max_depth: Option<usize>,
-    include_hidden: Option<bool>,
-    wait_timeout_ms: Option<u64>,
-    poll_ms: Option<u64>,
-    duration_ms: Option<u64>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct BatchPayload {
-    steps: Vec<BatchStep>,
-    continue_on_error: Option<bool>,
-}
-
-#[derive(Deserialize, Clone)]
-#[serde(
-    tag = "action",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-enum BatchStep {
-    Sleep {
-        ms: Option<u64>,
-        seconds: Option<f64>,
-    },
-    Tap(TapElementPayload),
-    WaitFor(WaitForPayload),
-    Assert(WaitForPayload),
-    AssertNot(WaitForPayload),
-    ScrollUntilVisible(ScrollUntilVisiblePayload),
-    Key {
-        key_code: u16,
-        modifiers: Option<u32>,
-    },
-    KeySequence {
-        key_codes: Vec<u16>,
-        delay_ms: Option<u64>,
-    },
-    Touch {
-        x: f64,
-        y: f64,
-        phase: Option<String>,
-        down: Option<bool>,
-        up: Option<bool>,
-        delay_ms: Option<u64>,
-    },
-    TouchSequence {
-        events: Vec<TouchSequenceEvent>,
-    },
-    Swipe {
-        start_x: f64,
-        start_y: f64,
-        end_x: f64,
-        end_y: f64,
-        duration_ms: Option<u64>,
-        steps: Option<u32>,
-    },
-    Gesture {
-        preset: String,
-        duration_ms: Option<u64>,
-        delta: Option<f64>,
-        steps: Option<u32>,
-    },
-    Type {
-        text: String,
-        delay_ms: Option<u64>,
-    },
-    Button {
-        button: String,
-        duration_ms: Option<u32>,
-    },
-    Crown {
-        delta: f64,
-    },
-    Launch {
-        bundle_id: String,
-    },
-    OpenUrl {
-        url: String,
-    },
-    Home,
-    DismissKeyboard,
-    AppSwitcher,
-    RotateLeft,
-    RotateRight,
-    ToggleAppearance,
-    Describe {
-        source: Option<String>,
-        max_depth: Option<usize>,
-        include_hidden: Option<bool>,
-    },
-}
+include!("action_types.rs");
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -888,63 +818,12 @@ pub fn router(state: AppState) -> Router {
             "/api/simulators/{udid}/screen-recording/{recording_id}/stop",
             post(stop_screen_recording),
         )
-        .route(
-            "/api/simulators/{udid}/toggle-appearance",
-            post(toggle_appearance),
-        )
         .route("/api/simulators/{udid}/refresh", post(refresh_stream))
-        .route("/api/simulators/{udid}/open-url", post(open_url))
-        .route("/api/simulators/{udid}/launch", post(launch_bundle))
-        .route("/api/simulators/{udid}/tap", post(tap_element))
-        .route("/api/simulators/{udid}/query", post(accessibility_query))
-        .route("/api/simulators/{udid}/wait-for", post(wait_for_element))
-        .route("/api/simulators/{udid}/assert", post(assert_element))
-        .route(
-            "/api/simulators/{udid}/wait-for-not",
-            post(wait_for_not_element),
-        )
-        .route(
-            "/api/simulators/{udid}/assert-not",
-            post(assert_not_element),
-        )
-        .route(
-            "/api/simulators/{udid}/scroll-until-visible",
-            post(scroll_until_visible),
-        )
-        .route("/api/simulators/{udid}/batch", post(run_batch))
-        .route("/api/simulators/{udid}/touch", post(send_touch))
-        .route("/api/simulators/{udid}/edge-touch", post(send_edge_touch))
-        .route("/api/simulators/{udid}/multi-touch", post(send_multi_touch))
+        .route("/api/simulators/{udid}/action", post(simulator_action))
         .route("/api/simulators/{udid}/control", get(control_socket))
         .route("/api/simulators/{udid}/input", get(control_socket))
         .route("/api/simulators/{udid}/h264", get(h264_socket))
         .route("/api/simulators/{udid}/webrtc/offer", post(webrtc_offer))
-        .route(
-            "/api/simulators/{udid}/touch-sequence",
-            post(send_touch_sequence),
-        )
-        .route("/api/simulators/{udid}/key", post(send_key))
-        .route(
-            "/api/simulators/{udid}/key-sequence",
-            post(send_key_sequence),
-        )
-        .route(
-            "/api/simulators/{udid}/dismiss-keyboard",
-            post(dismiss_keyboard),
-        )
-        .route(
-            "/api/simulators/{udid}/toggle-software-keyboard",
-            post(toggle_software_keyboard),
-        )
-        .route("/api/simulators/{udid}/button", post(press_button))
-        .route("/api/simulators/{udid}/crown", post(rotate_crown))
-        .route("/api/simulators/{udid}/home", post(press_home))
-        .route(
-            "/api/simulators/{udid}/app-switcher",
-            post(open_app_switcher),
-        )
-        .route("/api/simulators/{udid}/rotate-left", post(rotate_left))
-        .route("/api/simulators/{udid}/rotate-right", post(rotate_right))
         .route("/api/simulators/{udid}/chrome-profile", get(chrome_profile))
         .route("/api/simulators/{udid}/chrome.png", get(chrome_png))
         .route(
@@ -2157,7 +2036,14 @@ async fn boot_android_device(state: AppState, udid: String) -> Result<(), AppErr
 
 async fn boot_ios_device(state: AppState, udid: String) -> Result<(), AppError> {
     forget_lifecycle_session(&state, &udid);
-    run_bridge_action(state, move |bridge| bridge.boot_simulator(&udid)).await
+    let action_udid = udid.clone();
+    run_bridge_action(state.clone(), move |bridge| {
+        bridge.boot_simulator(&action_udid)
+    })
+    .await?;
+    let generation = state.accessibility_cache.generation(&udid);
+    warm_accessibility_cache(state, udid, generation).await;
+    Ok(())
 }
 
 async fn boot_simulator(
@@ -2210,6 +2096,7 @@ fn forget_lifecycle_session(state: &AppState, udid: &str) {
     // display session is destructed while CoreSimulator is booting, shutting
     // down, or erasing the same device. Detach it from the registry without
     // running Objective-C teardown on the lifecycle response path.
+    state.accessibility_cache.invalidate(udid);
     state.registry.forget(udid);
 }
 
@@ -2253,6 +2140,7 @@ async fn upload_install_app(
 }
 
 async fn install_app_path(state: AppState, udid: String, app_path: String) -> Result<(), AppError> {
+    state.accessibility_cache.invalidate(&udid);
     if android::is_android_id(&udid) {
         let action_udid = udid.clone();
         let action_path = app_path.clone();
@@ -2264,10 +2152,11 @@ async fn install_app_path(state: AppState, udid: String, app_path: String) -> Re
     }
     let action_udid = udid.clone();
     let action_path = app_path.clone();
-    run_bridge_action(state, move |bridge| {
+    run_bridge_action(state.clone(), move |bridge| {
         bridge.install_app(&action_udid, &action_path)
     })
     .await?;
+    spawn_accessibility_warmup(state, udid);
     Ok(())
 }
 
@@ -2388,6 +2277,7 @@ async fn uninstall_app(
     Path(udid): Path<String>,
     Json(payload): Json<UninstallPayload>,
 ) -> Result<Json<Value>, AppError> {
+    state.accessibility_cache.invalidate(&udid);
     if payload.bundle_id.trim().is_empty() {
         return Err(AppError::bad_request(
             "Request body must include `bundleId`.",
@@ -2402,10 +2292,11 @@ async fn uninstall_app(
         return Ok(json(json_value!({ "ok": true })));
     }
     let action_udid = udid.clone();
-    run_bridge_action(state, move |bridge| {
+    run_bridge_action(state.clone(), move |bridge| {
         bridge.uninstall_app(&action_udid, &payload.bundle_id)
     })
     .await?;
+    spawn_accessibility_warmup(state, udid);
     Ok(json(json_value!({ "ok": true })))
 }
 
@@ -2550,19 +2441,6 @@ fn validate_screen_recording_seconds(seconds: Option<f64>) -> Result<f64, AppErr
     Ok(seconds)
 }
 
-async fn toggle_appearance(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-) -> Result<Json<Value>, AppError> {
-    if android::is_android_id(&udid) {
-        run_android_action(state, move |android| android.toggle_appearance(&udid)).await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    let action_udid = udid.clone();
-    run_bridge_action(state, move |bridge| bridge.toggle_appearance(&action_udid)).await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
 async fn refresh_stream(
     State(state): State<AppState>,
     Path(udid): Path<String>,
@@ -2579,353 +2457,48 @@ async fn refresh_stream(
     Ok(json(json_value!({ "ok": true })))
 }
 
-async fn open_url(
+async fn simulator_action(
     State(state): State<AppState>,
     Path(udid): Path<String>,
-    Json(payload): Json<OpenUrlPayload>,
+    Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    if payload.url.trim().is_empty() {
-        return Err(AppError::bad_request("Request body must include `url`."));
-    }
-    if android::is_android_id(&udid) {
-        let action_udid = udid.clone();
-        run_android_action(state, move |android| {
-            android.open_url(&action_udid, &payload.url)
-        })
-        .await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    let action_udid = udid.clone();
-    run_bridge_action(state, move |bridge| {
-        bridge.open_url(&action_udid, &payload.url)
-    })
-    .await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn launch_bundle(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<LaunchPayload>,
-) -> Result<Json<Value>, AppError> {
-    if payload.bundle_id.trim().is_empty() {
-        return Err(AppError::bad_request(
-            "Request body must include `bundleId`.",
-        ));
-    }
-    if android::is_android_id(&udid) {
-        let action_udid = udid.clone();
-        run_android_action(state, move |android| {
-            android.launch_package(&action_udid, &payload.bundle_id)
-        })
-        .await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    let action_udid = udid.clone();
-    run_bridge_action(state, move |bridge| {
-        bridge.launch_bundle(&action_udid, &payload.bundle_id)
-    })
-    .await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn tap_element(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<TapElementPayload>,
-) -> Result<Json<Value>, AppError> {
-    perform_tap_payload(state, udid, payload).await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn accessibility_query(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<AccessibilityQueryPayload>,
-) -> Result<Json<Value>, AppError> {
-    let snapshot = accessibility_tree_value(
-        state,
-        udid,
-        payload.source.as_deref(),
-        payload.max_depth,
-        payload.include_hidden.unwrap_or(false),
-        false,
-    )
-    .await?;
-    let matches = query_compact_elements(
-        &snapshot,
-        &payload.selector,
-        payload.limit.unwrap_or(64).clamp(1, 512),
-    );
-    Ok(json(json_value!({
-        "ok": true,
-        "source": snapshot.get("source").cloned().unwrap_or(Value::Null),
-        "count": matches.len(),
-        "matches": matches,
-    })))
-}
-
-async fn wait_for_element(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<WaitForPayload>,
-) -> Result<Json<Value>, AppError> {
-    wait_for_element_payload(state, udid, payload).await
-}
-
-async fn assert_element(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<WaitForPayload>,
-) -> Result<Json<Value>, AppError> {
-    wait_for_element_payload(state, udid, payload).await
-}
-
-async fn wait_for_not_element(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<WaitForPayload>,
-) -> Result<Json<Value>, AppError> {
-    wait_for_absent_element_payload(state, udid, payload).await
-}
-
-async fn assert_not_element(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<WaitForPayload>,
-) -> Result<Json<Value>, AppError> {
-    wait_for_absent_element_payload(state, udid, payload).await
-}
-
-async fn scroll_until_visible(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<ScrollUntilVisiblePayload>,
-) -> Result<Json<Value>, AppError> {
-    scroll_until_visible_payload(state, udid, payload).await
-}
-
-async fn run_batch(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<BatchPayload>,
-) -> Result<Json<Value>, AppError> {
-    if payload.steps.is_empty() {
-        return Err(AppError::bad_request(
-            "Request body must include at least one batch step.",
-        ));
-    }
-    if payload.steps.len() > 256 {
-        return Err(AppError::bad_request(
-            "Batch cannot contain more than 256 steps.",
-        ));
+    let action = payload
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if action.eq_ignore_ascii_case("batch") {
+        let payload: BatchPayload = serde_json::from_value(payload).map_err(|error| {
+            AppError::bad_request(format!("Invalid batch action payload: {error}"))
+        })?;
+        let result = run_batch_steps(state, udid, payload).await?;
+        return Ok(json(result));
     }
 
-    let continue_on_error = payload.continue_on_error.unwrap_or(false);
-    let mut results = Vec::new();
-    let mut failure_count = 0usize;
-    for (index, step) in payload.steps.into_iter().enumerate() {
-        let started = Instant::now();
-        let result = run_batch_step(state.clone(), udid.clone(), step).await;
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-        match result {
-            Ok(value) => {
-                results.push(json_value!({
-                    "index": index,
-                    "ok": true,
-                    "elapsedMs": elapsed_ms,
-                    "result": value,
-                }));
-            }
-            Err(error) => {
-                failure_count += 1;
-                let message = error.to_string();
-                results.push(json_value!({
-                    "index": index,
-                    "ok": false,
-                    "elapsedMs": elapsed_ms,
-                    "error": message,
-                }));
-                if !continue_on_error {
-                    return Err(AppError::bad_request(format!(
-                        "Batch step {} failed: {}",
-                        index + 1,
-                        message
-                    )));
-                }
-            }
+    let step: BatchStep = serde_json::from_value(payload)
+        .map_err(|error| AppError::bad_request(format!("Invalid action payload: {error}")))?;
+    let invalidates_ax_cache = batch_step_invalidates_ax_cache(&step);
+    let should_warm_ax = batch_step_should_warm_ax(&step);
+    if invalidates_ax_cache {
+        state.accessibility_cache.invalidate(&udid);
+    }
+    let result = run_batch_step(state.clone(), udid.clone(), step).await?;
+    if should_warm_ax {
+        spawn_accessibility_warmup(state, udid);
+    }
+    Ok(json(action_response_value(result)))
+}
+
+fn action_response_value(result: Value) -> Value {
+    match result {
+        Value::Object(mut object) => {
+            object
+                .entry("ok".to_owned())
+                .or_insert_with(|| Value::Bool(true));
+            Value::Object(object)
         }
+        value => json_value!({ "ok": true, "result": value }),
     }
-    Ok(json(json_value!({
-        "ok": failure_count == 0,
-        "failureCount": failure_count,
-        "steps": results,
-    })))
-}
-
-async fn send_touch(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<TouchPayload>,
-) -> Result<Json<Value>, AppError> {
-    if !payload.x.is_finite() || !payload.y.is_finite() {
-        return Err(AppError::bad_request(
-            "`x` and `y` must be finite normalized numbers.",
-        ));
-    }
-    let x = payload.x.clamp(0.0, 1.0);
-    let y = payload.y.clamp(0.0, 1.0);
-    let phase = payload.phase;
-    if android::is_android_id(&udid) {
-        run_android_action(state, move |android| {
-            android.send_touch(&udid, x, y, &phase)
-        })
-        .await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    run_bridge_action(state, move |bridge| {
-        if bridge_simulator_is_tvos(&bridge, &udid) {
-            return handle_tvos_touch_phase(&bridge, &udid, &phase);
-        }
-        let input = bridge.create_input_session(&udid)?;
-        input.send_touch(x, y, &phase)
-    })
-    .await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn send_edge_touch(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<EdgeTouchPayload>,
-) -> Result<Json<Value>, AppError> {
-    if !payload.x.is_finite() || !payload.y.is_finite() {
-        return Err(AppError::bad_request(
-            "`x` and `y` must be finite normalized numbers.",
-        ));
-    }
-    if android::is_android_id(&udid) {
-        return Err(AppError::bad_request(
-            "Edge touch input is not supported for Android devices.",
-        ));
-    }
-    let edge = edge_name_to_hid_value(payload.edge.as_str()).ok_or_else(|| {
-        AppError::bad_request("`edge` must be `left`, `top`, `bottom`, `right`, or `none`.")
-    })?;
-    let x = payload.x.clamp(0.0, 1.0);
-    let y = payload.y.clamp(0.0, 1.0);
-    let phase = payload.phase;
-    run_bridge_action(state, move |bridge| {
-        if bridge_simulator_is_tvos(&bridge, &udid) {
-            return Err(AppError::bad_request(
-                "Edge touch input is not supported for tvOS simulators.",
-            ));
-        }
-        let input = bridge.create_input_session(&udid)?;
-        input.send_edge_touch(x, y, &phase, edge)
-    })
-    .await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn send_multi_touch(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<MultiTouchPayload>,
-) -> Result<Json<Value>, AppError> {
-    if !payload.x1.is_finite()
-        || !payload.y1.is_finite()
-        || !payload.x2.is_finite()
-        || !payload.y2.is_finite()
-    {
-        return Err(AppError::bad_request(
-            "`x1`, `y1`, `x2`, and `y2` must be finite normalized numbers.",
-        ));
-    }
-    if android::is_android_id(&udid) {
-        return Err(AppError::bad_request(
-            "Multi-touch input is not supported for Android devices.",
-        ));
-    }
-
-    let x1 = payload.x1.clamp(0.0, 1.0);
-    let y1 = payload.y1.clamp(0.0, 1.0);
-    let x2 = payload.x2.clamp(0.0, 1.0);
-    let y2 = payload.y2.clamp(0.0, 1.0);
-    let phase = payload.phase;
-    run_bridge_action(state, move |bridge| {
-        if bridge_simulator_is_tvos(&bridge, &udid) {
-            return Err(AppError::bad_request(
-                "Multi-touch input is not supported for tvOS simulators.",
-            ));
-        }
-        let input = bridge.create_input_session(&udid)?;
-        input.send_multitouch(x1, y1, x2, y2, &phase)
-    })
-    .await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn send_touch_sequence(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<TouchSequencePayload>,
-) -> Result<Json<Value>, AppError> {
-    if payload.events.is_empty() {
-        return Err(AppError::bad_request(
-            "Request body must include at least one touch event.",
-        ));
-    }
-    if payload.events.len() > 64 {
-        return Err(AppError::bad_request(
-            "Touch sequence cannot contain more than 64 events.",
-        ));
-    }
-    for event in &payload.events {
-        if !event.x.is_finite() || !event.y.is_finite() {
-            return Err(AppError::bad_request(
-                "`x` and `y` must be finite normalized numbers.",
-            ));
-        }
-    }
-    if android::is_android_id(&udid) {
-        run_android_action(state, move |android| {
-            for event in payload.events {
-                android.send_touch(
-                    &udid,
-                    event.x.clamp(0.0, 1.0),
-                    event.y.clamp(0.0, 1.0),
-                    &event.phase,
-                )?;
-                if let Some(delay_ms) = event.delay_ms_after.filter(|delay_ms| *delay_ms > 0) {
-                    std::thread::sleep(Duration::from_millis(delay_ms));
-                }
-            }
-            Ok(())
-        })
-        .await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    run_bridge_action(state, move |bridge| {
-        if bridge_simulator_is_tvos(&bridge, &udid) {
-            let key_code = tvos_touch_sequence_key(&payload.events)?;
-            return press_tvos_remote_key(&bridge, &udid, key_code);
-        }
-        let input = bridge.create_input_session(&udid)?;
-        for event in payload.events {
-            input.send_touch(
-                event.x.clamp(0.0, 1.0),
-                event.y.clamp(0.0, 1.0),
-                &event.phase,
-            )?;
-            if let Some(delay_ms) = event.delay_ms_after.filter(|delay_ms| *delay_ms > 0) {
-                std::thread::sleep(Duration::from_millis(delay_ms));
-            }
-        }
-        Ok(())
-    })
-    .await?;
-    Ok(json(json_value!({ "ok": true })))
 }
 
 async fn control_socket(
@@ -3832,208 +3405,6 @@ pub(crate) async fn run_toggle_appearance_control(
         .map_err(|error| AppError::internal(format!("Failed to join control task: {error}")))?
 }
 
-async fn send_key(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<KeyPayload>,
-) -> Result<Json<Value>, AppError> {
-    if android::is_android_id(&udid) {
-        run_android_action(state, move |android| {
-            android.send_key(&udid, payload.key_code, payload.modifiers.unwrap_or(0))
-        })
-        .await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    run_bridge_action(state, move |bridge| {
-        bridge.send_key(&udid, payload.key_code, payload.modifiers.unwrap_or(0))
-    })
-    .await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn send_key_sequence(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<KeySequencePayload>,
-) -> Result<Json<Value>, AppError> {
-    if payload.key_codes.is_empty() {
-        return Err(AppError::bad_request(
-            "Request body must include at least one key code.",
-        ));
-    }
-    if payload.key_codes.len() > 512 {
-        return Err(AppError::bad_request(
-            "Key sequence cannot contain more than 512 key codes.",
-        ));
-    }
-    if android::is_android_id(&udid) {
-        run_android_action(state, move |android| {
-            let delay_ms = payload.delay_ms.unwrap_or(0);
-            let key_count = payload.key_codes.len();
-            for (index, key_code) in payload.key_codes.into_iter().enumerate() {
-                android.send_key(&udid, key_code, 0)?;
-                if delay_ms > 0 && index + 1 < key_count {
-                    std::thread::sleep(Duration::from_millis(delay_ms));
-                }
-            }
-            Ok(())
-        })
-        .await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    run_bridge_action(state, move |bridge| {
-        let input = bridge.create_input_session(&udid)?;
-        let delay_ms = payload.delay_ms.unwrap_or(0);
-        let key_count = payload.key_codes.len();
-        for (index, key_code) in payload.key_codes.into_iter().enumerate() {
-            input.send_key(key_code, 0)?;
-            if delay_ms > 0 && index + 1 < key_count {
-                std::thread::sleep(Duration::from_millis(delay_ms));
-            }
-        }
-        Ok(())
-    })
-    .await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn dismiss_keyboard(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-) -> Result<Json<Value>, AppError> {
-    if android::is_android_id(&udid) {
-        run_android_action(state, move |android| android.dismiss_keyboard(&udid)).await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    run_bridge_action(state, move |bridge| bridge.send_key(&udid, 41, 0)).await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn toggle_software_keyboard(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-) -> Result<Json<Value>, AppError> {
-    if android::is_android_id(&udid) {
-        return Err(AppError::bad_request(
-            "Software keyboard toggle is only available for iOS simulators.",
-        ));
-    }
-    run_bridge_action(state, move |bridge| {
-        bridge.press_button(&udid, "software-keyboard", 0)
-    })
-    .await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn press_button(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<ButtonPayload>,
-) -> Result<Json<Value>, AppError> {
-    if payload.button.trim().is_empty() {
-        return Err(AppError::bad_request("Request body must include `button`."));
-    }
-    if android::is_android_id(&udid) {
-        run_android_action(state, move |android| {
-            android.press_button(&udid, &payload.button, payload.duration_ms.unwrap_or(0))
-        })
-        .await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    if let Some(phase) = payload.phase.as_deref() {
-        let pressed = match phase {
-            "down" | "began" => true,
-            "up" | "ended" | "cancelled" => false,
-            _ => {
-                return Err(AppError::bad_request(
-                    "`phase` must be `down`, `up`, `began`, `ended`, or `cancelled`.",
-                ))
-            }
-        };
-        run_bridge_action(state, move |bridge| {
-            bridge.send_button(
-                &udid,
-                &payload.button,
-                pressed,
-                payload.usage_page,
-                payload.usage,
-            )
-        })
-        .await?;
-    } else {
-        run_bridge_action(state, move |bridge| {
-            bridge.press_button(&udid, &payload.button, payload.duration_ms.unwrap_or(0))
-        })
-        .await?;
-    }
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn rotate_crown(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-    Json(payload): Json<CrownPayload>,
-) -> Result<Json<Value>, AppError> {
-    if !payload.delta.is_finite() {
-        return Err(AppError::bad_request(
-            "Request body must include finite `delta`.",
-        ));
-    }
-    run_bridge_action(state, move |bridge| {
-        bridge.rotate_crown(&udid, payload.delta)
-    })
-    .await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn press_home(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-) -> Result<Json<Value>, AppError> {
-    if android::is_android_id(&udid) {
-        run_android_action(state, move |android| android.press_home(&udid)).await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    run_bridge_action(state, move |bridge| bridge.press_home(&udid)).await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn open_app_switcher(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-) -> Result<Json<Value>, AppError> {
-    if android::is_android_id(&udid) {
-        run_android_action(state, move |android| android.open_app_switcher(&udid)).await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    run_bridge_action(state, move |bridge| bridge.open_app_switcher(&udid)).await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn rotate_right(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-) -> Result<Json<Value>, AppError> {
-    if android::is_android_id(&udid) {
-        run_android_action(state, move |android| android.rotate_right(&udid)).await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    run_bridge_action(state, move |bridge| bridge.rotate_right(&udid)).await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
-async fn rotate_left(
-    State(state): State<AppState>,
-    Path(udid): Path<String>,
-) -> Result<Json<Value>, AppError> {
-    if android::is_android_id(&udid) {
-        run_android_action(state, move |android| android.rotate_left(&udid)).await?;
-        return Ok(json(json_value!({ "ok": true })));
-    }
-    run_bridge_action(state, move |bridge| bridge.rotate_left(&udid)).await?;
-    Ok(json(json_value!({ "ok": true })))
-}
-
 async fn chrome_profile(
     State(state): State<AppState>,
     Path(udid): Path<String>,
@@ -4143,17 +3514,185 @@ async fn accessibility_tree(
     Path(udid): Path<String>,
     Query(query): Query<AccessibilityTreeQuery>,
 ) -> Result<Json<Value>, AppError> {
-    Ok(json(
-        accessibility_tree_value(
-            state,
-            udid,
-            query.source.as_deref(),
-            query.max_depth,
-            query.include_hidden.unwrap_or(false),
-            query.interactive_only.unwrap_or(false),
+    let snapshot = cached_accessibility_tree_value(
+        state,
+        udid,
+        query.source.as_deref(),
+        query.max_depth,
+        query.include_hidden.unwrap_or(false),
+        query.interactive_only.unwrap_or(false),
+    )
+    .await?;
+    Ok(json(snapshot))
+}
+
+async fn cached_accessibility_tree_value(
+    state: AppState,
+    udid: String,
+    source: Option<&str>,
+    max_depth: Option<usize>,
+    include_hidden: bool,
+    interactive_only: bool,
+) -> Result<Value, AppError> {
+    let cache_key =
+        accessibility_cache_key(&udid, source, max_depth, include_hidden, interactive_only);
+    if let Some(cache_key) = cache_key.as_ref() {
+        if let Some((cached_key, snapshot)) = state.accessibility_cache.get_compatible(cache_key) {
+            return Ok(if cached_key.max_depth != cache_key.max_depth {
+                trim_tree_depth(snapshot, cache_key.max_depth)
+            } else {
+                snapshot
+            });
+        }
+    }
+
+    refresh_accessibility_tree_value(
+        state,
+        udid,
+        source,
+        max_depth,
+        include_hidden,
+        interactive_only,
+    )
+    .await
+}
+
+async fn refresh_accessibility_tree_value(
+    state: AppState,
+    udid: String,
+    source: Option<&str>,
+    max_depth: Option<usize>,
+    include_hidden: bool,
+    interactive_only: bool,
+) -> Result<Value, AppError> {
+    let cache_key =
+        accessibility_cache_key(&udid, source, max_depth, include_hidden, interactive_only);
+    let generation = state.accessibility_cache.generation(&udid);
+    let snapshot = accessibility_tree_value(
+        state.clone(),
+        udid.clone(),
+        source,
+        max_depth,
+        include_hidden,
+        interactive_only,
+    )
+    .await?;
+    if let Some(cache_key) = cache_key {
+        state
+            .accessibility_cache
+            .insert_if_generation(cache_key, &snapshot, generation);
+    }
+    Ok(snapshot)
+}
+
+fn accessibility_cache_key(
+    udid: &str,
+    source: Option<&str>,
+    max_depth: Option<usize>,
+    include_hidden: bool,
+    interactive_only: bool,
+) -> Option<AccessibilitySnapshotCacheKey> {
+    let source = AccessibilitySource::parse(source).ok()?;
+    if source != AccessibilitySource::NativeAX
+        && !(interactive_only && source == AccessibilitySource::Auto)
+    {
+        return None;
+    }
+    Some(AccessibilitySnapshotCacheKey {
+        udid: udid.to_owned(),
+        source: source.as_query_value().to_owned(),
+        max_depth: max_depth.map(|depth| depth.min(80)),
+        include_hidden,
+        interactive_only,
+    })
+}
+
+fn spawn_accessibility_warmup(state: AppState, udid: String) {
+    let generation = state.accessibility_cache.generation(&udid);
+    if android::is_android_id(&udid) || !state.accessibility_cache.begin_warming(&udid, generation)
+    {
+        return;
+    }
+    tokio::spawn(async move {
+        warm_accessibility_cache(state.clone(), udid.clone(), generation).await;
+        state.accessibility_cache.finish_warming(&udid, generation);
+    });
+}
+
+async fn warm_accessibility_cache(state: AppState, udid: String, generation: u64) {
+    if android::is_android_id(&udid) {
+        return;
+    }
+    let session = match state.registry.get_or_create_async(&udid).await {
+        Ok(session) => session,
+        Err(error) => {
+            tracing::debug!("AX warmup skipped session creation for {udid}: {error}");
+            return;
+        }
+    };
+    if let Err(error) = session.ensure_started_async().await {
+        tracing::debug!("AX warmup skipped display start for {udid}: {error}");
+    }
+
+    for (max_depth, interactive_only) in [(Some(8), true)] {
+        let Ok(snapshot) = native_ax_accessibility_tree_value(
+            state.clone(),
+            udid.clone(),
+            max_depth,
+            false,
+            interactive_only,
         )
-        .await?,
-    ))
+        .await
+        else {
+            continue;
+        };
+        state.accessibility_cache.insert_if_generation(
+            AccessibilitySnapshotCacheKey {
+                udid: udid.clone(),
+                source: AccessibilitySource::NativeAX.as_query_value().to_owned(),
+                max_depth,
+                include_hidden: false,
+                interactive_only,
+            },
+            &snapshot,
+            generation,
+        );
+        if interactive_only {
+            state.accessibility_cache.insert_if_generation(
+                AccessibilitySnapshotCacheKey {
+                    udid: udid.clone(),
+                    source: AccessibilitySource::Auto.as_query_value().to_owned(),
+                    max_depth,
+                    include_hidden: false,
+                    interactive_only,
+                },
+                &snapshot,
+                generation,
+            );
+        }
+    }
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    if state.accessibility_cache.generation(&udid) != generation {
+        return;
+    }
+    let Ok(snapshot) =
+        native_ax_accessibility_tree_value(state.clone(), udid.clone(), Some(8), false, false)
+            .await
+    else {
+        return;
+    };
+    state.accessibility_cache.insert_if_generation(
+        AccessibilitySnapshotCacheKey {
+            udid,
+            source: AccessibilitySource::NativeAX.as_query_value().to_owned(),
+            max_depth: Some(8),
+            include_hidden: false,
+            interactive_only: false,
+        },
+        &snapshot,
+        generation,
+    );
 }
 
 async fn accessibility_tree_value(
@@ -4183,54 +3722,38 @@ async fn accessibility_tree_value(
         })
         .await;
     }
-    let requested_source = AccessibilityHierarchySource::parse(source)?;
+    let requested_source = AccessibilitySource::parse(source).map_err(AppError::bad_request)?;
+    if requested_source == AccessibilitySource::AndroidUiautomator {
+        return Err(AppError::bad_request(
+            "`android-uiautomator` source is only available for Android emulator IDs.",
+        ));
+    }
     let max_depth = max_depth.map(|depth| depth.min(80));
 
-    if requested_source == AccessibilityHierarchySource::NativeAX {
-        let inspector_session = inspector_session_for_state(&state, &udid).await.ok();
-        let mut available_sources = available_sources_with_native_ax(inspector_session.as_ref());
-        let native_snapshot =
-            match accessibility_snapshot(state.clone(), udid.clone(), None, max_depth).await {
-                Ok(snapshot) => snapshot,
-                Err(error) => {
-                    let snapshot = empty_accessibility_tree(
-                        SOURCE_NATIVE_AX,
-                        &available_sources,
-                        suppress_native_ax_translation_error(&error.to_string()),
-                    );
-                    return Ok(if interactive_only {
-                        interactive_accessibility_snapshot(&snapshot)
-                    } else {
-                        snapshot
-                    });
-                }
-            };
-        merge_connected_sources_for_pid(
-            &state,
-            &udid,
-            root_process_identifier(&native_snapshot),
-            &mut available_sources,
+    if requested_source == AccessibilitySource::NativeAX
+        || (interactive_only && requested_source == AccessibilitySource::Auto)
+    {
+        return native_ax_accessibility_tree_value(
+            state,
+            udid,
+            max_depth,
+            include_hidden,
+            interactive_only,
         )
         .await;
-        let snapshot = attach_available_sources(native_snapshot, &available_sources);
-        let snapshot = if interactive_only {
-            interactive_accessibility_snapshot(&snapshot)
-        } else {
-            snapshot
-        };
-        return Ok(snapshot);
     }
 
     match inspector_session_for_state(&state, &udid).await {
         Ok(session) => {
             let hierarchy_source = match requested_source {
-                AccessibilityHierarchySource::Auto => InAppHierarchySource::Automatic,
-                AccessibilityHierarchySource::NativeScript => InAppHierarchySource::Automatic,
-                AccessibilityHierarchySource::ReactNative => InAppHierarchySource::Automatic,
-                AccessibilityHierarchySource::Flutter => InAppHierarchySource::Automatic,
-                AccessibilityHierarchySource::SwiftUI => InAppHierarchySource::Automatic,
-                AccessibilityHierarchySource::UIKit => InAppHierarchySource::UIKit,
-                AccessibilityHierarchySource::NativeAX => unreachable!(),
+                AccessibilitySource::Auto => InAppHierarchySource::Automatic,
+                AccessibilitySource::NativeScript => InAppHierarchySource::Automatic,
+                AccessibilitySource::ReactNative => InAppHierarchySource::Automatic,
+                AccessibilitySource::Flutter => InAppHierarchySource::Automatic,
+                AccessibilitySource::SwiftUI => InAppHierarchySource::Automatic,
+                AccessibilitySource::UIKit => InAppHierarchySource::UIKit,
+                AccessibilitySource::NativeAX => unreachable!(),
+                AccessibilitySource::AndroidUiautomator => unreachable!(),
             };
             match run_in_app_inspector_hierarchy(
                 &state,
@@ -4247,20 +3770,19 @@ async fn accessibility_tree_value(
                     let available_sources =
                         available_sources_for_snapshot(&base_sources, &snapshot);
                     let snapshot_source = snapshot.get("source").and_then(Value::as_str);
-                    let fallback_reason = if requested_source
-                        == AccessibilityHierarchySource::NativeScript
+                    let fallback_reason = if requested_source == AccessibilitySource::NativeScript
                         && snapshot_source != Some(SOURCE_NATIVE_SCRIPT)
                     {
                         Some("NativeScript hierarchy is not published by the app.".to_owned())
-                    } else if requested_source == AccessibilityHierarchySource::ReactNative
+                    } else if requested_source == AccessibilitySource::ReactNative
                         && snapshot_source != Some(SOURCE_REACT_NATIVE)
                     {
                         Some("React Native hierarchy is not published by the app.".to_owned())
-                    } else if requested_source == AccessibilityHierarchySource::Flutter
+                    } else if requested_source == AccessibilitySource::Flutter
                         && snapshot_source != Some(SOURCE_FLUTTER)
                     {
                         Some("Flutter hierarchy is not published by the app.".to_owned())
-                    } else if requested_source == AccessibilityHierarchySource::SwiftUI
+                    } else if requested_source == AccessibilitySource::SwiftUI
                         && snapshot_source != Some(SOURCE_SWIFTUI)
                     {
                         Some("SwiftUI hierarchy is not published by the app.".to_owned())
@@ -4277,7 +3799,7 @@ async fn accessibility_tree_value(
                 }
                 Err(_inspector_error) => {
                     let mut available_sources = available_sources_with_native_ax(Some(&session));
-                    if requested_source == AccessibilityHierarchySource::UIKit {
+                    if requested_source == AccessibilitySource::UIKit {
                         if let Ok(snapshot) = run_in_app_inspector_hierarchy(
                             &state,
                             &session,
@@ -4352,6 +3874,45 @@ async fn accessibility_tree_value(
     }
 }
 
+async fn native_ax_accessibility_tree_value(
+    state: AppState,
+    udid: String,
+    max_depth: Option<usize>,
+    include_hidden: bool,
+    interactive_only: bool,
+) -> Result<Value, AppError> {
+    let available_sources = available_sources_with_native_ax(None);
+    match accessibility_snapshot_with_options(state, udid, None, max_depth, interactive_only).await
+    {
+        Ok(native_snapshot) => {
+            let mut snapshot = attach_available_sources(
+                trim_tree_depth(native_snapshot, max_depth),
+                &available_sources,
+            );
+            if include_hidden {
+                snapshot["includeHidden"] = Value::Bool(true);
+            }
+            Ok(if interactive_only {
+                interactive_accessibility_snapshot(&snapshot)
+            } else {
+                snapshot
+            })
+        }
+        Err(native_ax_error) => {
+            let snapshot = empty_accessibility_tree(
+                SOURCE_NATIVE_AX,
+                &available_sources,
+                suppress_native_ax_translation_error(&native_ax_error.to_string()),
+            );
+            Ok(if interactive_only {
+                interactive_accessibility_snapshot(&snapshot)
+            } else {
+                snapshot
+            })
+        }
+    }
+}
+
 async fn accessibility_point(
     State(state): State<AppState>,
     Path(udid): Path<String>,
@@ -4393,1355 +3954,9 @@ async fn accessibility_point(
     Ok(json(snapshot))
 }
 
-async fn perform_tap_payload(
-    state: AppState,
-    udid: String,
-    payload: TapElementPayload,
-) -> Result<(), AppError> {
-    let duration_ms = payload.duration_ms.unwrap_or(60);
-    let (x, y) = if selector_is_empty(&payload.selector) {
-        let x = payload
-            .x
-            .ok_or_else(|| AppError::bad_request("Tap requires `x` and `y` or a selector."))?;
-        let y = payload
-            .y
-            .ok_or_else(|| AppError::bad_request("Tap requires `x` and `y` or a selector."))?;
-        if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
-            return Err(AppError::bad_request(
-                "Tap coordinates must be finite non-negative numbers.",
-            ));
-        }
-        if payload.normalized.unwrap_or(true) {
-            (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0))
-        } else {
-            let snapshot = accessibility_tree_value(
-                state.clone(),
-                udid.clone(),
-                payload.source.as_deref(),
-                payload.max_depth,
-                payload.include_hidden.unwrap_or(false),
-                false,
-            )
-            .await?;
-            normalize_screen_point_from_snapshot(&snapshot, x, y)?
-        }
-    } else {
-        let wait_payload = WaitForPayload {
-            selector: payload.selector.clone(),
-            source: payload.source.clone(),
-            max_depth: payload.max_depth,
-            include_hidden: payload.include_hidden,
-            timeout_ms: payload.wait_timeout_ms,
-            poll_ms: payload.poll_ms,
-        };
-        let snapshot = wait_for_snapshot_match(state.clone(), udid.clone(), wait_payload).await?;
-        tap_point_from_snapshot(&snapshot, &payload.selector)?
-    };
+include!("action_execution.rs");
 
-    if android::is_android_id(&udid) {
-        return run_android_action(state, move |android| {
-            android.send_touch(&udid, x, y, "began")?;
-            if duration_ms > 0 {
-                std::thread::sleep(Duration::from_millis(duration_ms));
-            }
-            android.send_touch(&udid, x, y, "ended")
-        })
-        .await;
-    }
-
-    run_bridge_action(state, move |bridge| {
-        if bridge_simulator_is_tvos(&bridge, &udid) {
-            return press_tvos_remote_key(&bridge, &udid, HID_KEY_ENTER);
-        }
-        let input = bridge.create_input_session(&udid)?;
-        input.send_touch(x, y, "began")?;
-        if duration_ms > 0 {
-            std::thread::sleep(Duration::from_millis(duration_ms));
-        }
-        input.send_touch(x, y, "ended")
-    })
-    .await
-}
-
-async fn wait_for_element_payload(
-    state: AppState,
-    udid: String,
-    payload: WaitForPayload,
-) -> Result<Json<Value>, AppError> {
-    let started = Instant::now();
-    let snapshot = wait_for_snapshot_match(state, udid, payload.clone()).await?;
-    let found = first_matching_element(&snapshot, &payload.selector)
-        .ok_or_else(|| AppError::not_found("No accessibility element matched."))?;
-    Ok(json(json_value!({
-        "ok": true,
-        "elapsedMs": started.elapsed().as_millis() as u64,
-        "match": compact_accessibility_node(&found),
-    })))
-}
-
-async fn wait_for_absent_element_payload(
-    state: AppState,
-    udid: String,
-    payload: WaitForPayload,
-) -> Result<Json<Value>, AppError> {
-    let started = Instant::now();
-    let timeout_ms = payload.timeout_ms.unwrap_or(5_000);
-    let poll_ms = payload.poll_ms.unwrap_or(100).max(10);
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        let snapshot = accessibility_tree_value(
-            state.clone(),
-            udid.clone(),
-            payload.source.as_deref(),
-            payload.max_depth,
-            payload.include_hidden.unwrap_or(false),
-            false,
-        )
-        .await?;
-        if first_matching_element(&snapshot, &payload.selector).is_none() {
-            return Ok(json(json_value!({
-                "ok": true,
-                "elapsedMs": started.elapsed().as_millis() as u64,
-            })));
-        }
-        if timeout_ms == 0 || Instant::now() >= deadline {
-            return Err(AppError::bad_request(
-                "Accessibility element still matched the selector.",
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(poll_ms)).await;
-    }
-}
-
-async fn wait_for_snapshot_match(
-    state: AppState,
-    udid: String,
-    payload: WaitForPayload,
-) -> Result<Value, AppError> {
-    let timeout_ms = payload.timeout_ms.unwrap_or(5_000);
-    let poll_ms = payload.poll_ms.unwrap_or(100).max(10);
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        let snapshot = accessibility_tree_value(
-            state.clone(),
-            udid.clone(),
-            payload.source.as_deref(),
-            payload.max_depth,
-            payload.include_hidden.unwrap_or(false),
-            false,
-        )
-        .await?;
-        if first_matching_element(&snapshot, &payload.selector).is_some() {
-            return Ok(snapshot);
-        }
-        if timeout_ms == 0 || Instant::now() >= deadline {
-            return Err(AppError::not_found("No accessibility element matched."));
-        }
-        tokio::time::sleep(Duration::from_millis(poll_ms)).await;
-    }
-}
-
-async fn scroll_until_visible_payload(
-    state: AppState,
-    udid: String,
-    payload: ScrollUntilVisiblePayload,
-) -> Result<Json<Value>, AppError> {
-    let started = Instant::now();
-    let timeout_ms = payload.timeout_ms.unwrap_or(10_000);
-    let poll_ms = payload.poll_ms.unwrap_or(100).max(10);
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    let mut scroll_count = 0usize;
-    loop {
-        let snapshot = accessibility_tree_value(
-            state.clone(),
-            udid.clone(),
-            payload.source.as_deref(),
-            payload.max_depth,
-            payload.include_hidden.unwrap_or(false),
-            false,
-        )
-        .await?;
-        if let Some(found) = first_matching_element(&snapshot, &payload.selector) {
-            return Ok(json(json_value!({
-                "ok": true,
-                "elapsedMs": started.elapsed().as_millis() as u64,
-                "scrollCount": scroll_count,
-                "match": compact_accessibility_node(&found),
-            })));
-        }
-        if timeout_ms == 0 || Instant::now() >= deadline {
-            return Err(AppError::not_found("No accessibility element matched."));
-        }
-        let scroll_plan = scroll_input_plan_for_udid(&udid, &payload)?;
-        perform_scroll_input(state.clone(), udid.clone(), scroll_plan).await?;
-        scroll_count += 1;
-        tokio::time::sleep(Duration::from_millis(poll_ms)).await;
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct NormalizedSwipe {
-    start_x: f64,
-    start_y: f64,
-    end_x: f64,
-    end_y: f64,
-    duration_ms: u64,
-    steps: u32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ScrollInputBackend {
-    Android,
-    Native,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ScrollInputPlan {
-    backend: ScrollInputBackend,
-    swipe: NormalizedSwipe,
-}
-
-fn scroll_input_plan_for_udid(
-    udid: &str,
-    payload: &ScrollUntilVisiblePayload,
-) -> Result<ScrollInputPlan, AppError> {
-    let (start_x, start_y, end_x, end_y) =
-        normalized_scroll_coordinates(payload.direction.as_deref())?;
-    Ok(ScrollInputPlan {
-        backend: if android::is_android_id(udid) {
-            ScrollInputBackend::Android
-        } else {
-            ScrollInputBackend::Native
-        },
-        swipe: NormalizedSwipe {
-            start_x,
-            start_y,
-            end_x,
-            end_y,
-            duration_ms: payload.duration_ms.unwrap_or(350),
-            steps: payload.steps.unwrap_or(12).max(1),
-        },
-    })
-}
-
-async fn perform_scroll_input(
-    state: AppState,
-    udid: String,
-    plan: ScrollInputPlan,
-) -> Result<(), AppError> {
-    let swipe = plan.swipe;
-    match plan.backend {
-        ScrollInputBackend::Android => {
-            run_android_action(state, move |android| {
-                android.send_swipe(
-                    &udid,
-                    swipe.start_x,
-                    swipe.start_y,
-                    swipe.end_x,
-                    swipe.end_y,
-                    swipe.duration_ms,
-                )
-            })
-            .await
-        }
-        ScrollInputBackend::Native => {
-            run_bridge_action(state, move |bridge| {
-                if bridge_simulator_is_tvos(&bridge, &udid) {
-                    let key_code = tvos_remote_key_for_touch_motion(
-                        swipe.start_x,
-                        swipe.start_y,
-                        swipe.end_x,
-                        swipe.end_y,
-                    );
-                    return press_tvos_remote_key(&bridge, &udid, key_code);
-                }
-                let input = bridge.create_input_session(&udid)?;
-                let delay = Duration::from_millis(swipe.duration_ms / u64::from(swipe.steps));
-                input.send_touch(swipe.start_x, swipe.start_y, "began")?;
-                for step in 1..swipe.steps {
-                    let t = f64::from(step) / f64::from(swipe.steps);
-                    input.send_touch(
-                        swipe.start_x + (swipe.end_x - swipe.start_x) * t,
-                        swipe.start_y + (swipe.end_y - swipe.start_y) * t,
-                        "moved",
-                    )?;
-                    std::thread::sleep(delay);
-                }
-                input.send_touch(swipe.end_x, swipe.end_y, "ended")
-            })
-            .await
-        }
-    }
-}
-
-fn normalized_scroll_coordinates(
-    direction: Option<&str>,
-) -> Result<(f64, f64, f64, f64), AppError> {
-    match direction.unwrap_or("down").to_ascii_lowercase().as_str() {
-        "down" => Ok((0.5, 0.78, 0.5, 0.22)),
-        "up" => Ok((0.5, 0.22, 0.5, 0.78)),
-        "left" => Ok((0.78, 0.5, 0.22, 0.5)),
-        "right" => Ok((0.22, 0.5, 0.78, 0.5)),
-        other => Err(AppError::bad_request(format!(
-            "Unsupported scroll direction `{other}`."
-        ))),
-    }
-}
-
-async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Result<Value, AppError> {
-    match step {
-        BatchStep::Sleep { ms, seconds } => {
-            let duration =
-                ms.unwrap_or_else(|| ((seconds.unwrap_or(0.0) * 1000.0).max(0.0)) as u64);
-            tokio::time::sleep(Duration::from_millis(duration)).await;
-            Ok(json_value!({ "action": "sleep", "durationMs": duration }))
-        }
-        BatchStep::Tap(payload) => {
-            perform_tap_payload(state, udid, payload).await?;
-            Ok(json_value!({ "action": "tap" }))
-        }
-        BatchStep::WaitFor(payload) => {
-            let snapshot = wait_for_snapshot_match(state, udid, payload.clone()).await?;
-            let found = first_matching_element(&snapshot, &payload.selector)
-                .ok_or_else(|| AppError::not_found("No accessibility element matched."))?;
-            Ok(json_value!({ "action": "waitFor", "match": compact_accessibility_node(&found) }))
-        }
-        BatchStep::Assert(payload) => {
-            let snapshot = wait_for_snapshot_match(state, udid, payload.clone()).await?;
-            let found = first_matching_element(&snapshot, &payload.selector)
-                .ok_or_else(|| AppError::not_found("No accessibility element matched."))?;
-            Ok(json_value!({ "action": "assert", "match": compact_accessibility_node(&found) }))
-        }
-        BatchStep::AssertNot(payload) => {
-            let Json(_) = wait_for_absent_element_payload(state, udid, payload).await?;
-            Ok(json_value!({ "action": "assertNot" }))
-        }
-        BatchStep::ScrollUntilVisible(payload) => {
-            let Json(result) = scroll_until_visible_payload(state, udid, payload).await?;
-            Ok(json_value!({
-                "action": "scrollUntilVisible",
-                "match": result.get("match").cloned().unwrap_or(Value::Null),
-                "scrollCount": result.get("scrollCount").cloned().unwrap_or(Value::Null),
-            }))
-        }
-        BatchStep::Key {
-            key_code,
-            modifiers,
-        } => {
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| {
-                    android.send_key(&udid, key_code, modifiers.unwrap_or(0))
-                })
-                .await?;
-                return Ok(json_value!({ "action": "key" }));
-            }
-            run_bridge_action(state, move |bridge| {
-                bridge.send_key(&udid, key_code, modifiers.unwrap_or(0))
-            })
-            .await?;
-            Ok(json_value!({ "action": "key" }))
-        }
-        BatchStep::KeySequence {
-            key_codes,
-            delay_ms,
-        } => {
-            if key_codes.is_empty() {
-                return Err(AppError::bad_request("keySequence requires keyCodes."));
-            }
-            if key_codes.len() > 512 {
-                return Err(AppError::bad_request(
-                    "keySequence cannot contain more than 512 key codes.",
-                ));
-            }
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| {
-                    let delay_ms = delay_ms.unwrap_or(0);
-                    let key_count = key_codes.len();
-                    for (index, key_code) in key_codes.into_iter().enumerate() {
-                        android.send_key(&udid, key_code, 0)?;
-                        if delay_ms > 0 && index + 1 < key_count {
-                            std::thread::sleep(Duration::from_millis(delay_ms));
-                        }
-                    }
-                    Ok(())
-                })
-                .await?;
-                return Ok(json_value!({ "action": "keySequence" }));
-            }
-            run_bridge_action(state, move |bridge| {
-                let input = bridge.create_input_session(&udid)?;
-                let delay_ms = delay_ms.unwrap_or(0);
-                let key_count = key_codes.len();
-                for (index, key_code) in key_codes.into_iter().enumerate() {
-                    input.send_key(key_code, 0)?;
-                    if delay_ms > 0 && index + 1 < key_count {
-                        std::thread::sleep(Duration::from_millis(delay_ms));
-                    }
-                }
-                Ok(())
-            })
-            .await?;
-            Ok(json_value!({ "action": "keySequence" }))
-        }
-        BatchStep::Touch {
-            x,
-            y,
-            phase,
-            down,
-            up,
-            delay_ms,
-        } => {
-            if !x.is_finite() || !y.is_finite() {
-                return Err(AppError::bad_request(
-                    "touch requires finite normalized x and y.",
-                ));
-            }
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| {
-                    let x = x.clamp(0.0, 1.0);
-                    let y = y.clamp(0.0, 1.0);
-                    if down.unwrap_or(false) || up.unwrap_or(false) {
-                        if down.unwrap_or(false) {
-                            android.send_touch(&udid, x, y, "began")?;
-                        }
-                        if down.unwrap_or(false) && up.unwrap_or(false) {
-                            std::thread::sleep(Duration::from_millis(delay_ms.unwrap_or(100)));
-                        }
-                        if up.unwrap_or(false) {
-                            android.send_touch(&udid, x, y, "ended")?;
-                        }
-                    } else {
-                        android.send_touch(&udid, x, y, phase.as_deref().unwrap_or("began"))?;
-                    }
-                    Ok(())
-                })
-                .await?;
-                return Ok(json_value!({ "action": "touch" }));
-            }
-            run_bridge_action(state, move |bridge| {
-                if bridge_simulator_is_tvos(&bridge, &udid) {
-                    if down.unwrap_or(false) || up.unwrap_or(false) {
-                        if up.unwrap_or(false) {
-                            return press_tvos_remote_key(&bridge, &udid, HID_KEY_ENTER);
-                        }
-                        return Ok(());
-                    }
-                    return handle_tvos_touch_phase(
-                        &bridge,
-                        &udid,
-                        phase.as_deref().unwrap_or("began"),
-                    );
-                }
-                let input = bridge.create_input_session(&udid)?;
-                let x = x.clamp(0.0, 1.0);
-                let y = y.clamp(0.0, 1.0);
-                if down.unwrap_or(false) || up.unwrap_or(false) {
-                    if down.unwrap_or(false) {
-                        input.send_touch(x, y, "began")?;
-                    }
-                    if down.unwrap_or(false) && up.unwrap_or(false) {
-                        std::thread::sleep(Duration::from_millis(delay_ms.unwrap_or(100)));
-                    }
-                    if up.unwrap_or(false) {
-                        input.send_touch(x, y, "ended")?;
-                    }
-                } else {
-                    input.send_touch(x, y, phase.as_deref().unwrap_or("began"))?;
-                }
-                Ok(())
-            })
-            .await?;
-            Ok(json_value!({ "action": "touch" }))
-        }
-        BatchStep::TouchSequence { events } => {
-            if events.is_empty() {
-                return Err(AppError::bad_request("touchSequence requires events."));
-            }
-            if events.len() > 64 {
-                return Err(AppError::bad_request(
-                    "touchSequence cannot contain more than 64 events.",
-                ));
-            }
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| {
-                    for event in events {
-                        if !event.x.is_finite() || !event.y.is_finite() {
-                            return Err(AppError::bad_request(
-                                "touchSequence requires finite normalized x and y.",
-                            ));
-                        }
-                        android.send_touch(
-                            &udid,
-                            event.x.clamp(0.0, 1.0),
-                            event.y.clamp(0.0, 1.0),
-                            &event.phase,
-                        )?;
-                        if let Some(delay_ms) =
-                            event.delay_ms_after.filter(|delay_ms| *delay_ms > 0)
-                        {
-                            std::thread::sleep(Duration::from_millis(delay_ms));
-                        }
-                    }
-                    Ok(())
-                })
-                .await?;
-                return Ok(json_value!({ "action": "touchSequence" }));
-            }
-            run_bridge_action(state, move |bridge| {
-                if bridge_simulator_is_tvos(&bridge, &udid) {
-                    let key_code = tvos_touch_sequence_key(&events)?;
-                    return press_tvos_remote_key(&bridge, &udid, key_code);
-                }
-                let input = bridge.create_input_session(&udid)?;
-                for event in events {
-                    if !event.x.is_finite() || !event.y.is_finite() {
-                        return Err(AppError::bad_request(
-                            "touchSequence requires finite normalized x and y.",
-                        ));
-                    }
-                    input.send_touch(
-                        event.x.clamp(0.0, 1.0),
-                        event.y.clamp(0.0, 1.0),
-                        &event.phase,
-                    )?;
-                    if let Some(delay_ms) = event.delay_ms_after.filter(|delay_ms| *delay_ms > 0) {
-                        std::thread::sleep(Duration::from_millis(delay_ms));
-                    }
-                }
-                Ok(())
-            })
-            .await?;
-            Ok(json_value!({ "action": "touchSequence" }))
-        }
-        BatchStep::Swipe {
-            start_x,
-            start_y,
-            end_x,
-            end_y,
-            duration_ms,
-            steps,
-        } => {
-            if !start_x.is_finite()
-                || !start_y.is_finite()
-                || !end_x.is_finite()
-                || !end_y.is_finite()
-            {
-                return Err(AppError::bad_request(
-                    "swipe requires finite normalized coordinates.",
-                ));
-            }
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| {
-                    android.send_swipe(
-                        &udid,
-                        start_x,
-                        start_y,
-                        end_x,
-                        end_y,
-                        duration_ms.unwrap_or(350),
-                    )
-                })
-                .await?;
-                return Ok(json_value!({ "action": "swipe" }));
-            }
-            run_bridge_action(state, move |bridge| {
-                if bridge_simulator_is_tvos(&bridge, &udid) {
-                    let key_code = tvos_remote_key_for_touch_motion(
-                        start_x.clamp(0.0, 1.0),
-                        start_y.clamp(0.0, 1.0),
-                        end_x.clamp(0.0, 1.0),
-                        end_y.clamp(0.0, 1.0),
-                    );
-                    return press_tvos_remote_key(&bridge, &udid, key_code);
-                }
-                let step_count = steps.unwrap_or(12).max(1);
-                let delay =
-                    Duration::from_millis(duration_ms.unwrap_or(350) / u64::from(step_count));
-                let input = bridge.create_input_session(&udid)?;
-                let start_x = start_x.clamp(0.0, 1.0);
-                let start_y = start_y.clamp(0.0, 1.0);
-                let end_x = end_x.clamp(0.0, 1.0);
-                let end_y = end_y.clamp(0.0, 1.0);
-                input.send_touch(start_x, start_y, "began")?;
-                for step in 1..step_count {
-                    let t = f64::from(step) / f64::from(step_count);
-                    input.send_touch(
-                        start_x + (end_x - start_x) * t,
-                        start_y + (end_y - start_y) * t,
-                        "moved",
-                    )?;
-                    std::thread::sleep(delay);
-                }
-                input.send_touch(end_x, end_y, "ended")
-            })
-            .await?;
-            Ok(json_value!({ "action": "swipe" }))
-        }
-        BatchStep::Gesture {
-            preset,
-            duration_ms,
-            delta,
-            steps,
-        } => {
-            let (start_x, start_y, end_x, end_y, default_duration_ms) =
-                normalized_gesture_coordinates(&preset, delta)?;
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| {
-                    android.send_swipe(
-                        &udid,
-                        start_x,
-                        start_y,
-                        end_x,
-                        end_y,
-                        duration_ms.unwrap_or(default_duration_ms),
-                    )
-                })
-                .await?;
-                return Ok(json_value!({ "action": "gesture", "preset": preset }));
-            }
-            run_bridge_action(state, move |bridge| {
-                if bridge_simulator_is_tvos(&bridge, &udid) {
-                    let key_code = tvos_remote_key_for_touch_motion(start_x, start_y, end_x, end_y);
-                    return press_tvos_remote_key(&bridge, &udid, key_code);
-                }
-                let step_count = steps.unwrap_or(12).max(1);
-                let delay = Duration::from_millis(
-                    duration_ms.unwrap_or(default_duration_ms) / u64::from(step_count),
-                );
-                let input = bridge.create_input_session(&udid)?;
-                input.send_touch(start_x, start_y, "began")?;
-                for step in 1..step_count {
-                    let t = f64::from(step) / f64::from(step_count);
-                    input.send_touch(
-                        start_x + (end_x - start_x) * t,
-                        start_y + (end_y - start_y) * t,
-                        "moved",
-                    )?;
-                    std::thread::sleep(delay);
-                }
-                input.send_touch(end_x, end_y, "ended")
-            })
-            .await?;
-            Ok(json_value!({ "action": "gesture", "preset": preset }))
-        }
-        BatchStep::Type { text, delay_ms } => {
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| {
-                    if delay_ms.is_some() {
-                        for character in text.chars() {
-                            android.type_text(&udid, &character.to_string())?;
-                            if let Some(delay_ms) = delay_ms.filter(|delay_ms| *delay_ms > 0) {
-                                std::thread::sleep(Duration::from_millis(delay_ms));
-                            }
-                        }
-                        Ok(())
-                    } else {
-                        android.type_text(&udid, &text)
-                    }
-                })
-                .await?;
-                return Ok(json_value!({ "action": "type" }));
-            }
-            run_bridge_action(state, move |bridge| {
-                let input = bridge.create_input_session(&udid)?;
-                for character in text.chars() {
-                    let Some((key_code, modifiers)) = hid_for_character(character) else {
-                        return Err(AppError::bad_request(format!(
-                            "Unsupported character for HID typing: {character:?}"
-                        )));
-                    };
-                    input.send_key(key_code, modifiers)?;
-                    if let Some(delay_ms) = delay_ms.filter(|delay_ms| *delay_ms > 0) {
-                        std::thread::sleep(Duration::from_millis(delay_ms));
-                    }
-                }
-                Ok(())
-            })
-            .await?;
-            Ok(json_value!({ "action": "type" }))
-        }
-        BatchStep::Button {
-            button,
-            duration_ms,
-        } => {
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| {
-                    android.press_button(&udid, &button, duration_ms.unwrap_or(0))
-                })
-                .await?;
-                return Ok(json_value!({ "action": "button" }));
-            }
-            run_bridge_action(state, move |bridge| {
-                bridge.press_button(&udid, &button, duration_ms.unwrap_or(0))
-            })
-            .await?;
-            Ok(json_value!({ "action": "button" }))
-        }
-        BatchStep::Crown { delta } => {
-            run_bridge_action(state, move |bridge| bridge.rotate_crown(&udid, delta)).await?;
-            Ok(json_value!({ "action": "crown" }))
-        }
-        BatchStep::Launch { bundle_id } => {
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| {
-                    android.launch_package(&udid, &bundle_id)
-                })
-                .await?;
-                return Ok(json_value!({ "action": "launch" }));
-            }
-            run_bridge_action(state, move |bridge| bridge.launch_bundle(&udid, &bundle_id)).await?;
-            Ok(json_value!({ "action": "launch" }))
-        }
-        BatchStep::OpenUrl { url } => {
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| android.open_url(&udid, &url)).await?;
-                return Ok(json_value!({ "action": "openUrl" }));
-            }
-            run_bridge_action(state, move |bridge| bridge.open_url(&udid, &url)).await?;
-            Ok(json_value!({ "action": "openUrl" }))
-        }
-        BatchStep::Home => {
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| android.press_home(&udid)).await?;
-                return Ok(json_value!({ "action": "home" }));
-            }
-            run_bridge_action(state, move |bridge| bridge.press_home(&udid)).await?;
-            Ok(json_value!({ "action": "home" }))
-        }
-        BatchStep::DismissKeyboard => {
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| android.dismiss_keyboard(&udid)).await?;
-                return Ok(json_value!({ "action": "dismissKeyboard" }));
-            }
-            run_bridge_action(state, move |bridge| bridge.send_key(&udid, 41, 0)).await?;
-            Ok(json_value!({ "action": "dismissKeyboard" }))
-        }
-        BatchStep::AppSwitcher => {
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| android.open_app_switcher(&udid)).await?;
-                return Ok(json_value!({ "action": "appSwitcher" }));
-            }
-            run_bridge_action(state, move |bridge| bridge.open_app_switcher(&udid)).await?;
-            Ok(json_value!({ "action": "appSwitcher" }))
-        }
-        BatchStep::RotateLeft => {
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| android.rotate_left(&udid)).await?;
-                return Ok(json_value!({ "action": "rotateLeft" }));
-            }
-            run_bridge_action(state, move |bridge| bridge.rotate_left(&udid)).await?;
-            Ok(json_value!({ "action": "rotateLeft" }))
-        }
-        BatchStep::RotateRight => {
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| android.rotate_right(&udid)).await?;
-                return Ok(json_value!({ "action": "rotateRight" }));
-            }
-            run_bridge_action(state, move |bridge| bridge.rotate_right(&udid)).await?;
-            Ok(json_value!({ "action": "rotateRight" }))
-        }
-        BatchStep::ToggleAppearance => {
-            if android::is_android_id(&udid) {
-                run_android_action(state, move |android| android.toggle_appearance(&udid)).await?;
-                return Ok(json_value!({ "action": "toggleAppearance" }));
-            }
-            run_bridge_action(state, move |bridge| bridge.toggle_appearance(&udid)).await?;
-            Ok(json_value!({ "action": "toggleAppearance" }))
-        }
-        BatchStep::Describe {
-            source,
-            max_depth,
-            include_hidden,
-        } => {
-            let snapshot = accessibility_tree_value(
-                state,
-                udid,
-                source.as_deref(),
-                max_depth,
-                include_hidden.unwrap_or(false),
-                false,
-            )
-            .await?;
-            Ok(json_value!({
-                "action": "describe",
-                "snapshot": compact_accessibility_snapshot(&snapshot),
-            }))
-        }
-    }
-}
-
-fn query_compact_elements(
-    snapshot: &Value,
-    selector: &ElementSelectorPayload,
-    limit: usize,
-) -> Vec<Value> {
-    let mut matches = Vec::new();
-    if let Some(roots) = snapshot.get("roots").and_then(Value::as_array) {
-        for root in roots {
-            let target_limit = selector.index.map(|index| index + 1).unwrap_or(limit);
-            collect_query_matches(root, selector, target_limit, &mut matches);
-            if matches.len() >= target_limit {
-                break;
-            }
-        }
-    }
-    if let Some(index) = selector.index {
-        return matches.into_iter().nth(index).into_iter().collect();
-    }
-    matches
-}
-
-fn collect_query_matches(
-    node: &Value,
-    selector: &ElementSelectorPayload,
-    limit: usize,
-    matches: &mut Vec<Value>,
-) {
-    if matches.len() >= limit {
-        return;
-    }
-    if element_matches_selector(node, selector) {
-        matches.push(compact_accessibility_node(node));
-    }
-    if let Some(children) = node.get("children").and_then(Value::as_array) {
-        for child in children {
-            collect_query_matches(child, selector, limit, matches);
-            if matches.len() >= limit {
-                return;
-            }
-        }
-    }
-}
-
-fn first_matching_element(snapshot: &Value, selector: &ElementSelectorPayload) -> Option<Value> {
-    let roots = snapshot.get("roots")?.as_array()?;
-    if let Some(index) = selector.index {
-        let mut matches = Vec::new();
-        for root in roots {
-            collect_query_matches(root, selector, index + 1, &mut matches);
-            if matches.len() > index {
-                break;
-            }
-        }
-        return matches.into_iter().nth(index);
-    }
-    for root in roots {
-        if let Some(found) = first_matching_node(root, selector) {
-            return Some(found.clone());
-        }
-    }
-    None
-}
-
-fn first_matching_node<'a>(
-    node: &'a Value,
-    selector: &ElementSelectorPayload,
-) -> Option<&'a Value> {
-    if element_matches_selector(node, selector) {
-        return Some(node);
-    }
-    for child in node
-        .get("children")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if let Some(found) = first_matching_node(child, selector) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-fn element_matches_selector(node: &Value, selector: &ElementSelectorPayload) -> bool {
-    if selector_is_empty(selector) {
-        return true;
-    }
-    let use_regex = selector.regex.unwrap_or(false);
-    selector.element_type.as_ref().is_none_or(|expected| {
-        string_fields_match(node, expected, use_regex, &["type", "role", "className"])
-    }) && selector.id.as_ref().is_none_or(|expected| {
-        string_fields_match(
-            node,
-            expected,
-            use_regex,
-            &[
-                "AXIdentifier",
-                "AXUniqueId",
-                "inspectorId",
-                "id",
-                "identifier",
-            ],
-        )
-    }) && selector.text.as_ref().is_none_or(|expected| {
-        string_fields_match(
-            node,
-            expected,
-            use_regex,
-            &["AXLabel", "label", "title", "text", "name"],
-        )
-    }) && selector.label.as_ref().is_none_or(|expected| {
-        string_fields_match(
-            node,
-            expected,
-            use_regex,
-            &["AXLabel", "label", "title", "text", "name"],
-        )
-    }) && selector.value.as_ref().is_none_or(|expected| {
-        string_fields_match(node, expected, use_regex, &["AXValue", "value"])
-    }) && selector.enabled.is_none_or(|expected| {
-        bool_fields_match(
-            node,
-            expected,
-            &[
-                "enabled",
-                "AXEnabled",
-                "isEnabled",
-                "isUserInteractionEnabled",
-            ],
-        )
-    }) && selector.checked.is_none_or(|expected| {
-        bool_or_state_fields_match(
-            node,
-            expected,
-            &["checked", "isChecked", "AXChecked"],
-            &["AXValue", "value"],
-            &["1", "true", "yes", "on", "checked", "selected"],
-        )
-    }) && selector.focused.is_none_or(|expected| {
-        bool_fields_match(node, expected, &["focused", "isFocused", "AXFocused"])
-    }) && selector.selected.is_none_or(|expected| {
-        bool_or_state_fields_match(
-            node,
-            expected,
-            &["selected", "isSelected", "AXSelected"],
-            &["AXValue", "value"],
-            &["selected", "1", "true", "yes", "on"],
-        )
-    })
-}
-
-fn selector_is_empty(selector: &ElementSelectorPayload) -> bool {
-    selector.text.is_none()
-        && selector.id.is_none()
-        && selector.label.is_none()
-        && selector.value.is_none()
-        && selector.element_type.is_none()
-        && selector.enabled.is_none()
-        && selector.checked.is_none()
-        && selector.focused.is_none()
-        && selector.selected.is_none()
-}
-
-fn string_fields_match(node: &Value, expected: &str, use_regex: bool, fields: &[&str]) -> bool {
-    let regex = use_regex.then(|| Regex::new(expected).ok()).flatten();
-    fields
-        .iter()
-        .filter_map(|field| node.get(*field).and_then(Value::as_str))
-        .any(|value| {
-            if let Some(regex) = regex.as_ref() {
-                regex.is_match(value)
-            } else {
-                value == expected
-            }
-        })
-}
-
-fn bool_fields_match(node: &Value, expected: bool, fields: &[&str]) -> bool {
-    fields
-        .iter()
-        .find_map(|field| node.get(*field).and_then(Value::as_bool))
-        .is_some_and(|value| value == expected)
-}
-
-fn bool_or_state_fields_match(
-    node: &Value,
-    expected: bool,
-    bool_fields: &[&str],
-    string_fields: &[&str],
-    truthy_values: &[&str],
-) -> bool {
-    if bool_fields_match(node, expected, bool_fields) {
-        return true;
-    }
-    string_fields
-        .iter()
-        .filter_map(|field| node.get(*field).and_then(Value::as_str))
-        .any(|value| {
-            let truthy = truthy_values
-                .iter()
-                .any(|truthy| value.eq_ignore_ascii_case(truthy));
-            truthy == expected
-        })
-}
-
-fn tap_point_from_snapshot(
-    snapshot: &Value,
-    selector: &ElementSelectorPayload,
-) -> Result<(f64, f64), AppError> {
-    let roots = snapshot
-        .get("roots")
-        .and_then(Value::as_array)
-        .ok_or_else(|| AppError::not_found("Accessibility snapshot does not contain roots."))?;
-    let mut seen_matches = 0usize;
-    for root in roots {
-        let root_frame = root
-            .get("frame")
-            .or_else(|| root.get("frameInScreen"))
-            .ok_or_else(|| AppError::not_found("Accessibility root does not expose a frame."))?;
-        let root_width = number_field(root_frame, "width")?;
-        let root_height = number_field(root_frame, "height")?;
-        if let Some(node) = indexed_matching_node(root, selector, &mut seen_matches) {
-            let frame = node
-                .get("frame")
-                .or_else(|| node.get("frameInScreen"))
-                .ok_or_else(|| AppError::not_found("Matched element does not expose a frame."))?;
-            let x = number_field(frame, "x")? + number_field(frame, "width")? / 2.0;
-            let y = number_field(frame, "y")? + number_field(frame, "height")? / 2.0;
-            return Ok((
-                (x / root_width).clamp(0.0, 1.0),
-                (y / root_height).clamp(0.0, 1.0),
-            ));
-        }
-    }
-    Err(AppError::not_found("No accessibility element matched."))
-}
-
-fn indexed_matching_node<'a>(
-    node: &'a Value,
-    selector: &ElementSelectorPayload,
-    seen_matches: &mut usize,
-) -> Option<&'a Value> {
-    if element_matches_selector(node, selector) {
-        if selector.index.unwrap_or(0) == *seen_matches {
-            return Some(node);
-        }
-        *seen_matches += 1;
-    }
-    for child in node
-        .get("children")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if let Some(found) = indexed_matching_node(child, selector, seen_matches) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-fn normalize_screen_point_from_snapshot(
-    snapshot: &Value,
-    x: f64,
-    y: f64,
-) -> Result<(f64, f64), AppError> {
-    let root = snapshot
-        .get("roots")
-        .and_then(Value::as_array)
-        .and_then(|roots| roots.first())
-        .ok_or_else(|| AppError::not_found("Accessibility snapshot does not contain a root."))?;
-    let frame = root
-        .get("frame")
-        .or_else(|| root.get("frameInScreen"))
-        .ok_or_else(|| AppError::not_found("Accessibility root does not expose a frame."))?;
-    let width = number_field(frame, "width")?;
-    let height = number_field(frame, "height")?;
-    if width <= 0.0 || height <= 0.0 {
-        return Err(AppError::not_found("Accessibility root frame is empty."));
-    }
-    Ok(((x / width).clamp(0.0, 1.0), (y / height).clamp(0.0, 1.0)))
-}
-
-fn accessibility_point_snapshot(snapshot: &Value, x: f64, y: f64) -> Result<Value, AppError> {
-    let roots = snapshot
-        .get("roots")
-        .and_then(Value::as_array)
-        .ok_or_else(|| AppError::not_found("Accessibility snapshot does not contain roots."))?;
-    let node = roots
-        .iter()
-        .rev()
-        .find_map(|root| deepest_node_at_point(root, x, y))
-        .ok_or_else(|| AppError::not_found("No accessibility element contains the point."))?;
-    let mut node = node.clone();
-    if let Some(object) = node.as_object_mut() {
-        object.remove("children");
-    }
-
-    let mut response = Map::new();
-    for key in [
-        "source",
-        "availableSources",
-        "requestedSource",
-        "fallbackReason",
-        "inspector",
-        "includeHidden",
-    ] {
-        if let Some(value) = snapshot.get(key) {
-            response.insert(key.to_owned(), value.clone());
-        }
-    }
-    response.insert("roots".to_owned(), Value::Array(vec![node]));
-    Ok(Value::Object(response))
-}
-
-fn point_snapshot_looks_like_local_widget_coordinates(snapshot: &Value, x: f64, y: f64) -> bool {
-    let Some(roots) = snapshot.get("roots").and_then(Value::as_array) else {
-        return false;
-    };
-    if roots.len() != 1 {
-        return false;
-    }
-
-    let Some(frame) = roots[0]
-        .get("frame")
-        .or_else(|| roots[0].get("frameInScreen"))
-    else {
-        return false;
-    };
-    let Ok(frame_x) = number_field(frame, "x") else {
-        return false;
-    };
-    let Ok(frame_y) = number_field(frame, "y") else {
-        return false;
-    };
-    let Ok(width) = number_field(frame, "width") else {
-        return false;
-    };
-    let Ok(height) = number_field(frame, "height") else {
-        return false;
-    };
-
-    if width <= 0.0 || height <= 0.0 || frame_x > 64.0 || frame_y > 64.0 {
-        return false;
-    }
-
-    let compact_local_frame = width <= 240.0 && height <= 240.0;
-    let point_outside_frame = x > frame_x + width || y > frame_y + height;
-    compact_local_frame || point_outside_frame
-}
-
-fn deepest_node_at_point(node: &Value, x: f64, y: f64) -> Option<&Value> {
-    let has_frame = node
-        .get("frame")
-        .or_else(|| node.get("frameInScreen"))
-        .is_some();
-    if has_frame && !node_frame_contains_point(node, x, y).unwrap_or(false) {
-        return None;
-    }
-    for child in node
-        .get("children")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .rev()
-    {
-        if let Some(found) = deepest_node_at_point(child, x, y) {
-            return Some(found);
-        }
-    }
-    has_frame.then_some(node)
-}
-
-fn node_frame_contains_point(node: &Value, x: f64, y: f64) -> Result<bool, AppError> {
-    let frame = node
-        .get("frame")
-        .or_else(|| node.get("frameInScreen"))
-        .ok_or_else(|| AppError::not_found("Accessibility node does not expose a frame."))?;
-    let frame_x = number_field(frame, "x")?;
-    let frame_y = number_field(frame, "y")?;
-    let width = number_field(frame, "width")?;
-    let height = number_field(frame, "height")?;
-    Ok(width > 0.0
-        && height > 0.0
-        && x >= frame_x
-        && y >= frame_y
-        && x < frame_x + width
-        && y < frame_y + height)
-}
-
-fn number_field(value: &Value, field: &str) -> Result<f64, AppError> {
-    value
-        .get(field)
-        .and_then(Value::as_f64)
-        .filter(|value| value.is_finite())
-        .ok_or_else(|| AppError::not_found(format!("Missing numeric frame field `{field}`.")))
-}
-
-fn hid_for_character(character: char) -> Option<(u16, u32)> {
-    let shift: u32 = 1;
-    let mapping = match character {
-        'a'..='z' => (character as u16 - b'a' as u16 + 4, 0),
-        'A'..='Z' => (character as u16 - b'A' as u16 + 4, shift),
-        '1' => (30, 0),
-        '!' => (30, shift),
-        '2' => (31, 0),
-        '@' => (31, shift),
-        '3' => (32, 0),
-        '#' => (32, shift),
-        '4' => (33, 0),
-        '$' => (33, shift),
-        '5' => (34, 0),
-        '%' => (34, shift),
-        '6' => (35, 0),
-        '^' => (35, shift),
-        '7' => (36, 0),
-        '&' => (36, shift),
-        '8' => (37, 0),
-        '*' => (37, shift),
-        '9' => (38, 0),
-        '(' => (38, shift),
-        '0' => (39, 0),
-        ')' => (39, shift),
-        '\n' | '\r' => (40, 0),
-        '\t' => (43, 0),
-        ' ' => (44, 0),
-        '-' => (45, 0),
-        '_' => (45, shift),
-        '=' => (46, 0),
-        '+' => (46, shift),
-        '[' => (47, 0),
-        '{' => (47, shift),
-        ']' => (48, 0),
-        '}' => (48, shift),
-        '\\' => (49, 0),
-        '|' => (49, shift),
-        ';' => (51, 0),
-        ':' => (51, shift),
-        '\'' => (52, 0),
-        '"' => (52, shift),
-        '`' => (53, 0),
-        '~' => (53, shift),
-        ',' => (54, 0),
-        '<' => (54, shift),
-        '.' => (55, 0),
-        '>' => (55, shift),
-        '/' => (56, 0),
-        '?' => (56, shift),
-        _ => return None,
-    };
-    Some(mapping)
-}
-
-fn normalized_gesture_coordinates(
-    preset: &str,
-    delta: Option<f64>,
-) -> Result<(f64, f64, f64, f64, u64), AppError> {
-    let center_x = 0.5;
-    let center_y = 0.5;
-    let distance = delta.unwrap_or(0.45).clamp(0.05, 0.95);
-    let edge = 0.02;
-    let coordinates = match preset {
-        "scroll-up" => (
-            center_x,
-            center_y - distance / 2.0,
-            center_x,
-            center_y + distance / 2.0,
-            500,
-        ),
-        "scroll-down" => (
-            center_x,
-            center_y + distance / 2.0,
-            center_x,
-            center_y - distance / 2.0,
-            500,
-        ),
-        "scroll-left" => (
-            center_x - distance / 2.0,
-            center_y,
-            center_x + distance / 2.0,
-            center_y,
-            500,
-        ),
-        "scroll-right" => (
-            center_x + distance / 2.0,
-            center_y,
-            center_x - distance / 2.0,
-            center_y,
-            500,
-        ),
-        "swipe-from-left-edge" => (edge, center_y, 1.0 - edge, center_y, 300),
-        "swipe-from-right-edge" => (1.0 - edge, center_y, edge, center_y, 300),
-        "swipe-from-top-edge" => (center_x, edge, center_x, 1.0 - edge, 300),
-        "swipe-from-bottom-edge" => (center_x, 1.0 - edge, center_x, edge, 300),
-        _ => {
-            return Err(AppError::bad_request(format!(
-                "Unsupported gesture preset `{preset}`."
-            )))
-        }
-    };
-    Ok(coordinates)
-}
-
-fn compact_accessibility_snapshot(snapshot: &Value) -> Value {
-    let roots = snapshot
-        .get("roots")
-        .and_then(Value::as_array)
-        .map(|roots| {
-            roots
-                .iter()
-                .map(compact_accessibility_node)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    json_value!({
-        "source": snapshot.get("source").cloned().unwrap_or(Value::Null),
-        "roots": roots,
-    })
-}
-
-fn compact_accessibility_node(node: &Value) -> Value {
-    let mut object = Map::new();
-    copy_first_string(node, &mut object, "role", &["type", "role", "className"]);
-    copy_first_string(
-        node,
-        &mut object,
-        "id",
-        &[
-            "AXIdentifier",
-            "AXUniqueId",
-            "inspectorId",
-            "id",
-            "identifier",
-        ],
-    );
-    copy_first_string(
-        node,
-        &mut object,
-        "label",
-        &["AXLabel", "label", "title", "text", "name"],
-    );
-    copy_first_string(node, &mut object, "value", &["AXValue", "value"]);
-    if let Some(frame) = node.get("frame").or_else(|| node.get("frameInScreen")) {
-        object.insert("frame".to_owned(), frame.clone());
-    }
-    if let Some(children) = node.get("children").and_then(Value::as_array) {
-        let children = children
-            .iter()
-            .map(compact_accessibility_node)
-            .collect::<Vec<_>>();
-        if !children.is_empty() {
-            object.insert("children".to_owned(), Value::Array(children));
-        }
-    }
-    Value::Object(object)
-}
-
-fn copy_first_string(
-    source: &Value,
-    target: &mut Map<String, Value>,
-    output_key: &str,
-    input_keys: &[&str],
-) {
-    if let Some(value) = input_keys
-        .iter()
-        .filter_map(|key| source.get(*key).and_then(Value::as_str))
-        .map(str::trim)
-        .find(|value| !value.is_empty())
-    {
-        target.insert(output_key.to_owned(), Value::String(value.to_owned()));
-    }
-}
+include!("accessibility_query.rs");
 
 async fn inspector_request(
     State(state): State<AppState>,
@@ -5824,34 +4039,6 @@ async fn simulator_logs(
     Ok(json(json_value!({
         "entries": entries,
     })))
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum AccessibilityHierarchySource {
-    Auto,
-    NativeScript,
-    ReactNative,
-    Flutter,
-    SwiftUI,
-    UIKit,
-    NativeAX,
-}
-
-impl AccessibilityHierarchySource {
-    fn parse(value: Option<&str>) -> Result<Self, AppError> {
-        match value.unwrap_or("auto").trim().to_lowercase().as_str() {
-            "" | "auto" => Ok(Self::Auto),
-            "nativescript" | "ns" => Ok(Self::NativeScript),
-            "react-native" | "reactnative" | "rn" => Ok(Self::ReactNative),
-            "flutter" | "fl" => Ok(Self::Flutter),
-            "swiftui" | "swift-ui" => Ok(Self::SwiftUI),
-            "uikit" | "in-app-inspector" => Ok(Self::UIKit),
-            "ax" | "native-ax" | "native-accessibility" => Ok(Self::NativeAX),
-            source => Err(AppError::bad_request(format!(
-                "Unsupported accessibility hierarchy source `{source}`."
-            ))),
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -6841,42 +5028,6 @@ fn available_sources_for_snapshot(base_sources: &[String], snapshot: &Value) -> 
     sources
 }
 
-async fn merge_connected_sources_for_pid(
-    state: &AppState,
-    udid: &str,
-    process_identifier: Option<i64>,
-    sources: &mut Vec<String>,
-) {
-    for inspector in state.inspectors.connected().await {
-        if process_identifier.is_some_and(|pid| pid != inspector.process_identifier) {
-            continue;
-        }
-        if inspector_process_belongs_to_udid(udid, inspector.process_identifier)
-            .await
-            .unwrap_or(false)
-        {
-            for source in inspector_available_sources(&inspector.info) {
-                push_unique_source(sources, &source);
-            }
-        }
-    }
-    if sources
-        .iter()
-        .any(|source| source == SOURCE_REACT_NATIVE || source == SOURCE_FLUTTER)
-    {
-        sources.retain(|source| source != SOURCE_UIKIT);
-    }
-}
-
-fn root_process_identifier(snapshot: &Value) -> Option<i64> {
-    snapshot
-        .get("roots")
-        .and_then(Value::as_array)
-        .and_then(|roots| roots.first())
-        .and_then(|root| root.get("pid"))
-        .and_then(Value::as_i64)
-}
-
 fn framework_source(source: &str) -> bool {
     source == SOURCE_NATIVE_SCRIPT
         || source == SOURCE_REACT_NATIVE
@@ -7570,8 +5721,18 @@ async fn accessibility_snapshot(
     point: Option<(f64, f64)>,
     max_depth: Option<usize>,
 ) -> Result<Value, AppError> {
+    accessibility_snapshot_with_options(state, udid, point, max_depth, false).await
+}
+
+async fn accessibility_snapshot_with_options(
+    state: AppState,
+    udid: String,
+    point: Option<(f64, f64)>,
+    max_depth: Option<usize>,
+    interactive_only: bool,
+) -> Result<Value, AppError> {
     run_bridge_action(state, move |bridge| {
-        bridge.accessibility_snapshot_with_max_depth(&udid, point, max_depth)
+        bridge.accessibility_snapshot_with_options(&udid, point, max_depth, interactive_only)
     })
     .await
 }
@@ -7590,8 +5751,9 @@ mod tests {
         process_identifier_from_accessibility_snapshot, resolved_stream_quality_limits,
         scroll_input_plan_for_udid, split_filter_values, stream_quality_profile,
         suppress_native_ax_translation_error, tap_point_from_snapshot, trim_tree_depth,
-        ui_application_foreground_score, AccessibilityHierarchySource, ElementSelectorPayload,
-        InspectorSession, InspectorSessionTransport, ScrollInputBackend, ScrollUntilVisiblePayload,
+        ui_application_foreground_score, AccessibilitySnapshotCache, AccessibilitySnapshotCacheKey,
+        AccessibilitySource, BatchStep, ElementSelectorPayload, InspectorSession,
+        InspectorSessionTransport, ScrollInputBackend, ScrollUntilVisiblePayload,
         StreamClientForegroundRegistry, StreamQualityLimits, StreamQualityPayload,
         UIKitApplicationServiceDetails, SOURCE_FLUTTER, SOURCE_NATIVE_AX, SOURCE_NATIVE_SCRIPT,
         SOURCE_REACT_NATIVE, SOURCE_SWIFTUI, SOURCE_UIKIT,
@@ -7771,6 +5933,49 @@ mod tests {
         let point = tap_point_from_snapshot(&accessibility_snapshot(), &selector()).unwrap();
 
         assert_eq!(point, (0.35, 0.275));
+    }
+
+    #[test]
+    fn tap_point_from_snapshot_uses_agent_ref_index_order() {
+        let point = tap_point_from_snapshot(
+            &accessibility_snapshot(),
+            &ElementSelectorPayload {
+                index: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(point, (0.35, 0.275));
+    }
+
+    #[test]
+    fn accessibility_cache_returns_latest_interactive_snapshot() {
+        let cache = AccessibilitySnapshotCache::default();
+        cache.insert(
+            AccessibilitySnapshotCacheKey {
+                udid: "sim-1".to_owned(),
+                source: "auto".to_owned(),
+                max_depth: Some(4),
+                include_hidden: false,
+                interactive_only: true,
+            },
+            &json!({ "name": "first" }),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        cache.insert(
+            AccessibilitySnapshotCacheKey {
+                udid: "sim-1".to_owned(),
+                source: "native-ax".to_owned(),
+                max_depth: None,
+                include_hidden: false,
+                interactive_only: true,
+            },
+            &json!({ "name": "latest" }),
+        );
+
+        assert_eq!(cache.latest_interactive("sim-1").unwrap()["name"], "latest");
+        assert!(cache.latest_interactive("sim-2").is_none());
     }
 
     #[test]
@@ -8137,18 +6342,45 @@ mod tests {
     #[test]
     fn accessibility_source_parser_accepts_documented_aliases() {
         assert!(matches!(
-            AccessibilityHierarchySource::parse(Some("rn")).unwrap(),
-            AccessibilityHierarchySource::ReactNative
+            AccessibilitySource::parse(Some("rn")).unwrap(),
+            AccessibilitySource::ReactNative
         ));
         assert!(matches!(
-            AccessibilityHierarchySource::parse(Some("flutter")).unwrap(),
-            AccessibilityHierarchySource::Flutter
+            AccessibilitySource::parse(Some("flutter")).unwrap(),
+            AccessibilitySource::Flutter
         ));
         assert!(matches!(
-            AccessibilityHierarchySource::parse(Some("swift-ui")).unwrap(),
-            AccessibilityHierarchySource::SwiftUI
+            AccessibilitySource::parse(Some("swift-ui")).unwrap(),
+            AccessibilitySource::SwiftUI
         ));
-        assert!(AccessibilityHierarchySource::parse(Some("unknown")).is_err());
+        assert!(AccessibilitySource::parse(Some("unknown")).is_err());
+    }
+
+    #[test]
+    fn single_action_payloads_deserialize_like_batch_steps() {
+        let tap: BatchStep = serde_json::from_value(json!({
+            "action": "tap",
+            "selector": { "label": "Continue" },
+            "durationMs": 1,
+        }))
+        .unwrap();
+        match tap {
+            BatchStep::Tap(payload) => {
+                assert_eq!(payload.selector.label.as_deref(), Some("Continue"));
+                assert_eq!(payload.duration_ms, Some(1));
+            }
+            _ => panic!("tap payload should decode as BatchStep::Tap"),
+        }
+
+        let open_url: BatchStep = serde_json::from_value(json!({
+            "action": "openUrl",
+            "url": "https://example.com",
+        }))
+        .unwrap();
+        match open_url {
+            BatchStep::OpenUrl { url } => assert_eq!(url, "https://example.com"),
+            _ => panic!("openUrl payload should decode as BatchStep::OpenUrl"),
+        }
     }
 
     #[test]

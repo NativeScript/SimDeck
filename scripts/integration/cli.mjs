@@ -1110,8 +1110,9 @@ async function verifyUiWithDescribe(label, options = {}) {
 async function queryUi(label, body) {
   return retryHttpJson(
     "POST",
-    `/api/simulators/${simulatorUDID}/query`,
+    `/api/simulators/${simulatorUDID}/action`,
     {
+      action: "query",
       source: "native-ax",
       maxDepth: body.maxDepth ?? 8,
       ...body,
@@ -1127,8 +1128,9 @@ async function queryUi(label, body) {
 async function waitForUiElement(label, selector, options = {}) {
   return retryHttpJson(
     "POST",
-    `/api/simulators/${simulatorUDID}/wait-for`,
+    `/api/simulators/${simulatorUDID}/action`,
     {
+      action: "waitFor",
       source: "native-ax",
       maxDepth: options.maxDepth ?? 3,
       timeoutMs: options.waitTimeoutMs ?? 5_000,
@@ -1199,8 +1201,9 @@ async function resolveKnownSystemPromptsWithQueries(label) {
     logStep(`handling system ${prompt.kind} prompt after ${label}`);
     await retryHttpJson(
       "POST",
-      `/api/simulators/${simulatorUDID}/tap`,
+      `/api/simulators/${simulatorUDID}/action`,
       {
+        action: "tap",
         source: "native-ax",
         maxDepth: 6,
         waitTimeoutMs: 2_000,
@@ -1225,8 +1228,9 @@ async function resolveKnownSystemPromptsWithQueries(label) {
   logStep(`handling system keyboard-tip prompt after ${label}`);
   await retryHttpJson(
     "POST",
-    `/api/simulators/${simulatorUDID}/tap`,
+    `/api/simulators/${simulatorUDID}/action`,
     {
+      action: "tap",
       source: "native-ax",
       maxDepth: 8,
       waitTimeoutMs: 2_000,

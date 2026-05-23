@@ -30,6 +30,10 @@ export type TapOptions = QueryOptions & {
     durationMs?: number;
     waitTimeoutMs?: number;
     pollMs?: number;
+    expect?: ElementSelector;
+    expectTimeoutMs?: number;
+    expectMaxDepth?: number;
+    expectIncludeHidden?: boolean;
 };
 export type SwipeOptions = {
     durationMs?: number;
@@ -43,6 +47,11 @@ export type TypeTextOptions = {
 };
 export type KeySequenceOptions = {
     delayMs?: number;
+};
+export type BackOptions = {
+    timeoutMs?: number;
+    pollMs?: number;
+    fallbackSwipe?: boolean;
 };
 export type LogsOptions = {
     backfill?: boolean;
@@ -105,6 +114,7 @@ export type SimDeckSession = {
     ], Promise<void>>;
     button: DeviceMethod<[button: string, durationMs?: number], Promise<void>>;
     home: DeviceMethod<[], Promise<void>>;
+    back: DeviceMethod<[options?: BackOptions], Promise<void>>;
     dismissKeyboard: DeviceMethod<[], Promise<void>>;
     appSwitcher: DeviceMethod<[], Promise<void>>;
     rotateLeft: DeviceMethod<[], Promise<void>>;

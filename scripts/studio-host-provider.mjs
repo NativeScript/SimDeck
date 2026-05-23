@@ -268,8 +268,9 @@ async function allocateSession(config, state, job) {
     if (payload.bundleId) {
       await localJson(
         config,
-        `/api/simulators/${encodeURIComponent(udid)}/launch`,
+        `/api/simulators/${encodeURIComponent(udid)}/action`,
         {
+          action: "launch",
           bundleId: payload.bundleId,
         },
       );

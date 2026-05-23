@@ -149,8 +149,8 @@ async function runIteration(index) {
     if (mutating && index % 10 === 0) {
       endpoints.push([
         "POST",
-        `/api/simulators/${encodeURIComponent(udid)}/touch`,
-        { x: 0.5, y: 0.5, phase: "moved" },
+        `/api/simulators/${encodeURIComponent(udid)}/action`,
+        { action: "touch", x: 0.5, y: 0.5, phase: "moved" },
       ]);
     }
   }

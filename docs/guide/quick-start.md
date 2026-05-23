@@ -69,9 +69,17 @@ Use selectors when you want automation to wait for UI state:
 
 ```sh
 simdeck tap --label "Continue" --wait-timeout-ms 5000
+simdeck tap --id com.apple.settings.screenTime --expect-id BackButton
 simdeck tap "Continue"
+simdeck back
 simdeck describe --format agent --max-depth 3 --interactive
+simdeck press @e3
 ```
+
+`describe --format agent` prints refs such as `@e3`; use `press @e3` to target
+one of those elements directly. `snapshot`, `press`, and `wait` are aliases for
+`describe`, `tap`, and `wait-for`. Add `--expect-*` to a tap when the next
+screen should be present before the command returns.
 
 ## 5. Keep It Running In The Background
 

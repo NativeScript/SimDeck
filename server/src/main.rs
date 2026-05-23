@@ -18,7 +18,7 @@ mod static_files;
 mod transport;
 mod webkit;
 
-use accessibility::interactive_accessibility_snapshot;
+use accessibility::{interactive_accessibility_snapshot, AccessibilitySource};
 use anyhow::Context;
 use api::routes::{router, AppState};
 use axum::Router;
@@ -277,15 +277,15 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         frames: u64,
     },
-    #[command(name = "describe")]
+    #[command(name = "describe", visible_alias = "snapshot")]
     DescribeUi {
         udid: Option<String>,
         #[arg(long, value_parser = parse_point)]
         point: Option<(f64, f64)>,
         #[arg(long, value_enum, default_value_t = DescribeUiFormat::Json)]
         format: DescribeUiFormat,
-        #[arg(long, value_enum, default_value_t = DescribeUiSource::Auto)]
-        source: DescribeUiSource,
+        #[arg(long, value_enum, default_value_t = AccessibilitySource::NativeAX)]
+        source: AccessibilitySource,
         #[arg(long)]
         max_depth: Option<usize>,
         #[arg(long)]
@@ -309,6 +309,7 @@ enum Command {
         #[arg(long, default_value_t = 100)]
         delay_ms: u64,
     },
+    #[command(visible_alias = "press")]
     Tap {
         #[arg(value_name = "UDID_OR_TARGET", num_args = 0..)]
         args: Vec<String>,
@@ -320,6 +321,22 @@ enum Command {
         value: Option<String>,
         #[arg(long)]
         element_type: Option<String>,
+        #[arg(long)]
+        expect_id: Option<String>,
+        #[arg(long)]
+        expect_label: Option<String>,
+        #[arg(long)]
+        expect_value: Option<String>,
+        #[arg(long, alias = "expect-type")]
+        expect_element_type: Option<String>,
+        #[arg(long)]
+        expect_index: Option<usize>,
+        #[arg(long, default_value_t = 5_000)]
+        expect_timeout_ms: u64,
+        #[arg(long, default_value_t = 8)]
+        expect_max_depth: usize,
+        #[arg(long)]
+        expect_include_hidden: bool,
         #[arg(long, default_value_t = 0)]
         wait_timeout_ms: u64,
         #[arg(long, default_value_t = 100)]
@@ -333,12 +350,22 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         post_delay_ms: u64,
     },
+    Back {
+        udid: Option<String>,
+        #[arg(long, default_value_t = 5_000)]
+        timeout_ms: u64,
+        #[arg(long, default_value_t = 100)]
+        poll_interval_ms: u64,
+        #[arg(long = "no-fallback-swipe", default_value_t = true, action = ArgAction::SetFalse)]
+        fallback_swipe: bool,
+    },
+    #[command(visible_alias = "wait")]
     WaitFor {
         udid: Option<String>,
         #[command(flatten)]
         selector: SelectorArgs,
-        #[arg(long, value_enum, default_value_t = DescribeUiSource::Auto)]
-        source: DescribeUiSource,
+        #[arg(long, value_enum, default_value_t = AccessibilitySource::NativeAX)]
+        source: AccessibilitySource,
         #[arg(long)]
         max_depth: Option<usize>,
         #[arg(long)]
@@ -352,8 +379,8 @@ enum Command {
         udid: Option<String>,
         #[command(flatten)]
         selector: SelectorArgs,
-        #[arg(long, value_enum, default_value_t = DescribeUiSource::Auto)]
-        source: DescribeUiSource,
+        #[arg(long, value_enum, default_value_t = AccessibilitySource::NativeAX)]
+        source: AccessibilitySource,
         #[arg(long)]
         max_depth: Option<usize>,
         #[arg(long)]
@@ -745,6 +772,8 @@ struct SelectorArgs {
     value: Option<String>,
     #[arg(long, alias = "type")]
     element_type: Option<String>,
+    #[arg(long)]
+    index: Option<usize>,
 }
 
 impl SelectorArgs {
@@ -753,6 +782,7 @@ impl SelectorArgs {
             && self.label.is_none()
             && self.value.is_none()
             && self.element_type.is_none()
+            && self.index.is_none()
     }
 
     fn to_json(&self) -> Value {
@@ -761,6 +791,7 @@ impl SelectorArgs {
             "label": self.label.as_deref(),
             "value": self.value.as_deref(),
             "elementType": self.element_type.as_deref(),
+            "index": self.index,
         })
     }
 }
@@ -832,17 +863,6 @@ enum DescribeUiFormat {
     Json,
     CompactJson,
     Agent,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum DescribeUiSource {
-    Auto,
-    Nativescript,
-    ReactNative,
-    Flutter,
-    Uikit,
-    NativeAx,
-    AndroidUiautomator,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2032,6 +2052,7 @@ fn is_known_command(value: &str) -> bool {
             | "describe"
             | "touch"
             | "tap"
+            | "back"
             | "swipe"
             | "gesture"
             | "pinch"
@@ -2633,6 +2654,7 @@ fn parse_tap_command_args(
             label,
             value,
             element_type,
+            index: None,
         },
         ..Default::default()
     };
@@ -2685,8 +2707,21 @@ fn parse_tap_command_args(
         anyhow::bail!("tap coordinates must be provided as exactly two numeric values.");
     }
 
+    if target_args.len() == 1 {
+        if let Some(index) = parse_agent_ref(&target_args[0]) {
+            target.selector.index = Some(index);
+            return Ok(target);
+        }
+    }
+
     target.selector.label = Some(target_args.join(" "));
     Ok(target)
+}
+
+fn parse_agent_ref(value: &str) -> Option<usize> {
+    let digits = value.trim().strip_prefix("@e")?;
+    let index = digits.parse::<usize>().ok()?;
+    (index > 0).then_some(index - 1)
 }
 
 fn project_device_selection_for_selector(
@@ -3400,7 +3435,11 @@ fn main() -> anyhow::Result<()> {
         Command::ToggleAppearance { udid } => {
             let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
-            service_post_ok(&service_url, &udid, "toggle-appearance", &Value::Null)?;
+            service_action_ok(
+                &service_url,
+                &udid,
+                &serde_json::json!({ "action": "toggleAppearance" }),
+            )?;
             println_json(
                 &serde_json::json!({ "ok": true, "udid": udid, "action": "toggle-appearance" }),
             )?;
@@ -3725,6 +3764,14 @@ fn main() -> anyhow::Result<()> {
             label,
             value,
             element_type,
+            expect_id,
+            expect_label,
+            expect_value,
+            expect_element_type,
+            expect_index,
+            expect_timeout_ms,
+            expect_max_depth,
+            expect_include_hidden,
             wait_timeout_ms,
             poll_interval_ms,
             normalized,
@@ -3735,6 +3782,14 @@ fn main() -> anyhow::Result<()> {
             let target = parse_tap_command_args(args, id, label, value, element_type)?;
             let uses_inferred_device = target.udid.is_none();
             let uses_selector = !target.selector.is_empty();
+            let expect_selector = SelectorArgs {
+                id: expect_id,
+                label: expect_label,
+                value: expect_value,
+                element_type: expect_element_type,
+                index: expect_index,
+            };
+            let uses_expectation = !expect_selector.is_empty();
             let udid = resolve_cli_device_udid(
                 target.udid.as_deref(),
                 device_selector.as_deref(),
@@ -3747,15 +3802,18 @@ fn main() -> anyhow::Result<()> {
                 label,
                 value,
                 element_type,
+                index,
             } = target.selector;
-            let preferred_service_url = if uses_inferred_device || uses_selector {
+            let preferred_service_url = if uses_inferred_device || uses_selector || uses_expectation
+            {
                 Some(command_service_url(explicit_server_url.as_deref())?)
             } else {
                 service_url.clone()
             };
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &preferred_service_url)?;
-            if let (Some(server_url), Some(x), Some(y), true, None, None, None, None) = (
+            let mut expectation_match = None;
+            if let (Some(server_url), Some(x), Some(y), true, None, None, None, None, false) = (
                 command_server_url.as_deref(),
                 x,
                 y,
@@ -3764,30 +3822,45 @@ fn main() -> anyhow::Result<()> {
                 label.as_ref(),
                 value.as_ref(),
                 element_type.as_ref(),
+                uses_expectation,
             ) {
                 sleep_ms(pre_delay_ms);
                 service_tap(server_url, &udid, x, y, duration_ms)?;
                 sleep_ms(post_delay_ms);
             } else if let Some(server_url) = command_server_url.as_deref() {
                 sleep_ms(pre_delay_ms);
-                service_tap_element(
-                    server_url,
-                    &udid,
-                    serde_json::json!({
-                        "x": x,
-                        "y": y,
-                        "normalized": normalized,
-                        "selector": {
-                            "id": id,
-                            "label": label,
-                            "value": value,
-                            "elementType": element_type,
-                        },
-                        "waitTimeoutMs": wait_timeout_ms,
-                        "pollMs": poll_interval_ms,
-                        "durationMs": duration_ms,
-                    }),
-                )?;
+                let mut body = serde_json::json!({
+                    "x": x,
+                    "y": y,
+                    "normalized": normalized,
+                    "selector": {
+                        "id": id,
+                        "label": label,
+                        "value": value,
+                        "elementType": element_type,
+                        "index": index,
+                    },
+                    "waitTimeoutMs": wait_timeout_ms,
+                    "pollMs": poll_interval_ms,
+                    "durationMs": duration_ms,
+                });
+                if uses_expectation {
+                    if let Some(object) = body.as_object_mut() {
+                        object.insert(
+                            "expect".to_owned(),
+                            serde_json::json!({
+                                "selector": expect_selector.to_json(),
+                                "source": AccessibilitySource::NativeAX.as_query_value(),
+                                "maxDepth": expect_max_depth,
+                                "includeHidden": expect_include_hidden,
+                                "timeoutMs": expect_timeout_ms,
+                                "pollMs": poll_interval_ms,
+                            }),
+                        );
+                    }
+                }
+                let tap_result = service_tap_element(server_url, &udid, body)?;
+                expectation_match = tap_result.get("expectation").cloned();
                 sleep_ms(post_delay_ms);
             } else {
                 let target = resolve_tap_target(
@@ -3802,6 +3875,7 @@ fn main() -> anyhow::Result<()> {
                             label,
                             value,
                             element_type,
+                            index,
                         },
                         wait_timeout_ms,
                         poll_interval_ms,
@@ -3817,7 +3891,32 @@ fn main() -> anyhow::Result<()> {
                 }
                 sleep_ms(post_delay_ms);
             }
-            println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "tap" }))?;
+            let mut result = serde_json::json!({ "ok": true, "udid": udid, "action": "tap" });
+            if let (Some(object), Some(expectation)) = (result.as_object_mut(), expectation_match) {
+                object.insert("expectation".to_owned(), expectation);
+            }
+            println_json(&result)?;
+            Ok(())
+        }
+        Command::Back {
+            udid,
+            timeout_ms,
+            poll_interval_ms,
+            fallback_swipe,
+        } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
+            let service_url = command_service_url(explicit_server_url.as_deref())?;
+            let result = service_action(
+                &service_url,
+                &udid,
+                &serde_json::json!({
+                    "action": "back",
+                    "timeoutMs": timeout_ms,
+                    "pollMs": poll_interval_ms,
+                    "fallbackSwipe": fallback_swipe,
+                }),
+            )?;
+            println_json(&result)?;
             Ok(())
         }
         Command::WaitFor {
@@ -3893,10 +3992,10 @@ fn main() -> anyhow::Result<()> {
             if let Some(server_url) = command_server_url.as_deref().filter(|_| normalized) {
                 sleep_ms(pre_delay_ms);
                 if android_device {
-                    service_batch(
+                    service_action_ok(
                         server_url,
                         &udid,
-                        vec![serde_json::json!({
+                        &serde_json::json!({
                             "action": "swipe",
                             "startX": start_x,
                             "startY": start_y,
@@ -3904,8 +4003,7 @@ fn main() -> anyhow::Result<()> {
                             "endY": end_y,
                             "durationMs": duration_ms,
                             "steps": steps,
-                        })],
-                        false,
+                        }),
                     )?;
                 } else {
                     service_swipe(
@@ -3962,17 +4060,16 @@ fn main() -> anyhow::Result<()> {
                     .as_deref()
                     .ok_or_else(|| anyhow::anyhow!("Android command requires SimDeck daemon."))?;
                 sleep_ms(pre_delay_ms);
-                service_batch(
+                service_action_ok(
                     server_url,
                     &udid,
-                    vec![serde_json::json!({
+                    &serde_json::json!({
                         "action": "gesture",
                         "preset": preset,
                         "durationMs": duration_ms,
                         "delta": delta,
                         "steps": 4,
-                    })],
-                    false,
+                    }),
                 )?;
                 sleep_ms(post_delay_ms);
                 println_json(
@@ -4176,15 +4273,14 @@ fn main() -> anyhow::Result<()> {
             let text = read_text_input(text, stdin, file)?;
             if android::is_android_id(&udid) {
                 let server_url = command_service_url(explicit_server_url.as_deref())?;
-                service_batch(
+                service_action_ok(
                     &server_url,
                     &udid,
-                    vec![serde_json::json!({
+                    &serde_json::json!({
                         "action": "type",
                         "text": text,
                         "delayMs": delay_ms,
-                    })],
-                    false,
+                    }),
                 )?;
             } else {
                 type_text(&bridge, &udid, &text, delay_ms)?;
@@ -4227,18 +4323,18 @@ fn main() -> anyhow::Result<()> {
             continue_on_error,
         } => {
             let udid = resolve_device_udid(udid.as_deref())?;
-            let command_server_url =
-                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
-            let report = if let Some(server_url) = command_server_url.as_deref() {
-                let step_lines = read_batch_steps(steps, file, stdin)?;
-                service_batch(
-                    server_url,
+            let step_lines = read_batch_steps(steps, file, stdin)?;
+            let report = match command_service_url(explicit_server_url.as_deref()) {
+                Ok(server_url) => service_batch(
+                    &server_url,
                     &udid,
                     batch_lines_to_json_steps(&step_lines)?,
                     continue_on_error,
-                )?
-            } else {
-                run_batch(&bridge, &udid, steps, file, stdin, continue_on_error)?
+                )?,
+                Err(_error) if !android::is_android_id(&udid) => {
+                    run_batch(&bridge, &udid, step_lines, None, false, continue_on_error)?
+                }
+                Err(error) => return Err(error),
             };
             println_json(&report)?;
             Ok(())
@@ -4248,7 +4344,11 @@ fn main() -> anyhow::Result<()> {
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
-                service_post_ok(server_url, &udid, "dismiss-keyboard", &Value::Null)?;
+                service_action_ok(
+                    server_url,
+                    &udid,
+                    &serde_json::json!({ "action": "dismissKeyboard" }),
+                )?;
             } else {
                 bridge.send_key(&udid, 41, 0)?;
             }
@@ -4265,7 +4365,7 @@ fn main() -> anyhow::Result<()> {
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
-                service_post_ok(server_url, &udid, "home", &Value::Null)?;
+                service_action_ok(server_url, &udid, &serde_json::json!({ "action": "home" }))?;
             } else {
                 bridge.press_home(&udid)?;
             }
@@ -4277,7 +4377,11 @@ fn main() -> anyhow::Result<()> {
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
-                service_post_ok(server_url, &udid, "app-switcher", &Value::Null)?;
+                service_action_ok(
+                    server_url,
+                    &udid,
+                    &serde_json::json!({ "action": "appSwitcher" }),
+                )?;
             } else {
                 bridge.open_app_switcher(&udid)?;
             }
@@ -4291,7 +4395,11 @@ fn main() -> anyhow::Result<()> {
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
-                service_post_ok(server_url, &udid, "rotate-left", &Value::Null)?;
+                service_action_ok(
+                    server_url,
+                    &udid,
+                    &serde_json::json!({ "action": "rotateLeft" }),
+                )?;
             } else {
                 bridge.rotate_left(&udid)?;
             }
@@ -4305,7 +4413,11 @@ fn main() -> anyhow::Result<()> {
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
-                service_post_ok(server_url, &udid, "rotate-right", &Value::Null)?;
+                service_action_ok(
+                    server_url,
+                    &udid,
+                    &serde_json::json!({ "action": "rotateRight" }),
+                )?;
             } else {
                 bridge.rotate_right(&udid)?;
             }
@@ -4522,6 +4634,7 @@ struct ElementSelector {
     label: Option<String>,
     value: Option<String>,
     element_type: Option<String>,
+    index: Option<usize>,
 }
 
 impl ElementSelector {
@@ -4530,6 +4643,7 @@ impl ElementSelector {
             && self.label.is_none()
             && self.value.is_none()
             && self.element_type.is_none()
+            && self.index.is_none()
     }
 }
 
@@ -4824,7 +4938,7 @@ fn describe_ui_snapshot(
     bridge: &NativeBridge,
     udid: &str,
     point: Option<(f64, f64)>,
-    source: DescribeUiSource,
+    source: AccessibilitySource,
     max_depth: Option<usize>,
     include_hidden: bool,
     interactive_only: bool,
@@ -4835,13 +4949,13 @@ fn describe_ui_snapshot(
         if let Some((x, y)) = point {
             if matches!(
                 source,
-                DescribeUiSource::Auto
-                    | DescribeUiSource::NativeAx
-                    | DescribeUiSource::AndroidUiautomator
+                AccessibilitySource::Auto
+                    | AccessibilitySource::NativeAX
+                    | AccessibilitySource::AndroidUiautomator
             ) {
                 match fetch_service_accessibility_point(udid, x, y, server_url) {
                     Ok(snapshot) => return Ok(snapshot),
-                    Err(error) if source != DescribeUiSource::Auto => return Err(error),
+                    Err(error) if source != AccessibilitySource::Auto => return Err(error),
                     Err(_) => {}
                 }
             }
@@ -4855,20 +4969,21 @@ fn describe_ui_snapshot(
                 server_url,
             ) {
                 Ok(snapshot) => return Ok(snapshot),
-                Err(error) if source != DescribeUiSource::Auto => return Err(error),
+                Err(error) if source != AccessibilitySource::Auto => return Err(error),
                 Err(_) => {}
             }
         }
     }
 
-    if source != DescribeUiSource::Auto && source != DescribeUiSource::NativeAx {
+    if source != AccessibilitySource::Auto && source != AccessibilitySource::NativeAX {
         anyhow::bail!(
             "The `{}` hierarchy source requires a running SimDeck daemon. Start it with `simdeck daemon start --port 4311`, or use --source native-ax.",
             source.as_query_value()
         );
     }
 
-    let snapshot = bridge.accessibility_snapshot_with_max_depth(udid, point, max_depth)?;
+    let snapshot =
+        bridge.accessibility_snapshot_with_options(udid, point, max_depth, interactive_only)?;
     Ok(if interactive_only && point.is_none() {
         interactive_accessibility_snapshot(&snapshot)
     } else {
@@ -4878,7 +4993,7 @@ fn describe_ui_snapshot(
 
 fn fetch_service_accessibility_tree(
     udid: &str,
-    source: DescribeUiSource,
+    source: AccessibilitySource,
     max_depth: Option<usize>,
     include_hidden: bool,
     interactive_only: bool,
@@ -4975,2520 +5090,19 @@ fn http_get_json(server_url: &str, path: &str) -> anyhow::Result<Value> {
     http_request_json(server_url, "GET", path, None)
 }
 
-fn service_get_json(server_url: &str, path: &str) -> anyhow::Result<Value> {
-    http_request_json(server_url, "GET", path, None)
-}
+include!("main/service_client.rs");
 
-fn service_get_bytes(server_url: &str, path: &str) -> anyhow::Result<Vec<u8>> {
-    http_request(server_url, "GET", path, None)
-}
+include!("main/http.rs");
 
-fn service_post_bytes(server_url: &str, path: &str, body: &Value) -> anyhow::Result<Vec<u8>> {
-    http_request(server_url, "POST", path, Some(body))
-}
+include!("main/accessibility_format.rs");
 
-fn service_open_url(server_url: &str, udid: &str, url: &str) -> anyhow::Result<()> {
-    service_post_ok(
-        server_url,
-        udid,
-        "open-url",
-        &serde_json::json!({ "url": url }),
-    )
-}
+include!("main/tap_target.rs");
 
-fn service_launch(server_url: &str, udid: &str, bundle_id: &str) -> anyhow::Result<()> {
-    service_post_ok(
-        server_url,
-        udid,
-        "launch",
-        &serde_json::json!({ "bundleId": bundle_id }),
-    )
-}
+include!("main/input_helpers.rs");
 
-fn service_performance_json(
-    server_url: &str,
-    udid: &str,
-    pid: Option<i32>,
-) -> anyhow::Result<Value> {
-    let mut path = format!(
-        "/api/simulators/{}/performance?windowMs=120000",
-        url_path_component(udid)
-    );
-    if let Some(pid) = pid {
-        path.push_str(&format!("&pid={pid}"));
-    }
-    service_get_json(server_url, &path)
-}
+include!("main/maestro.rs");
 
-fn service_post_sample(
-    server_url: &str,
-    udid: &str,
-    pid: i32,
-    seconds: u64,
-) -> anyhow::Result<Value> {
-    http_request_json(
-        server_url,
-        "POST",
-        &format!(
-            "/api/simulators/{}/processes/{pid}/sample?seconds={}",
-            url_path_component(udid),
-            seconds.clamp(1, 30)
-        ),
-        None,
-    )
-}
-
-fn run_stats_watch(
-    server_url: &str,
-    udid: &str,
-    pid: Option<i32>,
-    interval: f64,
-) -> anyhow::Result<()> {
-    let interval = Duration::from_secs_f64(interval.clamp(0.25, 60.0));
-    loop {
-        let stats = service_performance_json(server_url, udid, pid)?;
-        print_performance_line(&stats)?;
-        std::thread::sleep(interval);
-    }
-}
-
-fn print_performance_line(stats: &Value) -> anyhow::Result<()> {
-    let current = stats
-        .get("current")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow::anyhow!("No current performance sample is available."))?;
-    let pid = current.get("pid").and_then(Value::as_i64).unwrap_or(0);
-    let process = stats
-        .get("processes")
-        .and_then(Value::as_array)
-        .and_then(|processes| {
-            processes
-                .iter()
-                .find(|process| process.get("pid").and_then(Value::as_i64) == Some(pid))
-        })
-        .and_then(|process| process.get("process"))
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let cpu = current
-        .get("cpuPercent")
-        .and_then(Value::as_f64)
-        .map(|value| format!("{value:.1}%"))
-        .unwrap_or_else(|| "--".to_owned());
-    let memory = current
-        .get("memoryFootprintBytes")
-        .or_else(|| current.get("memoryResidentBytes"))
-        .and_then(Value::as_u64)
-        .map(format_bytes_cli)
-        .unwrap_or_else(|| "--".to_owned());
-    let disk = current
-        .get("diskWriteBytesPerSecond")
-        .and_then(Value::as_f64)
-        .map(|value| format!("{}/s", format_bytes_cli(value.max(0.0) as u64)))
-        .unwrap_or_else(|| "--".to_owned());
-    let network_in = current
-        .get("networkReceivedBytesPerSecond")
-        .and_then(Value::as_f64)
-        .map(|value| format!("{}/s", format_bytes_cli(value.max(0.0) as u64)))
-        .unwrap_or_else(|| "--".to_owned());
-    let network_out = current
-        .get("networkSentBytesPerSecond")
-        .and_then(Value::as_f64)
-        .map(|value| format!("{}/s", format_bytes_cli(value.max(0.0) as u64)))
-        .unwrap_or_else(|| "--".to_owned());
-    let connections = current
-        .get("networkConnectionCount")
-        .and_then(Value::as_u64)
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "--".to_owned());
-    let hang = current
-        .get("hang")
-        .and_then(|hang| hang.get("state"))
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    println!(
-        "{} pid={} process={} cpu={} memory={} diskWrite={} netIn={} netOut={} connections={} hang={}",
-        chrono_like_time_label(),
-        pid,
-        process,
-        cpu,
-        memory,
-        disk,
-        network_in,
-        network_out,
-        connections,
-        hang
-    );
-    io::stdout().flush()?;
-    Ok(())
-}
-
-fn format_bytes_cli(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{} {}", bytes, UNITS[unit])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
-
-fn chrono_like_time_label() -> String {
-    let now = SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    let seconds = now % 60;
-    let minutes = (now / 60) % 60;
-    let hours = (now / 3600) % 24;
-    format!("{hours:02}:{minutes:02}:{seconds:02}")
-}
-
-fn service_touch(server_url: &str, udid: &str, x: f64, y: f64, phase: &str) -> anyhow::Result<()> {
-    service_post_ok(
-        server_url,
-        udid,
-        "touch",
-        &serde_json::json!({ "x": x, "y": y, "phase": phase }),
-    )
-}
-
-fn service_tap(
-    server_url: &str,
-    udid: &str,
-    x: f64,
-    y: f64,
-    duration_ms: u64,
-) -> anyhow::Result<()> {
-    service_touch_sequence(
-        server_url,
-        udid,
-        vec![
-            service_touch_event(x, y, "began", duration_ms),
-            service_touch_event(x, y, "ended", 0),
-        ],
-    )
-}
-
-fn service_tap_element(server_url: &str, udid: &str, body: Value) -> anyhow::Result<()> {
-    service_post_ok(server_url, udid, "tap", &body)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn service_wait_for_selector(
-    server_url: &str,
-    udid: &str,
-    action: &str,
-    selector: SelectorArgs,
-    source: DescribeUiSource,
-    max_depth: Option<usize>,
-    include_hidden: bool,
-    timeout_ms: u64,
-    poll_interval_ms: u64,
-) -> anyhow::Result<Value> {
-    if selector.is_empty() {
-        anyhow::bail!("{action} requires a selector flag.");
-    }
-    let body = serde_json::json!({
-        "selector": selector.to_json(),
-        "source": source.as_query_value(),
-        "maxDepth": max_depth,
-        "includeHidden": include_hidden,
-        "timeoutMs": timeout_ms,
-        "pollMs": poll_interval_ms,
-    });
-    let path = format!("/api/simulators/{}/{}", url_path_component(udid), action);
-    http_request_json(server_url, "POST", &path, Some(&body))
-}
-
-fn service_batch(
-    server_url: &str,
-    udid: &str,
-    steps: Vec<Value>,
-    continue_on_error: bool,
-) -> anyhow::Result<Value> {
-    let path = format!("/api/simulators/{}/batch", url_path_component(udid));
-    http_request_json(
-        server_url,
-        "POST",
-        &path,
-        Some(&serde_json::json!({
-            "steps": steps,
-            "continueOnError": continue_on_error,
-        })),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn service_swipe(
-    server_url: &str,
-    udid: &str,
-    start_x: f64,
-    start_y: f64,
-    end_x: f64,
-    end_y: f64,
-    duration_ms: u64,
-    steps: u32,
-) -> anyhow::Result<()> {
-    let step_count = steps.max(2);
-    let delay_ms = duration_ms / u64::from(step_count);
-    let mut events = vec![service_touch_event(start_x, start_y, "began", 0)];
-    for index in 1..step_count {
-        let progress = f64::from(index) / f64::from(step_count);
-        let x = start_x + (end_x - start_x) * progress;
-        let y = start_y + (end_y - start_y) * progress;
-        events.push(service_touch_event(x, y, "moved", delay_ms));
-    }
-    events.push(service_touch_event(end_x, end_y, "ended", 0));
-    service_touch_sequence(server_url, udid, events)
-}
-
-fn service_touch_event(x: f64, y: f64, phase: &str, delay_ms_after: u64) -> Value {
-    serde_json::json!({
-        "x": x,
-        "y": y,
-        "phase": phase,
-        "delayMsAfter": delay_ms_after,
-    })
-}
-
-fn service_touch_sequence(server_url: &str, udid: &str, events: Vec<Value>) -> anyhow::Result<()> {
-    service_post_ok(
-        server_url,
-        udid,
-        "touch-sequence",
-        &serde_json::json!({ "events": events }),
-    )
-}
-
-fn service_key(server_url: &str, udid: &str, key_code: u16, modifiers: u32) -> anyhow::Result<()> {
-    service_post_ok(
-        server_url,
-        udid,
-        "key",
-        &serde_json::json!({ "keyCode": key_code, "modifiers": modifiers }),
-    )
-}
-
-fn service_key_sequence(
-    server_url: &str,
-    udid: &str,
-    keys: &[u16],
-    delay_ms: u64,
-) -> anyhow::Result<()> {
-    service_post_ok(
-        server_url,
-        udid,
-        "key-sequence",
-        &serde_json::json!({ "keyCodes": keys, "delayMs": delay_ms }),
-    )
-}
-
-fn service_button(
-    server_url: &str,
-    udid: &str,
-    button: &str,
-    duration_ms: u32,
-) -> anyhow::Result<()> {
-    service_post_ok(
-        server_url,
-        udid,
-        "button",
-        &serde_json::json!({ "button": button, "durationMs": duration_ms }),
-    )
-}
-
-fn service_crown(server_url: &str, udid: &str, delta: f64) -> anyhow::Result<()> {
-    service_post_ok(
-        server_url,
-        udid,
-        "crown",
-        &serde_json::json!({ "delta": delta }),
-    )
-}
-
-fn service_post_ok(server_url: &str, udid: &str, action: &str, body: &Value) -> anyhow::Result<()> {
-    let path = format!("/api/simulators/{}/{}", url_path_component(udid), action);
-    let deadline = Instant::now() + Duration::from_secs(45);
-    loop {
-        match http_request_json(server_url, "POST", &path, Some(body)) {
-            Ok(_) => return Ok(()),
-            Err(error)
-                if Instant::now() < deadline
-                    && service_post_error_is_retryable(action, &error.to_string()) =>
-            {
-                std::thread::sleep(Duration::from_millis(250));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-fn service_post_error_is_retryable(action: &str, message: &str) -> bool {
-    if !matches!(
-        action,
-        "boot" | "shutdown" | "erase" | "launch" | "open-url"
-    ) {
-        return false;
-    }
-    let message = message.to_lowercase();
-    message.contains("resource temporarily unavailable")
-        || message.contains("connection reset by peer")
-        || message.contains("broken pipe")
-        || message.contains("unexpected eof")
-        || message.contains("timed out")
-}
-
-fn http_request_json(
-    server_url: &str,
-    method: &str,
-    path: &str,
-    body: Option<&Value>,
-) -> anyhow::Result<Value> {
-    let body = http_request(server_url, method, path, body)?;
-    serde_json::from_slice(&body).context("parse SimDeck service JSON response")
-}
-
-fn http_request(
-    server_url: &str,
-    method: &str,
-    path: &str,
-    body: Option<&Value>,
-) -> anyhow::Result<Vec<u8>> {
-    let endpoint = HttpEndpoint::parse(server_url)?;
-    let mut stream = std::net::TcpStream::connect((endpoint.host.as_str(), endpoint.port))
-        .with_context(|| format!("connect to SimDeck service at {server_url}"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(180)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    let body = body.map(serde_json::to_vec).transpose()?;
-    let request = if let Some(body) = body.as_ref() {
-        format!(
-            "{method} {path} HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            endpoint.host_header(),
-            endpoint.origin(),
-            body.len(),
-        )
-    } else {
-        format!(
-            "{method} {path} HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
-            endpoint.host_header(),
-            endpoint.origin(),
-        )
-    };
-    stream.write_all(request.as_bytes())?;
-    if let Some(body) = body.as_ref() {
-        stream.write_all(body)?;
-    }
-
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response)?;
-    let (status, headers, body) = parse_http_response(&response)?;
-    let body = if response_is_chunked(&headers) {
-        decode_chunked_body(body)?
-    } else {
-        body.to_vec()
-    };
-    if !(200..300).contains(&status) {
-        let message = String::from_utf8_lossy(&body).trim().to_owned();
-        anyhow::bail!(
-            "SimDeck service returned HTTP {status}{}",
-            if message.is_empty() {
-                String::new()
-            } else {
-                format!(": {message}")
-            }
-        );
-    }
-    Ok(body)
-}
-
-struct HttpEndpoint {
-    host: String,
-    port: u16,
-}
-
-type HttpHeaders = Vec<(String, String)>;
-
-impl HttpEndpoint {
-    fn parse(server_url: &str) -> anyhow::Result<Self> {
-        let without_scheme = server_url
-            .trim_end_matches('/')
-            .strip_prefix("http://")
-            .ok_or_else(|| anyhow::anyhow!("Only http:// server URLs are supported."))?;
-        let authority = without_scheme
-            .split('/')
-            .next()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Server URL must include a host."))?;
-        let (host, port) = if let Some(host) = authority.strip_prefix('[') {
-            let (host, rest) = host
-                .split_once(']')
-                .ok_or_else(|| anyhow::anyhow!("Invalid IPv6 server URL host."))?;
-            let port = rest
-                .strip_prefix(':')
-                .map(parse_port)
-                .transpose()?
-                .unwrap_or(80);
-            (host.to_owned(), port)
-        } else if let Some((host, port)) = authority.rsplit_once(':') {
-            (host.to_owned(), parse_port(port)?)
-        } else {
-            (authority.to_owned(), 80)
-        };
-        Ok(Self { host, port })
-    }
-
-    fn host_header(&self) -> String {
-        if self.host.contains(':') {
-            format!("[{}]:{}", self.host, self.port)
-        } else {
-            format!("{}:{}", self.host, self.port)
-        }
-    }
-
-    fn origin(&self) -> String {
-        format!("http://{}", self.host_header())
-    }
-}
-
-fn parse_port(value: &str) -> anyhow::Result<u16> {
-    value
-        .parse::<u16>()
-        .with_context(|| format!("parse port `{value}`"))
-}
-
-fn parse_http_response(response: &[u8]) -> anyhow::Result<(u16, HttpHeaders, &[u8])> {
-    let header_end = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| anyhow::anyhow!("SimDeck service returned a malformed HTTP response."))?;
-    let header_bytes = &response[..header_end];
-    let body = &response[header_end + 4..];
-    let header_text = std::str::from_utf8(header_bytes).context("parse HTTP headers as UTF-8")?;
-    let mut lines = header_text.lines();
-    let status_line = lines
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("SimDeck service returned an empty HTTP response."))?;
-    let status = status_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or_else(|| anyhow::anyhow!("HTTP response did not include a status code."))?
-        .parse::<u16>()
-        .context("parse HTTP status code")?;
-    let headers = lines
-        .filter_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            Some((name.trim().to_ascii_lowercase(), value.trim().to_owned()))
-        })
-        .collect();
-    Ok((status, headers, body))
-}
-
-fn response_is_chunked(headers: &[(String, String)]) -> bool {
-    headers.iter().any(|(name, value)| {
-        name == "transfer-encoding"
-            && value
-                .split(',')
-                .any(|part| part.trim().eq_ignore_ascii_case("chunked"))
-    })
-}
-
-fn decode_chunked_body(mut body: &[u8]) -> anyhow::Result<Vec<u8>> {
-    let mut decoded = Vec::new();
-    loop {
-        let line_end = body
-            .windows(2)
-            .position(|window| window == b"\r\n")
-            .ok_or_else(|| anyhow::anyhow!("Chunked response ended before a chunk size."))?;
-        let size_text = std::str::from_utf8(&body[..line_end])
-            .context("parse chunk size as UTF-8")?
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim();
-        let size = usize::from_str_radix(size_text, 16).context("parse chunk size")?;
-        body = &body[line_end + 2..];
-        if size == 0 {
-            return Ok(decoded);
-        }
-        if body.len() < size + 2 {
-            anyhow::bail!("Chunked response ended before a full chunk.");
-        }
-        decoded.extend_from_slice(&body[..size]);
-        body = &body[size + 2..];
-    }
-}
-
-fn url_path_component(value: &str) -> String {
-    value
-        .bytes()
-        .flat_map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                vec![byte as char]
-            }
-            _ => format!("%{byte:02X}").chars().collect(),
-        })
-        .collect()
-}
-
-impl DescribeUiSource {
-    fn as_query_value(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Nativescript => "nativescript",
-            Self::ReactNative => "react-native",
-            Self::Flutter => "flutter",
-            Self::Uikit => "uikit",
-            Self::NativeAx => "native-ax",
-            Self::AndroidUiautomator => "android-uiautomator",
-        }
-    }
-}
-
-fn print_describe_ui(snapshot: &Value, format: DescribeUiFormat) -> anyhow::Result<()> {
-    match format {
-        DescribeUiFormat::Json => println_json(snapshot),
-        DescribeUiFormat::CompactJson => {
-            println!(
-                "{}",
-                serde_json::to_string(&compact_accessibility_snapshot(snapshot))?
-            );
-            Ok(())
-        }
-        DescribeUiFormat::Agent => {
-            print!("{}", render_agent_accessibility_tree(snapshot));
-            Ok(())
-        }
-    }
-}
-
-fn compact_accessibility_snapshot(snapshot: &Value) -> Value {
-    let roots = snapshot
-        .get("roots")
-        .and_then(Value::as_array)
-        .map(|roots| {
-            roots
-                .iter()
-                .map(compact_accessibility_node)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let mut object = serde_json::Map::new();
-    object.insert(
-        "source".to_owned(),
-        snapshot
-            .get("source")
-            .cloned()
-            .unwrap_or_else(|| Value::String("unknown".to_owned())),
-    );
-    object.insert("roots".to_owned(), Value::Array(roots));
-    for field in ["availableSources", "fallbackReason", "fallbackSource"] {
-        if let Some(value) = snapshot.get(field) {
-            object.insert(field.to_owned(), value.clone());
-        }
-    }
-    Value::Object(object)
-}
-
-fn compact_accessibility_node(node: &Value) -> Value {
-    let mut object = serde_json::Map::new();
-    insert_string_alias(node, &mut object, "role", &["type", "role", "className"]);
-    insert_string_alias(
-        node,
-        &mut object,
-        "id",
-        &["AXIdentifier", "AXUniqueId", "inspectorId", "id"],
-    );
-    insert_string_alias(
-        node,
-        &mut object,
-        "label",
-        &["AXLabel", "label", "title", "text", "name"],
-    );
-    insert_string_alias(
-        node,
-        &mut object,
-        "value",
-        &["AXValue", "value", "placeholder"],
-    );
-    if let Some(frame) = compact_frame(node.get("frame").or_else(|| node.get("frameInScreen"))) {
-        object.insert("frame".to_owned(), frame);
-    }
-    if truthy_field(node, "hidden").unwrap_or(false)
-        || truthy_field(node, "isHidden").unwrap_or(false)
-    {
-        object.insert("hidden".to_owned(), Value::Bool(true));
-    }
-    if let Some(false) = truthy_field(node, "enabled") {
-        object.insert("enabled".to_owned(), Value::Bool(false));
-    }
-    if let Some(actions) = node
-        .get("custom_actions")
-        .or_else(|| {
-            node.get("control")
-                .and_then(|control| control.get("actions"))
-        })
-        .and_then(Value::as_array)
-    {
-        let actions = actions
-            .iter()
-            .filter_map(Value::as_str)
-            .map(|action| Value::String(action.to_owned()))
-            .collect::<Vec<_>>();
-        if !actions.is_empty() {
-            object.insert("actions".to_owned(), Value::Array(actions));
-        }
-    }
-    if let Some(source_location) = node.get("sourceLocation").filter(|value| !value.is_null()) {
-        object.insert("sourceLocation".to_owned(), source_location.clone());
-    }
-    let children = node
-        .get("children")
-        .and_then(Value::as_array)
-        .map(|children| {
-            children
-                .iter()
-                .map(compact_accessibility_node)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if !children.is_empty() {
-        object.insert("children".to_owned(), Value::Array(children));
-    }
-    Value::Object(object)
-}
-
-fn insert_string_alias(
-    source: &Value,
-    target: &mut serde_json::Map<String, Value>,
-    output_key: &str,
-    input_keys: &[&str],
-) {
-    if let Some(value) = input_keys
-        .iter()
-        .filter_map(|key| source.get(*key).and_then(Value::as_str))
-        .map(str::trim)
-        .find(|value| !value.is_empty())
-    {
-        target.insert(output_key.to_owned(), Value::String(value.to_owned()));
-    }
-}
-
-fn compact_frame(frame: Option<&Value>) -> Option<Value> {
-    let frame = frame?;
-    let x = frame.get("x")?.as_f64()?;
-    let y = frame.get("y")?.as_f64()?;
-    let width = frame.get("width")?.as_f64()?;
-    let height = frame.get("height")?.as_f64()?;
-    Some(serde_json::json!([
-        round_frame_value(x),
-        round_frame_value(y),
-        round_frame_value(width),
-        round_frame_value(height)
-    ]))
-}
-
-fn round_frame_value(value: f64) -> Value {
-    let rounded = (value * 10.0).round() / 10.0;
-    serde_json::Number::from_f64(rounded)
-        .map(Value::Number)
-        .unwrap_or(Value::Null)
-}
-
-fn truthy_field(node: &Value, field: &str) -> Option<bool> {
-    node.get(field).and_then(Value::as_bool)
-}
-
-fn render_agent_accessibility_tree(snapshot: &Value) -> String {
-    let mut lines = Vec::new();
-    lines.push(format!(
-        "source: {}",
-        snapshot
-            .get("source")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-    ));
-    if let Some(sources) = snapshot.get("availableSources").and_then(Value::as_array) {
-        let sources = sources
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>()
-            .join(",");
-        if !sources.is_empty() {
-            lines.push(format!("available: {sources}"));
-        }
-    }
-    if let Some(reason) = snapshot.get("fallbackReason").and_then(Value::as_str) {
-        lines.push(format!("fallback: {}", compact_text(reason)));
-    }
-    if let Some(roots) = snapshot.get("roots").and_then(Value::as_array) {
-        for root in roots {
-            render_agent_node(root, 0, &mut lines);
-        }
-    }
-    lines.push(String::new());
-    lines.join("\n")
-}
-
-fn render_agent_node(node: &Value, depth: usize, lines: &mut Vec<String>) {
-    let compact = compact_accessibility_node(node);
-    let object = compact.as_object();
-    let field = |name| {
-        object
-            .and_then(|object| object.get(name))
-            .and_then(Value::as_str)
-            .map(compact_text)
-            .filter(|value| !value.is_empty())
-    };
-    let role = field("role").unwrap_or_else(|| "View".to_owned());
-    let id = field("id");
-    let label = field("label");
-    let value = field("value");
-    let mut line = format!("{}- {}", "  ".repeat(depth), role);
-    if let Some(id) = id {
-        line.push_str(" #");
-        line.push_str(&id);
-    }
-    if let Some(label) = label.as_ref() {
-        line.push_str(": ");
-        line.push_str(label);
-    }
-    if let Some(value) = value.filter(|value| Some(value) != label.as_ref()) {
-        line.push_str(" = ");
-        line.push_str(&value);
-    }
-    if let Some(frame) = object
-        .and_then(|object| object.get("frame"))
-        .and_then(Value::as_array)
-        .filter(|frame| frame.len() == 4)
-    {
-        line.push_str(&format!(
-            " @{},{} {}x{}",
-            frame_value(&frame[0]),
-            frame_value(&frame[1]),
-            frame_value(&frame[2]),
-            frame_value(&frame[3])
-        ));
-    }
-    let mut flags = Vec::new();
-    if object
-        .and_then(|object| object.get("hidden"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        flags.push("hidden");
-    }
-    if object
-        .and_then(|object| object.get("enabled"))
-        .and_then(Value::as_bool)
-        == Some(false)
-    {
-        flags.push("disabled");
-    }
-    if let Some(actions) = object
-        .and_then(|object| object.get("actions"))
-        .and_then(Value::as_array)
-    {
-        let actions = actions.iter().filter_map(Value::as_str).collect::<Vec<_>>();
-        if !actions.is_empty() {
-            line.push_str(" actions=");
-            line.push_str(&actions.join(","));
-        }
-    }
-    if !flags.is_empty() {
-        line.push(' ');
-        line.push_str(&flags.join(","));
-    }
-    lines.push(line);
-
-    if let Some(children) = node.get("children").and_then(Value::as_array) {
-        for child in children {
-            render_agent_node(child, depth + 1, lines);
-        }
-    }
-}
-
-fn compact_text(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn frame_value(value: &Value) -> String {
-    value
-        .as_f64()
-        .map(|value| {
-            if value.fract() == 0.0 {
-                format!("{value:.0}")
-            } else {
-                format!("{value:.1}")
-            }
-        })
-        .unwrap_or_else(|| "?".to_owned())
-}
-
-fn resolve_tap_target(
-    bridge: &NativeBridge,
-    udid: &str,
-    request: TapTargetRequest,
-) -> Result<ResolvedTapTarget, crate::error::AppError> {
-    if request.selector.id.is_none()
-        && request.selector.label.is_none()
-        && request.selector.value.is_none()
-    {
-        let x = request.x.ok_or_else(|| {
-            crate::error::AppError::bad_request("Tap requires x and y or a selector.")
-        })?;
-        let y = request.y.ok_or_else(|| {
-            crate::error::AppError::bad_request("Tap requires x and y or a selector.")
-        })?;
-        let (x, y) = resolve_touch_point(bridge, udid, x, y, request.normalized)?;
-        return Ok(ResolvedTapTarget { x, y, input: None });
-    }
-
-    let deadline = std::time::Instant::now() + Duration::from_millis(request.wait_timeout_ms);
-    loop {
-        let snapshot = bridge.accessibility_snapshot(udid, None)?;
-        if let Some(target) = find_element_tap_target(&snapshot, &request.selector) {
-            let input = bridge.create_input_session(udid)?;
-            let (x, y) = if let Some((display_width, display_height)) = input.display_size() {
-                normalize_accessibility_point_for_display(
-                    target.x,
-                    target.y,
-                    target.root_width,
-                    target.root_height,
-                    display_width,
-                    display_height,
-                )
-            } else {
-                (
-                    (target.x / target.root_width).clamp(0.0, 1.0),
-                    (target.y / target.root_height).clamp(0.0, 1.0),
-                )
-            };
-            return Ok(ResolvedTapTarget {
-                x,
-                y,
-                input: Some(input),
-            });
-        }
-        if request.wait_timeout_ms == 0 || std::time::Instant::now() >= deadline {
-            return Err(crate::error::AppError::not_found(
-                "No accessibility element matched the tap selector.",
-            ));
-        }
-        sleep_ms(request.poll_interval_ms.max(10));
-    }
-}
-
-fn find_element_tap_target(
-    snapshot: &Value,
-    selector: &ElementSelector,
-) -> Option<ElementTapTarget> {
-    let roots = snapshot.get("roots")?.as_array()?;
-    let mut matches = Vec::new();
-    for root in roots {
-        let (root_width, root_height) = element_size(root)?;
-        collect_matching_elements(root, selector, root_width, root_height, &mut matches);
-    }
-    matches
-        .into_iter()
-        .max_by_key(|target| is_actionable_element(target.node) as u8)
-        .and_then(|target| {
-            element_center(target.node).map(|(x, y)| ElementTapTarget {
-                x,
-                y,
-                root_width: target.root_width,
-                root_height: target.root_height,
-            })
-        })
-}
-
-struct MatchedElement<'a> {
-    node: &'a Value,
-    root_width: f64,
-    root_height: f64,
-}
-
-fn collect_matching_elements<'a>(
-    node: &'a Value,
-    selector: &ElementSelector,
-    root_width: f64,
-    root_height: f64,
-    matches: &mut Vec<MatchedElement<'a>>,
-) {
-    if element_matches(node, selector) {
-        matches.push(MatchedElement {
-            node,
-            root_width,
-            root_height,
-        });
-    }
-    if let Some(children) = node.get("children").and_then(Value::as_array) {
-        for child in children {
-            collect_matching_elements(child, selector, root_width, root_height, matches);
-        }
-    }
-}
-
-fn element_matches(node: &Value, selector: &ElementSelector) -> bool {
-    if let Some(element_type) = &selector.element_type {
-        let node_type = string_field(node, "type").or_else(|| string_field(node, "role"));
-        if !node_type
-            .as_deref()
-            .map(|value| value.eq_ignore_ascii_case(element_type))
-            .unwrap_or(false)
-        {
-            return false;
-        }
-    }
-    if let Some(id) = &selector.id {
-        return [
-            "AXUniqueId",
-            "AXIdentifier",
-            "id",
-            "identifier",
-            "inspectorId",
-        ]
-        .iter()
-        .filter_map(|key| string_field(node, key))
-        .any(|value| value == *id);
-    }
-    if let Some(label) = &selector.label {
-        return ["AXLabel", "label", "title", "name"]
-            .iter()
-            .filter_map(|key| string_field(node, key))
-            .any(|value| value == *label);
-    }
-    if let Some(expected_value) = &selector.value {
-        return ["AXValue", "value"]
-            .iter()
-            .filter_map(|key| string_field(node, key))
-            .any(|value| value == *expected_value);
-    }
-    false
-}
-
-fn string_field(node: &Value, key: &str) -> Option<String> {
-    node.get(key)?.as_str().map(str::to_owned)
-}
-
-fn element_center(node: &Value) -> Option<(f64, f64)> {
-    let frame = node.get("frame")?;
-    let x = frame.get("x")?.as_f64()?;
-    let y = frame.get("y")?.as_f64()?;
-    let width = frame.get("width")?.as_f64()?;
-    let height = frame.get("height")?.as_f64()?;
-    (width > 0.0 && height > 0.0).then_some((x + width / 2.0, y + height / 2.0))
-}
-
-fn element_size(node: &Value) -> Option<(f64, f64)> {
-    let frame = node.get("frame")?;
-    let width = frame.get("width")?.as_f64()?;
-    let height = frame.get("height")?.as_f64()?;
-    (width > 0.0 && height > 0.0).then_some((width, height))
-}
-
-fn normalize_accessibility_point_for_display(
-    x: f64,
-    y: f64,
-    root_width: f64,
-    root_height: f64,
-    display_width: f64,
-    display_height: f64,
-) -> (f64, f64) {
-    let normalized_x = (x / root_width).clamp(0.0, 1.0);
-    let normalized_y = (y / root_height).clamp(0.0, 1.0);
-    let root_is_landscape = root_width > root_height;
-    let display_is_landscape = display_width > display_height;
-    if root_is_landscape != display_is_landscape {
-        return (normalized_y, normalized_x);
-    }
-    (normalized_x, normalized_y)
-}
-
-fn is_actionable_element(node: &Value) -> bool {
-    let haystack = format!(
-        "{} {}",
-        string_field(node, "type").unwrap_or_default(),
-        string_field(node, "role").unwrap_or_default()
-    )
-    .to_lowercase();
-    ["button", "textfield", "switch", "link", "cell"]
-        .iter()
-        .any(|needle| haystack.contains(needle))
-}
-
-fn gesture_coordinates(
-    bridge: &NativeBridge,
-    udid: &str,
-    preset: &str,
-    screen_width: Option<f64>,
-    screen_height: Option<f64>,
-    normalized: bool,
-    delta: Option<f64>,
-) -> Result<GestureCoordinates, crate::error::AppError> {
-    let (width, height) = if normalized {
-        (1.0, 1.0)
-    } else {
-        match (screen_width, screen_height) {
-            (Some(width), Some(height)) => (width, height),
-            _ => accessibility_root_size(bridge, udid)
-                .or_else(|| chrome_screen_size(bridge, udid))
-                .unwrap_or((390.0, 844.0)),
-        }
-    };
-    let center_x = width / 2.0;
-    let center_y = height / 2.0;
-    let edge = if normalized { 0.02 } else { 20.0 };
-    let distance = delta.unwrap_or(if normalized { 0.25 } else { 200.0 });
-    let (start_x, start_y, end_x, end_y, duration_ms) = match preset {
-        "scroll-up" => (
-            center_x,
-            center_y + distance / 2.0,
-            center_x,
-            center_y - distance / 2.0,
-            500,
-        ),
-        "scroll-down" => (
-            center_x,
-            center_y - distance / 2.0,
-            center_x,
-            center_y + distance / 2.0,
-            500,
-        ),
-        "scroll-left" => (
-            center_x + distance / 2.0,
-            center_y,
-            center_x - distance / 2.0,
-            center_y,
-            500,
-        ),
-        "scroll-right" => (
-            center_x - distance / 2.0,
-            center_y,
-            center_x + distance / 2.0,
-            center_y,
-            500,
-        ),
-        "swipe-from-left-edge" => (edge, center_y, width - edge, center_y, 300),
-        "swipe-from-right-edge" => (width - edge, center_y, edge, center_y, 300),
-        "swipe-from-top-edge" => (center_x, edge, center_x, height - edge, 300),
-        "swipe-from-bottom-edge" => (center_x, height - edge, center_x, edge, 300),
-        _ => {
-            return Err(crate::error::AppError::bad_request(format!(
-                "Unsupported gesture preset `{preset}`."
-            )))
-        }
-    };
-    let (start_x, start_y) = resolve_touch_point(bridge, udid, start_x, start_y, normalized)?;
-    let (end_x, end_y) = resolve_touch_point(bridge, udid, end_x, end_y, normalized)?;
-    Ok(GestureCoordinates {
-        start_x,
-        start_y,
-        end_x,
-        end_y,
-        duration_ms,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn pinch_frames(
-    bridge: &NativeBridge,
-    udid: &str,
-    center_x: Option<f64>,
-    center_y: Option<f64>,
-    start_distance: f64,
-    end_distance: f64,
-    angle_degrees: f64,
-    normalized: bool,
-    steps: u32,
-) -> Result<Vec<MultiTouchFrame>, crate::error::AppError> {
-    if start_distance < 0.0 || end_distance < 0.0 {
-        return Err(crate::error::AppError::bad_request(
-            "Pinch distances must be non-negative.",
-        ));
-    }
-    let (width, height) = gesture_surface_size(bridge, udid, normalized);
-    let center_x = center_x.unwrap_or(width / 2.0);
-    let center_y = center_y.unwrap_or(height / 2.0);
-    let angle = angle_degrees.to_radians();
-    let unit_x = angle.cos();
-    let unit_y = angle.sin();
-    let count = steps.max(2);
-    let mut frames = Vec::with_capacity(count as usize);
-    for step in 0..count {
-        let t = if count == 1 {
-            1.0
-        } else {
-            f64::from(step) / f64::from(count - 1)
-        };
-        let distance = lerp(start_distance, end_distance, t) / 2.0;
-        let p1x = center_x - unit_x * distance;
-        let p1y = center_y - unit_y * distance;
-        let p2x = center_x + unit_x * distance;
-        let p2y = center_y + unit_y * distance;
-        let (x1, y1) = resolve_touch_point(bridge, udid, p1x, p1y, normalized)?;
-        let (x2, y2) = resolve_touch_point(bridge, udid, p2x, p2y, normalized)?;
-        frames.push(MultiTouchFrame { x1, y1, x2, y2 });
-    }
-    Ok(frames)
-}
-
-fn rotate_gesture_frames(
-    bridge: &NativeBridge,
-    udid: &str,
-    request: RotateGestureRequest,
-) -> Result<Vec<MultiTouchFrame>, crate::error::AppError> {
-    if request.radius < 0.0 {
-        return Err(crate::error::AppError::bad_request(
-            "Rotate gesture radius must be non-negative.",
-        ));
-    }
-    let (width, height) = gesture_surface_size(bridge, udid, request.normalized);
-    let center_x = request.center_x.unwrap_or(width / 2.0);
-    let center_y = request.center_y.unwrap_or(height / 2.0);
-    let count = request.steps.max(2);
-    let mut frames = Vec::with_capacity(count as usize);
-    for step in 0..count {
-        let t = if count == 1 {
-            1.0
-        } else {
-            f64::from(step) / f64::from(count - 1)
-        };
-        let angle = (request.degrees * t).to_radians();
-        let unit_x = angle.cos();
-        let unit_y = angle.sin();
-        let p1x = center_x - unit_x * request.radius;
-        let p1y = center_y - unit_y * request.radius;
-        let p2x = center_x + unit_x * request.radius;
-        let p2y = center_y + unit_y * request.radius;
-        let (x1, y1) = resolve_touch_point(bridge, udid, p1x, p1y, request.normalized)?;
-        let (x2, y2) = resolve_touch_point(bridge, udid, p2x, p2y, request.normalized)?;
-        frames.push(MultiTouchFrame { x1, y1, x2, y2 });
-    }
-    Ok(frames)
-}
-
-fn gesture_surface_size(bridge: &NativeBridge, udid: &str, normalized: bool) -> (f64, f64) {
-    if normalized {
-        return (1.0, 1.0);
-    }
-    accessibility_root_size(bridge, udid)
-        .or_else(|| chrome_screen_size(bridge, udid))
-        .unwrap_or((390.0, 844.0))
-}
-
-fn parse_key_list(value: &str) -> Result<Vec<u16>, crate::error::AppError> {
-    let mut keys = Vec::new();
-    for token in value
-        .split(',')
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-    {
-        keys.push(parse_hid_key(token)?);
-    }
-    if keys.is_empty() {
-        return Err(crate::error::AppError::bad_request(
-            "Key sequence must include at least one key.",
-        ));
-    }
-    Ok(keys)
-}
-
-fn parse_hid_key(value: &str) -> Result<u16, crate::error::AppError> {
-    if let Ok(code) = value.parse::<u16>() {
-        return Ok(code);
-    }
-    let key = match value.to_lowercase().as_str() {
-        "enter" | "return" => HID_KEY_ENTER,
-        "escape" | "esc" => 41,
-        "backspace" | "delete" => 42,
-        "tab" => 43,
-        "space" => 44,
-        "right" | "arrow-right" => HID_KEY_ARROW_RIGHT,
-        "left" | "arrow-left" => HID_KEY_ARROW_LEFT,
-        "down" | "arrow-down" => HID_KEY_ARROW_DOWN,
-        "up" | "arrow-up" => HID_KEY_ARROW_UP,
-        "home" => 74,
-        "end" => 77,
-        other if other.len() == 1 => hid_for_character(other.chars().next().unwrap())
-            .map(|(key, _)| key)
-            .ok_or_else(|| {
-                crate::error::AppError::bad_request(format!("Unsupported key `{value}`."))
-            })?,
-        _ => {
-            return Err(crate::error::AppError::bad_request(format!(
-                "Unsupported key `{value}`."
-            )))
-        }
-    };
-    Ok(key)
-}
-
-fn parse_modifier_mask(value: &str) -> Result<u32, crate::error::AppError> {
-    let mut mask = 0;
-    for token in value
-        .split(',')
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-    {
-        mask |= match token.to_lowercase().as_str() {
-            "shift" | "225" | "left-shift" => 1,
-            "ctrl" | "control" | "224" | "left-control" => 1 << 1,
-            "alt" | "option" | "226" | "left-option" => 1 << 2,
-            "cmd" | "command" | "meta" | "227" | "left-command" => 1 << 3,
-            "caps" | "caps-lock" | "57" => 1 << 4,
-            other => {
-                return Err(crate::error::AppError::bad_request(format!(
-                    "Unsupported modifier `{other}`."
-                )))
-            }
-        };
-    }
-    Ok(mask)
-}
-
-fn run_maestro_flow(
-    server_url: &str,
-    udid: &str,
-    flow: &Path,
-    artifacts_dir: Option<PathBuf>,
-    continue_on_error: bool,
-) -> anyhow::Result<Value> {
-    let raw = fs::read_to_string(flow)
-        .with_context(|| format!("read Maestro flow {}", flow.display()))?;
-    let yaml = parse_maestro_flow_yaml(&raw)
-        .with_context(|| format!("parse Maestro flow {}", flow.display()))?;
-    let commands = maestro_commands_from_flow(&yaml)?;
-    let artifact_root = artifacts_dir.unwrap_or_else(|| {
-        PathBuf::from("simdeck-artifacts").join(
-            flow.file_stem()
-                .and_then(|value| value.to_str())
-                .unwrap_or("maestro-flow"),
-        )
-    });
-    fs::create_dir_all(&artifact_root)?;
-
-    let mut steps = Vec::new();
-    let mut failures = Vec::new();
-    for (index, command) in commands.iter().enumerate() {
-        let started = Instant::now();
-        let result = run_maestro_command(server_url, udid, command, &artifact_root);
-        match result {
-            Ok(detail) => steps.push(serde_json::json!({
-                "index": index,
-                "ok": true,
-                "command": maestro_command_name(command),
-                "elapsedMs": started.elapsed().as_millis() as u64,
-                "detail": detail,
-            })),
-            Err(error) => {
-                let message = error.to_string();
-                let screenshot =
-                    capture_maestro_failure_screenshot(server_url, udid, &artifact_root, index + 1)
-                        .ok();
-                steps.push(serde_json::json!({
-                    "index": index,
-                    "ok": false,
-                    "command": maestro_command_name(command),
-                    "elapsedMs": started.elapsed().as_millis() as u64,
-                    "error": message,
-                    "screenshot": screenshot,
-                }));
-                failures.push(message);
-                if !continue_on_error {
-                    break;
-                }
-            }
-        }
-    }
-
-    Ok(serde_json::json!({
-        "ok": failures.is_empty(),
-        "flow": flow,
-        "udid": udid,
-        "steps": steps,
-        "failureCount": failures.len(),
-        "artifactsDir": artifact_root,
-    }))
-}
-
-fn parse_maestro_flow_yaml(raw: &str) -> anyhow::Result<YamlValue> {
-    let mut documents = Vec::new();
-    for document in serde_yaml::Deserializer::from_str(raw) {
-        documents.push(YamlValue::deserialize(document)?);
-    }
-    match documents.len() {
-        0 => Err(anyhow::anyhow!("Maestro flow is empty.")),
-        1 => Ok(documents.remove(0)),
-        _ => {
-            let app_id = documents
-                .first()
-                .and_then(|value| yaml_string_or_field(value, "appId"));
-            let mut commands = documents
-                .pop()
-                .ok_or_else(|| anyhow::anyhow!("Maestro flow is empty."))?;
-            if let Some(app_id) = app_id {
-                fill_empty_launch_app_commands(&mut commands, &app_id);
-            }
-            Ok(commands)
-        }
-    }
-}
-
-fn fill_empty_launch_app_commands(commands: &mut YamlValue, app_id: &str) {
-    let Some(commands) = commands.as_sequence_mut() else {
-        return;
-    };
-    for command in commands {
-        if command.as_str() == Some("launchApp") {
-            let mut mapping = serde_yaml::Mapping::new();
-            mapping.insert(
-                YamlValue::String("launchApp".to_owned()),
-                YamlValue::String(app_id.to_owned()),
-            );
-            *command = YamlValue::Mapping(mapping);
-            continue;
-        }
-        let Some(mapping) = command.as_mapping_mut() else {
-            continue;
-        };
-        let key = YamlValue::String("launchApp".to_owned());
-        let Some(value) = mapping.get_mut(&key) else {
-            continue;
-        };
-        if value.is_null() || value.as_mapping().is_some_and(|mapping| mapping.is_empty()) {
-            *value = YamlValue::String(app_id.to_owned());
-        }
-    }
-}
-
-fn maestro_commands_from_flow(flow: &YamlValue) -> anyhow::Result<Vec<YamlValue>> {
-    match flow {
-        YamlValue::Sequence(commands) => Ok(commands.clone()),
-        YamlValue::Mapping(mapping) => mapping
-            .get(YamlValue::String("commands".to_owned()))
-            .and_then(YamlValue::as_sequence)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!("Maestro flow must be a command list or contain `commands`.")
-            }),
-        _ => Err(anyhow::anyhow!(
-            "Maestro flow must be a command list or contain `commands`."
-        )),
-    }
-}
-
-fn run_maestro_command(
-    server_url: &str,
-    udid: &str,
-    command: &YamlValue,
-    artifacts_dir: &Path,
-) -> anyhow::Result<Value> {
-    let null_value = YamlValue::Null;
-    let (name, value) = if let Some(name) = command.as_str() {
-        (name, &null_value)
-    } else {
-        let Some(mapping) = command.as_mapping() else {
-            anyhow::bail!("Maestro command must be a string or mapping.");
-        };
-        if mapping.len() != 1 {
-            anyhow::bail!("Maestro command must contain exactly one action.");
-        }
-        let (name, value) = mapping.iter().next().unwrap();
-        (
-            name.as_str()
-                .ok_or_else(|| anyhow::anyhow!("Maestro command name must be a string."))?,
-            value,
-        )
-    };
-    match name {
-        "launchApp" => {
-            let bundle_id = maestro_bundle_id(value)?;
-            service_launch(server_url, udid, &bundle_id)?;
-            Ok(serde_json::json!({ "bundleId": bundle_id }))
-        }
-        "openLink" => {
-            let url = yaml_string_or_field(value, "link")
-                .or_else(|| yaml_string_or_field(value, "url"))
-                .ok_or_else(|| anyhow::anyhow!("openLink requires a URL."))?;
-            service_open_url(server_url, udid, &url)?;
-            Ok(serde_json::json!({ "url": url }))
-        }
-        "tapOn" => {
-            let body = maestro_tap_body(value)?;
-            service_tap_element(server_url, udid, body)?;
-            Ok(Value::Null)
-        }
-        "inputText" => {
-            let text = yaml_string_or_field(value, "text")
-                .ok_or_else(|| anyhow::anyhow!("inputText requires text."))?;
-            service_batch(
-                server_url,
-                udid,
-                vec![serde_json::json!({ "action": "type", "text": text })],
-                false,
-            )?;
-            Ok(Value::Null)
-        }
-        "eraseText" => {
-            let count = yaml_u64_or_field(value, "charactersToErase").unwrap_or(64);
-            let keys = vec![42u16; count as usize];
-            service_key_sequence(server_url, udid, &keys, 5)?;
-            Ok(serde_json::json!({ "charactersToErase": count }))
-        }
-        "pressKey" => {
-            let key = yaml_string_or_field(value, "key")
-                .ok_or_else(|| anyhow::anyhow!("pressKey requires a key."))?;
-            service_key(server_url, udid, parse_hid_key(&key)?, 0)?;
-            Ok(serde_json::json!({ "key": key }))
-        }
-        "assertVisible" => {
-            let selector = maestro_selector(value)?;
-            service_wait_for(server_url, udid, "assert", selector, 5_000)?;
-            Ok(Value::Null)
-        }
-        "assertNotVisible" => {
-            let selector = maestro_selector(value)?;
-            service_wait_for(server_url, udid, "assert-not", selector, 5_000)?;
-            Ok(Value::Null)
-        }
-        "scrollUntilVisible" => {
-            let selector_value = yaml_field(value, "element").unwrap_or(value);
-            let selector = maestro_selector(selector_value)?;
-            let direction =
-                yaml_string_or_field(value, "direction").unwrap_or_else(|| "down".to_owned());
-            service_post_ok(
-                server_url,
-                udid,
-                "scroll-until-visible",
-                &serde_json::json!({
-                    "selector": selector,
-                    "direction": direction,
-                    "timeoutMs": yaml_u64_or_field(value, "timeout").unwrap_or(10_000),
-                }),
-            )?;
-            Ok(Value::Null)
-        }
-        "swipe" => {
-            let direction =
-                yaml_string_or_field(value, "direction").unwrap_or_else(|| "up".to_owned());
-            let preset = match direction.to_ascii_lowercase().as_str() {
-                "up" => "scroll-up",
-                "down" => "scroll-down",
-                "left" => "scroll-left",
-                "right" => "scroll-right",
-                _ => anyhow::bail!("Unsupported Maestro swipe direction `{direction}`."),
-            };
-            service_batch(
-                server_url,
-                udid,
-                vec![serde_json::json!({ "action": "gesture", "preset": preset })],
-                false,
-            )?;
-            Ok(serde_json::json!({ "direction": direction }))
-        }
-        "takeScreenshot" => {
-            let name = yaml_string_or_field(value, "path")
-                .or_else(|| yaml_string_or_field(value, "name"))
-                .unwrap_or_else(|| "screenshot".to_owned());
-            let path = artifacts_dir.join(format!("{}.png", name.trim_end_matches(".png")));
-            let png = service_get_bytes(
-                server_url,
-                &format!(
-                    "/api/simulators/{}/screenshot.png",
-                    url_path_component(udid)
-                ),
-            )?;
-            fs::write(&path, png)?;
-            Ok(serde_json::json!({ "path": path }))
-        }
-        "waitForAnimationToEnd" | "waitForAnimationToEnd:" => {
-            sleep_ms(
-                yaml_u64_or_field(value, "timeout")
-                    .unwrap_or(1_000)
-                    .min(10_000),
-            );
-            Ok(Value::Null)
-        }
-        other => Err(anyhow::anyhow!(
-            "Unsupported Maestro command `{other}` in this compatibility runner."
-        )),
-    }
-}
-
-fn maestro_command_name(command: &YamlValue) -> String {
-    if let Some(name) = command.as_str() {
-        return name.to_owned();
-    }
-    command
-        .as_mapping()
-        .and_then(|mapping| mapping.keys().next())
-        .and_then(YamlValue::as_str)
-        .unwrap_or("unknown")
-        .to_owned()
-}
-
-fn maestro_bundle_id(value: &YamlValue) -> anyhow::Result<String> {
-    yaml_string_or_field(value, "appId")
-        .or_else(|| yaml_string_or_field(value, "bundleId"))
-        .ok_or_else(|| anyhow::anyhow!("launchApp requires `appId` or `bundleId`."))
-}
-
-fn maestro_tap_body(value: &YamlValue) -> anyhow::Result<Value> {
-    if let Some(point) = yaml_field(value, "point")
-        .and_then(YamlValue::as_str)
-        .map(str::to_owned)
-    {
-        let (x, y) = parse_maestro_point(&point)?;
-        return Ok(serde_json::json!({ "x": x, "y": y, "normalized": true }));
-    }
-    Ok(serde_json::json!({
-        "selector": maestro_selector(value)?,
-        "waitTimeoutMs": yaml_u64_or_field(value, "timeout").unwrap_or(5_000),
-    }))
-}
-
-fn maestro_selector(value: &YamlValue) -> anyhow::Result<Value> {
-    if let Some(text) = value.as_str() {
-        return Ok(serde_json::json!({ "text": text, "regex": true }));
-    }
-    let Some(mapping) = value.as_mapping() else {
-        anyhow::bail!("Selector must be a string or mapping.");
-    };
-    let text = yaml_string_field(mapping, "text");
-    let explicit_regex = yaml_bool_field(mapping, "regex");
-    let use_regex = explicit_regex.unwrap_or_else(|| text.is_some());
-    let id = yaml_string_field(mapping, "id").map(|id| {
-        if use_regex && explicit_regex != Some(true) {
-            anchored_regex_literal(&id)
-        } else {
-            id
-        }
-    });
-    Ok(serde_json::json!({
-        "text": text,
-        "id": id,
-        "label": yaml_string_field(mapping, "label"),
-        "value": yaml_string_field(mapping, "value"),
-        "elementType": yaml_string_field(mapping, "type"),
-        "index": yaml_u64_field(mapping, "index"),
-        "enabled": yaml_bool_field(mapping, "enabled"),
-        "checked": yaml_bool_field(mapping, "checked"),
-        "focused": yaml_bool_field(mapping, "focused"),
-        "selected": yaml_bool_field(mapping, "selected"),
-        "regex": use_regex,
-    }))
-}
-
-fn anchored_regex_literal(value: &str) -> String {
-    format!("^{}$", regex::escape(value))
-}
-
-fn service_wait_for(
-    server_url: &str,
-    udid: &str,
-    action: &str,
-    selector: Value,
-    timeout_ms: u64,
-) -> anyhow::Result<()> {
-    service_post_ok(
-        server_url,
-        udid,
-        action,
-        &serde_json::json!({ "selector": selector, "timeoutMs": timeout_ms }),
-    )
-}
-
-fn parse_maestro_point(point: &str) -> anyhow::Result<(f64, f64)> {
-    let (x, y) = point
-        .split_once(',')
-        .ok_or_else(|| anyhow::anyhow!("point must be `x,y`."))?;
-    let parse = |value: &str| -> anyhow::Result<f64> {
-        let value = value.trim();
-        if let Some(percent) = value.strip_suffix('%') {
-            Ok(percent.parse::<f64>()? / 100.0)
-        } else {
-            Ok(value.parse::<f64>()?)
-        }
-    };
-    Ok((parse(x)?, parse(y)?))
-}
-
-fn capture_maestro_failure_screenshot(
-    server_url: &str,
-    udid: &str,
-    artifacts_dir: &Path,
-    step: usize,
-) -> anyhow::Result<PathBuf> {
-    let path = artifacts_dir.join(format!("failure-step-{step}.png"));
-    let png = service_get_bytes(
-        server_url,
-        &format!(
-            "/api/simulators/{}/screenshot.png",
-            url_path_component(udid)
-        ),
-    )?;
-    fs::write(&path, png)?;
-    Ok(path)
-}
-
-fn yaml_field<'a>(value: &'a YamlValue, field: &str) -> Option<&'a YamlValue> {
-    value.as_mapping()?.get(YamlValue::String(field.to_owned()))
-}
-
-fn yaml_string_or_field(value: &YamlValue, field: &str) -> Option<String> {
-    value.as_str().map(str::to_owned).or_else(|| {
-        yaml_field(value, field)
-            .and_then(YamlValue::as_str)
-            .map(str::to_owned)
-    })
-}
-
-fn yaml_u64_or_field(value: &YamlValue, field: &str) -> Option<u64> {
-    value
-        .as_u64()
-        .or_else(|| yaml_field(value, field).and_then(YamlValue::as_u64))
-}
-
-fn yaml_string_field(mapping: &serde_yaml::Mapping, field: &str) -> Option<String> {
-    mapping
-        .get(YamlValue::String(field.to_owned()))
-        .and_then(YamlValue::as_str)
-        .map(str::to_owned)
-}
-
-fn yaml_u64_field(mapping: &serde_yaml::Mapping, field: &str) -> Option<u64> {
-    mapping
-        .get(YamlValue::String(field.to_owned()))
-        .and_then(YamlValue::as_u64)
-}
-
-fn yaml_bool_field(mapping: &serde_yaml::Mapping, field: &str) -> Option<bool> {
-    mapping
-        .get(YamlValue::String(field.to_owned()))
-        .and_then(YamlValue::as_bool)
-}
-
-fn run_batch(
-    bridge: &NativeBridge,
-    udid: &str,
-    steps: Vec<String>,
-    file: Option<PathBuf>,
-    use_stdin: bool,
-    continue_on_error: bool,
-) -> anyhow::Result<Value> {
-    let step_lines = read_batch_steps(steps, file, use_stdin)?;
-    let mut results = Vec::new();
-    let mut failures = Vec::new();
-    for (index, line) in step_lines.iter().enumerate() {
-        let result = run_batch_step(bridge, udid, line);
-        match result {
-            Ok(action) => {
-                results.push(serde_json::json!({ "index": index, "ok": true, "action": action }))
-            }
-            Err(error) => {
-                let message = error.to_string();
-                results.push(serde_json::json!({ "index": index, "ok": false, "error": message }));
-                failures.push(message);
-                if !continue_on_error {
-                    return Err(crate::error::AppError::bad_request(format!(
-                        "Batch step {} failed: {}",
-                        index + 1,
-                        failures.last().unwrap()
-                    ))
-                    .into());
-                }
-            }
-        }
-    }
-    Ok(serde_json::json!({
-        "ok": failures.is_empty(),
-        "steps": results,
-        "failureCount": failures.len()
-    }))
-}
-
-fn read_batch_steps(
-    steps: Vec<String>,
-    file: Option<PathBuf>,
-    use_stdin: bool,
-) -> anyhow::Result<Vec<String>> {
-    let source_count =
-        usize::from(!steps.is_empty()) + usize::from(file.is_some()) + usize::from(use_stdin);
-    if source_count != 1 {
-        return Err(crate::error::AppError::bad_request(
-            "Specify exactly one batch source: --step, --file, or --stdin.",
-        )
-        .into());
-    }
-    let raw = if use_stdin {
-        let mut buffer = String::new();
-        io::stdin().read_to_string(&mut buffer)?;
-        buffer
-    } else if let Some(file) = file {
-        fs::read_to_string(file)?
-    } else {
-        return Ok(steps);
-    };
-    Ok(raw
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(str::to_owned)
-        .collect())
-}
-
-fn batch_lines_to_json_steps(step_lines: &[String]) -> anyhow::Result<Vec<Value>> {
-    step_lines
-        .iter()
-        .map(|line| batch_line_to_json_step(line))
-        .collect()
-}
-
-fn batch_line_to_json_step(line: &str) -> anyhow::Result<Value> {
-    let tokens = tokenize_step(line)?;
-    let Some(command) = tokens.first().map(String::as_str) else {
-        return Err(crate::error::AppError::bad_request("Empty batch step.").into());
-    };
-    let args = parse_step_options(&tokens[1..]);
-    let value = match command {
-        "sleep" => serde_json::json!({
-            "action": "sleep",
-            "ms": parse_batch_sleep_duration_ms(&args, tokens.get(1).map(String::as_str))?,
-        }),
-        "tap" => serde_json::json!({
-            "action": "tap",
-            "x": args.value("x").and_then(|value| value.parse::<f64>().ok()),
-            "y": args.value("y").and_then(|value| value.parse::<f64>().ok()),
-            "normalized": args.flag("normalized"),
-            "selector": batch_selector_json(&args),
-            "durationMs": args.value("duration-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(60),
-            "waitTimeoutMs": args.value("wait-timeout-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(0),
-            "pollMs": args.value("poll-interval-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(100),
-        }),
-        "wait-for" | "waitFor" => serde_json::json!({
-            "action": "waitFor",
-            "selector": batch_selector_json(&args),
-            "source": args.value("source"),
-            "maxDepth": args.value("max-depth").and_then(|value| value.parse::<usize>().ok()),
-            "includeHidden": args.flag("include-hidden"),
-            "timeoutMs": args.value("timeout-ms").or_else(|| args.value("wait-timeout-ms")).and_then(|value| value.parse::<u64>().ok()).unwrap_or(5_000),
-            "pollMs": args.value("poll-interval-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(100),
-        }),
-        "assert" => serde_json::json!({
-            "action": "assert",
-            "selector": batch_selector_json(&args),
-            "source": args.value("source"),
-            "maxDepth": args.value("max-depth").and_then(|value| value.parse::<usize>().ok()),
-            "includeHidden": args.flag("include-hidden"),
-            "timeoutMs": args.value("timeout-ms").or_else(|| args.value("wait-timeout-ms")).and_then(|value| value.parse::<u64>().ok()).unwrap_or(5_000),
-            "pollMs": args.value("poll-interval-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(100),
-        }),
-        "assert-not" | "assertNot" | "wait-for-not" | "waitForNot" => serde_json::json!({
-            "action": "assertNot",
-            "selector": batch_selector_json(&args),
-            "source": args.value("source"),
-            "maxDepth": args.value("max-depth").and_then(|value| value.parse::<usize>().ok()),
-            "includeHidden": args.flag("include-hidden"),
-            "timeoutMs": args.value("timeout-ms").or_else(|| args.value("wait-timeout-ms")).and_then(|value| value.parse::<u64>().ok()).unwrap_or(5_000),
-            "pollMs": args.value("poll-interval-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(100),
-        }),
-        "scroll-until-visible" | "scrollUntilVisible" => serde_json::json!({
-            "action": "scrollUntilVisible",
-            "selector": batch_selector_json(&args),
-            "source": args.value("source"),
-            "maxDepth": args.value("max-depth").and_then(|value| value.parse::<usize>().ok()),
-            "includeHidden": args.flag("include-hidden"),
-            "timeoutMs": args.value("timeout-ms").or_else(|| args.value("wait-timeout-ms")).and_then(|value| value.parse::<u64>().ok()).unwrap_or(10_000),
-            "pollMs": args.value("poll-interval-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(100),
-            "direction": args.value("direction").unwrap_or("down"),
-        }),
-        "key" => serde_json::json!({
-            "action": "key",
-            "keyCode": parse_hid_key(tokens.get(1).map(String::as_str).unwrap_or(""))?,
-            "modifiers": args.value("modifiers").and_then(|value| value.parse::<u32>().ok()).unwrap_or(0),
-        }),
-        "key-sequence" => serde_json::json!({
-            "action": "keySequence",
-            "keyCodes": parse_key_list(args.value("keycodes").or_else(|| args.value("keys")).unwrap_or(""))?,
-            "delayMs": args.value("delay-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(0),
-        }),
-        "key-combo" => serde_json::json!({
-            "action": "key",
-            "keyCode": parse_hid_key(args.value("key").unwrap_or(""))?,
-            "modifiers": parse_modifier_mask(args.value("modifiers").unwrap_or(""))?,
-        }),
-        "touch" => {
-            let x = args
-                .value("x")
-                .or_else(|| tokens.get(1).map(String::as_str))
-                .and_then(|value| value.parse::<f64>().ok());
-            let y = args
-                .value("y")
-                .or_else(|| tokens.get(2).map(String::as_str))
-                .and_then(|value| value.parse::<f64>().ok());
-            serde_json::json!({
-                "action": "touch",
-                "x": x.unwrap_or(0.0),
-                "y": y.unwrap_or(0.0),
-                "phase": args.value("phase").unwrap_or("began"),
-                "down": args.flag("down"),
-                "up": args.flag("up"),
-                "delayMs": args.value("delay-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(100),
-            })
-        }
-        "swipe" => {
-            let value = |name: &str, index: usize| {
-                args.value(name)
-                    .or_else(|| tokens.get(index).map(String::as_str))
-                    .and_then(|value| value.parse::<f64>().ok())
-            };
-            serde_json::json!({
-                "action": "swipe",
-                "startX": value("start-x", 1).unwrap_or(0.5),
-                "startY": value("start-y", 2).unwrap_or(0.75),
-                "endX": value("end-x", 3).unwrap_or(0.5),
-                "endY": value("end-y", 4).unwrap_or(0.25),
-                "durationMs": args.value("duration-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(350),
-                "steps": args.value("steps").and_then(|value| value.parse::<u32>().ok()).unwrap_or(12),
-            })
-        }
-        "gesture" => serde_json::json!({
-            "action": "gesture",
-            "preset": tokens.get(1).map(String::as_str).unwrap_or("scroll-down"),
-            "durationMs": args.value("duration-ms").and_then(|value| value.parse::<u64>().ok()),
-            "delta": args.value("delta").and_then(|value| value.parse::<f64>().ok()),
-            "steps": args.value("steps").and_then(|value| value.parse::<u32>().ok()).unwrap_or(12),
-        }),
-        "type" => serde_json::json!({
-            "action": "type",
-            "text": tokens.get(1).map(String::as_str).unwrap_or(""),
-            "delayMs": args.value("delay-ms").and_then(|value| value.parse::<u64>().ok()).unwrap_or(12),
-        }),
-        "button" => serde_json::json!({
-            "action": "button",
-            "button": tokens.get(1).map(String::as_str).unwrap_or(""),
-            "durationMs": args.value("duration-ms").and_then(|value| value.parse::<u32>().ok()).unwrap_or(0),
-        }),
-        "crown" => serde_json::json!({
-            "action": "crown",
-            "delta": args.value("delta").and_then(|value| value.parse::<f64>().ok()).unwrap_or(50.0),
-        }),
-        "home" => serde_json::json!({ "action": "home" }),
-        "dismiss-keyboard" => serde_json::json!({ "action": "dismissKeyboard" }),
-        "app-switcher" => serde_json::json!({ "action": "appSwitcher" }),
-        "rotate-left" => serde_json::json!({ "action": "rotateLeft" }),
-        "rotate-right" => serde_json::json!({ "action": "rotateRight" }),
-        "toggle-appearance" => serde_json::json!({ "action": "toggleAppearance" }),
-        "launch" => serde_json::json!({
-            "action": "launch",
-            "bundleId": tokens.get(1).map(String::as_str).unwrap_or(""),
-        }),
-        "open-url" => serde_json::json!({
-            "action": "openUrl",
-            "url": tokens.get(1).map(String::as_str).unwrap_or(""),
-        }),
-        other => {
-            return Err(crate::error::AppError::bad_request(format!(
-                "Unsupported daemon batch step `{other}`."
-            ))
-            .into())
-        }
-    };
-    Ok(value)
-}
-
-fn run_batch_step(
-    bridge: &NativeBridge,
-    udid: &str,
-    line: &str,
-) -> Result<&'static str, crate::error::AppError> {
-    let tokens = tokenize_step(line)?;
-    let Some(command) = tokens.first().map(String::as_str) else {
-        return Err(crate::error::AppError::bad_request("Empty batch step."));
-    };
-    match command {
-        "sleep" => {
-            let args = parse_step_options(&tokens[1..]);
-            let duration_ms = parse_batch_sleep_duration_ms(
-                &args,
-                tokens
-                    .iter()
-                    .skip(1)
-                    .find(|token| !token.starts_with('-'))
-                    .map(String::as_str),
-            )?;
-            sleep_ms(duration_ms);
-            Ok("sleep")
-        }
-        "tap" => {
-            let args = parse_step_options(&tokens[1..]);
-            let x = args.value("x").and_then(|value| value.parse::<f64>().ok());
-            let y = args.value("y").and_then(|value| value.parse::<f64>().ok());
-            let normalized = args.flag("normalized");
-            let duration_ms = args
-                .value("duration-ms")
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(60);
-            let target = resolve_tap_target(
-                bridge,
-                udid,
-                TapTargetRequest {
-                    x,
-                    y,
-                    normalized,
-                    selector: batch_selector_from_args(&args),
-                    wait_timeout_ms: args
-                        .value("wait-timeout-ms")
-                        .and_then(|value| value.parse().ok())
-                        .unwrap_or(0),
-                    poll_interval_ms: args
-                        .value("poll-interval-ms")
-                        .and_then(|value| value.parse().ok())
-                        .unwrap_or(100),
-                },
-            )?;
-            if bridge_simulator_is_tvos(bridge, udid) {
-                press_tvos_remote_key(bridge, udid, HID_KEY_ENTER)?;
-            } else if let Some(input) = target.input.as_ref() {
-                perform_tap_with_input(input, target.x, target.y, duration_ms)?;
-            } else {
-                perform_tap(bridge, udid, target.x, target.y, duration_ms)?;
-            }
-            Ok("tap")
-        }
-        "wait-for" | "waitFor" => {
-            let args = parse_step_options(&tokens[1..]);
-            wait_for_batch_selector(bridge, udid, &args)?;
-            Ok("wait-for")
-        }
-        "assert" => {
-            let args = parse_step_options(&tokens[1..]);
-            wait_for_batch_selector(bridge, udid, &args)?;
-            Ok("assert")
-        }
-        "swipe" => {
-            let args = parse_step_options(&tokens[1..]);
-            let start_x = required_f64(&args, "start-x")?;
-            let start_y = required_f64(&args, "start-y")?;
-            let end_x = required_f64(&args, "end-x")?;
-            let end_y = required_f64(&args, "end-y")?;
-            let normalized = args.flag("normalized");
-            let (start_x, start_y) =
-                resolve_touch_point(bridge, udid, start_x, start_y, normalized)?;
-            let (end_x, end_y) = resolve_touch_point(bridge, udid, end_x, end_y, normalized)?;
-            perform_swipe(
-                bridge,
-                udid,
-                GestureCoordinates {
-                    start_x,
-                    start_y,
-                    end_x,
-                    end_y,
-                    duration_ms: args
-                        .value("duration-ms")
-                        .and_then(|value| value.parse().ok())
-                        .unwrap_or(350),
-                },
-                args.value("steps")
-                    .and_then(|value| value.parse().ok())
-                    .unwrap_or(12),
-            )?;
-            Ok("swipe")
-        }
-        "gesture" => {
-            let preset = tokens
-                .get(1)
-                .ok_or_else(|| crate::error::AppError::bad_request("gesture requires a preset."))?;
-            let args = parse_step_options(&tokens[2..]);
-            let gesture = gesture_coordinates(
-                bridge,
-                udid,
-                preset,
-                args.value("screen-width")
-                    .and_then(|value| value.parse().ok()),
-                args.value("screen-height")
-                    .and_then(|value| value.parse().ok()),
-                args.flag("normalized"),
-                args.value("delta").and_then(|value| value.parse().ok()),
-            )?;
-            perform_swipe(
-                bridge,
-                udid,
-                GestureCoordinates {
-                    duration_ms: args
-                        .value("duration-ms")
-                        .and_then(|value| value.parse().ok())
-                        .unwrap_or(gesture.duration_ms),
-                    ..gesture
-                },
-                12,
-            )?;
-            Ok("gesture")
-        }
-        "pinch" => {
-            let args = parse_step_options(&tokens[1..]);
-            let frames = pinch_frames(
-                bridge,
-                udid,
-                args.value("center-x").and_then(|value| value.parse().ok()),
-                args.value("center-y").and_then(|value| value.parse().ok()),
-                args.value("start-distance")
-                    .and_then(|value| value.parse().ok())
-                    .unwrap_or(160.0),
-                args.value("end-distance")
-                    .and_then(|value| value.parse().ok())
-                    .unwrap_or(80.0),
-                args.value("angle-degrees")
-                    .and_then(|value| value.parse().ok())
-                    .unwrap_or(0.0),
-                args.flag("normalized"),
-                args.value("steps")
-                    .and_then(|value| value.parse().ok())
-                    .unwrap_or(12),
-            )?;
-            run_multitouch_frames(
-                bridge,
-                udid,
-                frames,
-                args.value("duration-ms")
-                    .and_then(|value| value.parse().ok())
-                    .unwrap_or(450),
-            )?;
-            Ok("pinch")
-        }
-        "rotate-gesture" => {
-            let args = parse_step_options(&tokens[1..]);
-            let frames = rotate_gesture_frames(
-                bridge,
-                udid,
-                RotateGestureRequest {
-                    center_x: args.value("center-x").and_then(|value| value.parse().ok()),
-                    center_y: args.value("center-y").and_then(|value| value.parse().ok()),
-                    radius: args
-                        .value("radius")
-                        .and_then(|value| value.parse().ok())
-                        .unwrap_or(100.0),
-                    degrees: args
-                        .value("degrees")
-                        .and_then(|value| value.parse().ok())
-                        .unwrap_or(90.0),
-                    normalized: args.flag("normalized"),
-                    steps: args
-                        .value("steps")
-                        .and_then(|value| value.parse().ok())
-                        .unwrap_or(12),
-                },
-            )?;
-            run_multitouch_frames(
-                bridge,
-                udid,
-                frames,
-                args.value("duration-ms")
-                    .and_then(|value| value.parse().ok())
-                    .unwrap_or(500),
-            )?;
-            Ok("rotate-gesture")
-        }
-        "touch" => {
-            let args = parse_step_options(&tokens[1..]);
-            let x = required_f64(&args, "x")?;
-            let y = required_f64(&args, "y")?;
-            let normalized = args.flag("normalized");
-            if bridge_simulator_is_tvos(bridge, udid) {
-                perform_tvos_touch_command(
-                    bridge,
-                    udid,
-                    args.value("phase").unwrap_or("began"),
-                    args.flag("down"),
-                    args.flag("up"),
-                )?;
-            } else {
-                let (x, y) = resolve_touch_point(bridge, udid, x, y, normalized)?;
-                if args.flag("down") || args.flag("up") {
-                    let input = bridge.create_input_session(udid)?;
-                    if args.flag("down") {
-                        input.send_touch(x, y, "began")?;
-                    }
-                    if args.flag("down") && args.flag("up") {
-                        sleep_ms(
-                            args.value("delay-ms")
-                                .and_then(|value| value.parse().ok())
-                                .unwrap_or(100),
-                        );
-                    }
-                    if args.flag("up") {
-                        input.send_touch(x, y, "ended")?;
-                    }
-                } else {
-                    bridge.send_touch(udid, x, y, args.value("phase").unwrap_or("began"))?;
-                }
-            }
-            Ok("touch")
-        }
-        "type" => {
-            let text = tokens.get(1).cloned().unwrap_or_default();
-            type_text(bridge, udid, &text, 12)?;
-            Ok("type")
-        }
-        "button" => {
-            let button = tokens
-                .get(1)
-                .ok_or_else(|| crate::error::AppError::bad_request("button requires a name."))?;
-            bridge.press_button(udid, button, 0)?;
-            Ok("button")
-        }
-        "crown" => {
-            let delta = tokens
-                .get(1)
-                .and_then(|value| value.parse::<f64>().ok())
-                .unwrap_or(50.0);
-            bridge.rotate_crown(udid, delta)?;
-            Ok("crown")
-        }
-        "key" => {
-            let key = tokens.get(1).ok_or_else(|| {
-                crate::error::AppError::bad_request("key requires a keycode or key name.")
-            })?;
-            bridge.send_key(udid, parse_hid_key(key)?, 0)?;
-            Ok("key")
-        }
-        "key-sequence" => {
-            let args = parse_step_options(&tokens[1..]);
-            let keys = parse_key_list(
-                args.value("keycodes")
-                    .or_else(|| args.value("keys"))
-                    .ok_or_else(|| {
-                        crate::error::AppError::bad_request("key-sequence requires --keycodes.")
-                    })?,
-            )?;
-            let input = bridge.create_input_session(udid)?;
-            for (index, key) in keys.iter().enumerate() {
-                input.send_key(*key, 0)?;
-                if index + 1 < keys.len() {
-                    sleep_ms(
-                        args.value("delay-ms")
-                            .and_then(|value| value.parse().ok())
-                            .unwrap_or(100),
-                    );
-                }
-            }
-            Ok("key-sequence")
-        }
-        "key-combo" => {
-            let args = parse_step_options(&tokens[1..]);
-            let modifiers = args.value("modifiers").ok_or_else(|| {
-                crate::error::AppError::bad_request("key-combo requires --modifiers.")
-            })?;
-            let key = args
-                .value("key")
-                .ok_or_else(|| crate::error::AppError::bad_request("key-combo requires --key."))?;
-            bridge.send_key(udid, parse_hid_key(key)?, parse_modifier_mask(modifiers)?)?;
-            Ok("key-combo")
-        }
-        _ => Err(crate::error::AppError::bad_request(format!(
-            "Unsupported batch step `{command}`."
-        ))),
-    }
-}
-
-#[derive(Default)]
-struct StepOptions {
-    values: Vec<(String, String)>,
-    flags: Vec<String>,
-}
-
-impl StepOptions {
-    fn value(&self, key: &str) -> Option<&str> {
-        self.values
-            .iter()
-            .rev()
-            .find(|(candidate, _)| candidate == key)
-            .map(|(_, value)| value.as_str())
-    }
-
-    fn flag(&self, key: &str) -> bool {
-        self.flags.iter().any(|candidate| candidate == key)
-    }
-}
-
-fn parse_step_options(tokens: &[String]) -> StepOptions {
-    let mut options = StepOptions::default();
-    let mut index = 0;
-    while index < tokens.len() {
-        let token = &tokens[index];
-        if let Some(stripped) = token.strip_prefix("--") {
-            if let Some((key, value)) = stripped.split_once('=') {
-                options.values.push((key.to_owned(), value.to_owned()));
-            } else if index + 1 < tokens.len() && !tokens[index + 1].starts_with("--") {
-                options
-                    .values
-                    .push((stripped.to_owned(), tokens[index + 1].clone()));
-                index += 1;
-            } else {
-                options.flags.push(stripped.to_owned());
-            }
-        } else if let Some(stripped) = token.strip_prefix('-') {
-            if index + 1 < tokens.len() && !tokens[index + 1].starts_with('-') {
-                options
-                    .values
-                    .push((stripped.to_owned(), tokens[index + 1].clone()));
-                index += 1;
-            }
-        }
-        index += 1;
-    }
-    options
-}
-
-fn required_f64(args: &StepOptions, key: &str) -> Result<f64, crate::error::AppError> {
-    args.value(key)
-        .ok_or_else(|| crate::error::AppError::bad_request(format!("Missing --{key}.")))?
-        .parse::<f64>()
-        .map_err(|_| crate::error::AppError::bad_request(format!("--{key} must be numeric.")))
-}
-
-fn batch_selector_json(args: &StepOptions) -> Value {
-    serde_json::json!({
-        "text": args.value("text"),
-        "id": args.value("id"),
-        "label": args.value("label"),
-        "value": args.value("value"),
-        "elementType": args.value("element-type"),
-        "index": args.value("index").and_then(|value| value.parse::<usize>().ok()),
-        "enabled": args.value("enabled").and_then(parse_bool_value),
-        "checked": args.value("checked").and_then(parse_bool_value),
-        "focused": args.value("focused").and_then(parse_bool_value),
-        "selected": args.value("selected").and_then(parse_bool_value),
-        "regex": args.flag("regex"),
-    })
-}
-
-fn batch_selector_from_args(args: &StepOptions) -> ElementSelector {
-    ElementSelector {
-        id: args.value("id").map(str::to_owned),
-        label: args.value("label").map(str::to_owned),
-        value: args.value("value").map(str::to_owned),
-        element_type: args.value("element-type").map(str::to_owned),
-    }
-}
-
-fn parse_bool_value(value: &str) -> Option<bool> {
-    match value.to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" | "on" => Some(true),
-        "false" | "0" | "no" | "off" => Some(false),
-        _ => None,
-    }
-}
-
-fn wait_for_batch_selector(
-    bridge: &NativeBridge,
-    udid: &str,
-    args: &StepOptions,
-) -> Result<(), crate::error::AppError> {
-    let selector = batch_selector_from_args(args);
-    if selector.id.is_none()
-        && selector.label.is_none()
-        && selector.value.is_none()
-        && selector.element_type.is_none()
-    {
-        return Err(crate::error::AppError::bad_request(
-            "wait-for/assert requires a selector flag.",
-        ));
-    }
-
-    let timeout_ms = args
-        .value("timeout-ms")
-        .or_else(|| args.value("wait-timeout-ms"))
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(5_000);
-    let poll_interval_ms = args
-        .value("poll-interval-ms")
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(100)
-        .max(10);
-    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
-
-    loop {
-        let snapshot = bridge.accessibility_snapshot(udid, None)?;
-        if snapshot_contains_element(&snapshot, &selector) {
-            return Ok(());
-        }
-        if timeout_ms == 0 || std::time::Instant::now() >= deadline {
-            return Err(crate::error::AppError::not_found(
-                "No accessibility element matched the selector.",
-            ));
-        }
-        sleep_ms(poll_interval_ms);
-    }
-}
-
-fn snapshot_contains_element(snapshot: &Value, selector: &ElementSelector) -> bool {
-    snapshot
-        .get("roots")
-        .and_then(Value::as_array)
-        .map(|roots| {
-            roots
-                .iter()
-                .any(|root| node_contains_matching_element(root, selector))
-        })
-        .unwrap_or(false)
-}
-
-fn node_contains_matching_element(node: &Value, selector: &ElementSelector) -> bool {
-    element_matches(node, selector)
-        || node
-            .get("children")
-            .and_then(Value::as_array)
-            .map(|children| {
-                children
-                    .iter()
-                    .any(|child| node_contains_matching_element(child, selector))
-            })
-            .unwrap_or(false)
-}
-
-fn parse_batch_sleep_duration_ms(
-    args: &StepOptions,
-    positional: Option<&str>,
-) -> Result<u64, crate::error::AppError> {
-    if let Some(value) = args
-        .value("ms")
-        .or_else(|| args.value("milliseconds"))
-        .or_else(|| args.value("duration-ms"))
-    {
-        return parse_duration_ms_value(value, "sleep --ms");
-    }
-
-    if let Some(value) = args.value("seconds").or_else(|| args.value("s")) {
-        return parse_duration_seconds_value(value, "sleep --seconds");
-    }
-
-    let Some(value) = positional else {
-        return Err(crate::error::AppError::bad_request(
-            "sleep requires a duration, for example `sleep 500`, `sleep 500ms`, or `sleep 0.5s`.",
-        ));
-    };
-
-    parse_duration_literal_ms(value)
-}
-
-fn parse_duration_literal_ms(value: &str) -> Result<u64, crate::error::AppError> {
-    let value = value.trim();
-    if let Some(ms) = value.strip_suffix("ms") {
-        return parse_duration_ms_value(ms, "sleep duration");
-    }
-    if let Some(seconds) = value.strip_suffix('s') {
-        return parse_duration_seconds_value(seconds, "sleep duration");
-    }
-    parse_duration_ms_value(value, "sleep duration")
-}
-
-fn parse_duration_ms_value(value: &str, context: &str) -> Result<u64, crate::error::AppError> {
-    let duration = value
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| crate::error::AppError::bad_request(format!("{context} must be numeric.")))?;
-    finite_non_negative_duration_ms(duration, 1.0, context)
-}
-
-fn parse_duration_seconds_value(value: &str, context: &str) -> Result<u64, crate::error::AppError> {
-    let duration = value
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| crate::error::AppError::bad_request(format!("{context} must be numeric.")))?;
-    finite_non_negative_duration_ms(duration, 1000.0, context)
-}
-
-fn finite_non_negative_duration_ms(
-    value: f64,
-    multiplier: f64,
-    context: &str,
-) -> Result<u64, crate::error::AppError> {
-    if !value.is_finite() || value < 0.0 {
-        return Err(crate::error::AppError::bad_request(format!(
-            "{context} must be finite and non-negative."
-        )));
-    }
-    Ok((value * multiplier).round() as u64)
-}
-
-fn tokenize_step(line: &str) -> Result<Vec<String>, crate::error::AppError> {
-    enum State {
-        Normal,
-        Single,
-        Double,
-    }
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut state = State::Normal;
-    let mut escaping = false;
-    let mut saw_boundary = false;
-    for character in line.chars() {
-        match state {
-            State::Normal => {
-                if escaping {
-                    current.push(character);
-                    escaping = false;
-                    saw_boundary = true;
-                } else if character == '\\' {
-                    escaping = true;
-                } else if character == '\'' {
-                    state = State::Single;
-                    saw_boundary = true;
-                } else if character == '"' {
-                    state = State::Double;
-                    saw_boundary = true;
-                } else if character.is_whitespace() {
-                    if !current.is_empty() || saw_boundary {
-                        tokens.push(std::mem::take(&mut current));
-                        saw_boundary = false;
-                    }
-                } else {
-                    current.push(character);
-                    saw_boundary = true;
-                }
-            }
-            State::Single => {
-                if character == '\'' {
-                    state = State::Normal;
-                } else {
-                    current.push(character);
-                }
-            }
-            State::Double => {
-                if escaping {
-                    current.push(character);
-                    escaping = false;
-                } else if character == '\\' {
-                    escaping = true;
-                } else if character == '"' {
-                    state = State::Normal;
-                } else {
-                    current.push(character);
-                }
-            }
-        }
-    }
-    if escaping {
-        return Err(crate::error::AppError::bad_request(
-            "Dangling escape in batch step.",
-        ));
-    }
-    if !matches!(state, State::Normal) {
-        return Err(crate::error::AppError::bad_request(
-            "Unterminated quote in batch step.",
-        ));
-    }
-    if !current.is_empty() || saw_boundary {
-        tokens.push(current);
-    }
-    Ok(tokens)
-}
+include!("main/batch.rs");
 
 fn println_json(value: &Value) -> anyhow::Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
@@ -7660,6 +5274,7 @@ async fn serve(
         performance: PerformanceRegistry::default(),
         stream_clients: Default::default(),
         simulator_inventory: Default::default(),
+        accessibility_cache: Default::default(),
         android: Default::default(),
     };
 
@@ -8355,10 +5970,31 @@ mod tests {
         let pruned = interactive_accessibility_snapshot(&snapshot);
         let output = render_agent_accessibility_tree(&pruned);
 
-        assert!(output.contains("- Window"));
-        assert!(output.contains("- View: Static wrapper"));
-        assert!(output.contains("- Button: Continue"));
+        assert!(output.contains("- @e1 Window"));
+        assert!(output.contains("- @e2 View: Static wrapper"));
+        assert!(output.contains("- @e3 Button: Continue"));
         assert!(!output.contains("Read only"));
+    }
+
+    #[test]
+    fn describe_agent_format_emits_stable_element_refs() {
+        let snapshot = serde_json::json!({
+            "source": "native-ax",
+            "roots": [{
+                "type": "Application",
+                "AXLabel": "Fixture",
+                "children": [{
+                    "type": "Button",
+                    "AXLabel": "Continue",
+                    "children": []
+                }]
+            }]
+        });
+
+        let output = render_agent_accessibility_tree(&snapshot);
+
+        assert!(output.contains("- @e1 Application: Fixture"));
+        assert!(output.contains("  - @e2 Button: Continue"));
     }
 
     #[test]
@@ -8381,6 +6017,87 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn tap_agent_ref_maps_to_element_index() {
+        let parsed = Cli::try_parse_from(["simdeck", "tap", "@e3"]).unwrap();
+        let Command::Tap { args, .. } = parsed.command else {
+            panic!("expected tap command");
+        };
+        let target = parse_tap_command_args(args, None, None, None, None).unwrap();
+
+        assert_eq!(
+            target.selector,
+            ElementSelector {
+                index: Some(2),
+                ..Default::default()
+            }
+        );
+        assert_eq!(target.udid, None);
+    }
+
+    #[test]
+    fn tap_accepts_post_action_expectation_flags() {
+        let parsed = Cli::try_parse_from([
+            "simdeck",
+            "tap",
+            "--id",
+            "com.apple.settings.screenTime",
+            "--expect-id",
+            "BackButton",
+            "--expect-timeout-ms",
+            "2500",
+        ])
+        .unwrap();
+        let Command::Tap {
+            expect_id,
+            expect_timeout_ms,
+            ..
+        } = parsed.command
+        else {
+            panic!("expected tap command");
+        };
+
+        assert_eq!(expect_id.as_deref(), Some("BackButton"));
+        assert_eq!(expect_timeout_ms, 2500);
+    }
+
+    #[test]
+    fn agent_command_aliases_parse_like_primary_commands() {
+        let parsed = Cli::try_parse_from(["simdeck", "snapshot", "sim-1"]).unwrap();
+        assert!(matches!(parsed.command, Command::DescribeUi { .. }));
+
+        let parsed = Cli::try_parse_from(["simdeck", "press", "Continue"]).unwrap();
+        assert!(matches!(parsed.command, Command::Tap { .. }));
+
+        let parsed = Cli::try_parse_from(["simdeck", "wait", "--label", "Continue"]).unwrap();
+        assert!(matches!(parsed.command, Command::WaitFor { .. }));
+    }
+
+    #[test]
+    fn back_command_accepts_default_device_and_timeout() {
+        let parsed = Cli::try_parse_from([
+            "simdeck",
+            "back",
+            "--timeout-ms",
+            "3000",
+            "--no-fallback-swipe",
+        ])
+        .unwrap();
+        let Command::Back {
+            udid,
+            timeout_ms,
+            fallback_swipe,
+            ..
+        } = parsed.command
+        else {
+            panic!("expected back command");
+        };
+
+        assert_eq!(udid, None);
+        assert_eq!(timeout_ms, 3000);
+        assert!(!fallback_swipe);
     }
 
     #[test]
@@ -8568,6 +6285,24 @@ mod tests {
         assert_eq!(step["pollMs"], 25);
         assert_eq!(step["source"], "native-ax");
         assert_eq!(step["maxDepth"], 4);
+    }
+
+    #[test]
+    fn batch_tap_maps_post_action_expectation() {
+        let step = batch_line_to_json_step(
+            "tap --id com.apple.settings.screenTime --expect-id BackButton --expect-timeout-ms 2500",
+        )
+        .unwrap();
+
+        assert_eq!(step["action"], "tap");
+        assert_eq!(step["selector"]["id"], "com.apple.settings.screenTime");
+        assert_eq!(step["expect"]["selector"]["id"], "BackButton");
+        assert_eq!(step["expect"]["timeoutMs"], 2500);
+
+        let back = batch_line_to_json_step("back --timeout-ms 3000 --no-fallback-swipe").unwrap();
+        assert_eq!(back["action"], "back");
+        assert_eq!(back["timeoutMs"], 3000);
+        assert_eq!(back["fallbackSwipe"], false);
     }
 
     #[test]

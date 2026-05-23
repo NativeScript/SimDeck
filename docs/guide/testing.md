@@ -37,7 +37,7 @@ try {
 | `openUrl()`                                     | Universal links and deep links |
 | `tap()`, `tapElement()`, `swipe()`, `gesture()` | UI input                       |
 | `typeText()`, `key()`, `keySequence()`          | Text and keyboard input        |
-| `button()`, `home()`, `appSwitcher()`           | System controls                |
+| `button()`, `home()`, `back()`, `appSwitcher()` | System controls                |
 | `tree()`, `query()`, `waitFor()`, `assert()`    | UI state checks                |
 | `waitForNot()`, `assertNot()`                   | Negative UI state checks       |
 | `scrollUntilVisible()`                          | Scroll until a selector exists |
@@ -89,6 +89,21 @@ npm run test:integration:android
 ```
 
 Android tests require the Android SDK and a running or bootable AVD.
+
+## Agent Control Benchmarks
+
+Compare SimDeck against agent-device and Argent on a booted iOS simulator:
+
+```sh
+npm run bench:agent-control -- --reps 3
+```
+
+Pass `--udid <udid>` to pin a simulator and `--out-dir <path>` to choose where
+the JSON and Markdown reports are written. The benchmark measures cold tool
+startup plus hot command latency for common agent actions: listing devices,
+launching Settings, opening a URL, describing the AX tree, waiting, tapping,
+back navigation, swiping, screenshots, home, and a short tap/back batch flow.
+Setup/reset work is excluded from action timings.
 
 ## Helpful Environment Variables
 

@@ -27,7 +27,7 @@ test("recognizes simctl openurl timeouts as CoreSimulator activation stalls", ()
 
 test("does not recycle for ordinary UI lookup misses", () => {
   const verifyError = new Error(
-    'POST /api/simulators/5FAFF5E2/wait-for returned 404: {"error":"No accessibility element matched."}',
+    'POST /api/simulators/5FAFF5E2/action returned 404: {"error":"No accessibility element matched."}',
   );
 
   assert.equal(isCoreSimulatorActivationTimeout(verifyError), false);

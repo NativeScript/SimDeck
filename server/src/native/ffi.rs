@@ -113,6 +113,7 @@ unsafe extern "C" {
         x: f64,
         y: f64,
         max_depth: usize,
+        interactive_only: bool,
         error_message: *mut *mut c_char,
     ) -> *mut c_char;
     pub fn xcw_native_send_touch(

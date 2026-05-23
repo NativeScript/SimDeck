@@ -43,8 +43,12 @@ simdeck install /path/to/App.ipa
 simdeck launch com.example.App
 simdeck open-url https://example.com
 simdeck tap --label "Continue" --wait-timeout-ms 5000
+simdeck tap --id com.apple.settings.screenTime --expect-id BackButton
 simdeck tap "Continue"
+simdeck back
 simdeck describe --format agent --max-depth 3 --interactive
+simdeck press @e3
+simdeck snapshot --format agent --max-depth 3 -i
 simdeck screenshot --output screen.png
 simdeck screenshot --with-bezel --output screen-bezel.png
 simdeck record --seconds 5 --output screen-recording.mp4
@@ -54,6 +58,10 @@ simdeck sample --seconds 3
 ```
 
 The explicit form still works, for example `simdeck launch <udid> com.example.App`.
+`snapshot`, `press`, and `wait` are aliases for `describe`, `tap`, and
+`wait-for`. Agent snapshots include refs like `@e3` that can be reused by
+`tap`/`press`. Use `tap --expect-*` to fold a post-tap wait into the action,
+and `back` for app-owned back navigation.
 
 Most successful commands print JSON so they can be piped into tools such as `jq`.
 

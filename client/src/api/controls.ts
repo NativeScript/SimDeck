@@ -39,6 +39,19 @@ async function postSimulatorAction(
   action: string,
   payload?: LaunchPayload | OpenUrlPayload,
 ): Promise<SimulatorMetadata | null> {
+  if (action === "launch" || action === "open-url") {
+    const response = await apiRequest<{
+      ok: boolean;
+      simulator?: SimulatorMetadata | null;
+    }>(`/api/simulators/${encodeURIComponent(udid)}/action`, {
+      method: "POST",
+      body: JSON.stringify({
+        action: action === "open-url" ? "openUrl" : "launch",
+        ...payload,
+      }),
+    });
+    return response.simulator ?? null;
+  }
   const response = await apiRequest<SimulatorResponse | { ok: boolean }>(
     `/api/simulators/${udid}/${action}`,
     {
@@ -64,6 +77,16 @@ export function openSimulatorUrl(udid: string, payload: OpenUrlPayload) {
 
 export function launchSimulatorBundle(udid: string, payload: LaunchPayload) {
   return postSimulatorAction(udid, "launch", payload);
+}
+
+export function toggleSimulatorAppearance(udid: string) {
+  return apiRequest<{ ok: boolean }>(
+    `/api/simulators/${encodeURIComponent(udid)}/action`,
+    {
+      method: "POST",
+      body: JSON.stringify({ action: "toggleAppearance" }),
+    },
+  );
 }
 
 export function uploadSimulatorApp(

@@ -98,43 +98,9 @@ simdeck use <udid>
 simdeck tap 0.5 0.5 --normalized
 simdeck tap "Continue"
 simdeck describe --format agent --max-depth 2 --interactive
+simdeck press @e3
+simdeck snapshot --format agent --max-depth 2 -i
 simdeck --device <other-udid> describe --format agent --max-depth 2
-```
-
-## Daemon
-
-Manage the project daemon explicitly when needed:
-
-```sh
-simdeck daemon start
-simdeck daemon restart
-simdeck daemon status
-simdeck daemon stop
-simdeck daemon killall
-```
-
-`simdeck daemon` manages the normal per-project warm process. `daemon killall`
-stops SimDeck daemons across all workspaces.
-
-Use software H.264 when the hardware encoder is unavailable, busy, or starved
-by screen recording:
-
-```sh
-simdeck daemon start --video-codec software
-```
-
-Restart the CoreSimulator service layer when `simctl` reports a stale service
-version or the live display gets stuck before the first frame:
-
-```sh
-simdeck core-simulator restart
-```
-
-You can also start or stop the CoreSimulator service layer explicitly:
-
-```sh
-simdeck core-simulator start
-simdeck core-simulator shutdown
 ```
 
 ## CLI
@@ -161,12 +127,17 @@ simdeck stream --frames 120 > stream.h264
 simdeck describe
 simdeck describe --format agent --max-depth 4
 simdeck describe --format agent --max-depth 4 --interactive
+simdeck snapshot --format agent --max-depth 4 -i
 simdeck describe --point 120,240
 simdeck wait-for --label "Welcome" --timeout-ms 5000
+simdeck wait --label "Welcome" --timeout-ms 5000
 simdeck assert --id login.button --source auto --max-depth 8
 simdeck tap 120 240
 simdeck tap --label "Continue" --wait-timeout-ms 5000
+simdeck tap --id com.apple.settings.screenTime --expect-id BackButton
 simdeck tap "Continue"
+simdeck press @e3
+simdeck back
 simdeck swipe 200 700 200 200
 simdeck gesture scroll-down
 simdeck pinch --start-distance 160 --end-distance 80
@@ -184,7 +155,7 @@ simdeck button action --duration-ms 1000
 simdeck button digital-crown
 simdeck crown --delta 50
 simdeck button left-side-button
-simdeck batch --step "tap --label Continue" --step "type 'hello'" --step "wait-for --label hello"
+simdeck batch --step "tap --label Continue --expect-label Done" --step "type 'hello'" --step "back"
 simdeck dismiss-keyboard
 simdeck button software-keyboard
 simdeck home
@@ -205,35 +176,7 @@ metadata.
 `simdeck use <udid>` stores a default simulator for the current project
 directory. Most device commands accept `[<udid>]`; when it is omitted, SimDeck
 uses `--device`, `SIMDECK_DEVICE`, `SIMDECK_UDID`, the saved project default,
-or the only booted simulator, in that order. The old explicit-UDID form still
-works for every command.
-
-`boot` uses SimDeck's private CoreSimulator boot path so it can start devices
-without launching Simulator.app. If that private path is unavailable, the
-command returns the CoreSimulator error instead of falling back to
-`xcrun simctl boot`.
-
-Android emulators appear in `simdeck list` with IDs like
-`android:SimDeck_Pixel_8_API_36`. For Android IDs, lifecycle, install, launch,
-URL, screenshot, logs, UIAutomator `describe`, tap, swipe, text, key, home, app
-switcher, rotation, pasteboard, and browser live view route through the Android
-SDK tools (`emulator` and `adb`) plus the emulator gRPC screenshot stream for
-live video. `simdeck stream` remains iOS-only because it writes the iOS H.264
-transport stream.
-
-`stream` writes an Annex B H.264 elementary stream to stdout for diagnostics or
-external tools such as `ffplay`.
-
-`describe` uses the project daemon to prefer React Native, NativeScript,
-Flutter, or UIKit in-app inspectors, then falls back to the built-in private
-CoreSimulator accessibility bridge. Use `--format agent` or
-`--format compact-json` for
-lower-token hierarchy dumps, and add `--interactive`/`-i` when an agent only
-needs actionable elements plus their ancestors. Set a project default with
-`simdeck use <udid>` so agent commands can use short forms like
-`simdeck tap "Continue"` and `simdeck describe --format agent --max-depth 2`.
-Coordinate commands accept screen coordinates from the accessibility tree by
-default; pass `--normalized` to send `0.0..1.0` coordinates directly.
+or the only booted simulator, in that order.
 
 ## JS/TS Tests
 
@@ -256,12 +199,6 @@ try {
 healthy, and only stops daemons it started itself. Pass `udid` to `connect()`
 to make it the default for session methods; each method still accepts an
 explicit UDID as the first argument when needed.
-
-Run common Maestro YAML flows against the same daemon-backed simulator API:
-
-```sh
-simdeck maestro test flow.yaml --artifacts-dir artifacts/maestro
-```
 
 ## NativeScript Inspector
 
@@ -317,13 +254,6 @@ void main() {
   runApp(const App());
 }
 ```
-
-## VS Code
-
-Install the `nativescript.simdeck-vscode` extension from the VS Code Marketplace, then
-run `SimDeck: Open Simulator View` from the Command Palette. The extension
-opens the simulator inside a VS Code panel and auto-starts the local daemon
-when it is not already reachable.
 
 ## Contributing
 

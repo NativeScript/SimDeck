@@ -77,6 +77,7 @@ static char *XCWJSONStringFromObject(id object, char **errorMessage) {
 @property (nonatomic, assign) double x;
 @property (nonatomic, assign) double y;
 @property (nonatomic, assign) NSUInteger maxDepth;
+@property (nonatomic, assign) BOOL interactiveOnly;
 @property (nonatomic, assign) char *result;
 @property (nonatomic, assign) char *serializationError;
 @property (nonatomic, strong) NSError *snapshotError;
@@ -94,6 +95,7 @@ static char *XCWJSONStringFromObject(id object, char **errorMessage) {
         NSDictionary *snapshot = [XCWAccessibilityBridge accessibilitySnapshotForSimulatorUDID:self.udid
                                                                                        atPoint:pointValue
                                                                                      maxDepth:self.maxDepth
+                                                                               interactiveOnly:self.interactiveOnly
                                                                                          error:&error];
         if (snapshot == nil) {
             self.snapshotError = error;
@@ -607,7 +609,7 @@ char *xcw_native_recent_logs(const char *udid, double seconds, size_t limit, cha
     }
 }
 
-char *xcw_native_accessibility_snapshot(const char *udid, bool has_point, double x, double y, size_t max_depth, char **error_message) {
+char *xcw_native_accessibility_snapshot(const char *udid, bool has_point, double x, double y, size_t max_depth, bool interactive_only, char **error_message) {
     @autoreleasepool {
         XCWNativeAccessibilitySnapshotRequest *request = [XCWNativeAccessibilitySnapshotRequest new];
         request.udid = XCWStringFromCString(udid);
@@ -615,6 +617,7 @@ char *xcw_native_accessibility_snapshot(const char *udid, bool has_point, double
         request.x = x;
         request.y = y;
         request.maxDepth = max_depth;
+        request.interactiveOnly = interactive_only;
 
         NSThread *accessibilityThread = XCWNativeAccessibilityThread();
         if (NSThread.currentThread == accessibilityThread) {

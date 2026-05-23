@@ -15,6 +15,9 @@ export async function connect(options = {}) {
     const endpoint = result.url;
     const createSession = (defaultUdid) => {
         const simulatorPath = (udid, suffix) => `/api/simulators/${encodeURIComponent(udid)}${suffix}`;
+        const actionPath = (udid) => simulatorPath(udid, "/action");
+        const requestAction = (udid, body) => requestJson(endpoint, "POST", actionPath(udid), body);
+        const requestActionOk = (udid, body) => requestAction(udid, body).then(() => undefined);
         const requireUdid = (udid) => {
             const resolved = udid ?? defaultUdid;
             if (!resolved) {
@@ -82,13 +85,15 @@ export async function connect(options = {}) {
             },
             launch: (...args) => {
                 const { udid, value: bundleId } = resolveStringArgDeviceCall(args);
-                return requestOk(endpoint, simulatorPath(udid, "/launch"), {
+                return requestActionOk(udid, {
+                    action: "launch",
                     bundleId,
                 });
             },
             openUrl: (...args) => {
                 const { udid, value: url } = resolveStringArgDeviceCall(args);
-                return requestOk(endpoint, simulatorPath(udid, "/open-url"), {
+                return requestActionOk(udid, {
+                    action: "openUrl",
                     url,
                 });
             },
@@ -96,7 +101,8 @@ export async function connect(options = {}) {
                 const [udid, x, y] = typeof args[0] === "string"
                     ? [args[0], args[1], args[2]]
                     : [requireUdid(), args[0], args[1]];
-                return requestOk(endpoint, simulatorPath(udid, "/tap"), {
+                return requestActionOk(udid, {
+                    action: "tap",
                     x,
                     y,
                     normalized: true,
@@ -105,9 +111,21 @@ export async function connect(options = {}) {
             tapElement: (...args) => {
                 const { udid, value: selector, rest, } = resolveObjectArgDeviceCall(args);
                 const [tapOptions] = rest;
-                return requestOk(endpoint, simulatorPath(udid, "/tap"), {
+                const { expect, expectTimeoutMs, expectMaxDepth, expectIncludeHidden, ...restOptions } = tapOptions ?? {};
+                return requestActionOk(udid, {
+                    action: "tap",
                     selector: selectorPayload(selector),
-                    ...tapOptions,
+                    ...restOptions,
+                    expect: expect
+                        ? {
+                            selector: selectorPayload(expect),
+                            source: tapOptions?.source,
+                            maxDepth: expectMaxDepth ?? 8,
+                            includeHidden: expectIncludeHidden,
+                            timeoutMs: expectTimeoutMs,
+                            pollMs: tapOptions?.pollMs,
+                        }
+                        : undefined,
                 });
             },
             touch: (...args) => {
@@ -119,7 +137,8 @@ export async function connect(options = {}) {
                         args[1],
                         args[2],
                     ];
-                return requestOk(endpoint, simulatorPath(udid, "/touch"), {
+                return requestActionOk(udid, {
+                    action: "touch",
                     x,
                     y,
                     phase,
@@ -143,50 +162,39 @@ export async function connect(options = {}) {
                         args[3],
                         args[4],
                     ];
-                return requestJson(endpoint, "POST", simulatorPath(udid, "/batch"), {
-                    steps: [
-                        {
-                            action: "swipe",
-                            startX,
-                            startY,
-                            endX,
-                            endY,
-                            ...swipeOptions,
-                        },
-                    ],
+                return requestAction(udid, {
+                    action: "swipe",
+                    startX,
+                    startY,
+                    endX,
+                    endY,
+                    ...swipeOptions,
                 });
             },
             gesture: (...args) => {
                 const { udid, value: preset, rest } = resolveStringArgDeviceCall(args);
                 const [gestureOptions = {}] = rest;
-                return requestJson(endpoint, "POST", simulatorPath(udid, "/batch"), {
-                    steps: [
-                        {
-                            action: "gesture",
-                            preset,
-                            ...gestureOptions,
-                        },
-                    ],
+                return requestAction(udid, {
+                    action: "gesture",
+                    preset,
+                    ...gestureOptions,
                 });
             },
             typeText: (...args) => {
                 const { udid, value: text, rest } = resolveStringArgDeviceCall(args);
                 const [typeOptions = {}] = rest;
-                return requestJson(endpoint, "POST", simulatorPath(udid, "/batch"), {
-                    steps: [
-                        {
-                            action: "type",
-                            text,
-                            ...typeOptions,
-                        },
-                    ],
+                return requestAction(udid, {
+                    action: "type",
+                    text,
+                    ...typeOptions,
                 });
             },
             key: (...args) => {
                 const [udid, keyCode, modifiers = 0] = typeof args[0] === "string"
                     ? [args[0], args[1], args[2]]
                     : [requireUdid(), args[0], args[1]];
-                return requestOk(endpoint, simulatorPath(udid, "/key"), {
+                return requestActionOk(udid, {
+                    action: "key",
                     keyCode,
                     modifiers,
                 });
@@ -194,7 +202,8 @@ export async function connect(options = {}) {
             keySequence: (...args) => {
                 const { udid, value: keyCodes, rest, } = resolveObjectArgDeviceCall(args);
                 const [keySequenceOptions = {}] = rest;
-                return requestOk(endpoint, simulatorPath(udid, "/key-sequence"), {
+                return requestActionOk(udid, {
+                    action: "keySequence",
                     keyCodes,
                     ...keySequenceOptions,
                 });
@@ -202,34 +211,39 @@ export async function connect(options = {}) {
             button: (...args) => {
                 const { udid, value: button, rest } = resolveStringArgDeviceCall(args);
                 const [durationMs = 0] = rest;
-                return requestOk(endpoint, simulatorPath(udid, "/button"), {
+                return requestActionOk(udid, {
+                    action: "button",
                     button,
                     durationMs,
                 });
             },
             home: (...args) => {
                 const { udid } = resolveNoArgDeviceCall(args);
-                return requestOk(endpoint, simulatorPath(udid, "/home"), null);
+                return requestActionOk(udid, { action: "home" });
+            },
+            back: (...args) => {
+                const { udid, options } = resolveOptionalObjectDeviceCall(args);
+                return requestActionOk(udid, { action: "back", ...options });
             },
             dismissKeyboard: (...args) => {
                 const { udid } = resolveNoArgDeviceCall(args);
-                return requestOk(endpoint, simulatorPath(udid, "/dismiss-keyboard"), null);
+                return requestActionOk(udid, { action: "dismissKeyboard" });
             },
             appSwitcher: (...args) => {
                 const { udid } = resolveNoArgDeviceCall(args);
-                return requestOk(endpoint, simulatorPath(udid, "/app-switcher"), null);
+                return requestActionOk(udid, { action: "appSwitcher" });
             },
             rotateLeft: (...args) => {
                 const { udid } = resolveNoArgDeviceCall(args);
-                return requestOk(endpoint, simulatorPath(udid, "/rotate-left"), null);
+                return requestActionOk(udid, { action: "rotateLeft" });
             },
             rotateRight: (...args) => {
                 const { udid } = resolveNoArgDeviceCall(args);
-                return requestOk(endpoint, simulatorPath(udid, "/rotate-right"), null);
+                return requestActionOk(udid, { action: "rotateRight" });
             },
             toggleAppearance: (...args) => {
                 const { udid } = resolveNoArgDeviceCall(args);
-                return requestOk(endpoint, simulatorPath(udid, "/toggle-appearance"), null);
+                return requestActionOk(udid, { action: "toggleAppearance" });
             },
             pasteboardSet: (...args) => {
                 const { udid, value: text } = resolveStringArgDeviceCall(args);
@@ -268,16 +282,18 @@ export async function connect(options = {}) {
             query: async (...args) => {
                 const { udid, value: selector, rest, } = resolveObjectArgDeviceCall(args);
                 const [treeOptions] = rest;
-                const result = await requestJson(endpoint, "POST", simulatorPath(udid, "/query"), {
+                const result = await requestAction(udid, {
+                    action: "query",
                     selector: selectorPayload(selector),
                     ...treeOptions,
                 });
-                return result.matches;
+                return result.result?.matches ?? result.matches ?? [];
             },
             assert: (...args) => {
                 const { udid, value: selector, rest, } = resolveObjectArgDeviceCall(args);
                 const [assertOptions] = rest;
-                return requestJson(endpoint, "POST", simulatorPath(udid, "/assert"), {
+                return requestAction(udid, {
+                    action: "assert",
                     selector: selectorPayload(selector),
                     ...assertOptions,
                 });
@@ -285,7 +301,8 @@ export async function connect(options = {}) {
             assertNot: (...args) => {
                 const { udid, value: selector, rest, } = resolveObjectArgDeviceCall(args);
                 const [assertOptions] = rest;
-                return requestJson(endpoint, "POST", simulatorPath(udid, "/assert-not"), {
+                return requestAction(udid, {
+                    action: "assertNot",
                     selector: selectorPayload(selector),
                     ...assertOptions,
                 });
@@ -293,7 +310,8 @@ export async function connect(options = {}) {
             waitFor: (...args) => {
                 const { udid, value: selector, rest, } = resolveObjectArgDeviceCall(args);
                 const [waitOptions] = rest;
-                return requestJson(endpoint, "POST", simulatorPath(udid, "/wait-for"), {
+                return requestAction(udid, {
+                    action: "waitFor",
                     selector: selectorPayload(selector),
                     ...waitOptions,
                 });
@@ -301,7 +319,8 @@ export async function connect(options = {}) {
             waitForNot: (...args) => {
                 const { udid, value: selector, rest, } = resolveObjectArgDeviceCall(args);
                 const [waitOptions] = rest;
-                return requestJson(endpoint, "POST", simulatorPath(udid, "/wait-for-not"), {
+                return requestAction(udid, {
+                    action: "assertNot",
                     selector: selectorPayload(selector),
                     ...waitOptions,
                 });
@@ -309,7 +328,8 @@ export async function connect(options = {}) {
             scrollUntilVisible: (...args) => {
                 const { udid, value: selector, rest, } = resolveObjectArgDeviceCall(args);
                 const [scrollOptions] = rest;
-                return requestJson(endpoint, "POST", simulatorPath(udid, "/scroll-until-visible"), {
+                return requestAction(udid, {
+                    action: "scrollUntilVisible",
                     selector: selectorPayload(selector),
                     ...scrollOptions,
                 });
@@ -317,7 +337,8 @@ export async function connect(options = {}) {
             batch: (...args) => {
                 const { udid, value: steps, rest, } = resolveObjectArgDeviceCall(args);
                 const [continueOnError = false] = rest;
-                return requestJson(endpoint, "POST", simulatorPath(udid, "/batch"), {
+                return requestAction(udid, {
+                    action: "batch",
                     steps,
                     continueOnError,
                 });

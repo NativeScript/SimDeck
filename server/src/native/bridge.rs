@@ -605,6 +605,16 @@ impl NativeBridge {
         point: Option<(f64, f64)>,
         max_depth: Option<usize>,
     ) -> Result<serde_json::Value, AppError> {
+        self.accessibility_snapshot_with_options(udid, point, max_depth, false)
+    }
+
+    pub fn accessibility_snapshot_with_options(
+        &self,
+        udid: &str,
+        point: Option<(f64, f64)>,
+        max_depth: Option<usize>,
+        interactive_only: bool,
+    ) -> Result<serde_json::Value, AppError> {
         let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
         let max_depth = max_depth.unwrap_or(80).min(80);
         let max_attempts = if point.is_some() || max_depth == 0 {
@@ -613,14 +623,21 @@ impl NativeBridge {
             ACCESSIBILITY_SNAPSHOT_MAX_ATTEMPTS
         };
         for attempt in 1..=max_attempts {
-            let json = match native_accessibility_snapshot_json(&udid, point, max_depth) {
-                Ok(json) => json,
-                Err(error) if is_core_simulator_service_mismatch(&error.to_string()) => {
-                    std::thread::sleep(Duration::from_millis(250));
-                    native_accessibility_snapshot_json(&udid, point, max_depth)?
-                }
-                Err(error) => return Err(error),
-            };
+            let json =
+                match native_accessibility_snapshot_json(&udid, point, max_depth, interactive_only)
+                {
+                    Ok(json) => json,
+                    Err(error) if is_core_simulator_service_mismatch(&error.to_string()) => {
+                        std::thread::sleep(Duration::from_millis(250));
+                        native_accessibility_snapshot_json(
+                            &udid,
+                            point,
+                            max_depth,
+                            interactive_only,
+                        )?
+                    }
+                    Err(error) => return Err(error),
+                };
             let snapshot: serde_json::Value =
                 serde_json::from_str(&json).map_err(|e| AppError::internal(e.to_string()))?;
             if !accessibility_snapshot_is_transient_empty(&snapshot) || attempt == max_attempts {
@@ -1265,6 +1282,7 @@ fn native_accessibility_snapshot_json(
     udid: &CString,
     point: Option<(f64, f64)>,
     max_depth: usize,
+    interactive_only: bool,
 ) -> Result<String, AppError> {
     unsafe {
         let mut error = ptr::null_mut();
@@ -1277,6 +1295,7 @@ fn native_accessibility_snapshot_json(
             x,
             y,
             max_depth,
+            interactive_only,
             &mut error,
         );
         string_from_raw(raw, error)

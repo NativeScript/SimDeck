@@ -37,8 +37,8 @@ curl -H "X-SimDeck-Token: $SIMDECK_TOKEN" \
 curl -X POST \
   -H "Content-Type: application/json" \
   -H "X-SimDeck-Token: $SIMDECK_TOKEN" \
-  -d '{"url":"https://example.com"}' \
-  http://127.0.0.1:4310/api/simulators/<udid>/open-url
+  -d '{"action":"openUrl","url":"https://example.com"}' \
+  http://127.0.0.1:4310/api/simulators/<udid>/action
 ```
 
 ## Server
@@ -56,16 +56,15 @@ See [Health & Metrics](/api/health) for details.
 
 ## Devices
 
-| Method | Path                                       | Purpose                                   |
-| ------ | ------------------------------------------ | ----------------------------------------- |
-| `GET`  | `/api/simulators`                          | List iOS Simulators and Android emulators |
-| `POST` | `/api/simulators`                          | Create and boot a simulator or emulator   |
-| `GET`  | `/api/simulators/create-options`           | List device types and runtimes for create |
-| `GET`  | `/api/simulators/{udid}/state`             | Get one device state                      |
-| `POST` | `/api/simulators/{udid}/boot`              | Boot a simulator or emulator              |
-| `POST` | `/api/simulators/{udid}/shutdown`          | Shut it down                              |
-| `POST` | `/api/simulators/{udid}/erase`             | Erase data and settings                   |
-| `POST` | `/api/simulators/{udid}/toggle-appearance` | Toggle light/dark appearance              |
+| Method | Path                              | Purpose                                   |
+| ------ | --------------------------------- | ----------------------------------------- |
+| `GET`  | `/api/simulators`                 | List iOS Simulators and Android emulators |
+| `POST` | `/api/simulators`                 | Create and boot a simulator or emulator   |
+| `GET`  | `/api/simulators/create-options`  | List device types and runtimes for create |
+| `GET`  | `/api/simulators/{udid}/state`    | Get one device state                      |
+| `POST` | `/api/simulators/{udid}/boot`     | Boot a simulator or emulator              |
+| `POST` | `/api/simulators/{udid}/shutdown` | Shut it down                              |
+| `POST` | `/api/simulators/{udid}/erase`    | Erase data and settings                   |
 
 Device IDs come from `/api/simulators`. Android IDs use the `android:` prefix.
 Booted devices are listed first. Paired iPhone and Apple Watch entries include
@@ -109,11 +108,12 @@ Android:
 | `POST` | `/api/simulators/{udid}/install`        | `{ "appPath": "/path/to/App.app" }`                  |
 | `POST` | `/api/simulators/{udid}/install-upload` | Raw `.ipa` or `.apk` bytes with `x-simdeck-filename` |
 | `POST` | `/api/simulators/{udid}/uninstall`      | `{ "bundleId": "com.example.App" }`                  |
-| `POST` | `/api/simulators/{udid}/launch`         | `{ "bundleId": "com.example.App" }`                  |
-| `POST` | `/api/simulators/{udid}/open-url`       | `{ "url": "https://example.com" }`                   |
 
 `install-upload` is intended for browser clients. iOS simulator uploads must be
 `.ipa` archives; Android emulator uploads must be `.apk` files.
+Launch apps and open URLs through `/api/simulators/{udid}/action` with
+`{ "action": "launch", "bundleId": "com.example.App" }` or
+`{ "action": "openUrl", "url": "https://example.com" }`.
 
 ## Performance
 
@@ -169,27 +169,80 @@ Response:
 }
 ```
 
-## Input
+## Actions And Input
 
-| Method | Path                                              | Body                                                                 |
-| ------ | ------------------------------------------------- | -------------------------------------------------------------------- |
-| `POST` | `/api/simulators/{udid}/tap`                      | Selector or coordinate tap                                           |
-| `POST` | `/api/simulators/{udid}/touch`                    | `{ "x": 0.5, "y": 0.5, "phase": "began" }`                           |
-| `POST` | `/api/simulators/{udid}/edge-touch`               | `{ "x": 0.5, "y": 0.98, "phase": "began", "edge": "bottom" }`        |
-| `POST` | `/api/simulators/{udid}/multi-touch`              | `{ "x1": 0.35, "y1": 0.5, "x2": 0.65, "y2": 0.5, "phase": "began" }` |
-| `POST` | `/api/simulators/{udid}/touch-sequence`           | Multiple touch phases                                                |
-| `POST` | `/api/simulators/{udid}/key`                      | `{ "keyCode": 4, "modifiers": 0 }`                                   |
-| `POST` | `/api/simulators/{udid}/key-sequence`             | `{ "keyCodes": [11,8,15], "delayMs": 5 }`                            |
-| `POST` | `/api/simulators/{udid}/button`                   | `{ "button": "lock", "durationMs": 50 }`                             |
-| `POST` | `/api/simulators/{udid}/crown`                    | `{ "delta": 50 }`                                                    |
-| `POST` | `/api/simulators/{udid}/dismiss-keyboard`         | Dismiss the software keyboard                                        |
-| `POST` | `/api/simulators/{udid}/toggle-software-keyboard` | Toggle the software keyboard                                         |
-| `POST` | `/api/simulators/{udid}/home`                     | Press Home                                                           |
-| `POST` | `/api/simulators/{udid}/app-switcher`             | Open app switcher                                                    |
-| `POST` | `/api/simulators/{udid}/rotate-left`              | Rotate left                                                          |
-| `POST` | `/api/simulators/{udid}/rotate-right`             | Rotate right                                                         |
+| Method | Path                            | Body                               |
+| ------ | ------------------------------- | ---------------------------------- |
+| `POST` | `/api/simulators/{udid}/action` | One tagged action or batch payload |
 
-Touch, edge-touch, and multi-touch coordinates are normalized from `0.0` to `1.0`.
+Common action bodies:
+
+```json
+{ "action": "tap", "selector": { "text": "Continue" }, "waitTimeoutMs": 5000 }
+```
+
+```json
+{
+  "action": "tap",
+  "selector": { "id": "com.apple.settings.screenTime" },
+  "expect": { "selector": { "id": "BackButton" }, "timeoutMs": 5000 }
+}
+```
+
+```json
+{ "action": "back", "timeoutMs": 5000 }
+```
+
+```json
+{ "action": "touch", "x": 0.5, "y": 0.5, "phase": "began" }
+```
+
+```json
+{
+  "action": "edgeTouch",
+  "x": 0.5,
+  "y": 0.98,
+  "phase": "began",
+  "edge": "bottom"
+}
+```
+
+```json
+{
+  "action": "multiTouch",
+  "x1": 0.35,
+  "y1": 0.5,
+  "x2": 0.65,
+  "y2": 0.5,
+  "phase": "began"
+}
+```
+
+```json
+{ "action": "keySequence", "keyCodes": [11, 8, 15], "delayMs": 5 }
+```
+
+```json
+{ "action": "button", "button": "lock", "durationMs": 50 }
+```
+
+```json
+{
+  "action": "batch",
+  "steps": [
+    { "action": "tap", "selector": { "text": "Continue" } },
+    { "action": "waitFor", "selector": { "text": "Done" }, "timeoutMs": 5000 }
+  ]
+}
+```
+
+Supported action tags include `tap`, `query`, `waitFor`, `assert`,
+`assertNot`, `scrollUntilVisible`, `touch`, `touchSequence`, `edgeTouch`,
+`multiTouch`, `swipe`, `gesture`, `type`, `key`, `keySequence`, `button`,
+`crown`, `home`, `back`, `dismissKeyboard`, `appSwitcher`, `rotateLeft`,
+`rotateRight`, `toggleAppearance`, `launch`, `openUrl`, `describe`, and
+`batch`. Touch, edge-touch, swipe, gesture, and multi-touch coordinates are
+normalized from `0.0` to `1.0`.
 
 ## UI State And Inspection
 
@@ -197,13 +250,7 @@ Touch, edge-touch, and multi-touch coordinates are normalized from `0.0` to `1.0
 | ------ | -------------------------------------------------------- | ------------------------------- |
 | `GET`  | `/api/simulators/{udid}/accessibility-tree`              | Current UI tree                 |
 | `GET`  | `/api/simulators/{udid}/accessibility-point?x=120&y=240` | Element at a point              |
-| `POST` | `/api/simulators/{udid}/query`                           | Query tree by selector          |
-| `POST` | `/api/simulators/{udid}/wait-for`                        | Wait until selector appears     |
-| `POST` | `/api/simulators/{udid}/wait-for-not`                    | Wait until selector disappears  |
-| `POST` | `/api/simulators/{udid}/assert`                          | Assert selector exists          |
-| `POST` | `/api/simulators/{udid}/assert-not`                      | Assert selector is absent       |
-| `POST` | `/api/simulators/{udid}/scroll-until-visible`            | Scroll until selector appears   |
-| `POST` | `/api/simulators/{udid}/batch`                           | Run multiple control steps      |
+| `POST` | `/api/simulators/{udid}/action`                          | Query, wait, assert, or batch   |
 | `POST` | `/api/simulators/{udid}/inspector/request`               | Call an in-app inspector method |
 
 Tree query parameters:
@@ -224,7 +271,7 @@ Point query parameters:
 
 Every tree response reports the `source` used and may include a `fallbackReason`.
 
-Selector endpoints accept compact accessibility selectors:
+Selector actions accept compact accessibility selectors:
 
 ```json
 {
@@ -242,13 +289,18 @@ Selector endpoints accept compact accessibility selectors:
 ```
 
 Selectors can match `text`, `id`, `label`, `value`, `elementType`, `index`, `enabled`, `checked`, `focused`, and `selected`. Set `regex: true` to use regular expression matching for string fields.
+`index` uses the same zero-based traversal order behind agent refs, so CLI
+`@e3` maps to API selector `{ "index": 2 }`.
 
-`POST /api/simulators/{udid}/query` returns compact matches. `wait-for` and `assert` use the same body shape for positive checks. `wait-for-not` and `assert-not` perform negative checks.
+`POST /api/simulators/{udid}/action` with `{ "action": "query", ... }`
+returns compact matches. `waitFor` and `assert` use the same body shape for
+positive checks. `assertNot` performs negative checks.
 
-`POST /api/simulators/{udid}/scroll-until-visible` scrolls and polls until a selector appears:
+`scrollUntilVisible` scrolls and polls until a selector appears:
 
 ```json
 {
+  "action": "scrollUntilVisible",
   "selector": { "text": "Settings" },
   "direction": "down",
   "timeoutMs": 10000

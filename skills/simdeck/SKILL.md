@@ -52,7 +52,7 @@ Start by choosing a project default device. `simdeck use <UDID>` stores the
 selection for the current workspace/CWD so later commands can omit the UDID.
 Explicit UDIDs, `--device`, `SIMDECK_DEVICE`, and `SIMDECK_UDID` still work for
 one-off overrides. Prefer short forms in agent loops, such as
-`simdeck tap "Continue"` and `simdeck describe --format agent --max-depth 2`.
+`simdeck tap "Continue"` and `simdeck snapshot --format agent --max-depth 2 -i`.
 
 ```bash
 simdeck list
@@ -83,38 +83,39 @@ AVDs from the Android SDK.
 
 ## Fast Agent Inspection
 
-Use targeted checks for test loops. `describe` is a diagnostic snapshot of the whole hierarchy. For verification, prefer the daemon APIs exposed by `simdeck/test`: `query`, `waitFor`, `assert`, selector `tap`, and `batch`.
+Use targeted checks for test loops. `describe` is a diagnostic snapshot of the whole hierarchy. For verification, prefer the daemon APIs exposed by `simdeck/test`: `action`, `query`, `waitFor`, `assert`, selector `tap`, and `batch`.
 
 ```bash
 simdeck describe
 simdeck describe --format agent --max-depth 4
 simdeck describe --format agent --max-depth 4 --interactive
+simdeck snapshot --format agent --max-depth 4 -i
 simdeck describe --format compact-json
 simdeck describe --point 120,240
 simdeck describe --source auto
-simdeck describe --source nativescript
-simdeck describe --source react-native
-simdeck describe --source flutter
-simdeck describe --source uikit
+simdeck describe --source nativescript|react-native|flutter|swiftui|uikit
 simdeck describe --source native-ax
 simdeck describe --source android-uiautomator
 simdeck describe --direct
 simdeck wait-for --label "Welcome" --timeout-ms 5000
+simdeck wait --label "Welcome" --timeout-ms 5000
 simdeck assert --id login.button --source auto --max-depth 8
 ```
 
-Use `--source auto` with the project daemon. Use `--direct` or `--source native-ax` for the private CoreSimulator accessibility bridge. Use `--source android-uiautomator` for Android emulator UIAutomator hierarchies. NativeScript, React Native, and Flutter inspector runtimes can add richer hierarchy data.
+The default source is `native-ax`, which is the fastest and most universal path for agents. Use `--source auto` with the project daemon when you want richer NativeScript, React Native, Flutter, SwiftUI, or UIKit inspector data before native accessibility fallback. Use `--direct` or `--source native-ax` for the private CoreSimulator accessibility bridge. Use `--source android-uiautomator` for Android emulator UIAutomator hierarchies.
 For Android IDs, `describe` uses `uiautomator dump`; use `--format agent` or
 `--format compact-json` the same way as iOS.
-Use `--interactive` or `-i` when an agent only needs controls and actionable framework nodes; SimDeck keeps ancestor context so the output is still navigable.
+Use `--interactive` or `-i` when an agent only needs controls and actionable framework nodes; SimDeck keeps ancestor context so the output is still navigable. Agent output labels nodes with refs such as `@e3`; reuse them with `simdeck press @e3`. `snapshot`, `press`, and `wait` are aliases for `describe`, `tap`, and `wait-for`.
 
-Prefer selectors, coordinates only when needed. Selector taps go through the daemon and wait for the element server-side.
+Prefer selectors, coordinates only when needed. Selector taps go through the daemon and wait for the element server-side. Use `--expect-id`, `--expect-label`, or another `--expect-*` selector when the tap should also wait for the next screen before returning.
 
 ```bash
 simdeck tap --id LoginButton --wait-timeout-ms 5000
+simdeck tap --id com.apple.settings.screenTime --expect-id BackButton
 simdeck tap --label "Continue" --element-type Button
 simdeck tap 120 240
 simdeck tap "Continue"
+simdeck press @e3
 ```
 
 For persistent app integration tests, use `simdeck/test` instead of shelling out repeatedly:
@@ -166,6 +167,7 @@ simdeck key-combo --modifiers cmd,shift --key z
 simdeck dismiss-keyboard
 simdeck button software-keyboard
 simdeck button home
+simdeck back
 simdeck button lock --duration-ms 1000
 simdeck button side-button
 simdeck button volume-up
@@ -191,6 +193,8 @@ Use `--stdin` or `--file` for text with quotes, newlines, shell variables, or sh
 
 ```bash
 simdeck tap --label "Continue" --wait-timeout-ms 5000
+simdeck tap --label "Continue" --expect-label "Done"
+simdeck back
 simdeck swipe 200 700 200 200 --pre-delay-ms 100 --post-delay-ms 250
 simdeck button lock --duration-ms 1000
 ```
@@ -201,13 +205,13 @@ Use `batch` when steps are known; use discrete commands when a later step depend
 
 ```bash
 simdeck batch \
-  --step "tap --label Continue --wait-timeout-ms 5000" \
+  --step "tap --label Continue --wait-timeout-ms 5000 --expect-label Done" \
   --step "type 'hello world'" \
-  --step "gesture scroll-down" \
+  --step "back" \
   --step "pinch --start-distance 0.20 --end-distance 0.35 --normalized"
 ```
 
-Batch rules: one source (`--step`, `--file`, or `--stdin`); set the default with `simdeck use <UDID>` or keep `<UDID>` at batch level; ordered steps; fail-fast by default; `--continue-on-error` for best effort. Step commands: `tap`, `wait-for`, `assert`, `swipe`, `gesture`, `pinch`, `rotate-gesture`, `touch`, `type`, `button`, `key`, `key-sequence`, `key-combo`, `sleep`.
+Batch rules: one source (`--step`, `--file`, or `--stdin`); set the default with `simdeck use <UDID>` or keep `<UDID>` at batch level; ordered steps; fail-fast by default; `--continue-on-error` for best effort. Step commands: `tap`, `back`, `wait-for`, `assert`, `swipe`, `gesture`, `pinch`, `rotate-gesture`, `touch`, `type`, `button`, `key`, `key-sequence`, `key-combo`, `sleep`.
 
 For JS tests, batch can combine action and verification without extra CLI process startup:
 
