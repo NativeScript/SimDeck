@@ -137,31 +137,42 @@ Useful direct commands:
 
 ```sh
 ./build/simdeck list
+./build/simdeck use <udid>
 ./build/simdeck boot <udid>
-./build/simdeck shutdown <udid>
-./build/simdeck erase <udid>
-./build/simdeck install <udid> /path/to/App.app
-./build/simdeck uninstall <udid> com.example.App
-./build/simdeck open-url <udid> https://example.com
-./build/simdeck launch <udid> com.apple.Preferences
-./build/simdeck pasteboard set <udid> "hello"
-./build/simdeck pasteboard get <udid>
-./build/simdeck screenshot <udid> --output screen.png
-./build/simdeck screenshot <udid> --with-bezel --output screen-bezel.png
-./build/simdeck record <udid> --seconds 5 --output screen-recording.mp4
-./build/simdeck describe <udid>
-./build/simdeck tap <udid> 120 240
-./build/simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
-./build/simdeck swipe <udid> 200 700 200 200
-./build/simdeck gesture <udid> scroll-down
-./build/simdeck pinch <udid> --start-distance 160 --end-distance 80
-./build/simdeck rotate-gesture <udid> --radius 100 --degrees 90
-./build/simdeck key-sequence <udid> --keycodes h,e,l,l,o
-./build/simdeck key-combo <udid> --modifiers cmd --key a
-./build/simdeck type <udid> "hello"
-./build/simdeck button <udid> lock --duration-ms 1000
-./build/simdeck home <udid>
+./build/simdeck shutdown
+./build/simdeck erase
+./build/simdeck install /path/to/App.app
+./build/simdeck uninstall com.example.App
+./build/simdeck open-url https://example.com
+./build/simdeck launch com.apple.Preferences
+./build/simdeck pasteboard set "hello"
+./build/simdeck pasteboard get
+./build/simdeck screenshot --output screen.png
+./build/simdeck screenshot --with-bezel --output screen-bezel.png
+./build/simdeck record --seconds 5 --output screen-recording.mp4
+./build/simdeck describe --format agent --max-depth 4 -i
+./build/simdeck wait-for --label "Welcome" --timeout-ms 5000
+./build/simdeck tap 120 240
+./build/simdeck tap --label "Continue" --wait-timeout-ms 5000
+./build/simdeck tap "Continue"
+./build/simdeck tap --id com.apple.settings.screenTime --expect-id BackButton
+./build/simdeck back
+./build/simdeck swipe 200 700 200 200
+./build/simdeck gesture scroll-down
+./build/simdeck pinch --start-distance 160 --end-distance 80
+./build/simdeck rotate-gesture --radius 100 --degrees 90
+./build/simdeck key-sequence --keycodes h,e,l,l,o
+./build/simdeck key-combo --modifiers cmd --key a
+./build/simdeck type "hello"
+./build/simdeck button lock --duration-ms 1000
+./build/simdeck home
 ```
+
+Most simulator commands accept `[<udid>]`; when it is omitted, SimDeck uses
+`--device`, `SIMDECK_DEVICE`, `SIMDECK_UDID`, the saved project default, or the
+only booted simulator, in that order. For agent navigation, prefer
+`describe -i`, `wait-for`, `tap --id/--label`, `tap "Text"`, `back`, and
+`batch` over coordinate-only loops.
 
 ## Expectations For Future Changes
 
