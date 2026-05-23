@@ -35,13 +35,13 @@ The extension tries the configured server URL first. If it is not reachable and 
 
 ## Settings
 
-| Setting                   | Default                 | Purpose                      |
-| ------------------------- | ----------------------- | ---------------------------- |
-| `simdeck.serverUrl`       | `http://127.0.0.1:4310` | Preferred daemon URL         |
-| `simdeck.cliPath`         | empty                   | Explicit path to the CLI     |
+| Setting                   | Default                 | Purpose                               |
+| ------------------------- | ----------------------- | ------------------------------------- |
+| `simdeck.serverUrl`       | `http://127.0.0.1:4310` | Preferred daemon URL                  |
+| `simdeck.cliPath`         | empty                   | Explicit path to the CLI              |
 | `simdeck.port`            | `4311`                  | Port for auto-started project daemons |
-| `simdeck.bindAddress`     | `127.0.0.1`             | Bind address for auto-start  |
-| `simdeck.autoStartDaemon` | `true`                  | Start the daemon when needed |
+| `simdeck.bindAddress`     | `127.0.0.1`             | Bind address for auto-start           |
+| `simdeck.autoStartDaemon` | `true`                  | Start the daemon when needed          |
 
 CLI resolution order:
 
