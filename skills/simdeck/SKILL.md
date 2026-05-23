@@ -138,6 +138,10 @@ try {
 }
 ```
 
+`simdeck/test` state-query helpers default to `source: "native-ax"` for fast
+agent control. Pass `source: "auto"` only when you intentionally want richer
+framework inspector trees before native accessibility fallback.
+
 Use `tree()`/`describe` only when a test needs to print the whole UI for debugging. In a normal agent loop, do not fetch the full tree after every action; verify the specific element or text that proves the step succeeded.
 
 ## Interact

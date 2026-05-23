@@ -26,6 +26,10 @@ try {
 ```
 
 `connect()` starts the project daemon if needed, reuses a healthy daemon, and only stops daemons it started itself. Pass `udid` to `connect()` to make it the default for session methods; methods still accept an explicit UDID as their first argument. Use `sim.device("<other-udid>")` to create a session bound to another simulator.
+State-query helpers default to `source: "native-ax"` so agent loops use the
+fast universal accessibility path. Pass `source: "auto"` when a test
+intentionally wants connected NativeScript, React Native, Flutter, SwiftUI, or
+UIKit inspector trees before the native accessibility fallback.
 
 ## Useful Test Methods
 

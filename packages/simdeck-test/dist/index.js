@@ -5,6 +5,7 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+const DEFAULT_QUERY_SOURCE = "native-ax";
 export async function connect(options = {}) {
     const cliPath = options.cliPath ?? "simdeck";
     const result = options.isolated
@@ -115,11 +116,11 @@ export async function connect(options = {}) {
                 return requestActionOk(udid, {
                     action: "tap",
                     selector: selectorPayload(selector),
-                    ...restOptions,
+                    ...withQueryDefaults(restOptions),
                     expect: expect
                         ? {
                             selector: selectorPayload(expect),
-                            source: tapOptions?.source,
+                            source: tapOptions?.source ?? DEFAULT_QUERY_SOURCE,
                             maxDepth: expectMaxDepth ?? 8,
                             includeHidden: expectIncludeHidden,
                             timeoutMs: expectTimeoutMs,
@@ -285,7 +286,7 @@ export async function connect(options = {}) {
                 const result = await requestAction(udid, {
                     action: "query",
                     selector: selectorPayload(selector),
-                    ...treeOptions,
+                    ...withQueryDefaults(treeOptions),
                 });
                 return result.result?.matches ?? result.matches ?? [];
             },
@@ -295,7 +296,7 @@ export async function connect(options = {}) {
                 return requestAction(udid, {
                     action: "assert",
                     selector: selectorPayload(selector),
-                    ...assertOptions,
+                    ...withQueryDefaults(assertOptions),
                 });
             },
             assertNot: (...args) => {
@@ -304,7 +305,7 @@ export async function connect(options = {}) {
                 return requestAction(udid, {
                     action: "assertNot",
                     selector: selectorPayload(selector),
-                    ...assertOptions,
+                    ...withQueryDefaults(assertOptions),
                 });
             },
             waitFor: (...args) => {
@@ -313,7 +314,7 @@ export async function connect(options = {}) {
                 return requestAction(udid, {
                     action: "waitFor",
                     selector: selectorPayload(selector),
-                    ...waitOptions,
+                    ...withQueryDefaults(waitOptions),
                 });
             },
             waitForNot: (...args) => {
@@ -322,7 +323,7 @@ export async function connect(options = {}) {
                 return requestAction(udid, {
                     action: "assertNot",
                     selector: selectorPayload(selector),
-                    ...waitOptions,
+                    ...withQueryDefaults(waitOptions),
                 });
             },
             scrollUntilVisible: (...args) => {
@@ -331,7 +332,7 @@ export async function connect(options = {}) {
                 return requestAction(udid, {
                     action: "scrollUntilVisible",
                     selector: selectorPayload(selector),
-                    ...scrollOptions,
+                    ...withQueryDefaults(scrollOptions),
                 });
             },
             batch: (...args) => {
@@ -539,8 +540,7 @@ function requestBuffer(endpoint, pathName, method = "GET", body) {
 }
 function treeQuery(options = {}) {
     const params = new URLSearchParams();
-    if (options.source)
-        params.set("source", options.source);
+    params.set("source", options.source ?? DEFAULT_QUERY_SOURCE);
     if (options.maxDepth !== undefined)
         params.set("maxDepth", String(options.maxDepth));
     if (options.includeHidden)
@@ -548,6 +548,9 @@ function treeQuery(options = {}) {
     if (options.interactiveOnly)
         params.set("interactiveOnly", "true");
     return params.toString();
+}
+function withQueryDefaults(options) {
+    return { source: DEFAULT_QUERY_SOURCE, ...(options ?? {}) };
 }
 function logsQuery(options = {}) {
     const params = new URLSearchParams();

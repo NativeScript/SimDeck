@@ -198,7 +198,11 @@ try {
 `connect()` starts the project daemon when needed, reuses it when it is already
 healthy, and only stops daemons it started itself. Pass `udid` to `connect()`
 to make it the default for session methods; each method still accepts an
-explicit UDID as the first argument when needed.
+explicit UDID as the first argument when needed. Query helpers such as
+`tree()`, `query()`, `waitFor()`, `assert()`, and selector `tapElement()`
+default to `source: "native-ax"` for fast agent control; pass
+`source: "auto"` when a test intentionally wants richer framework inspector
+trees first.
 
 ## NativeScript Inspector
 
