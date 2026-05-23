@@ -138,19 +138,25 @@ async function main() {
     phase: phaseSetup,
   });
   await measuredStep(
+    "CLI use default simulator",
+    () => {
+      const selection = simdeckJson(["use", simulatorUDID]);
+      if (selection.udid !== simulatorUDID) {
+        throw new Error(`simdeck use selected ${JSON.stringify(selection)}`);
+      }
+    },
+    { phase: phaseSetup },
+  );
+  await measuredStep(
     "CLI chrome-profile",
-    () =>
-      assertJson(
-        simdeckJson(["chrome-profile", simulatorUDID]),
-        "chrome-profile",
-      ),
+    () => assertJson(simdeckJson(["chrome-profile"]), "chrome-profile"),
     { phase: phaseSetup },
   );
   await measuredStep(
     "CLI logs",
     () =>
       assertJson(
-        simdeckJson(["logs", simulatorUDID, "--seconds", "1", "--limit", "1"]),
+        simdeckJson(["logs", "--seconds", "1", "--limit", "1"]),
         "logs",
       ),
     { phase: phaseSetup },
@@ -159,7 +165,7 @@ async function main() {
   await measuredStep(
     "CLI install fixture",
     async () => {
-      simdeckJson(["install", simulatorUDID, fixture.appPath]);
+      simdeckJson(["install", fixture.appPath]);
       preapproveFixtureUrlScheme();
     },
     { phase: phaseSetup },
@@ -177,7 +183,6 @@ async function main() {
   const agentTree = await measuredStep("server describe agent", () =>
     simdeckText([
       "describe",
-      simulatorUDID,
       "--source",
       "native-ax",
       "--format",
@@ -194,7 +199,6 @@ async function main() {
     () =>
       simdeckText([
         "describe",
-        simulatorUDID,
         "--source",
         "native-ax",
         "--format",
@@ -219,7 +223,7 @@ async function main() {
   await measuredStep(
     "CLI screenshot file",
     async () => {
-      simdeckJson(["screenshot", simulatorUDID, "--output", screenshotPath]);
+      simdeckJson(["screenshot", "--output", screenshotPath]);
       assertPng(screenshotPath);
     },
     { phase: phaseCommandSmoke },
@@ -232,10 +236,11 @@ async function main() {
         stdoutPng,
         runBuffer(
           simdeck,
-          ["--server-url", serverUrl, "screenshot", simulatorUDID, "--stdout"],
+          ["--server-url", serverUrl, "screenshot", "--stdout"],
           {
             timeoutMs: 300_000,
             maxBuffer: 64 * 1024 * 1024,
+            env: { HOME: tempRoot },
           },
         ),
       );
@@ -249,7 +254,6 @@ async function main() {
     async () => {
       simdeckJson([
         "screenshot",
-        simulatorUDID,
         "--with-bezel",
         "--output",
         bezeledScreenshotPath,
@@ -262,14 +266,7 @@ async function main() {
   await measuredStep(
     "CLI screen recording",
     async () => {
-      simdeckJson([
-        "record",
-        simulatorUDID,
-        "--seconds",
-        "1",
-        "--output",
-        recordingPath,
-      ]);
+      simdeckJson(["record", "--seconds", "1", "--output", recordingPath]);
       assertMp4(recordingPath);
     },
     { phase: phaseCommandSmoke },
@@ -278,14 +275,14 @@ async function main() {
   await measuredStep(
     "CLI pasteboard set",
     async () => {
-      simdeckJson(["pasteboard", "set", simulatorUDID, "simdeck integration"]);
+      simdeckJson(["pasteboard", "set", "simdeck integration"]);
     },
     { phase: phaseCommandSmoke },
   );
   await measuredStep(
     "CLI pasteboard get",
     async () => {
-      const pasteboard = simdeckJson(["pasteboard", "get", simulatorUDID]);
+      const pasteboard = simdeckJson(["pasteboard", "get"]);
       if (pasteboard.text !== "simdeck integration") {
         throw new Error(
           `pasteboard round-trip failed: ${JSON.stringify(pasteboard)}`,
@@ -300,14 +297,14 @@ async function main() {
   await measuredStep(
     "CLI type file",
     async () => {
-      simdeckJson(["type", simulatorUDID, "--file", fileInput]);
+      simdeckJson(["type", "--file", fileInput]);
     },
     { phase: phaseCommandSmoke },
   );
   await measuredStep(
     "CLI type stdin",
     async () => {
-      simdeckJson(["type", simulatorUDID, "--stdin"], {
+      simdeckJson(["type", "--stdin"], {
         input: "stdin input",
       });
     },
@@ -319,7 +316,6 @@ async function main() {
     async () => {
       const batch = simdeckJson([
         "batch",
-        simulatorUDID,
         "--step",
         "button home",
         "--step",
@@ -339,7 +335,7 @@ async function main() {
 
   await measuredStep(
     "CLI uninstall fixture",
-    () => simdeckJson(["uninstall", simulatorUDID, fixtureBundleId]),
+    () => simdeckJson(["uninstall", fixtureBundleId]),
     { phase: phaseSimulatorLifecycle },
   );
   await measuredStep(
@@ -509,7 +505,6 @@ async function runCliControls() {
     "CLI tap label shorthand",
     ["tap", "Continue", "--wait-timeout-ms", "15000", "--duration-ms", "30"],
     {
-      env: { SIMDECK_DEVICE: simulatorUDID },
       timeoutMs: 180_000,
       maxElapsedMs: 60_000,
     },
@@ -1687,7 +1682,7 @@ function simdeckText(args, options = {}) {
     timeoutMs: options.timeoutMs ?? 120_000,
     maxElapsedMs: options.maxElapsedMs,
     input: options.input,
-    env: options.env,
+    env: { HOME: tempRoot, ...(options.env ?? {}) },
   });
 }
 
@@ -1728,6 +1723,7 @@ function runBuffer(command, args, options = {}) {
     cwd: root,
     encoding: "buffer",
     maxBuffer: options.maxBuffer ?? 16 * 1024 * 1024,
+    env: options.env ? { ...process.env, ...options.env } : process.env,
     timeout: options.timeoutMs ?? 120_000,
   });
   if (result.status !== 0) {

@@ -86,7 +86,7 @@ struct Cli {
         long,
         global = true,
         value_name = "SIMULATOR_NAME_OR_UDID",
-        help = "Default simulator for commands that can infer their target"
+        help = "Override the simulator target for this command"
     )]
     device: Option<String>,
     #[command(subcommand)]
@@ -192,50 +192,54 @@ enum Command {
         #[arg(long, value_enum, default_value_t = ListFormat::CompactJson)]
         format: ListFormat,
     },
-    Boot {
+    Use {
+        #[arg(value_name = "UDID")]
         udid: String,
+    },
+    Boot {
+        udid: Option<String>,
     },
     Shutdown {
-        udid: String,
+        udid: Option<String>,
     },
     OpenUrl {
-        udid: String,
-        url: String,
+        #[arg(value_name = "UDID_OR_URL", num_args = 1..=2)]
+        args: Vec<String>,
     },
     Launch {
-        udid: String,
-        bundle_id: String,
+        #[arg(value_name = "UDID_OR_BUNDLE_ID", num_args = 1..=2)]
+        args: Vec<String>,
     },
     ToggleAppearance {
-        udid: String,
+        udid: Option<String>,
     },
     Erase {
-        udid: String,
+        udid: Option<String>,
     },
     Install {
-        udid: String,
-        app_path: String,
+        #[arg(value_name = "UDID_OR_APP_PATH", num_args = 1..=2)]
+        args: Vec<String>,
     },
     Uninstall {
-        udid: String,
-        bundle_id: String,
+        #[arg(value_name = "UDID_OR_BUNDLE_ID", num_args = 1..=2)]
+        args: Vec<String>,
     },
     Pasteboard {
         #[command(subcommand)]
         command: PasteboardCommand,
     },
     Logs {
-        udid: String,
+        udid: Option<String>,
         #[arg(long, default_value_t = 30.0)]
         seconds: f64,
         #[arg(long, default_value_t = 200)]
         limit: usize,
     },
     Processes {
-        udid: String,
+        udid: Option<String>,
     },
     Stats {
-        udid: String,
+        udid: Option<String>,
         #[arg(long)]
         pid: Option<i32>,
         #[arg(long)]
@@ -244,14 +248,14 @@ enum Command {
         interval: f64,
     },
     Sample {
-        udid: String,
+        udid: Option<String>,
         #[arg(long)]
         pid: Option<i32>,
         #[arg(long, default_value_t = 3)]
         seconds: u64,
     },
     Screenshot {
-        udid: String,
+        udid: Option<String>,
         #[arg(short, long)]
         output: Option<PathBuf>,
         #[arg(long)]
@@ -260,7 +264,7 @@ enum Command {
         with_bezel: bool,
     },
     Record {
-        udid: String,
+        udid: Option<String>,
         #[arg(short, long)]
         output: Option<PathBuf>,
         #[arg(long)]
@@ -269,7 +273,7 @@ enum Command {
         seconds: f64,
     },
     Stream {
-        udid: String,
+        udid: Option<String>,
         #[arg(long, default_value_t = 0)]
         frames: u64,
     },
@@ -292,9 +296,8 @@ enum Command {
         direct: bool,
     },
     Touch {
-        udid: String,
-        x: f64,
-        y: f64,
+        #[arg(value_name = "UDID_OR_POINT", num_args = 2..=3)]
+        args: Vec<String>,
         #[arg(long, default_value = "began")]
         phase: String,
         #[arg(long)]
@@ -331,7 +334,7 @@ enum Command {
         post_delay_ms: u64,
     },
     WaitFor {
-        udid: String,
+        udid: Option<String>,
         #[command(flatten)]
         selector: SelectorArgs,
         #[arg(long, value_enum, default_value_t = DescribeUiSource::Auto)]
@@ -346,7 +349,7 @@ enum Command {
         poll_interval_ms: u64,
     },
     Assert {
-        udid: String,
+        udid: Option<String>,
         #[command(flatten)]
         selector: SelectorArgs,
         #[arg(long, value_enum, default_value_t = DescribeUiSource::Auto)]
@@ -361,11 +364,8 @@ enum Command {
         poll_interval_ms: u64,
     },
     Swipe {
-        udid: String,
-        start_x: f64,
-        start_y: f64,
-        end_x: f64,
-        end_y: f64,
+        #[arg(value_name = "UDID_OR_POINTS", num_args = 4..=5)]
+        args: Vec<String>,
         #[arg(long)]
         normalized: bool,
         #[arg(long, default_value_t = 350)]
@@ -378,8 +378,8 @@ enum Command {
         post_delay_ms: u64,
     },
     Gesture {
-        udid: String,
-        preset: String,
+        #[arg(value_name = "UDID_OR_PRESET", num_args = 1..=2)]
+        args: Vec<String>,
         #[arg(long)]
         screen_width: Option<f64>,
         #[arg(long)]
@@ -396,9 +396,8 @@ enum Command {
         post_delay_ms: u64,
     },
     Pinch {
-        udid: String,
-        center_x: Option<f64>,
-        center_y: Option<f64>,
+        #[arg(value_name = "UDID_OR_CENTER", num_args = 0..=3)]
+        args: Vec<String>,
         #[arg(long, default_value_t = 160.0)]
         start_distance: f64,
         #[arg(long, default_value_t = 80.0)]
@@ -413,9 +412,8 @@ enum Command {
         steps: u32,
     },
     RotateGesture {
-        udid: String,
-        center_x: Option<f64>,
-        center_y: Option<f64>,
+        #[arg(value_name = "UDID_OR_CENTER", num_args = 0..=3)]
+        args: Vec<String>,
         #[arg(long, default_value_t = 100.0)]
         radius: f64,
         #[arg(long, default_value_t = 90.0)]
@@ -428,8 +426,8 @@ enum Command {
         steps: u32,
     },
     Key {
-        udid: String,
-        key: String,
+        #[arg(value_name = "UDID_OR_KEY", num_args = 1..=2)]
+        args: Vec<String>,
         #[arg(long, default_value_t = 0)]
         modifiers: u32,
         #[arg(long, default_value_t = 0)]
@@ -440,22 +438,22 @@ enum Command {
         post_delay_ms: u64,
     },
     KeySequence {
-        udid: String,
+        udid: Option<String>,
         #[arg(long = "keycodes", alias = "keys")]
         keycodes: String,
         #[arg(long, default_value_t = 100)]
         delay_ms: u64,
     },
     KeyCombo {
-        udid: String,
+        udid: Option<String>,
         #[arg(long)]
         modifiers: String,
         #[arg(long)]
         key: String,
     },
     Type {
-        udid: String,
-        text: Option<String>,
+        #[arg(value_name = "UDID_OR_TEXT", num_args = 0..=2)]
+        args: Vec<String>,
         #[arg(long)]
         stdin: bool,
         #[arg(long)]
@@ -464,18 +462,18 @@ enum Command {
         delay_ms: u64,
     },
     Button {
-        udid: String,
-        button: String,
+        #[arg(value_name = "UDID_OR_BUTTON", num_args = 1..=2)]
+        args: Vec<String>,
         #[arg(long, default_value_t = 0)]
         duration_ms: u32,
     },
     Crown {
-        udid: String,
+        udid: Option<String>,
         #[arg(long, default_value_t = 50.0)]
         delta: f64,
     },
     Batch {
-        udid: String,
+        udid: Option<String>,
         #[arg(long = "step")]
         steps: Vec<String>,
         #[arg(long)]
@@ -486,22 +484,22 @@ enum Command {
         continue_on_error: bool,
     },
     DismissKeyboard {
-        udid: String,
+        udid: Option<String>,
     },
     Home {
-        udid: String,
+        udid: Option<String>,
     },
     AppSwitcher {
-        udid: String,
+        udid: Option<String>,
     },
     RotateLeft {
-        udid: String,
+        udid: Option<String>,
     },
     RotateRight {
-        udid: String,
+        udid: Option<String>,
     },
     ChromeProfile {
-        udid: String,
+        udid: Option<String>,
     },
 }
 
@@ -641,8 +639,8 @@ enum ProviderCommand {
 #[derive(Subcommand)]
 enum MaestroCommand {
     Test {
-        udid: String,
-        flow: PathBuf,
+        #[arg(value_name = "UDID_OR_FLOW", num_args = 1..=2)]
+        args: Vec<String>,
         #[arg(long)]
         artifacts_dir: Option<PathBuf>,
         #[arg(long)]
@@ -725,11 +723,11 @@ enum CoreSimulatorCommand {
 #[derive(Subcommand)]
 enum PasteboardCommand {
     Get {
-        udid: String,
+        udid: Option<String>,
     },
     Set {
-        udid: String,
-        text: Option<String>,
+        #[arg(value_name = "UDID_OR_TEXT", num_args = 0..=2)]
+        args: Vec<String>,
         #[arg(long)]
         stdin: bool,
         #[arg(long)]
@@ -878,6 +876,18 @@ struct DaemonMetadata {
     stream_quality_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     local_stream_fps: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectDeviceSelection {
+    project_root: PathBuf,
+    udid: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime_name: Option<String>,
+    selected_at: u64,
 }
 
 fn default_daemon_port() -> u16 {
@@ -1862,6 +1872,47 @@ fn daemon_log_path_for_root(root: &Path) -> anyhow::Result<PathBuf> {
         .join(format!("{:016x}.log", hasher.finish())))
 }
 
+fn read_project_device_selection() -> anyhow::Result<Option<ProjectDeviceSelection>> {
+    let root = project_root()?;
+    let path = project_device_selection_path_for_root(&root)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let selection = serde_json::from_str::<ProjectDeviceSelection>(&data)
+        .with_context(|| format!("parse simulator selection {}", path.display()))?;
+    if selection.project_root != root {
+        return Ok(None);
+    }
+    Ok(Some(selection))
+}
+
+fn write_project_device_selection(selection: &ProjectDeviceSelection) -> anyhow::Result<PathBuf> {
+    let path = project_device_selection_path_for_root(&selection.project_root)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, serde_json::to_vec_pretty(selection)?)
+        .with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
+}
+
+fn project_device_selection_path_for_root(root: &Path) -> anyhow::Result<PathBuf> {
+    let mut hasher = DefaultHasher::new();
+    root.to_string_lossy().hash(&mut hasher);
+    Ok(simdeck_user_state_dir()
+        .join("default-devices")
+        .join(format!("{:016x}.json", hasher.finish())))
+}
+
+fn simdeck_user_state_dir() -> PathBuf {
+    env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|home| home.join(".simdeck"))
+        .unwrap_or_else(|| env::temp_dir().join("simdeck"))
+}
+
 fn daemon_metadata_paths() -> anyhow::Result<Vec<PathBuf>> {
     let dir = env::temp_dir().join("simdeck");
     if !dir.exists() {
@@ -1963,6 +2014,7 @@ fn is_known_command(value: &str) -> bool {
             | "core-simulator"
             | "simctl-service"
             | "list"
+            | "use"
             | "boot"
             | "shutdown"
             | "open-url"
@@ -2003,7 +2055,15 @@ fn is_known_command(value: &str) -> bool {
 
 fn run_no_command_action(action: NoCommandAction) -> anyhow::Result<()> {
     match action {
-        NoCommandAction::Foreground(selector) => run_foreground_ui(selector),
+        NoCommandAction::Foreground(selector) => {
+            let selector = selector.or_else(|| {
+                read_project_device_selection()
+                    .ok()
+                    .flatten()
+                    .map(|selection| selection.udid)
+            });
+            run_foreground_ui(selector)
+        }
         NoCommandAction::Detached => start_detached_daemon(DaemonLaunchOptions::default()),
         NoCommandAction::Kill => stop_project_daemon(),
         NoCommandAction::Restart => restart_detached_daemon(DaemonLaunchOptions::default()),
@@ -2512,6 +2572,13 @@ fn resolve_cli_device_udid(
         return Ok(selector);
     }
 
+    if let Some(selection) = read_project_device_selection()? {
+        let udid = selection.udid.trim();
+        if !udid.is_empty() {
+            return Ok(udid.to_owned());
+        }
+    }
+
     let server_url = command_service_url(explicit_server_url)?;
     if let Some(simulator) = infer_default_cli_simulator(&server_url)? {
         return Ok(simulator.udid);
@@ -2524,14 +2591,14 @@ fn resolve_cli_device_udid(
         .collect::<Vec<_>>();
     if booted.len() > 1 {
         anyhow::bail!(
-            "Multiple booted simulators are available. Pass a UDID, use --device, or set SIMDECK_DEVICE."
+            "Multiple booted simulators are available. Pass a UDID, run `simdeck use <UDID>`, use --device, or set SIMDECK_DEVICE."
         );
     }
     if simulators.is_empty() {
         anyhow::bail!("No simulators are available. Boot one or pass a UDID explicitly.");
     }
     anyhow::bail!(
-        "No default simulator could be inferred. Pass a UDID, use --device, or set SIMDECK_DEVICE."
+        "No default simulator could be inferred. Pass a UDID, run `simdeck use <UDID>`, use --device, or set SIMDECK_DEVICE."
     )
 }
 
@@ -2620,6 +2687,134 @@ fn parse_tap_command_args(
 
     target.selector.label = Some(target_args.join(" "));
     Ok(target)
+}
+
+fn project_device_selection_for_selector(
+    selector: &str,
+    explicit_server_url: Option<&str>,
+) -> anyhow::Result<ProjectDeviceSelection> {
+    let selector = selector.trim();
+    if selector.is_empty() {
+        anyhow::bail!("simdeck use requires a simulator UDID or name.");
+    }
+
+    let project_root = project_root()?;
+    if android::is_android_id(selector) || looks_like_device_selector(selector) {
+        return Ok(ProjectDeviceSelection {
+            project_root,
+            udid: selector.to_owned(),
+            name: None,
+            runtime_name: None,
+            selected_at: now_secs(),
+        });
+    }
+
+    let server_url = command_service_url(explicit_server_url)?;
+    let matched = select_studio_simulator(&server_url, selector)?;
+    if let Some(simulator) = matched {
+        return Ok(ProjectDeviceSelection {
+            project_root,
+            udid: simulator.udid,
+            name: Some(simulator.name),
+            runtime_name: simulator.runtime_name,
+            selected_at: now_secs(),
+        });
+    }
+
+    anyhow::bail!("No simulator matched {selector:?}. Run `simdeck list` to see available UDIDs.")
+}
+
+fn parse_optional_udid_value_args(
+    command: &str,
+    args: Vec<String>,
+    value_name: &str,
+) -> anyhow::Result<(Option<String>, String)> {
+    let args = clean_cli_args(args);
+    match args.as_slice() {
+        [value] => Ok((None, value.clone())),
+        [udid, value] => Ok((Some(udid.clone()), value.clone())),
+        [] => anyhow::bail!("{command} requires {value_name}."),
+        _ => anyhow::bail!("{command} accepts either {value_name} or UDID {value_name}."),
+    }
+}
+
+fn parse_optional_udid_text_args(
+    command: &str,
+    args: Vec<String>,
+    has_non_positional_input: bool,
+) -> anyhow::Result<(Option<String>, Option<String>)> {
+    let args = clean_cli_args(args);
+    if has_non_positional_input {
+        return match args.as_slice() {
+            [] => Ok((None, None)),
+            [udid] => Ok((Some(udid.clone()), None)),
+            _ => anyhow::bail!(
+                "{command} accepts at most one positional UDID with --stdin or --file."
+            ),
+        };
+    }
+    match args.as_slice() {
+        [] => Ok((None, None)),
+        [text] => Ok((None, Some(text.clone()))),
+        [udid, text] => Ok((Some(udid.clone()), Some(text.clone()))),
+        _ => anyhow::bail!("{command} accepts either TEXT or UDID TEXT. Quote multi-word text."),
+    }
+}
+
+fn parse_optional_udid_f64_args(
+    command: &str,
+    args: Vec<String>,
+    expected_values: usize,
+) -> anyhow::Result<(Option<String>, Vec<f64>)> {
+    let args = clean_cli_args(args);
+    let (udid, values) = match args.len() {
+        len if len == expected_values => (None, args.as_slice()),
+        len if len == expected_values + 1 => (Some(args[0].clone()), &args[1..]),
+        _ => anyhow::bail!(
+            "{command} accepts either {expected_values} numeric values or UDID plus {expected_values} numeric values."
+        ),
+    };
+    let mut parsed = Vec::with_capacity(values.len());
+    for value in values {
+        parsed.push(parse_f64_arg(value).ok_or_else(|| {
+            anyhow::anyhow!("{command} expected a finite number, got {value:?}.")
+        })?);
+    }
+    Ok((udid, parsed))
+}
+
+fn parse_optional_udid_point_args(
+    command: &str,
+    args: Vec<String>,
+) -> anyhow::Result<(Option<String>, Option<f64>, Option<f64>)> {
+    let args = clean_cli_args(args);
+    match args.as_slice() {
+        [] => Ok((None, None, None)),
+        [udid] => Ok((Some(udid.clone()), None, None)),
+        [x, y] => Ok((
+            None,
+            Some(parse_required_f64_arg(command, x)?),
+            Some(parse_required_f64_arg(command, y)?),
+        )),
+        [udid, x, y] => Ok((
+            Some(udid.clone()),
+            Some(parse_required_f64_arg(command, x)?),
+            Some(parse_required_f64_arg(command, y)?),
+        )),
+        _ => anyhow::bail!("{command} accepts [UDID] or [UDID] CENTER_X CENTER_Y."),
+    }
+}
+
+fn parse_required_f64_arg(command: &str, value: &str) -> anyhow::Result<f64> {
+    parse_f64_arg(value)
+        .ok_or_else(|| anyhow::anyhow!("{command} expected a finite number, got {value:?}."))
+}
+
+fn clean_cli_args(args: Vec<String>) -> Vec<String> {
+    args.into_iter()
+        .map(|arg| arg.trim().to_owned())
+        .filter(|arg| !arg.is_empty())
+        .collect()
 }
 
 fn parse_f64_arg(value: &str) -> Option<f64> {
@@ -2792,6 +2987,13 @@ fn main() -> anyhow::Result<()> {
         .or_else(|| env::var("SIMDECK_SERVER_URL").ok())
         .filter(|value| !value.trim().is_empty());
     let bridge = NativeBridge;
+    let resolve_device_udid = |udid: Option<&str>| -> anyhow::Result<String> {
+        resolve_cli_device_udid(
+            udid,
+            device_selector.as_deref(),
+            explicit_server_url.as_deref(),
+        )
+    };
 
     match cli.command {
         Command::Ui {
@@ -2985,11 +3187,13 @@ fn main() -> anyhow::Result<()> {
         Command::Provider { command } => run_provider_command(command),
         Command::Maestro { command } => match command {
             MaestroCommand::Test {
-                udid,
-                flow,
+                args,
                 artifacts_dir,
                 continue_on_error,
             } => {
+                let (udid, flow) = parse_optional_udid_value_args("maestro test", args, "FLOW")?;
+                let udid = resolve_device_udid(udid.as_deref())?;
+                let flow = PathBuf::from(flow);
                 let service_url = command_service_url(explicit_server_url.as_deref())?;
                 let report =
                     run_maestro_flow(&service_url, &udid, &flow, artifacts_dir, continue_on_error)?;
@@ -3128,7 +3332,23 @@ fn main() -> anyhow::Result<()> {
             print_list_simulators(&simulators, format)?;
             Ok(())
         }
+        Command::Use { udid } => {
+            let selection =
+                project_device_selection_for_selector(&udid, explicit_server_url.as_deref())?;
+            let path = write_project_device_selection(&selection)?;
+            println_json(&serde_json::json!({
+                "ok": true,
+                "action": "use",
+                "udid": selection.udid,
+                "name": selection.name,
+                "runtimeName": selection.runtime_name,
+                "projectRoot": selection.project_root,
+                "path": path,
+            }))?;
+            Ok(())
+        }
         Command::Boot { udid } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(&service_url, &udid, "boot", &Value::Null)?;
             println!(
@@ -3140,6 +3360,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Shutdown { udid } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(&service_url, &udid, "shutdown", &Value::Null)?;
             println!(
@@ -3150,7 +3371,9 @@ fn main() -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Command::OpenUrl { udid, url } => {
+        Command::OpenUrl { args } => {
+            let (udid, url) = parse_optional_udid_value_args("open-url", args, "URL")?;
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_open_url(&service_url, &udid, &url)?;
             println!(
@@ -3161,7 +3384,9 @@ fn main() -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Command::Launch { udid, bundle_id } => {
+        Command::Launch { args } => {
+            let (udid, bundle_id) = parse_optional_udid_value_args("launch", args, "BUNDLE_ID")?;
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_launch(&service_url, &udid, &bundle_id)?;
             println!(
@@ -3173,6 +3398,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::ToggleAppearance { udid } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(&service_url, &udid, "toggle-appearance", &Value::Null)?;
             println_json(
@@ -3181,12 +3407,15 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Erase { udid } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(&service_url, &udid, "erase", &Value::Null)?;
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "erase" }))?;
             Ok(())
         }
-        Command::Install { udid, app_path } => {
+        Command::Install { args } => {
+            let (udid, app_path) = parse_optional_udid_value_args("install", args, "APP_PATH")?;
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(
                 &service_url,
@@ -3199,7 +3428,9 @@ fn main() -> anyhow::Result<()> {
             )?;
             Ok(())
         }
-        Command::Uninstall { udid, bundle_id } => {
+        Command::Uninstall { args } => {
+            let (udid, bundle_id) = parse_optional_udid_value_args("uninstall", args, "BUNDLE_ID")?;
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             service_post_ok(
                 &service_url,
@@ -3214,6 +3445,7 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Pasteboard { command } => match command {
             PasteboardCommand::Get { udid } => {
+                let udid = resolve_device_udid(udid.as_deref())?;
                 let service_url = command_service_url(explicit_server_url.as_deref())?;
                 let text = service_get_json(
                     &service_url,
@@ -3226,12 +3458,14 @@ fn main() -> anyhow::Result<()> {
                 println_json(&serde_json::json!({ "udid": udid, "text": text }))?;
                 Ok(())
             }
-            PasteboardCommand::Set {
-                udid,
-                text,
-                stdin,
-                file,
-            } => {
+            PasteboardCommand::Set { args, stdin, file } => {
+                let has_non_positional_input = stdin || file.is_some();
+                let (udid, text) = parse_optional_udid_text_args(
+                    "pasteboard set",
+                    args,
+                    has_non_positional_input,
+                )?;
+                let udid = resolve_device_udid(udid.as_deref())?;
                 let service_url = command_service_url(explicit_server_url.as_deref())?;
                 let text = read_text_input(text, stdin, file)?;
                 service_post_ok(
@@ -3251,6 +3485,7 @@ fn main() -> anyhow::Result<()> {
             seconds,
             limit,
         } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             let filters = native::bridge::LogFilters::new(Vec::new(), Vec::new(), String::new());
             let _ = filters;
@@ -3268,6 +3503,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Processes { udid } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             let processes = service_get_json(
                 &service_url,
@@ -3282,6 +3518,7 @@ fn main() -> anyhow::Result<()> {
             watch,
             interval,
         } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             if watch {
                 run_stats_watch(&service_url, &udid, pid, interval)?;
@@ -3292,6 +3529,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Sample { udid, pid, seconds } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             let pid = match pid {
                 Some(pid) => pid,
@@ -3320,6 +3558,7 @@ fn main() -> anyhow::Result<()> {
             stdout,
             with_bezel,
         } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             let query = if with_bezel { "?bezel=true" } else { "" };
             let png = service_get_bytes(
@@ -3353,6 +3592,7 @@ fn main() -> anyhow::Result<()> {
             stdout,
             seconds,
         } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             let mp4 = service_post_bytes(
                 &service_url,
@@ -3379,7 +3619,10 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::Stream { udid, frames } => run_stream_stdout(&bridge, udid, frames),
+        Command::Stream { udid, frames } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
+            run_stream_stdout(&bridge, udid, frames)
+        }
         Command::DescribeUi {
             udid,
             point,
@@ -3415,15 +3658,17 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Touch {
-            udid,
-            x,
-            y,
+            args,
             phase,
             normalized,
             down,
             up,
             delay_ms,
         } => {
+            let (udid, points) = parse_optional_udid_f64_args("touch", args, 2)?;
+            let udid = resolve_device_udid(udid.as_deref())?;
+            let x = points[0];
+            let y = points[1];
             let android_device = android::is_android_id(&udid);
             if android_device && !normalized {
                 anyhow::bail!("Android touch coordinates require --normalized.");
@@ -3584,6 +3829,7 @@ fn main() -> anyhow::Result<()> {
             timeout_ms,
             poll_interval_ms,
         } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             let result = service_wait_for_selector(
                 &service_url,
@@ -3608,6 +3854,7 @@ fn main() -> anyhow::Result<()> {
             timeout_ms,
             poll_interval_ms,
         } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             let result = service_wait_for_selector(
                 &service_url,
@@ -3624,17 +3871,19 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Swipe {
-            udid,
-            start_x,
-            start_y,
-            end_x,
-            end_y,
+            args,
             normalized,
             duration_ms,
             steps,
             pre_delay_ms,
             post_delay_ms,
         } => {
+            let (udid, points) = parse_optional_udid_f64_args("swipe", args, 4)?;
+            let udid = resolve_device_udid(udid.as_deref())?;
+            let start_x = points[0];
+            let start_y = points[1];
+            let end_x = points[2];
+            let end_y = points[3];
             let android_device = android::is_android_id(&udid);
             if android_device && !normalized {
                 anyhow::bail!("Android swipe coordinates require --normalized.");
@@ -3694,8 +3943,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Gesture {
-            udid,
-            preset,
+            args,
             screen_width,
             screen_height,
             normalized,
@@ -3704,6 +3952,8 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
+            let (udid, preset) = parse_optional_udid_value_args("gesture", args, "PRESET")?;
+            let udid = resolve_device_udid(udid.as_deref())?;
             let android_device = android::is_android_id(&udid);
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
@@ -3783,9 +4033,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Pinch {
-            udid,
-            center_x,
-            center_y,
+            args,
             start_distance,
             end_distance,
             angle_degrees,
@@ -3793,6 +4041,8 @@ fn main() -> anyhow::Result<()> {
             duration_ms,
             steps,
         } => {
+            let (udid, center_x, center_y) = parse_optional_udid_point_args("pinch", args)?;
+            let udid = resolve_device_udid(udid.as_deref())?;
             if android::is_android_id(&udid) {
                 anyhow::bail!("Android pinch gestures are not supported by the ADB input bridge.");
             }
@@ -3812,15 +4062,16 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::RotateGesture {
-            udid,
-            center_x,
-            center_y,
+            args,
             radius,
             degrees,
             normalized,
             duration_ms,
             steps,
         } => {
+            let (udid, center_x, center_y) =
+                parse_optional_udid_point_args("rotate-gesture", args)?;
+            let udid = resolve_device_udid(udid.as_deref())?;
             if android::is_android_id(&udid) {
                 anyhow::bail!("Android rotate gestures are not supported by the ADB input bridge.");
             }
@@ -3843,13 +4094,14 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Key {
-            udid,
-            key,
+            args,
             modifiers,
             duration_ms,
             pre_delay_ms,
             post_delay_ms,
         } => {
+            let (udid, key) = parse_optional_udid_value_args("key", args, "KEY")?;
+            let udid = resolve_device_udid(udid.as_deref())?;
             let key_code = parse_hid_key(&key)?;
             sleep_ms(pre_delay_ms);
             let command_server_url =
@@ -3873,6 +4125,7 @@ fn main() -> anyhow::Result<()> {
             keycodes,
             delay_ms,
         } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let keys = parse_key_list(&keycodes)?;
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
@@ -3897,6 +4150,7 @@ fn main() -> anyhow::Result<()> {
             modifiers,
             key,
         } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let modifier_mask = parse_modifier_mask(&modifiers)?;
             let key_code = parse_hid_key(&key)?;
             let command_server_url =
@@ -3910,12 +4164,15 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Type {
-            udid,
-            text,
+            args,
             stdin,
             file,
             delay_ms,
         } => {
+            let has_non_positional_input = stdin || file.is_some();
+            let (udid, text) =
+                parse_optional_udid_text_args("type", args, has_non_positional_input)?;
+            let udid = resolve_device_udid(udid.as_deref())?;
             let text = read_text_input(text, stdin, file)?;
             if android::is_android_id(&udid) {
                 let server_url = command_service_url(explicit_server_url.as_deref())?;
@@ -3935,11 +4192,9 @@ fn main() -> anyhow::Result<()> {
             println_json(&serde_json::json!({ "ok": true, "udid": udid, "action": "type" }))?;
             Ok(())
         }
-        Command::Button {
-            udid,
-            button,
-            duration_ms,
-        } => {
+        Command::Button { args, duration_ms } => {
+            let (udid, button) = parse_optional_udid_value_args("button", args, "BUTTON")?;
+            let udid = resolve_device_udid(udid.as_deref())?;
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
@@ -3953,6 +4208,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Crown { udid, delta } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             if let Some(server_url) = service_url.as_deref() {
                 service_crown(server_url, &udid, delta)?;
             } else {
@@ -3970,6 +4226,7 @@ fn main() -> anyhow::Result<()> {
             stdin,
             continue_on_error,
         } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             let report = if let Some(server_url) = command_server_url.as_deref() {
@@ -3987,6 +4244,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::DismissKeyboard { udid } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
@@ -4003,6 +4261,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Home { udid } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
@@ -4014,6 +4273,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::AppSwitcher { udid } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
@@ -4027,6 +4287,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::RotateLeft { udid } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
@@ -4040,6 +4301,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::RotateRight { udid } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let command_server_url =
                 command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
             if let Some(server_url) = command_server_url.as_deref() {
@@ -4053,6 +4315,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::ChromeProfile { udid } => {
+            let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
             let profile = service_get_json(
                 &service_url,
@@ -7651,14 +7914,16 @@ mod tests {
         batch_line_to_json_step, daemon_matches_launch_options, http_url_for_host,
         interactive_accessibility_snapshot, is_tailscale_ip, maestro_commands_from_flow,
         maestro_selector, normalize_accessibility_point_for_display, parse_maestro_flow_yaml,
-        parse_maestro_point, parse_tap_command_args, parse_workspace_daemon_process_line,
-        render_agent_accessibility_tree, render_qr_code, run_maestro_command,
-        server_health_watchdog_should_restart, service_post_error_is_retryable, simdeck_pair_url,
-        studio_daemon_restart_args, workspace_daemon_process_is_current, Cli, Command,
-        DaemonCommand, DaemonLaunchOptions, DaemonMetadata, ElementSelector, PairingAddress,
-        ServiceCommand, StreamQualityProfileArg, StudioExposeOptions, TapCommandTarget,
-        VideoCodecMode, WorkspaceDaemonProcess, YamlValue, DEFAULT_LOCAL_STREAM_QUALITY_PROFILE,
-        SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD, SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
+        parse_maestro_point, parse_optional_udid_f64_args, parse_optional_udid_text_args,
+        parse_optional_udid_value_args, parse_tap_command_args,
+        parse_workspace_daemon_process_line, render_agent_accessibility_tree, render_qr_code,
+        run_maestro_command, server_health_watchdog_should_restart,
+        service_post_error_is_retryable, simdeck_pair_url, studio_daemon_restart_args,
+        workspace_daemon_process_is_current, Cli, Command, DaemonCommand, DaemonLaunchOptions,
+        DaemonMetadata, ElementSelector, PairingAddress, ServiceCommand, StreamQualityProfileArg,
+        StudioExposeOptions, TapCommandTarget, VideoCodecMode, WorkspaceDaemonProcess, YamlValue,
+        DEFAULT_LOCAL_STREAM_QUALITY_PROFILE, SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD,
+        SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
     };
     use clap::Parser;
     use std::collections::HashMap;
@@ -8158,6 +8423,109 @@ mod tests {
             Cli::try_parse_from(["simdeck", "--device", "iPhone 16", "tap", "Continue"]).unwrap();
 
         assert_eq!(parsed.device.as_deref(), Some("iPhone 16"));
+    }
+
+    #[test]
+    fn use_command_accepts_udid_selector() {
+        let parsed =
+            Cli::try_parse_from(["simdeck", "use", "00000000-0000-0000-0000-000000000001"])
+                .unwrap();
+
+        let Command::Use { udid } = parsed.command else {
+            panic!("expected use command");
+        };
+        assert_eq!(udid, "00000000-0000-0000-0000-000000000001");
+    }
+
+    #[test]
+    fn device_commands_accept_omitted_udid() {
+        let parsed = Cli::try_parse_from(["simdeck", "boot"]).unwrap();
+        let Command::Boot { udid } = parsed.command else {
+            panic!("expected boot command");
+        };
+        assert_eq!(udid, None);
+
+        let parsed = Cli::try_parse_from(["simdeck", "home"]).unwrap();
+        let Command::Home { udid } = parsed.command else {
+            panic!("expected home command");
+        };
+        assert_eq!(udid, None);
+
+        let parsed = Cli::try_parse_from(["simdeck", "screenshot", "--stdout"]).unwrap();
+        let Command::Screenshot { udid, stdout, .. } = parsed.command else {
+            panic!("expected screenshot command");
+        };
+        assert_eq!(udid, None);
+        assert!(stdout);
+    }
+
+    #[test]
+    fn payload_commands_keep_legacy_udid_but_allow_default_device() {
+        let parsed = Cli::try_parse_from(["simdeck", "launch", "com.example.App"]).unwrap();
+        let Command::Launch { args } = parsed.command else {
+            panic!("expected launch command");
+        };
+        let (udid, bundle_id) =
+            parse_optional_udid_value_args("launch", args, "BUNDLE_ID").unwrap();
+        assert_eq!(udid, None);
+        assert_eq!(bundle_id, "com.example.App");
+
+        let parsed =
+            Cli::try_parse_from(["simdeck", "launch", "SIM-1", "com.example.App"]).unwrap();
+        let Command::Launch { args } = parsed.command else {
+            panic!("expected launch command");
+        };
+        let (udid, bundle_id) =
+            parse_optional_udid_value_args("launch", args, "BUNDLE_ID").unwrap();
+        assert_eq!(udid.as_deref(), Some("SIM-1"));
+        assert_eq!(bundle_id, "com.example.App");
+    }
+
+    #[test]
+    fn coordinate_commands_keep_legacy_udid_but_allow_default_device() {
+        let parsed = Cli::try_parse_from(["simdeck", "touch", "120", "240"]).unwrap();
+        let Command::Touch { args, .. } = parsed.command else {
+            panic!("expected touch command");
+        };
+        let (udid, points) = parse_optional_udid_f64_args("touch", args, 2).unwrap();
+        assert_eq!(udid, None);
+        assert_eq!(points, vec![120.0, 240.0]);
+
+        let parsed =
+            Cli::try_parse_from(["simdeck", "swipe", "SIM-1", "10", "20", "30", "40"]).unwrap();
+        let Command::Swipe { args, .. } = parsed.command else {
+            panic!("expected swipe command");
+        };
+        let (udid, points) = parse_optional_udid_f64_args("swipe", args, 4).unwrap();
+        assert_eq!(udid.as_deref(), Some("SIM-1"));
+        assert_eq!(points, vec![10.0, 20.0, 30.0, 40.0]);
+    }
+
+    #[test]
+    fn text_commands_use_positional_text_or_legacy_udid_with_input_flags() {
+        let parsed = Cli::try_parse_from(["simdeck", "type", "hello"]).unwrap();
+        let Command::Type {
+            args, stdin, file, ..
+        } = parsed.command
+        else {
+            panic!("expected type command");
+        };
+        let (udid, text) =
+            parse_optional_udid_text_args("type", args, stdin || file.is_some()).unwrap();
+        assert_eq!(udid, None);
+        assert_eq!(text.as_deref(), Some("hello"));
+
+        let parsed = Cli::try_parse_from(["simdeck", "type", "SIM-1", "--stdin"]).unwrap();
+        let Command::Type {
+            args, stdin, file, ..
+        } = parsed.command
+        else {
+            panic!("expected type command");
+        };
+        let (udid, text) =
+            parse_optional_udid_text_args("type", args, stdin || file.is_some()).unwrap();
+        assert_eq!(udid.as_deref(), Some("SIM-1"));
+        assert_eq!(text, None);
     }
 
     #[test]

@@ -10,10 +10,14 @@ simdeck daemon start --help
 
 ## Global
 
-| Flag                  | Env                  | Purpose                                        |
-| --------------------- | -------------------- | ---------------------------------------------- |
-| `--server-url <url>`  | `SIMDECK_SERVER_URL` | Target a specific running daemon               |
-| `--device <selector>` | `SIMDECK_DEVICE`     | Default simulator for inferred-device commands |
+| Flag                  | Env                  | Purpose                          |
+| --------------------- | -------------------- | -------------------------------- |
+| `--server-url <url>`  | `SIMDECK_SERVER_URL` | Target a specific running daemon |
+| `--device <selector>` | `SIMDECK_DEVICE`     | One-off simulator override       |
+
+`SIMDECK_UDID` is also accepted for compatibility. Device commands resolve in
+this order: positional UDID, `--device`, `SIMDECK_DEVICE`, `SIMDECK_UDID`, the
+project default from `simdeck use <udid>`, then auto-inference from the daemon.
 
 ## Server Options
 

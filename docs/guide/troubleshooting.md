@@ -161,10 +161,10 @@ The fallback is expected when no in-app inspector is available. Check:
 Use a forced source to see the failure reason:
 
 ```sh
-simdeck describe <udid> --source nativescript
-simdeck describe <udid> --source react-native
-simdeck describe <udid> --source flutter
-simdeck describe <udid> --source uikit
+simdeck describe --source nativescript
+simdeck describe --source react-native
+simdeck describe --source flutter
+simdeck describe --source uikit
 ```
 
 ### NativeScript inspector does not connect

@@ -94,10 +94,11 @@ CLI commands automatically use the same warm daemon:
 
 ```sh
 simdeck list
-simdeck tap <udid> 0.5 0.5 --normalized
-simdeck describe <udid> --format agent --max-depth 2
-SIMDECK_DEVICE=<udid> simdeck tap "Continue"
-simdeck --device <udid> describe --format agent --max-depth 2 --interactive
+simdeck use <udid>
+simdeck tap 0.5 0.5 --normalized
+simdeck tap "Continue"
+simdeck describe --format agent --max-depth 2 --interactive
+simdeck --device <other-udid> describe --format agent --max-depth 2
 ```
 
 ## Daemon
@@ -140,65 +141,72 @@ simdeck core-simulator shutdown
 
 ```sh
 simdeck list
+simdeck use <udid>
 simdeck boot <udid>
-simdeck shutdown <udid>
-simdeck erase <udid>
-simdeck install <udid> /path/to/App.app
-simdeck install <udid> /path/to/App.ipa
+simdeck shutdown
+simdeck erase
+simdeck install /path/to/App.app
+simdeck install /path/to/App.ipa
 simdeck install android:<avd-name> /path/to/app.apk
-simdeck uninstall <udid> com.example.App
-simdeck open-url <udid> https://example.com
-simdeck launch <udid> com.apple.Preferences
-simdeck toggle-appearance <udid>
-simdeck pasteboard set <udid> "hello"
-simdeck pasteboard get <udid>
-simdeck screenshot <udid> --output screen.png
-simdeck screenshot <udid> --with-bezel --output screen-bezel.png
-simdeck record <udid> --seconds 5 --output screen-recording.mp4
-simdeck stream <udid> --frames 120 > stream.h264
-simdeck describe <udid>
-simdeck describe <udid> --format agent --max-depth 4
-simdeck describe <udid> --format agent --max-depth 4 --interactive
-simdeck describe <udid> --point 120,240
-simdeck wait-for <udid> --label "Welcome" --timeout-ms 5000
-simdeck assert <udid> --id login.button --source auto --max-depth 8
-simdeck tap <udid> 120 240
-simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
+simdeck uninstall com.example.App
+simdeck open-url https://example.com
+simdeck launch com.apple.Preferences
+simdeck toggle-appearance
+simdeck pasteboard set "hello"
+simdeck pasteboard get
+simdeck screenshot --output screen.png
+simdeck screenshot --with-bezel --output screen-bezel.png
+simdeck record --seconds 5 --output screen-recording.mp4
+simdeck stream --frames 120 > stream.h264
+simdeck describe
+simdeck describe --format agent --max-depth 4
+simdeck describe --format agent --max-depth 4 --interactive
+simdeck describe --point 120,240
+simdeck wait-for --label "Welcome" --timeout-ms 5000
+simdeck assert --id login.button --source auto --max-depth 8
+simdeck tap 120 240
+simdeck tap --label "Continue" --wait-timeout-ms 5000
 simdeck tap "Continue"
-simdeck swipe <udid> 200 700 200 200
-simdeck gesture <udid> scroll-down
-simdeck pinch <udid> --start-distance 160 --end-distance 80
-simdeck rotate-gesture <udid> --radius 100 --degrees 90
-simdeck touch <udid> 0.5 0.5 --phase began --normalized
-simdeck touch <udid> 120 240 --down --up --delay-ms 800
-simdeck key <udid> enter
-simdeck key-sequence <udid> --keycodes h,e,l,l,o
-simdeck key-combo <udid> --modifiers cmd --key a
-simdeck type <udid> "hello"
-simdeck type <udid> --file message.txt
-simdeck button <udid> lock --duration-ms 1000
-simdeck button <udid> volume-up
-simdeck button <udid> action --duration-ms 1000
-simdeck button <udid> digital-crown
-simdeck crown <udid> --delta 50
-simdeck button <udid> left-side-button
-simdeck batch <udid> --step "tap --label Continue" --step "type 'hello'" --step "wait-for --label hello"
-simdeck dismiss-keyboard <udid>
-simdeck button <udid> software-keyboard
-simdeck home <udid>
-simdeck app-switcher <udid>
-simdeck rotate-left <udid>
-simdeck rotate-right <udid>
-simdeck chrome-profile <udid>
-simdeck logs <udid> --seconds 30 --limit 200
-simdeck processes <udid>
-simdeck stats <udid> --watch
-simdeck sample <udid> --seconds 3
+simdeck swipe 200 700 200 200
+simdeck gesture scroll-down
+simdeck pinch --start-distance 160 --end-distance 80
+simdeck rotate-gesture --radius 100 --degrees 90
+simdeck touch 0.5 0.5 --phase began --normalized
+simdeck touch 120 240 --down --up --delay-ms 800
+simdeck key enter
+simdeck key-sequence --keycodes h,e,l,l,o
+simdeck key-combo --modifiers cmd --key a
+simdeck type "hello"
+simdeck type --file message.txt
+simdeck button lock --duration-ms 1000
+simdeck button volume-up
+simdeck button action --duration-ms 1000
+simdeck button digital-crown
+simdeck crown --delta 50
+simdeck button left-side-button
+simdeck batch --step "tap --label Continue" --step "type 'hello'" --step "wait-for --label hello"
+simdeck dismiss-keyboard
+simdeck button software-keyboard
+simdeck home
+simdeck app-switcher
+simdeck rotate-left
+simdeck rotate-right
+simdeck chrome-profile
+simdeck logs --seconds 30 --limit 200
+simdeck processes
+simdeck stats --watch
+simdeck sample --seconds 3
 ```
 
 `simdeck list` defaults to compact JSON for agent-friendly device selection.
 Use `simdeck list --format json` for the full inventory with paths and display
 metadata.
+
+`simdeck use <udid>` stores a default simulator for the current project
+directory. Most device commands accept `[<udid>]`; when it is omitted, SimDeck
+uses `--device`, `SIMDECK_DEVICE`, `SIMDECK_UDID`, the saved project default,
+or the only booted simulator, in that order. The old explicit-UDID form still
+works for every command.
 
 `boot` uses SimDeck's private CoreSimulator boot path so it can start devices
 without launching Simulator.app. If that private path is unavailable, the
@@ -221,10 +229,11 @@ Flutter, or UIKit in-app inspectors, then falls back to the built-in private
 CoreSimulator accessibility bridge. Use `--format agent` or
 `--format compact-json` for
 lower-token hierarchy dumps, and add `--interactive`/`-i` when an agent only
-needs actionable elements plus their ancestors. `describe` and `tap` can infer a
-target from `--device`, `SIMDECK_DEVICE`, `SIMDECK_UDID`, or the only booted
-simulator. Coordinate commands accept screen coordinates from the accessibility
-tree by default; pass `--normalized` to send `0.0..1.0` coordinates directly.
+needs actionable elements plus their ancestors. Set a project default with
+`simdeck use <udid>` so agent commands can use short forms like
+`simdeck tap "Continue"` and `simdeck describe --format agent --max-depth 2`.
+Coordinate commands accept screen coordinates from the accessibility tree by
+default; pass `--normalized` to send `0.0..1.0` coordinates directly.
 
 ## JS/TS Tests
 
@@ -251,7 +260,7 @@ explicit UDID as the first argument when needed.
 Run common Maestro YAML flows against the same daemon-backed simulator API:
 
 ```sh
-simdeck maestro test <udid> flow.yaml --artifacts-dir artifacts/maestro
+simdeck maestro test flow.yaml --artifacts-dir artifacts/maestro
 ```
 
 ## NativeScript Inspector

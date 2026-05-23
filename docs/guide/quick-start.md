@@ -31,18 +31,21 @@ The UI lists available iOS Simulators and Android emulators. You can also use th
 
 ```sh
 simdeck list
+simdeck use <udid>
 simdeck boot <udid>
 ```
 
-Android emulator IDs are prefixed with `android:`.
+`simdeck use <udid>` saves the simulator default for this project directory so
+later device commands can omit the UDID. Android emulator IDs are prefixed with
+`android:`.
 
 ## 3. Install And Launch An App
 
 ```sh
-simdeck install <udid> /path/to/App.app
-simdeck install <udid> /path/to/App.ipa
-simdeck launch <udid> com.example.App
-simdeck open-url <udid> myapp://debug
+simdeck install /path/to/App.app
+simdeck install /path/to/App.ipa
+simdeck launch com.example.App
+simdeck open-url myapp://debug
 ```
 
 For Android:
@@ -57,17 +60,17 @@ simdeck launch android:<avd-name> com.example.app
 Use coordinates when you know them:
 
 ```sh
-simdeck tap <udid> 120 240
-simdeck swipe <udid> 200 700 200 200
-simdeck type <udid> "hello"
+simdeck tap 120 240
+simdeck swipe 200 700 200 200
+simdeck type "hello"
 ```
 
 Use selectors when you want automation to wait for UI state:
 
 ```sh
-simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
+simdeck tap --label "Continue" --wait-timeout-ms 5000
 simdeck tap "Continue"
-simdeck describe <udid> --format agent --max-depth 3 --interactive
+simdeck describe --format agent --max-depth 3 --interactive
 ```
 
 ## 5. Keep It Running In The Background

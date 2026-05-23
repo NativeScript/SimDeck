@@ -21,6 +21,11 @@ simdeck [SIMULATOR_NAME_OR_UDID]
 simdeck [--server-url <url>] <command> [options]
 ```
 
+Use `simdeck use <udid>` once per project directory to make that simulator the
+default for later device commands. Most commands accept `[<udid>]`; `--device`,
+`SIMDECK_DEVICE`, and `SIMDECK_UDID` override the saved project default when a
+one-off target is needed.
+
 Use `--server-url` or `SIMDECK_SERVER_URL` when a script should target a specific daemon:
 
 ```sh
@@ -31,23 +36,24 @@ SIMDECK_SERVER_URL=http://127.0.0.1:4310 simdeck list
 
 ```sh
 simdeck list
+simdeck use <udid>
 simdeck boot <udid>
-simdeck install <udid> /path/to/App.app
-simdeck install <udid> /path/to/App.ipa
-simdeck launch <udid> com.example.App
-simdeck open-url <udid> https://example.com
-simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
+simdeck install /path/to/App.app
+simdeck install /path/to/App.ipa
+simdeck launch com.example.App
+simdeck open-url https://example.com
+simdeck tap --label "Continue" --wait-timeout-ms 5000
 simdeck tap "Continue"
-simdeck describe <udid> --format agent --max-depth 3 --interactive
-simdeck screenshot <udid> --output screen.png
-simdeck screenshot <udid> --with-bezel --output screen-bezel.png
-simdeck record <udid> --seconds 5 --output screen-recording.mp4
-simdeck logs <udid> --seconds 30 --limit 200
-simdeck stats <udid>
-simdeck sample <udid> --seconds 3
+simdeck describe --format agent --max-depth 3 --interactive
+simdeck screenshot --output screen.png
+simdeck screenshot --with-bezel --output screen-bezel.png
+simdeck record --seconds 5 --output screen-recording.mp4
+simdeck logs --seconds 30 --limit 200
+simdeck stats
+simdeck sample --seconds 3
 ```
 
-`tap` and `describe` can infer their simulator from `--device`, `SIMDECK_DEVICE`, `SIMDECK_UDID`, or the only booted simulator.
+The explicit form still works, for example `simdeck launch <udid> com.example.App`.
 
 Most successful commands print JSON so they can be piped into tools such as `jq`.
 

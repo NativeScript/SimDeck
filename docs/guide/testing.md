@@ -51,7 +51,8 @@ Selectors can match `text`, `id`, `label`, `value`, `type`, `index`, `enabled`, 
 The CLI includes a compatibility runner for common Maestro YAML flows:
 
 ```sh
-simdeck maestro test <udid> flow.yaml --artifacts-dir artifacts/maestro
+simdeck use <udid>
+simdeck maestro test flow.yaml --artifacts-dir artifacts/maestro
 ```
 
 Supported commands include `launchApp`, `openLink`, `tapOn`, `inputText`, `eraseText`, `pressKey`, `assertVisible`, `assertNotVisible`, `scrollUntilVisible`, `swipe`, `takeScreenshot`, and `waitForAnimationToEnd`. Unsupported Maestro commands fail clearly so the flow can be adjusted or the compatibility layer can be expanded.
