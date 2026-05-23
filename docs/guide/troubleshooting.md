@@ -23,7 +23,7 @@ simdeck
 ### Port is already in use
 
 ```text
-bind HTTP listener on 127.0.0.1:4310
+bind HTTP listener on 127.0.0.1:4311
 ```
 
 Use another port:
@@ -35,7 +35,7 @@ simdeck ui --port 4320 --open
 Or find the listener:
 
 ```sh
-lsof -nP -iTCP:4310 -sTCP:LISTEN
+lsof -nP -iTCP:4311 -sTCP:LISTEN
 ```
 
 If it is an old project daemon:

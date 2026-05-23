@@ -9,14 +9,24 @@ import {
 interface UseKeyboardInputOptions {
   enabled: boolean;
   onKey: (payload: { keyCode: number; modifiers: number }) => void;
+  onToggleSoftwareKeyboard?: () => void;
 }
 
-export function useKeyboardInput({ enabled, onKey }: UseKeyboardInputOptions) {
+export function useKeyboardInput({
+  enabled,
+  onKey,
+  onToggleSoftwareKeyboard,
+}: UseKeyboardInputOptions) {
   const onKeyRef = useRef(onKey);
+  const onToggleSoftwareKeyboardRef = useRef(onToggleSoftwareKeyboard);
 
   useEffect(() => {
     onKeyRef.current = onKey;
   }, [onKey]);
+
+  useEffect(() => {
+    onToggleSoftwareKeyboardRef.current = onToggleSoftwareKeyboard;
+  }, [onToggleSoftwareKeyboard]);
 
   useEffect(() => {
     if (!enabled) {
@@ -28,6 +38,12 @@ export function useKeyboardInput({ enabled, onKey }: UseKeyboardInputOptions) {
         return;
       }
       if (isCopyShortcut(event) && hasDocumentSelection()) {
+        return;
+      }
+      if (isSoftwareKeyboardShortcut(event)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onToggleSoftwareKeyboardRef.current?.();
         return;
       }
 
@@ -43,6 +59,16 @@ export function useKeyboardInput({ enabled, onKey }: UseKeyboardInputOptions) {
     window.addEventListener("keydown", handleWindowKeyDown);
     return () => window.removeEventListener("keydown", handleWindowKeyDown);
   }, [enabled]);
+}
+
+function isSoftwareKeyboardShortcut(event: KeyboardEvent): boolean {
+  return (
+    event.key.toLowerCase() === "k" &&
+    event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey
+  );
 }
 
 function isCopyShortcut(event: KeyboardEvent): boolean {

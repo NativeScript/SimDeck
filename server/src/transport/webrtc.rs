@@ -943,6 +943,9 @@ async fn run_android_webrtc_control_message(
             )),
         },
         ControlMessage::DismissKeyboard => state.android.dismiss_keyboard(&udid),
+        ControlMessage::ToggleSoftwareKeyboard => Err(AppError::bad_request(
+            "Software keyboard toggle is only available for iOS simulators.",
+        )),
         ControlMessage::Home => state.android.press_home(&udid),
         ControlMessage::AppSwitcher => state.android.open_app_switcher(&udid),
         ControlMessage::RotateLeft => state.android.rotate_left(&udid),

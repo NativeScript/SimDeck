@@ -28,18 +28,19 @@ simdeck -r  # restarts the daemon
 simdeck daemon killall # kills all daemons on the machine, use with care
 ```
 
-Usually `http://127.0.0.1:4310` or `http://127.0.0.1:4310?device=<UDID>`.
-Port may increment if multiple daemons are running.
+Usually `http://127.0.0.1:4311` or `http://127.0.0.1:4311?device=<UDID>` for
+project daemons. The always-on LaunchAgent service stays on
+`http://127.0.0.1:4310`.
+Daemon ports may increment upward from 4311 if multiple daemons are running.
 Use `simdeck pair` when a native iOS client needs to pair. It starts or
 refreshes the global LaunchAgent-backed service, detects LAN and Tailscale IPv4
 addresses, and prints a QR with a `simdeck://pair` URL that carries the pairing
 code plus alternate server addresses.
 The LaunchAgent service token is stable across `simdeck pair`, `simdeck service
 on`, and `simdeck service restart`; use `simdeck service reset` only when you
-need to rotate the token and restart the service.
-If a workspace daemon is already on 4310, the LaunchAgent service moves to the
-next available service-discovery port, up to 4320, and leaves the workspace
-daemon running.
+need to rotate the token and restart the service. When that service is active,
+`simdeck` and `simdeck ui` report the service endpoints instead of starting a
+project daemon.
 
 Always first run `simdeck ui` to open the URL reported by the `simdeck ui` in the in-app browser using Browser Use tool if available.
 
@@ -155,6 +156,7 @@ simdeck key <UDID> 42 --duration-ms 500
 simdeck key-sequence <UDID> --keycodes h,e,l,l,o --delay-ms 75
 simdeck key-combo <UDID> --modifiers cmd,shift --key z
 simdeck dismiss-keyboard <UDID>
+simdeck button <UDID> software-keyboard
 simdeck button <UDID> home
 simdeck button <UDID> lock --duration-ms 1000
 simdeck button <UDID> side-button

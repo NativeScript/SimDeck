@@ -1,7 +1,4 @@
-import {
-  MixerHorizontalIcon as MenuIcon,
-  PlusIcon,
-} from "@radix-ui/react-icons";
+import { MixerHorizontalIcon as MenuIcon } from "@radix-ui/react-icons";
 import type { RefObject } from "react";
 
 import type { SimulatorMetadata } from "../../api/types";
@@ -13,30 +10,24 @@ import type {
   StreamTransport,
 } from "../stream/streamTypes";
 import { simulatorHasFixedOrientation } from "./simulatorDisplay";
-import { SimulatorRow } from "./SimulatorRow";
 
 interface SimulatorMenuProps {
+  captureBusy: boolean;
   debugVisible: boolean;
-  filteredSimulators: SimulatorMetadata[];
-  hideSimulatorSelection?: boolean;
-  isLoading: boolean;
   canInstallApp: boolean;
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
   onBoot: () => void;
   onCaptureScreenshot: () => void;
   onCaptureScreenshotWithBezel: () => void;
-  onChangeSearch: (value: string) => void;
   onCloseMenu: () => void;
   onDismissKeyboard: () => void;
   onHome: () => void;
   onInstallAppPrompt: () => void;
   onOpenAppSwitcher: () => void;
   onOpenBundlePrompt: () => void;
-  onOpenNewSimulator: () => void;
   onOpenUrlPrompt: () => void;
   onRotateRight: () => void;
-  onRecordScreen: () => void;
   onShutdown: () => void;
   onStreamEncoderChange: (encoder: StreamEncoder) => void;
   onStreamFpsChange: (fps: StreamFps) => void;
@@ -45,11 +36,13 @@ interface SimulatorMenuProps {
   onToggleAppearance: () => void;
   onToggleDebug: () => void;
   onToggleMenu: () => void;
+  onToggleRecording: () => void;
+  onToggleSoftwareKeyboard: () => void;
   onToggleTouchOverlay: () => void;
+  recordingActive: boolean;
+  recordingStopping: boolean;
   remoteStream?: boolean;
-  search: string;
   selectedSimulator: SimulatorMetadata | null;
-  setSelectedUDID: (udid: string) => void;
   showBootButton: boolean;
   showStopButton: boolean;
   streamConfig: StreamConfig;
@@ -58,27 +51,22 @@ interface SimulatorMenuProps {
 }
 
 export function SimulatorMenu({
+  captureBusy,
   debugVisible,
-  filteredSimulators,
-  hideSimulatorSelection = false,
-  isLoading,
   canInstallApp,
   menuOpen,
   menuRef,
   onBoot,
   onCaptureScreenshot,
   onCaptureScreenshotWithBezel,
-  onChangeSearch,
   onCloseMenu,
   onDismissKeyboard,
   onHome,
   onInstallAppPrompt,
   onOpenAppSwitcher,
   onOpenBundlePrompt,
-  onOpenNewSimulator,
   onOpenUrlPrompt,
   onRotateRight,
-  onRecordScreen,
   onShutdown,
   onStreamEncoderChange,
   onStreamFpsChange,
@@ -87,11 +75,13 @@ export function SimulatorMenu({
   onToggleAppearance,
   onToggleDebug,
   onToggleMenu,
+  onToggleRecording,
+  onToggleSoftwareKeyboard,
   onToggleTouchOverlay,
+  recordingActive,
+  recordingStopping,
   remoteStream = false,
-  search,
   selectedSimulator,
-  setSelectedUDID,
   showBootButton,
   showStopButton,
   streamConfig,
@@ -137,49 +127,8 @@ export function SimulatorMenu({
           className="menu-popover"
           onPointerDown={(event) => event.stopPropagation()}
         >
-          {!hideSimulatorSelection ? (
-            <>
-              <input
-                className="sidebar-search"
-                onChange={(event) => onChangeSearch(event.target.value)}
-                placeholder="Search simulators..."
-                value={search}
-              />
-              <div className="menu-actions menu-actions-compact">
-                <button
-                  className="menu-action menu-primary-action"
-                  onClick={() => {
-                    onOpenNewSimulator();
-                    onCloseMenu();
-                  }}
-                  type="button"
-                >
-                  <PlusIcon />
-                  New Simulator
-                </button>
-              </div>
-              <div className="sim-list">
-                {isLoading ? <p className="list-empty">Loading...</p> : null}
-                {!isLoading && filteredSimulators.length === 0 ? (
-                  <p className="list-empty">No matches</p>
-                ) : null}
-                {filteredSimulators.map((simulator) => (
-                  <SimulatorRow
-                    isSelected={simulator.udid === selectedSimulator?.udid}
-                    key={simulator.udid}
-                    onSelect={() => {
-                      setSelectedUDID(simulator.udid);
-                      onCloseMenu();
-                    }}
-                    simulator={simulator}
-                  />
-                ))}
-              </div>
-            </>
-          ) : null}
           {selectedSimulator ? (
             <>
-              <div className="menu-divider" />
               <div className="menu-section">
                 <div className="menu-section-heading">
                   <span className="menu-section-title">Stream</span>
@@ -292,6 +241,7 @@ export function SimulatorMenu({
                 </button>
                 <button
                   className="menu-action"
+                  disabled={captureBusy}
                   onClick={() => {
                     onCaptureScreenshot();
                     onCloseMenu();
@@ -301,6 +251,7 @@ export function SimulatorMenu({
                 </button>
                 <button
                   className="menu-action"
+                  disabled={captureBusy}
                   onClick={() => {
                     onCaptureScreenshotWithBezel();
                     onCloseMenu();
@@ -310,12 +261,17 @@ export function SimulatorMenu({
                 </button>
                 <button
                   className="menu-action"
+                  disabled={captureBusy || recordingStopping}
                   onClick={() => {
-                    onRecordScreen();
+                    onToggleRecording();
                     onCloseMenu();
                   }}
                 >
-                  Record 5s Video
+                  {recordingStopping
+                    ? "Stopping Recording"
+                    : recordingActive
+                      ? "Stop Recording"
+                      : "Start Recording"}
                 </button>
                 <button
                   className="menu-action mobile-menu-action"
@@ -355,6 +311,15 @@ export function SimulatorMenu({
                 >
                   Dismiss Keyboard
                 </button>
+                <button
+                  className="menu-action"
+                  onClick={() => {
+                    onToggleSoftwareKeyboard();
+                    onCloseMenu();
+                  }}
+                >
+                  Toggle Software Keyboard
+                </button>
                 <button className="menu-action" onClick={onToggleTouchOverlay}>
                   {touchOverlayVisible
                     ? "Hide Touch Overlay"
@@ -374,7 +339,9 @@ export function SimulatorMenu({
                 </button>
               </div>
             </>
-          ) : null}
+          ) : (
+            <p className="list-empty">No simulator selected</p>
+          )}
         </div>
       ) : null}
     </div>

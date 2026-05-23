@@ -62,6 +62,8 @@ const SERVER_HEALTH_WATCHDOG_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const SERVER_HEALTH_WATCHDOG_STALE_HEARTBEAT: Duration = Duration::from_secs(60);
 const SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD: usize = 12;
 const SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD: usize = 3;
+const SERVICE_PORT: u16 = 4310;
+const DAEMON_PORT_START: u16 = 4311;
 
 #[derive(Parser)]
 #[command(name = "simdeck")]
@@ -84,7 +86,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Ui {
-        #[arg(long, default_value_t = 4310)]
+        #[arg(long, default_value_t = DAEMON_PORT_START)]
         port: u16,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
@@ -106,7 +108,7 @@ enum Command {
     Pair {
         #[arg(
             long,
-            help = "Defaults to the existing service port, or the next available port near 4310"
+            help = "Defaults to the existing service port, or 4310 when the service is not installed"
         )]
         port: Option<u16>,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::UNSPECIFIED))]
@@ -140,7 +142,7 @@ enum Command {
     },
     #[command(hide = true)]
     Serve {
-        #[arg(long, default_value_t = 4310)]
+        #[arg(long, default_value_t = SERVICE_PORT)]
         port: u16,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
@@ -491,7 +493,7 @@ enum Command {
 #[derive(Subcommand)]
 enum DaemonCommand {
     Start {
-        #[arg(long, default_value_t = 4310)]
+        #[arg(long, default_value_t = DAEMON_PORT_START)]
         port: u16,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
@@ -509,7 +511,7 @@ enum DaemonCommand {
         local_stream_fps: Option<u32>,
     },
     Restart {
-        #[arg(long, default_value_t = 4310)]
+        #[arg(long, default_value_t = DAEMON_PORT_START)]
         port: u16,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
@@ -566,7 +568,7 @@ enum StudioCommand {
         simulator: Option<String>,
         #[arg(long, default_value = "https://simdeck.djdev.me")]
         studio_url: String,
-        #[arg(long, default_value_t = 4310)]
+        #[arg(long, default_value_t = DAEMON_PORT_START)]
         port: u16,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
@@ -608,7 +610,7 @@ enum ProviderCommand {
         max_capacity: u32,
         #[arg(long, default_value = "iPhone 17 Pro")]
         simulator_template: String,
-        #[arg(long, default_value_t = 4310)]
+        #[arg(long, default_value_t = DAEMON_PORT_START)]
         port: u16,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::Software)]
         video_codec: VideoCodecMode,
@@ -624,7 +626,7 @@ enum ProviderCommand {
 #[derive(Subcommand)]
 enum ServiceCommand {
     On {
-        #[arg(long, default_value_t = 4310)]
+        #[arg(long, default_value_t = SERVICE_PORT)]
         port: u16,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
@@ -644,7 +646,7 @@ enum ServiceCommand {
         access_token: Option<String>,
     },
     Restart {
-        #[arg(long, default_value_t = 4310)]
+        #[arg(long, default_value_t = SERVICE_PORT)]
         port: u16,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
@@ -664,7 +666,7 @@ enum ServiceCommand {
         access_token: Option<String>,
     },
     Reset {
-        #[arg(long, default_value_t = 4310)]
+        #[arg(long, default_value_t = SERVICE_PORT)]
         port: u16,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
@@ -852,7 +854,7 @@ struct DaemonMetadata {
 }
 
 fn default_daemon_port() -> u16 {
-    4310
+    DAEMON_PORT_START
 }
 
 fn default_daemon_bind() -> IpAddr {
@@ -1038,7 +1040,7 @@ fn command_service_url_for_udid(
 impl Default for DaemonLaunchOptions {
     fn default() -> Self {
         Self {
-            port: 4310,
+            port: DAEMON_PORT_START,
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             advertise_host: None,
             client_root: None,
@@ -1496,6 +1498,59 @@ fn print_daemon_start_result(metadata: &DaemonMetadata, started: bool) -> anyhow
         "pairingCode": metadata.pairing_code,
         "started": started
     }))
+}
+
+fn print_existing_service_endpoints(
+    result: service::ServiceInstallResult,
+    selector: Option<&str>,
+    open: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    let target = PairingTarget::from_service(result)?;
+    let local_url = ui_url("127.0.0.1", target.port, selector);
+    let addresses: Vec<PairingAddress> = pairing_addresses(&target)
+        .into_iter()
+        .map(|address| PairingAddress {
+            kind: address.kind,
+            url: ui_url_from_base(address.url, selector),
+        })
+        .collect();
+
+    if open {
+        open_browser(&local_url)?;
+    }
+
+    if json {
+        println_json(&serde_json::json!({
+            "ok": true,
+            "target": target.target,
+            "service": target.service,
+            "url": local_url,
+            "started": false,
+            "serverId": target.server_id,
+            "pairingCode": target.pairing_code,
+            "addresses": addresses,
+        }))?;
+        return Ok(());
+    }
+
+    println!("SimDeck service is already running");
+    println!();
+    for address in &addresses {
+        let label = match address.kind {
+            "local" => "Local:",
+            "lan" => "LAN:",
+            "tailscale" => "Tailscale:",
+            _ => "URL:",
+        };
+        println!("{:>12}   {}", label, address.url);
+    }
+    println!(
+        "{:>12}   {}",
+        "Pair:",
+        format_pairing_code(&target.pairing_code)
+    );
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1969,7 +2024,7 @@ fn pair_global_service(options: PairGlobalServiceOptions) -> anyhow::Result<()> 
     }
     let requested_port = match port {
         Some(port) => port,
-        None => service::installed_port()?.unwrap_or(4310),
+        None => service::installed_port()?.unwrap_or(SERVICE_PORT),
     };
     print_pair_progress(format!("requesting port {requested_port}"));
 
@@ -2025,6 +2080,10 @@ fn pair_global_service(options: PairGlobalServiceOptions) -> anyhow::Result<()> 
 }
 
 fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
+    if let Some(result) = service::active()? {
+        return print_existing_service_endpoints(result, selector.as_deref(), false, false);
+    }
+
     if let Some(metadata) = read_daemon_metadata().ok().flatten() {
         if daemon_is_healthy(&metadata) {
             terminate_daemon_metadata(&metadata)?;
@@ -2033,7 +2092,7 @@ fn run_foreground_ui(selector: Option<String>) -> anyhow::Result<()> {
 
     let project_root = project_root()?;
     let bind = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
-    let port = choose_daemon_port_for_bind(4310, bind)?;
+    let port = choose_daemon_port_for_bind(DAEMON_PORT_START, bind)?;
     let video_codec = VideoCodecMode::Auto;
     let low_latency = false;
     let stream_quality_profile = Some(DEFAULT_LOCAL_STREAM_QUALITY_PROFILE.to_owned());
@@ -2168,7 +2227,10 @@ fn http_url_for_host(host: &str, port: u16) -> String {
 }
 
 fn ui_url(host: &str, port: u16, selector: Option<&str>) -> String {
-    let mut url = http_url_for_host(host, port);
+    ui_url_from_base(http_url_for_host(host, port), selector)
+}
+
+fn ui_url_from_base(mut url: String, selector: Option<&str>) -> String {
     if let Some(selector) = selector.filter(|value| !value.trim().is_empty()) {
         url.push_str(&format!("/?device={}", percent_encode(selector.trim())));
     }
@@ -2568,6 +2630,9 @@ fn main() -> anyhow::Result<()> {
             local_stream_fps,
             open,
         } => {
+            if let Some(result) = service::active()? {
+                return print_existing_service_endpoints(result, None, open, true);
+            }
             let (metadata, started) = ensure_project_daemon_with_status(DaemonLaunchOptions {
                 port,
                 bind,
@@ -4292,7 +4357,7 @@ fn describe_ui_snapshot(
 
     if source != DescribeUiSource::Auto && source != DescribeUiSource::NativeAx {
         anyhow::bail!(
-            "The `{}` hierarchy source requires a running SimDeck daemon. Start it with `simdeck daemon start --port 4310`, or use --source native-ax.",
+            "The `{}` hierarchy source requires a running SimDeck daemon. Start it with `simdeck daemon start --port 4311`, or use --source native-ax.",
             source.as_query_value()
         );
     }

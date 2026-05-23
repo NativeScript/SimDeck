@@ -75,7 +75,7 @@ function getAutoStartDaemon(config) {
 async function startProjectDaemon(context) {
   const config = vscode.workspace.getConfiguration("simdeck");
   const cliPath = resolveCliPath(context, config.get("cliPath", ""));
-  const port = String(config.get("port", 4310));
+  const port = String(config.get("port", 4311));
   const bindAddress = config.get("bindAddress", "127.0.0.1");
   const args = ["ui", "--port", port, "--bind", bindAddress];
 

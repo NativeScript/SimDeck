@@ -538,6 +538,33 @@ impl NativeBridge {
         }
     }
 
+    pub fn start_screen_recording(&self, udid: &str) -> Result<String, AppError> {
+        let udid = CString::new(udid).map_err(|e| AppError::bad_request(e.to_string()))?;
+        let recording_id = unsafe {
+            let mut error = ptr::null_mut();
+            let raw = ffi::xcw_native_start_screen_recording(udid.as_ptr(), &mut error);
+            string_from_raw(raw, error)?
+        };
+        Ok(recording_id)
+    }
+
+    pub fn stop_screen_recording(&self, recording_id: &str) -> Result<Vec<u8>, AppError> {
+        let recording_id =
+            CString::new(recording_id).map_err(|e| AppError::bad_request(e.to_string()))?;
+        unsafe {
+            let mut error = ptr::null_mut();
+            let bytes = ffi::xcw_native_stop_screen_recording(recording_id.as_ptr(), &mut error);
+            if bytes.data.is_null() {
+                return Err(
+                    take_error(error).unwrap_or_else(|| AppError::native("Unknown native error."))
+                );
+            }
+            let data = std::slice::from_raw_parts(bytes.data, bytes.length).to_vec();
+            ffi::xcw_native_free_bytes(bytes);
+            Ok(data)
+        }
+    }
+
     pub fn recent_logs(
         &self,
         udid: &str,

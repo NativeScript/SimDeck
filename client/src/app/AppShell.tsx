@@ -20,9 +20,10 @@ import {
   captureSimulatorScreenshot,
   launchSimulatorBundle,
   openSimulatorUrl,
-  recordSimulatorScreen,
   simulatorControlSocketUrl,
   shutdownSimulator,
+  startSimulatorScreenRecording,
+  stopSimulatorScreenRecording,
   uploadSimulatorApp,
   type ControlMessage,
 } from "../api/controls";
@@ -334,7 +335,7 @@ function downloadBlob(blob: Blob, fileName: string) {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 function captureFileBaseName(
@@ -343,6 +344,13 @@ function captureFileBaseName(
 ): string {
   const safeName = simulator.name.replace(/[^A-Za-z0-9._-]+/g, "-");
   return `SimDeck ${artifact} - ${safeName || simulator.udid}`;
+}
+
+function formatElapsedRecordingTime(startedAt: number, now: number): string {
+  const elapsedSeconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function simulatorDisplaySize(
@@ -414,6 +422,19 @@ type AppInstallState = {
   phase: "dragging" | "installing" | "installed";
 };
 
+type CaptureStatus = {
+  busy: boolean;
+  label: string;
+};
+
+type ScreenRecordingState = {
+  recordingId: string;
+  simulatorName: string;
+  startedAt: number;
+  udid: string;
+  phase: "recording" | "stopping";
+};
+
 export interface AppShellProps {
   apiRoot?: string;
   fixedSimulatorUDID?: string | null;
@@ -472,8 +493,15 @@ export function AppShell({
     initialUiState.bundleIDValue ?? "com.apple.Preferences",
   );
   const [menuOpen, setMenuOpen] = useState(false);
+  const [simulatorMenuOpen, setSimulatorMenuOpen] = useState(false);
   const [newSimulatorOpen, setNewSimulatorOpen] = useState(false);
   const [localError, setLocalError] = useState("");
+  const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(
+    null,
+  );
+  const [screenRecording, setScreenRecording] =
+    useState<ScreenRecordingState | null>(null);
+  const [recordingNow, setRecordingNow] = useState(Date.now());
   const [failedStreamUDIDs, setFailedStreamUDIDs] = useState<Set<string>>(
     () => new Set(),
   );
@@ -541,9 +569,11 @@ export function AppShell({
     useState<SimulatorStateResponse | null>(null);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const simulatorMenuRef = useRef<HTMLDivElement | null>(null);
   const appInstallInputRef = useRef<HTMLInputElement | null>(null);
   const appInstallDragDepthRef = useRef(0);
   const appInstallStatusTimeoutRef = useRef(0);
+  const captureStatusTimeoutRef = useRef(0);
   const outerCanvasRef = useRef<HTMLDivElement | null>(null);
   const streamCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [outerCanvasElement, setOuterCanvasElement] =
@@ -965,6 +995,19 @@ export function AppShell({
         isAndroidViewport,
       )
     : "";
+  const recordingOverlayLabel = screenRecording
+    ? screenRecording.phase === "stopping"
+      ? "Finalizing recording..."
+      : `Recording ${formatElapsedRecordingTime(screenRecording.startedAt, recordingNow)}`
+    : "";
+  const captureOverlayLabel = appInstallOverlayLabel
+    ? appInstallOverlayLabel
+    : recordingOverlayLabel || captureStatus?.label || "";
+  const captureOverlayBusy = Boolean(
+    isInstallingApp ||
+    captureStatus?.busy ||
+    screenRecording?.phase === "stopping",
+  );
   const autoViewportOffsetY =
     viewMode === "manual" ? 0 : -zoomDockReservedHeight / 2;
   const screenAspect = screenAspectRatio(effectiveDeviceNaturalSize);
@@ -1593,20 +1636,24 @@ export function AppShell({
   ]);
 
   useEffect(() => {
-    if (!menuOpen) {
+    if (!menuOpen && !simulatorMenuOpen) {
       return;
     }
 
     function handleDocumentPointerDown(event: PointerEvent) {
-      if (menuRef.current?.contains(event.target as Node)) {
-        return;
+      const target = event.target as Node;
+      if (menuOpen && !menuRef.current?.contains(target)) {
+        setMenuOpen(false);
       }
-      setMenuOpen(false);
+      if (simulatorMenuOpen && !simulatorMenuRef.current?.contains(target)) {
+        setSimulatorMenuOpen(false);
+      }
     }
 
     function handleWindowKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setMenuOpen(false);
+        setSimulatorMenuOpen(false);
       }
     }
 
@@ -1620,7 +1667,17 @@ export function AppShell({
       );
       window.removeEventListener("keydown", handleWindowKeyDown);
     };
-  }, [menuOpen]);
+  }, [menuOpen, simulatorMenuOpen]);
+
+  useEffect(() => {
+    if (!screenRecording || screenRecording.phase !== "recording") {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setRecordingNow(Date.now());
+    }, 500);
+    return () => window.clearInterval(interval);
+  }, [screenRecording]);
 
   useEffect(() => {
     function handleWindowKeyDown(event: KeyboardEvent) {
@@ -1682,6 +1739,9 @@ export function AppShell({
       if (appInstallStatusTimeoutRef.current) {
         clearTimeout(appInstallStatusTimeoutRef.current);
       }
+      if (captureStatusTimeoutRef.current) {
+        clearTimeout(captureStatusTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -1698,6 +1758,9 @@ export function AppShell({
         return;
       }
       sendControl(selectedSimulator.udid, { type: "key", keyCode, modifiers });
+    },
+    onToggleSoftwareKeyboard: () => {
+      toggleSoftwareKeyboard();
     },
   });
 
@@ -1916,11 +1979,48 @@ export function AppShell({
     }
   }
 
+  function toggleSoftwareKeyboard() {
+    if (!selectedSimulator) {
+      return;
+    }
+    if (
+      !sendControl(selectedSimulator.udid, {
+        type: "toggleSoftwareKeyboard",
+      })
+    ) {
+      setLocalError("Simulator control stream disconnected.");
+    }
+  }
+
+  function setTransientCaptureStatus(label: string, busy: boolean) {
+    if (captureStatusTimeoutRef.current) {
+      window.clearTimeout(captureStatusTimeoutRef.current);
+      captureStatusTimeoutRef.current = 0;
+    }
+    setCaptureStatus({ busy, label });
+  }
+
+  function clearCaptureStatusLater(label: string, delayMs = 1600) {
+    if (captureStatusTimeoutRef.current) {
+      window.clearTimeout(captureStatusTimeoutRef.current);
+    }
+    captureStatusTimeoutRef.current = window.setTimeout(() => {
+      captureStatusTimeoutRef.current = 0;
+      setCaptureStatus((current) =>
+        current?.label === label ? null : current,
+      );
+    }, delayMs);
+  }
+
   async function downloadSimulatorScreenshot(withBezel: boolean) {
     if (!selectedSimulator) {
       return;
     }
     setLocalError("");
+    const statusLabel = withBezel
+      ? "Capturing screenshot with bezel..."
+      : "Capturing screenshot...";
+    setTransientCaptureStatus(statusLabel, true);
     try {
       const blob = await captureSimulatorScreenshot(selectedSimulator.udid, {
         withBezel,
@@ -1929,7 +2029,11 @@ export function AppShell({
         blob,
         `${captureFileBaseName(selectedSimulator, "Screenshot")}${withBezel ? " Bezel" : ""}.png`,
       );
+      const successLabel = "Screenshot downloaded";
+      setTransientCaptureStatus(successLabel, false);
+      clearCaptureStatusLater(successLabel);
     } catch (captureError) {
+      setCaptureStatus(null);
       setLocalError(
         captureError instanceof Error
           ? captureError.message
@@ -1938,18 +2042,68 @@ export function AppShell({
     }
   }
 
-  async function downloadSimulatorRecording() {
+  async function toggleSimulatorRecording() {
     if (!selectedSimulator) {
       return;
     }
     setLocalError("");
+    if (screenRecording) {
+      if (screenRecording.phase === "stopping") {
+        return;
+      }
+      const recording = screenRecording;
+      setScreenRecording({ ...recording, phase: "stopping" });
+      try {
+        const blob = await stopSimulatorScreenRecording(
+          recording.udid,
+          recording.recordingId,
+        );
+        downloadBlob(
+          blob,
+          `${captureFileBaseName(
+            {
+              ...selectedSimulator,
+              name: recording.simulatorName,
+              udid: recording.udid,
+            },
+            "Recording",
+          )}.mp4`,
+        );
+        setScreenRecording(null);
+        const successLabel = "Recording downloaded";
+        setTransientCaptureStatus(successLabel, false);
+        clearCaptureStatusLater(successLabel);
+      } catch (captureError) {
+        setScreenRecording(recording);
+        setLocalError(
+          captureError instanceof Error
+            ? captureError.message
+            : "Recording failed.",
+        );
+      }
+      return;
+    }
+
+    if (!selectedSimulator.isBooted) {
+      setLocalError("Boot the simulator before recording.");
+      return;
+    }
+    setTransientCaptureStatus("Starting recording...", true);
     try {
-      const blob = await recordSimulatorScreen(selectedSimulator.udid, 5);
-      downloadBlob(
-        blob,
-        `${captureFileBaseName(selectedSimulator, "Recording")}.mp4`,
+      const response = await startSimulatorScreenRecording(
+        selectedSimulator.udid,
       );
+      setCaptureStatus(null);
+      setRecordingNow(Date.now());
+      setScreenRecording({
+        phase: "recording",
+        recordingId: response.recordingId,
+        simulatorName: selectedSimulator.name,
+        startedAt: Date.now(),
+        udid: selectedSimulator.udid,
+      });
     } catch (captureError) {
+      setCaptureStatus(null);
       setLocalError(
         captureError instanceof Error
           ? captureError.message
@@ -2662,8 +2816,10 @@ export function AppShell({
         type="file"
       />
       <Toolbar
+        captureBusy={Boolean(captureStatus?.busy)}
         canInstallApp={canInstallApp}
         closeMenu={() => setMenuOpen(false)}
+        closeSimulatorMenu={() => setSimulatorMenuOpen(false)}
         debugVisible={debugVisible}
         error={toolbarError}
         filteredSimulators={filteredSimulators}
@@ -2722,6 +2878,7 @@ export function AppShell({
         onOpenBundlePrompt={promptForBundleID}
         onOpenNewSimulator={() => {
           setMenuOpen(false);
+          setSimulatorMenuOpen(false);
           setNewSimulatorOpen(true);
         }}
         onOpenUrlPrompt={promptForURL}
@@ -2747,8 +2904,8 @@ export function AppShell({
           }
           setLocalError("Simulator control stream disconnected.");
         }}
-        onRecordScreen={() => {
-          void downloadSimulatorRecording();
+        onToggleRecording={() => {
+          void toggleSimulatorRecording();
         }}
         onStreamEncoderChange={updateStreamEncoder}
         onStreamFpsChange={updateStreamFps}
@@ -2784,15 +2941,28 @@ export function AppShell({
             void loadAccessibilityTree();
           }
         }}
-        onToggleMenu={() => setMenuOpen((current) => !current)}
+        onToggleMenu={() => {
+          setSimulatorMenuOpen(false);
+          setMenuOpen((current) => !current);
+        }}
+        onToggleSimulatorMenu={() => {
+          setMenuOpen(false);
+          setSimulatorMenuOpen((current) => !current);
+        }}
+        onToggleSoftwareKeyboard={toggleSoftwareKeyboard}
         onToggleTouchOverlay={() =>
           setTouchOverlayVisible((current) => !current)
         }
+        recordingActive={screenRecording?.phase === "recording"}
+        recordingStopping={screenRecording?.phase === "stopping"}
         remoteStream={remoteStream}
         search={search}
         selectedSimulator={selectedSimulator}
         selectedSimulatorIdentifier={selectedSimulatorDetail}
-        setSelectedUDID={setSelectedUDID}
+        setSelectedUDID={(udid) => {
+          setSelectedUDID(udid);
+          setSimulatorMenuOpen(false);
+        }}
         showBootButton={Boolean(
           selectedSimulator &&
           !selectedSimulator.isBooted &&
@@ -2800,6 +2970,8 @@ export function AppShell({
         )}
         streamConfig={streamConfig}
         streamTransport={streamTransport}
+        simulatorMenuOpen={simulatorMenuOpen}
+        simulatorMenuRef={simulatorMenuRef}
         showStopButton={Boolean(
           selectedSimulator?.isBooted && !selectedSimulatorTransitionKind,
         )}
@@ -2814,7 +2986,7 @@ export function AppShell({
       />
       <SimulatorViewport
         accessibilityHoveredId={accessibilityHoveredId}
-        appInstallOverlayLabel={appInstallOverlayLabel}
+        appInstallOverlayLabel={captureOverlayLabel}
         accessibilityPanel={
           <AccessibilityInspector
             availableSources={accessibilityAvailableSources}
@@ -2873,7 +3045,7 @@ export function AppShell({
         isStreamError={viewportHasStreamError}
         isPanning={pointerInput.isPanning}
         isAppInstallDragging={appInstallState?.phase === "dragging"}
-        isAppInstalling={appInstallState?.phase === "installing"}
+        isAppInstalling={captureOverlayBusy}
         onAppInstallDragEnter={handleAppInstallDragEnter}
         onAppInstallDragLeave={handleAppInstallDragLeave}
         onAppInstallDragOver={handleAppInstallDragOver}

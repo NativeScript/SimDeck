@@ -111,6 +111,8 @@ static const uint32_t DFConsumerControlUsagePage = 0x0c;
 static const uint32_t DFHomeConsumerUsage = 0x65;
 // Apple Simulator sends Indigo button code 0x191 for Home; 1 is Lock.
 static const uint32_t DFHomeButtonCode = 0x191;
+// Simulator.app dispatches Cmd+K through this private button code.
+static const uint32_t DFSoftwareKeyboardButtonCode = 0x3f0;
 static const NSUInteger DFKeyboardModifierShift = 1 << 0;
 static const NSUInteger DFKeyboardModifierControl = 1 << 1;
 static const NSUInteger DFKeyboardModifierOption = 1 << 2;
@@ -3610,6 +3612,9 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             @"side-button": @4,
             @"side": @4,
             @"siri": @5,
+            @"software-keyboard": @(DFSoftwareKeyboardButtonCode),
+            @"software_keyboard": @(DFSoftwareKeyboardButtonCode),
+            @"keyboard": @(DFSoftwareKeyboardButtonCode),
         };
         arbitraryButtons = @{
             @"power": @[ @(DFConsumerControlUsagePage), @48 ],

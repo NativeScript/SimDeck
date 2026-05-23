@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SERVER_BIN = resolve(ROOT, "build/simdeck");
 const LOG_PATH = resolve(ROOT, "build/cli.log");
-const SERVER_PORT = "4310";
+const SERVER_PORT = "4311";
 
 function findListeningPids(port) {
   try {
@@ -50,8 +50,8 @@ function isManagedCliProcess(pid) {
 
 function stopStaleCliProcesses() {
   const stalePids = new Set([
-    ...findListeningPids(4310),
     ...findListeningPids(4311),
+    ...findListeningPids(4312),
   ]);
   for (const pid of stalePids) {
     if (pid === process.pid || !isManagedCliProcess(pid)) {

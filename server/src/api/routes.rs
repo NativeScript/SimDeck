@@ -444,6 +444,7 @@ pub(crate) enum ControlMessage {
         delta: f64,
     },
     DismissKeyboard,
+    ToggleSoftwareKeyboard,
     Home,
     AppSwitcher,
     RotateLeft,
@@ -853,6 +854,14 @@ pub fn router(state: AppState) -> Router {
             post(screen_recording),
         )
         .route(
+            "/api/simulators/{udid}/screen-recording/start",
+            post(start_screen_recording),
+        )
+        .route(
+            "/api/simulators/{udid}/screen-recording/{recording_id}/stop",
+            post(stop_screen_recording),
+        )
+        .route(
             "/api/simulators/{udid}/toggle-appearance",
             post(toggle_appearance),
         )
@@ -883,6 +892,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/simulators/{udid}/dismiss-keyboard",
             post(dismiss_keyboard),
+        )
+        .route(
+            "/api/simulators/{udid}/toggle-software-keyboard",
+            post(toggle_software_keyboard),
         )
         .route("/api/simulators/{udid}/button", post(press_button))
         .route("/api/simulators/{udid}/crown", post(rotate_crown))
@@ -2444,6 +2457,45 @@ async fn screen_recording(
     Ok((StatusCode::OK, headers, mp4))
 }
 
+async fn start_screen_recording(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Screen recording is currently supported for iOS simulators only.",
+        ));
+    }
+    let recording_id =
+        run_bridge_action(state, move |bridge| bridge.start_screen_recording(&udid)).await?;
+    Ok(Json(json_value!({
+        "ok": true,
+        "recordingId": recording_id,
+    })))
+}
+
+async fn stop_screen_recording(
+    State(state): State<AppState>,
+    Path((udid, recording_id)): Path<(String, String)>,
+) -> Result<(StatusCode, HeaderMap, Vec<u8>), AppError> {
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Screen recording is currently supported for iOS simulators only.",
+        ));
+    }
+    let mp4 = run_bridge_action(state, move |bridge| {
+        bridge.stop_screen_recording(&recording_id)
+    })
+    .await?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "video/mp4".parse().unwrap());
+    headers.insert(
+        header::CACHE_CONTROL,
+        "no-cache, no-store, must-revalidate".parse().unwrap(),
+    );
+    Ok((StatusCode::OK, headers, mp4))
+}
+
 fn validate_screen_recording_seconds(seconds: Option<f64>) -> Result<f64, AppError> {
     let seconds = seconds.unwrap_or(5.0);
     if !seconds.is_finite() || seconds <= 0.0 {
@@ -2900,6 +2952,9 @@ async fn run_android_control_message(
                     )),
                 },
                 ControlMessage::DismissKeyboard => android.dismiss_keyboard(&udid),
+                ControlMessage::ToggleSoftwareKeyboard => Err(AppError::bad_request(
+                    "Software keyboard toggle is only available for iOS simulators.",
+                )),
                 ControlMessage::Home => android.press_home(&udid),
                 ControlMessage::AppSwitcher => android.open_app_switcher(&udid),
                 ControlMessage::RotateLeft => android.rotate_left(&udid),
@@ -3594,6 +3649,7 @@ pub(crate) async fn run_control_message(
         }
         ControlMessage::Crown { delta } => session.rotate_crown(delta),
         ControlMessage::DismissKeyboard => session.send_key(41, 0),
+        ControlMessage::ToggleSoftwareKeyboard => session.press_button("software-keyboard", 0),
         ControlMessage::Home => session.press_home(),
         ControlMessage::AppSwitcher => session.open_app_switcher(),
         ControlMessage::RotateLeft => session.rotate_left(),
@@ -3786,6 +3842,22 @@ async fn dismiss_keyboard(
         return Ok(json(json_value!({ "ok": true })));
     }
     run_bridge_action(state, move |bridge| bridge.send_key(&udid, 41, 0)).await?;
+    Ok(json(json_value!({ "ok": true })))
+}
+
+async fn toggle_software_keyboard(
+    State(state): State<AppState>,
+    Path(udid): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    if android::is_android_id(&udid) {
+        return Err(AppError::bad_request(
+            "Software keyboard toggle is only available for iOS simulators.",
+        ));
+    }
+    run_bridge_action(state, move |bridge| {
+        bridge.press_button(&udid, "software-keyboard", 0)
+    })
+    .await?;
     Ok(json(json_value!({ "ok": true })))
 }
 

@@ -278,6 +278,17 @@
   z-index: 20;
 }
 
+.simulator-picker-popover {
+  width: min(360px, calc(100vw - 24px));
+}
+
+.simulator-picker-current {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
 .sidebar-search {
   width: 100%;
   padding: 8px 12px;
