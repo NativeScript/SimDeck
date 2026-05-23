@@ -681,6 +681,52 @@ static NSString *XCWAXRoleType(NSString *role) {
     return role ?: @"";
 }
 
+static BOOL XCWAXRoleLooksInteractive(NSString *role) {
+    NSString *lowercase = (role ?: @"").lowercaseString;
+    for (NSString *needle in @[
+        @"button",
+        @"cell",
+        @"checkbox",
+        @"collection",
+        @"combobox",
+        @"control",
+        @"link",
+        @"menu",
+        @"picker",
+        @"radio",
+        @"scroll",
+        @"search",
+        @"segmented",
+        @"select",
+        @"slider",
+        @"stepper",
+        @"switch",
+        @"tab",
+        @"table",
+        @"textfield",
+        @"text field",
+        @"textinput",
+        @"text input",
+        @"toggle",
+        @"webview",
+    ]) {
+        if ([lowercase containsString:needle]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL XCWAXElementLooksInteractive(id element, NSString *role) {
+    if (XCWAXBool(element, "isAccessibilityHidden")) {
+        return NO;
+    }
+    if (XCWAXBool(element, "isAccessibilityFocused")) {
+        return YES;
+    }
+    return XCWAXRoleLooksInteractive(role) || XCWAXRoleLooksInteractive(XCWAXRoleType(role));
+}
+
 static pid_t XCWAXElementPID(id element) {
     id translation = XCWAXObject(element, "translation");
     SEL selector = sel_registerName("pid");
@@ -718,7 +764,7 @@ static NSDictionary *XCWAXDictionaryForElement(id element) {
     return values;
 }
 
-static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, NSHashTable *visited, NSUInteger depth, NSUInteger maxDepth) {
+static NSMutableDictionary *XCWAXSerializeElementWithOptions(id element, NSString *token, NSHashTable *visited, NSUInteger depth, NSUInteger maxDepth, BOOL interactiveOnly) {
     if (element == nil || depth > maxDepth || [visited containsObject:element]) {
         return nil;
     }
@@ -729,19 +775,31 @@ static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, N
         ((void(*)(id, SEL, id))objc_msgSend)(translation, sel_registerName("setBridgeDelegateToken:"), token);
     }
 
-    NSMutableDictionary *values = [XCWAXDictionaryForElement(element) mutableCopy];
     NSMutableArray *childrenValues = [NSMutableArray array];
     id children = depth < maxDepth ? XCWAXObject(element, "accessibilityChildren") : nil;
     if ([children isKindOfClass:NSArray.class]) {
         for (id child in (NSArray *)children) {
-            NSMutableDictionary *childValues = XCWAXSerializeElement(child, token, visited, depth + 1, maxDepth);
+            NSMutableDictionary *childValues = XCWAXSerializeElementWithOptions(child, token, visited, depth + 1, maxDepth, interactiveOnly);
             if (childValues != nil) {
                 [childrenValues addObject:childValues];
             }
         }
     }
-    values[@"children"] = childrenValues;
+
+    NSString *role = XCWAXObject(element, "accessibilityRole");
+    if (interactiveOnly && childrenValues.count == 0 && !XCWAXElementLooksInteractive(element, role)) {
+        return nil;
+    }
+
+    NSMutableDictionary *values = [XCWAXDictionaryForElement(element) mutableCopy];
+    if (!interactiveOnly || childrenValues.count > 0) {
+        values[@"children"] = childrenValues;
+    }
     return values;
+}
+
+static NSMutableDictionary *XCWAXSerializeElement(id element, NSString *token, NSHashTable *visited, NSUInteger depth, NSUInteger maxDepth) {
+    return XCWAXSerializeElementWithOptions(element, token, visited, depth, maxDepth, NO);
 }
 
 static NSArray<NSValue *> *XCWAXRootRecoveryHitTestPoints(void) {
@@ -1511,7 +1569,7 @@ static void XCWAXNormalizeWidgetRendererPointFrames(NSMutableArray<NSDictionary 
             }
 
             NSHashTable *visited = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
-            NSMutableDictionary *root = XCWAXSerializeElement(element, token, visited, 0, MIN(maxDepth, XCWAXMaxDepth));
+            NSMutableDictionary *root = XCWAXSerializeElementWithOptions(element, token, visited, 0, MIN(maxDepth, XCWAXMaxDepth), interactiveOnly);
             if (root != nil) {
                 XCWAXApplyRecoveredRootMetadata(root, rootItem);
                 [serializedRootItems addObject:@{

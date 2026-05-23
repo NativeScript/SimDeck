@@ -1837,7 +1837,7 @@ fn daemon_is_healthy(metadata: &DaemonMetadata) -> bool {
 }
 
 fn daemon_matches_launch_options(metadata: &DaemonMetadata, options: &DaemonLaunchOptions) -> bool {
-    metadata.port == options.port
+    daemon_port_matches_launch_options(metadata.port, options.port)
         && metadata.bind == options.bind
         && metadata.advertise_host == options.advertise_host
         && metadata.client_root == options.client_root
@@ -1850,6 +1850,11 @@ fn daemon_matches_launch_options(metadata: &DaemonMetadata, options: &DaemonLaun
             == (options.realtime_stream || options.stream_quality_profile.is_some())
         && metadata.stream_quality_profile == options.stream_quality_profile
         && metadata.local_stream_fps == options.local_stream_fps
+}
+
+fn daemon_port_matches_launch_options(actual: u16, preferred: u16) -> bool {
+    let start = preferred.max(1024);
+    actual >= start && actual < start.saturating_add(200)
 }
 
 fn read_daemon_metadata() -> anyhow::Result<Option<DaemonMetadata>> {
@@ -5873,6 +5878,14 @@ mod tests {
         let options = daemon_launch_options_for_test(4320, "127.0.0.1", None, None);
 
         assert!(!daemon_matches_launch_options(&metadata, &options));
+    }
+
+    #[test]
+    fn daemon_launch_options_accept_probed_port() {
+        let metadata = daemon_metadata_for_test(4313, "127.0.0.1", None, None);
+        let options = daemon_launch_options_for_test(4311, "127.0.0.1", None, None);
+
+        assert!(daemon_matches_launch_options(&metadata, &options));
     }
 
     #[test]

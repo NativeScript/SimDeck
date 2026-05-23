@@ -654,6 +654,10 @@ async function runRestControls() {
   await measuredStep(
     "REST accessibility-tree interactive",
     async () => {
+      const fullTree = await httpJson(
+        "GET",
+        `/api/simulators/${simulatorUDID}/accessibility-tree?source=native-ax&maxDepth=8`,
+      );
       const tree = await httpJson(
         "GET",
         `/api/simulators/${simulatorUDID}/accessibility-tree?source=native-ax&maxDepth=8&interactiveOnly=true`,
@@ -661,6 +665,13 @@ async function runRestControls() {
       assertRoots(tree, "REST accessibility-tree interactive");
       if (tree.interactiveOnly !== true) {
         throw new Error("interactive tree did not report interactiveOnly=true");
+      }
+      const fullCount = countAccessibilityNodes(fullTree);
+      const interactiveCount = countAccessibilityNodes(tree);
+      if (interactiveCount <= 0 || interactiveCount > fullCount) {
+        throw new Error(
+          `interactive tree node count ${interactiveCount} was not a pruned subset of full count ${fullCount}`,
+        );
       }
     },
     { phase: phaseSetup },
@@ -1909,6 +1920,24 @@ function assertRoots(payload, label) {
   if (!Array.isArray(payload.roots) || payload.roots.length === 0) {
     throw new Error(`${label} returned no roots: ${JSON.stringify(payload)}`);
   }
+}
+
+function countAccessibilityNodes(snapshot) {
+  const roots = Array.isArray(snapshot?.roots) ? snapshot.roots : [];
+  let count = 0;
+  const visit = (node) => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    count += 1;
+    for (const child of Array.isArray(node.children) ? node.children : []) {
+      visit(child);
+    }
+  };
+  for (const root of roots) {
+    visit(root);
+  }
+  return count;
 }
 
 function assertJson(payload, label) {
