@@ -208,11 +208,12 @@ Touch, edge-touch, and multi-touch coordinates are normalized from `0.0` to `1.0
 
 Tree query parameters:
 
-| Parameter       | Values                                                                                                    |
-| --------------- | --------------------------------------------------------------------------------------------------------- |
-| `source`        | `auto`, `nativescript`, `react-native`, `flutter`, `swiftui`, `uikit`, `native-ax`, `android-uiautomator` |
-| `maxDepth`      | Integer depth limit                                                                                       |
-| `includeHidden` | `true` or `false`                                                                                         |
+| Parameter         | Values                                                                                                    |
+| ----------------- | --------------------------------------------------------------------------------------------------------- |
+| `source`          | `auto`, `nativescript`, `react-native`, `flutter`, `swiftui`, `uikit`, `native-ax`, `android-uiautomator` |
+| `maxDepth`        | Integer depth limit                                                                                       |
+| `includeHidden`   | `true` or `false`                                                                                         |
+| `interactiveOnly` | `true` keeps actionable elements plus their ancestors                                                     |
 
 Point query parameters:
 

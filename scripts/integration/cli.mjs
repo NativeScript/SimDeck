@@ -189,6 +189,29 @@ async function main() {
   if (!agentTree.includes("source:") || !agentTree.includes("- ")) {
     throw new Error("agent describe output did not look like a hierarchy");
   }
+  const interactiveTree = await measuredStep(
+    "server describe agent interactive",
+    () =>
+      simdeckText([
+        "describe",
+        simulatorUDID,
+        "--source",
+        "native-ax",
+        "--format",
+        "agent",
+        "--max-depth",
+        "8",
+        "--interactive",
+      ]),
+  );
+  if (
+    !interactiveTree.includes("source:") ||
+    !interactiveTree.includes("Continue")
+  ) {
+    throw new Error(
+      "interactive agent describe did not include fixture controls",
+    );
+  }
   await runRestControls();
   await runCliControls();
 
@@ -483,6 +506,16 @@ async function runCliControls() {
     { expectFixture: true, expectText: "URL Opened" },
   );
   await cliStep(
+    "CLI tap label shorthand",
+    ["tap", "Continue", "--wait-timeout-ms", "15000", "--duration-ms", "30"],
+    {
+      env: { SIMDECK_DEVICE: simulatorUDID },
+      timeoutMs: 180_000,
+      maxElapsedMs: 60_000,
+    },
+    { expectFixture: true, expectText: "Continue Tapped", attempts: 8 },
+  );
+  await cliStep(
     "CLI tap fixture text field",
     [
       "tap",
@@ -497,7 +530,7 @@ async function runCliControls() {
     { timeoutMs: 180_000, maxElapsedMs: 60_000 },
     {
       expectFixture: true,
-      expectText: "URL Opened",
+      expectText: "Continue Tapped",
       attempts: 6,
       delayMs: 1_500,
     },
@@ -620,6 +653,20 @@ async function runRestControls() {
         ),
         "REST accessibility-tree",
       );
+    },
+    { phase: phaseSetup },
+  );
+  await measuredStep(
+    "REST accessibility-tree interactive",
+    async () => {
+      const tree = await httpJson(
+        "GET",
+        `/api/simulators/${simulatorUDID}/accessibility-tree?source=native-ax&maxDepth=8&interactiveOnly=true`,
+      );
+      assertRoots(tree, "REST accessibility-tree interactive");
+      if (tree.interactiveOnly !== true) {
+        throw new Error("interactive tree did not report interactiveOnly=true");
+      }
     },
     { phase: phaseSetup },
   );
@@ -1640,6 +1687,7 @@ function simdeckText(args, options = {}) {
     timeoutMs: options.timeoutMs ?? 120_000,
     maxElapsedMs: options.maxElapsedMs,
     input: options.input,
+    env: options.env,
   });
 }
 
@@ -1654,6 +1702,7 @@ function runText(command, args, options = {}) {
     cwd: root,
     encoding: "utf8",
     input: options.input,
+    env: options.env ? { ...process.env, ...options.env } : process.env,
     timeout: options.timeoutMs ?? 120_000,
   });
   if (result.status !== 0) {

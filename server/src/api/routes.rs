@@ -1,3 +1,4 @@
+use crate::accessibility::interactive_accessibility_snapshot;
 use crate::android::{self, AndroidBridge, AndroidEmulatorSpec};
 use crate::api::json::json;
 use crate::auth;
@@ -745,6 +746,7 @@ struct AccessibilityTreeQuery {
     source: Option<String>,
     max_depth: Option<usize>,
     include_hidden: Option<bool>,
+    interactive_only: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -2647,6 +2649,7 @@ async fn accessibility_query(
         payload.source.as_deref(),
         payload.max_depth,
         payload.include_hidden.unwrap_or(false),
+        false,
     )
     .await?;
     let matches = query_compact_elements(
@@ -4147,6 +4150,7 @@ async fn accessibility_tree(
             query.source.as_deref(),
             query.max_depth,
             query.include_hidden.unwrap_or(false),
+            query.interactive_only.unwrap_or(false),
         )
         .await?,
     ))
@@ -4158,6 +4162,7 @@ async fn accessibility_tree_value(
     source: Option<&str>,
     max_depth: Option<usize>,
     include_hidden: bool,
+    interactive_only: bool,
 ) -> Result<Value, AppError> {
     if android::is_android_id(&udid) {
         let requested_source = source
@@ -4170,6 +4175,9 @@ async fn accessibility_tree_value(
             }
             if let Some(source) = requested_source {
                 tree["requestedSource"] = Value::String(source);
+            }
+            if interactive_only {
+                tree = interactive_accessibility_snapshot(&tree);
             }
             Ok(tree)
         })
@@ -4185,11 +4193,16 @@ async fn accessibility_tree_value(
             match accessibility_snapshot(state.clone(), udid.clone(), None, max_depth).await {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
-                    return Ok(empty_accessibility_tree(
+                    let snapshot = empty_accessibility_tree(
                         SOURCE_NATIVE_AX,
                         &available_sources,
                         suppress_native_ax_translation_error(&error.to_string()),
-                    ));
+                    );
+                    return Ok(if interactive_only {
+                        interactive_accessibility_snapshot(&snapshot)
+                    } else {
+                        snapshot
+                    });
                 }
             };
         merge_connected_sources_for_pid(
@@ -4200,6 +4213,11 @@ async fn accessibility_tree_value(
         )
         .await;
         let snapshot = attach_available_sources(native_snapshot, &available_sources);
+        let snapshot = if interactive_only {
+            interactive_accessibility_snapshot(&snapshot)
+        } else {
+            snapshot
+        };
         return Ok(snapshot);
     }
 
@@ -4220,6 +4238,7 @@ async fn accessibility_tree_value(
                 hierarchy_source,
                 max_depth,
                 include_hidden,
+                interactive_only,
             )
             .await
             {
@@ -4248,11 +4267,13 @@ async fn accessibility_tree_value(
                     } else {
                         None
                     };
-                    Ok(attach_tree_metadata(
-                        snapshot,
-                        &available_sources,
-                        fallback_reason,
-                    ))
+                    let snapshot =
+                        attach_tree_metadata(snapshot, &available_sources, fallback_reason);
+                    Ok(if interactive_only {
+                        interactive_accessibility_snapshot(&snapshot)
+                    } else {
+                        snapshot
+                    })
                 }
                 Err(_inspector_error) => {
                     let mut available_sources = available_sources_with_native_ax(Some(&session));
@@ -4263,6 +4284,7 @@ async fn accessibility_tree_value(
                             InAppHierarchySource::Automatic,
                             Some(0),
                             include_hidden,
+                            false,
                         )
                         .await
                         {
@@ -4272,15 +4294,29 @@ async fn accessibility_tree_value(
                     }
                     match accessibility_snapshot(state.clone(), udid.clone(), None, max_depth).await
                     {
-                        Ok(native_snapshot) => Ok(attach_available_sources(
-                            trim_tree_depth(native_snapshot, max_depth),
-                            &available_sources,
-                        )),
-                        Err(native_ax_error) => Ok(empty_accessibility_tree(
-                            SOURCE_NATIVE_AX,
-                            &available_sources,
-                            suppress_native_ax_translation_error(&native_ax_error.to_string()),
-                        )),
+                        Ok(native_snapshot) => {
+                            let snapshot = attach_available_sources(
+                                trim_tree_depth(native_snapshot, max_depth),
+                                &available_sources,
+                            );
+                            Ok(if interactive_only {
+                                interactive_accessibility_snapshot(&snapshot)
+                            } else {
+                                snapshot
+                            })
+                        }
+                        Err(native_ax_error) => {
+                            let snapshot = empty_accessibility_tree(
+                                SOURCE_NATIVE_AX,
+                                &available_sources,
+                                suppress_native_ax_translation_error(&native_ax_error.to_string()),
+                            );
+                            Ok(if interactive_only {
+                                interactive_accessibility_snapshot(&snapshot)
+                            } else {
+                                snapshot
+                            })
+                        }
                     }
                 }
             }
@@ -4288,15 +4324,29 @@ async fn accessibility_tree_value(
         Err(_inspector_error) => {
             let available_sources = available_sources_with_native_ax(None);
             match accessibility_snapshot(state.clone(), udid.clone(), None, max_depth).await {
-                Ok(native_snapshot) => Ok(attach_available_sources(
-                    trim_tree_depth(native_snapshot, max_depth),
-                    &available_sources,
-                )),
-                Err(native_ax_error) => Ok(empty_accessibility_tree(
-                    SOURCE_NATIVE_AX,
-                    &available_sources,
-                    suppress_native_ax_translation_error(&native_ax_error.to_string()),
-                )),
+                Ok(native_snapshot) => {
+                    let snapshot = attach_available_sources(
+                        trim_tree_depth(native_snapshot, max_depth),
+                        &available_sources,
+                    );
+                    Ok(if interactive_only {
+                        interactive_accessibility_snapshot(&snapshot)
+                    } else {
+                        snapshot
+                    })
+                }
+                Err(native_ax_error) => {
+                    let snapshot = empty_accessibility_tree(
+                        SOURCE_NATIVE_AX,
+                        &available_sources,
+                        suppress_native_ax_translation_error(&native_ax_error.to_string()),
+                    );
+                    Ok(if interactive_only {
+                        interactive_accessibility_snapshot(&snapshot)
+                    } else {
+                        snapshot
+                    })
+                }
             }
         }
     }
@@ -4370,6 +4420,7 @@ async fn perform_tap_payload(
                 payload.source.as_deref(),
                 payload.max_depth,
                 payload.include_hidden.unwrap_or(false),
+                false,
             )
             .await?;
             normalize_screen_point_from_snapshot(&snapshot, x, y)?
@@ -4444,6 +4495,7 @@ async fn wait_for_absent_element_payload(
             payload.source.as_deref(),
             payload.max_depth,
             payload.include_hidden.unwrap_or(false),
+            false,
         )
         .await?;
         if first_matching_element(&snapshot, &payload.selector).is_none() {
@@ -4476,6 +4528,7 @@ async fn wait_for_snapshot_match(
             payload.source.as_deref(),
             payload.max_depth,
             payload.include_hidden.unwrap_or(false),
+            false,
         )
         .await?;
         if first_matching_element(&snapshot, &payload.selector).is_some() {
@@ -4505,6 +4558,7 @@ async fn scroll_until_visible_payload(
             payload.source.as_deref(),
             payload.max_depth,
             payload.include_hidden.unwrap_or(false),
+            false,
         )
         .await?;
         if let Some(found) = first_matching_element(&snapshot, &payload.selector) {
@@ -5105,6 +5159,7 @@ async fn run_batch_step(state: AppState, udid: String, step: BatchStep) -> Resul
                 source.as_deref(),
                 max_depth,
                 include_hidden.unwrap_or(false),
+                false,
             )
             .await?;
             Ok(json_value!({
@@ -6553,16 +6608,19 @@ async fn run_in_app_inspector_hierarchy(
     source: InAppHierarchySource,
     max_depth: Option<usize>,
     include_hidden: bool,
+    interactive_only: bool,
 ) -> Result<Value, String> {
     let max_depth = max_depth.unwrap_or(80);
     let params = match source {
         InAppHierarchySource::Automatic => json_value!({
             "includeHidden": include_hidden,
             "maxDepth": max_depth,
+            "interactiveOnly": interactive_only,
         }),
         InAppHierarchySource::UIKit => json_value!({
             "includeHidden": include_hidden,
             "maxDepth": max_depth,
+            "interactiveOnly": interactive_only,
             "source": "uikit",
         }),
     };

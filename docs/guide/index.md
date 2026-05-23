@@ -30,7 +30,8 @@ simdeck install <udid> /path/to/App.app
 simdeck install <udid> /path/to/App.ipa
 simdeck launch <udid> com.example.App
 simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
-simdeck describe <udid> --format agent --max-depth 3
+simdeck tap "Continue"
+simdeck describe <udid> --format agent --max-depth 3 --interactive
 ```
 
 Use `simdeck -d` for a detached background daemon, `simdeck -k` to stop it, and `simdeck -r` to restart it.

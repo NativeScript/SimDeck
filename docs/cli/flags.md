@@ -10,9 +10,10 @@ simdeck daemon start --help
 
 ## Global
 
-| Flag                 | Env                  | Purpose                          |
-| -------------------- | -------------------- | -------------------------------- |
-| `--server-url <url>` | `SIMDECK_SERVER_URL` | Target a specific running daemon |
+| Flag                  | Env                  | Purpose                                        |
+| --------------------- | -------------------- | ---------------------------------------------- |
+| `--server-url <url>`  | `SIMDECK_SERVER_URL` | Target a specific running daemon               |
+| `--device <selector>` | `SIMDECK_DEVICE`     | Default simulator for inferred-device commands |
 
 ## Server Options
 
@@ -24,7 +25,7 @@ Used by `simdeck ui`, `daemon start`, `daemon restart`, `service on`, and `servi
 | `--bind <ip>`                | `127.0.0.1`                            | Use `0.0.0.0` or `::` for LAN access                                              |
 | `--advertise-host <host>`    | detected                               | Host printed for remote browsers                                                  |
 | `--client-root <path>`       | bundled client                         | Static client directory                                                           |
-| `--video-codec <mode>`       | `auto`                                 | Encoder mode                                                                      |
+| `--video-codec <mode>`       | `auto`                                 | `auto`, `hardware`, or `software`                                                 |
 | `--stream-quality <profile>` | `full`                                 | `full`, `balanced`, `economy`, `low`, `tiny`, `ci-software`, and related profiles |
 | `--local-stream-fps <fps>`   | `60`                                   | Local stream frame target                                                         |
 | `--low-latency`              | off                                    | Conservative software H.264 profile                                               |
@@ -32,14 +33,15 @@ Used by `simdeck ui`, `daemon start`, `daemon restart`, `service on`, and `servi
 
 ## `describe`
 
-| Flag               | Purpose                                           |
-| ------------------ | ------------------------------------------------- | ------------ | ------------------- | ----- | --------- | -------------------- | --------------------- |
-| `--format json     | compact-json                                      | agent`       | Choose output shape |
-| `--source auto     | nativescript                                      | react-native | flutter             | uikit | native-ax | android-uiautomator` | Pick inspector source |
-| `--max-depth <n>`  | Trim hierarchy depth                              |
-| `--include-hidden` | Include hidden nodes when supported               |
-| `--point <x>,<y>`  | Describe the element at a screen point            |
-| `--direct`         | Skip daemon and use native accessibility directly |
+| Flag                  | Purpose                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------- |
+| `--format <format>`   | `json`, `compact-json`, or `agent`                                                                |
+| `--source <source>`   | `auto`, `nativescript`, `react-native`, `flutter`, `uikit`, `native-ax`, or `android-uiautomator` |
+| `--max-depth <n>`     | Trim hierarchy depth                                                                              |
+| `--include-hidden`    | Include hidden nodes when supported                                                               |
+| `-i`, `--interactive` | Keep only actionable elements plus ancestors                                                      |
+| `--point <x>,<y>`     | Describe the element at a screen point                                                            |
+| `--direct`            | Skip daemon and use native accessibility directly                                                 |
 
 ## Input
 

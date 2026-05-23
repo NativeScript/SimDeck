@@ -20,11 +20,12 @@ Use the built-in accessibility fallback for any app. Add an in-app inspector whe
 ```sh
 simdeck describe <udid>
 simdeck describe <udid> --format agent --max-depth 3
+simdeck describe <udid> --format agent --max-depth 3 --interactive
 simdeck describe <udid> --source native-ax
 simdeck describe <udid> --source react-native
 ```
 
-`auto` source selection uses the best available source and falls back to accessibility.
+`auto` source selection uses the best available source and falls back to accessibility. Add `--interactive` or `-i` for a smaller agent-oriented tree of actionable elements plus ancestors.
 
 ## Use From The Browser
 

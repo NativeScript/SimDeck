@@ -72,6 +72,7 @@ simdeck toggle-appearance <udid>
 ```sh
 simdeck describe <udid>
 simdeck describe <udid> --format agent --max-depth 4
+simdeck describe <udid> --format agent --max-depth 4 --interactive
 simdeck describe <udid> --format compact-json
 simdeck describe <udid> --source nativescript
 simdeck describe <udid> --source react-native
@@ -83,7 +84,7 @@ simdeck wait-for <udid> --label "Welcome" --timeout-ms 5000
 simdeck assert <udid> --id login.button --source auto --max-depth 8
 ```
 
-Default source selection prefers a connected framework inspector, then the Swift in-app agent, then native accessibility.
+Default source selection prefers a connected framework inspector, then the Swift in-app agent, then native accessibility. Use `--interactive` or `-i` to keep actionable elements and the ancestor context needed to find them. For quick agent loops, `describe` can infer the device from `--device`, `SIMDECK_DEVICE`, `SIMDECK_UDID`, or the only booted simulator.
 
 ## Performance
 
@@ -100,12 +101,13 @@ Performance data is simulator-only and uses host-process telemetry for matching 
 
 ## Input
 
-Coordinates are screen points unless `--normalized` is present.
+Coordinates are screen points unless `--normalized` is present. `tap "Continue"` is shorthand for a label tap on the inferred device. Use `--device <udid>` or `SIMDECK_DEVICE=<udid>` when more than one simulator is booted.
 
 ```sh
 simdeck tap <udid> 120 240
 simdeck tap <udid> 0.5 0.5 --normalized
 simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
+simdeck tap "Continue"
 simdeck swipe <udid> 200 700 200 200
 simdeck gesture <udid> scroll-down
 simdeck pinch <udid> --start-distance 160 --end-distance 80

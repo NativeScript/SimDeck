@@ -1,3 +1,4 @@
+mod accessibility;
 mod android;
 mod api;
 mod auth;
@@ -17,6 +18,7 @@ mod static_files;
 mod transport;
 mod webkit;
 
+use accessibility::interactive_accessibility_snapshot;
 use anyhow::Context;
 use api::routes::{router, AppState};
 use axum::Router;
@@ -80,6 +82,13 @@ const DAEMON_PORT_START: u16 = 4311;
 struct Cli {
     #[arg(long, global = true, hide = true)]
     server_url: Option<String>,
+    #[arg(
+        long,
+        global = true,
+        value_name = "SIMULATOR_NAME_OR_UDID",
+        help = "Default simulator for commands that can infer their target"
+    )]
+    device: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -266,7 +275,7 @@ enum Command {
     },
     #[command(name = "describe")]
     DescribeUi {
-        udid: String,
+        udid: Option<String>,
         #[arg(long, value_parser = parse_point)]
         point: Option<(f64, f64)>,
         #[arg(long, value_enum, default_value_t = DescribeUiFormat::Json)]
@@ -277,6 +286,8 @@ enum Command {
         max_depth: Option<usize>,
         #[arg(long)]
         include_hidden: bool,
+        #[arg(short = 'i', long = "interactive", visible_alias = "interactive-only")]
+        interactive_only: bool,
         #[arg(long)]
         direct: bool,
     },
@@ -296,9 +307,8 @@ enum Command {
         delay_ms: u64,
     },
     Tap {
-        udid: String,
-        x: Option<f64>,
-        y: Option<f64>,
+        #[arg(value_name = "UDID_OR_TARGET", num_args = 0..)]
+        args: Vec<String>,
         #[arg(long)]
         id: Option<String>,
         #[arg(long)]
@@ -2475,6 +2485,152 @@ fn list_studio_simulators(server_url: &str) -> anyhow::Result<Vec<StudioSimulato
         .collect())
 }
 
+fn resolve_cli_device_udid(
+    positional: Option<&str>,
+    global_selector: Option<&str>,
+    explicit_server_url: Option<&str>,
+) -> anyhow::Result<String> {
+    if let Some(udid) = positional.map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(udid.to_owned());
+    }
+
+    let selector = global_selector
+        .map(str::to_owned)
+        .or_else(|| env::var("SIMDECK_DEVICE").ok())
+        .or_else(|| env::var("SIMDECK_UDID").ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    if let Some(selector) = selector {
+        if android::is_android_id(&selector) || looks_like_device_selector(&selector) {
+            return Ok(selector);
+        }
+        let server_url = command_service_url(explicit_server_url)?;
+        if let Some(simulator) = select_studio_simulator(&server_url, &selector)? {
+            return Ok(simulator.udid);
+        }
+        return Ok(selector);
+    }
+
+    let server_url = command_service_url(explicit_server_url)?;
+    if let Some(simulator) = infer_default_cli_simulator(&server_url)? {
+        return Ok(simulator.udid);
+    }
+
+    let simulators = list_studio_simulators(&server_url)?;
+    let booted = simulators
+        .iter()
+        .filter(|simulator| simulator.is_booted)
+        .collect::<Vec<_>>();
+    if booted.len() > 1 {
+        anyhow::bail!(
+            "Multiple booted simulators are available. Pass a UDID, use --device, or set SIMDECK_DEVICE."
+        );
+    }
+    if simulators.is_empty() {
+        anyhow::bail!("No simulators are available. Boot one or pass a UDID explicitly.");
+    }
+    anyhow::bail!(
+        "No default simulator could be inferred. Pass a UDID, use --device, or set SIMDECK_DEVICE."
+    )
+}
+
+fn infer_default_cli_simulator(
+    server_url: &str,
+) -> anyhow::Result<Option<StudioSimulatorSelection>> {
+    let simulators = list_studio_simulators(server_url)?;
+    let booted = simulators
+        .iter()
+        .filter(|simulator| simulator.is_booted)
+        .cloned()
+        .collect::<Vec<_>>();
+    if booted.len() == 1 {
+        return Ok(booted.into_iter().next());
+    }
+    if booted.is_empty() && simulators.len() == 1 {
+        return Ok(simulators.into_iter().next());
+    }
+    Ok(None)
+}
+
+fn parse_tap_command_args(
+    args: Vec<String>,
+    id: Option<String>,
+    label: Option<String>,
+    value: Option<String>,
+    element_type: Option<String>,
+) -> anyhow::Result<TapCommandTarget> {
+    let mut target = TapCommandTarget {
+        selector: ElementSelector {
+            id,
+            label,
+            value,
+            element_type,
+        },
+        ..Default::default()
+    };
+
+    let args = args
+        .into_iter()
+        .map(|arg| arg.trim().to_owned())
+        .filter(|arg| !arg.is_empty())
+        .collect::<Vec<_>>();
+
+    if !target.selector.is_empty() {
+        match args.as_slice() {
+            [] => return Ok(target),
+            [udid] => {
+                target.udid = Some(udid.clone());
+                return Ok(target);
+            }
+            _ => anyhow::bail!(
+                "tap accepts at most one positional UDID when selector flags are used."
+            ),
+        }
+    }
+
+    if args.is_empty() {
+        return Ok(target);
+    }
+
+    let (udid, target_args) = if args.len() >= 2 && looks_like_device_selector(&args[0]) {
+        (Some(args[0].clone()), &args[1..])
+    } else {
+        (None, args.as_slice())
+    };
+    target.udid = udid;
+
+    if target_args.len() == 2 {
+        if let (Some(x), Some(y)) = (
+            parse_f64_arg(&target_args[0]),
+            parse_f64_arg(&target_args[1]),
+        ) {
+            target.x = Some(x);
+            target.y = Some(y);
+            return Ok(target);
+        }
+    }
+
+    if target_args.len() == 1 && parse_f64_arg(&target_args[0]).is_some() {
+        anyhow::bail!("tap requires both x and y coordinates.");
+    }
+    if target_args.iter().any(|arg| parse_f64_arg(arg).is_some()) {
+        anyhow::bail!("tap coordinates must be provided as exactly two numeric values.");
+    }
+
+    target.selector.label = Some(target_args.join(" "));
+    Ok(target)
+}
+
+fn parse_f64_arg(value: &str) -> Option<f64> {
+    value.parse::<f64>().ok().filter(|value| value.is_finite())
+}
+
+fn looks_like_device_selector(value: &str) -> bool {
+    android::is_android_id(value)
+        || (value.len() == 36 && value.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-'))
+}
+
 fn studio_provider_bridge_script() -> anyhow::Result<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(root) = project_root() {
@@ -2630,6 +2786,7 @@ fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let explicit_server_url = cli.server_url.clone();
+    let device_selector = cli.device.clone();
     let service_url = explicit_server_url
         .clone()
         .or_else(|| env::var("SIMDECK_SERVER_URL").ok())
@@ -3230,9 +3387,19 @@ fn main() -> anyhow::Result<()> {
             source,
             max_depth,
             include_hidden,
+            interactive_only,
             direct,
         } => {
-            let service_url = command_service_url(explicit_server_url.as_deref())?;
+            let udid = resolve_cli_device_udid(
+                udid.as_deref(),
+                device_selector.as_deref(),
+                explicit_server_url.as_deref(),
+            )?;
+            let service_url = if direct {
+                String::new()
+            } else {
+                command_service_url(explicit_server_url.as_deref())?
+            };
             let snapshot = describe_ui_snapshot(
                 &bridge,
                 &udid,
@@ -3240,6 +3407,7 @@ fn main() -> anyhow::Result<()> {
                 source,
                 max_depth,
                 include_hidden,
+                interactive_only,
                 direct,
                 &service_url,
             )?;
@@ -3307,9 +3475,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Tap {
-            udid,
-            x,
-            y,
+            args,
             id,
             label,
             value,
@@ -3321,8 +3487,29 @@ fn main() -> anyhow::Result<()> {
             pre_delay_ms,
             post_delay_ms,
         } => {
+            let target = parse_tap_command_args(args, id, label, value, element_type)?;
+            let uses_inferred_device = target.udid.is_none();
+            let uses_selector = !target.selector.is_empty();
+            let udid = resolve_cli_device_udid(
+                target.udid.as_deref(),
+                device_selector.as_deref(),
+                explicit_server_url.as_deref(),
+            )?;
+            let x = target.x;
+            let y = target.y;
+            let ElementSelector {
+                id,
+                label,
+                value,
+                element_type,
+            } = target.selector;
+            let preferred_service_url = if uses_inferred_device || uses_selector {
+                Some(command_service_url(explicit_server_url.as_deref())?)
+            } else {
+                service_url.clone()
+            };
             let command_server_url =
-                command_service_url_for_udid(&udid, &explicit_server_url, &service_url)?;
+                command_service_url_for_udid(&udid, &explicit_server_url, &preferred_service_url)?;
             if let (Some(server_url), Some(x), Some(y), true, None, None, None, None) = (
                 command_server_url.as_deref(),
                 x,
@@ -4066,12 +4253,29 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct ElementSelector {
     id: Option<String>,
     label: Option<String>,
     value: Option<String>,
     element_type: Option<String>,
+}
+
+impl ElementSelector {
+    fn is_empty(&self) -> bool {
+        self.id.is_none()
+            && self.label.is_none()
+            && self.value.is_none()
+            && self.element_type.is_none()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct TapCommandTarget {
+    udid: Option<String>,
+    x: Option<f64>,
+    y: Option<f64>,
+    selector: ElementSelector,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -4360,6 +4564,7 @@ fn describe_ui_snapshot(
     source: DescribeUiSource,
     max_depth: Option<usize>,
     include_hidden: bool,
+    interactive_only: bool,
     direct: bool,
     server_url: &str,
 ) -> anyhow::Result<Value> {
@@ -4383,6 +4588,7 @@ fn describe_ui_snapshot(
                 source,
                 max_depth,
                 include_hidden,
+                interactive_only,
                 server_url,
             ) {
                 Ok(snapshot) => return Ok(snapshot),
@@ -4399,7 +4605,12 @@ fn describe_ui_snapshot(
         );
     }
 
-    Ok(bridge.accessibility_snapshot_with_max_depth(udid, point, max_depth)?)
+    let snapshot = bridge.accessibility_snapshot_with_max_depth(udid, point, max_depth)?;
+    Ok(if interactive_only && point.is_none() {
+        interactive_accessibility_snapshot(&snapshot)
+    } else {
+        snapshot
+    })
 }
 
 fn fetch_service_accessibility_tree(
@@ -4407,6 +4618,7 @@ fn fetch_service_accessibility_tree(
     source: DescribeUiSource,
     max_depth: Option<usize>,
     include_hidden: bool,
+    interactive_only: bool,
     server_url: &str,
 ) -> anyhow::Result<Value> {
     let mut query = vec![format!("source={}", source.as_query_value())];
@@ -4415,6 +4627,9 @@ fn fetch_service_accessibility_tree(
     }
     if include_hidden {
         query.push("includeHidden=true".to_owned());
+    }
+    if interactive_only {
+        query.push("interactiveOnly=true".to_owned());
     }
     let path = format!(
         "/api/simulators/{}/accessibility-tree?{}",
@@ -7433,16 +7648,17 @@ fn default_client_root() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        batch_line_to_json_step, daemon_matches_launch_options, http_url_for_host, is_tailscale_ip,
-        maestro_commands_from_flow, maestro_selector, normalize_accessibility_point_for_display,
-        parse_maestro_flow_yaml, parse_maestro_point, parse_workspace_daemon_process_line,
-        render_qr_code, run_maestro_command, server_health_watchdog_should_restart,
-        service_post_error_is_retryable, simdeck_pair_url, studio_daemon_restart_args,
-        workspace_daemon_process_is_current, Cli, Command, DaemonCommand, DaemonLaunchOptions,
-        DaemonMetadata, PairingAddress, ServiceCommand, StreamQualityProfileArg,
-        StudioExposeOptions, VideoCodecMode, WorkspaceDaemonProcess, YamlValue,
-        DEFAULT_LOCAL_STREAM_QUALITY_PROFILE, SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD,
-        SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
+        batch_line_to_json_step, daemon_matches_launch_options, http_url_for_host,
+        interactive_accessibility_snapshot, is_tailscale_ip, maestro_commands_from_flow,
+        maestro_selector, normalize_accessibility_point_for_display, parse_maestro_flow_yaml,
+        parse_maestro_point, parse_tap_command_args, parse_workspace_daemon_process_line,
+        render_agent_accessibility_tree, render_qr_code, run_maestro_command,
+        server_health_watchdog_should_restart, service_post_error_is_retryable, simdeck_pair_url,
+        studio_daemon_restart_args, workspace_daemon_process_is_current, Cli, Command,
+        DaemonCommand, DaemonLaunchOptions, DaemonMetadata, ElementSelector, PairingAddress,
+        ServiceCommand, StreamQualityProfileArg, StudioExposeOptions, TapCommandTarget,
+        VideoCodecMode, WorkspaceDaemonProcess, YamlValue, DEFAULT_LOCAL_STREAM_QUALITY_PROFILE,
+        SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD, SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
     };
     use clap::Parser;
     use std::collections::HashMap;
@@ -7835,6 +8051,113 @@ mod tests {
             "touch",
             "Connection reset by peer (os error 54)"
         ));
+    }
+
+    #[test]
+    fn describe_interactive_flag_prunes_agent_tree_but_keeps_context() {
+        let parsed =
+            Cli::try_parse_from(["simdeck", "describe", "sim-1", "--format", "agent", "-i"])
+                .unwrap();
+        let Command::DescribeUi {
+            interactive_only, ..
+        } = parsed.command
+        else {
+            panic!("expected describe command");
+        };
+        assert!(interactive_only);
+
+        let snapshot = serde_json::json!({
+            "source": "native-ax",
+            "roots": [{
+                "type": "Window",
+                "children": [{
+                    "type": "View",
+                    "AXLabel": "Static wrapper",
+                    "children": [{
+                        "type": "Button",
+                        "AXLabel": "Continue",
+                        "enabled": true,
+                        "children": []
+                    }, {
+                        "type": "Label",
+                        "AXLabel": "Read only",
+                        "children": []
+                    }]
+                }]
+            }]
+        });
+
+        let pruned = interactive_accessibility_snapshot(&snapshot);
+        let output = render_agent_accessibility_tree(&pruned);
+
+        assert!(output.contains("- Window"));
+        assert!(output.contains("- View: Static wrapper"));
+        assert!(output.contains("- Button: Continue"));
+        assert!(!output.contains("Read only"));
+    }
+
+    #[test]
+    fn tap_single_positional_arg_is_label_shorthand() {
+        let parsed = Cli::try_parse_from(["simdeck", "tap", "Continue"]).unwrap();
+        let Command::Tap { args, .. } = parsed.command else {
+            panic!("expected tap command");
+        };
+        let target = parse_tap_command_args(args, None, None, None, None).unwrap();
+
+        assert_eq!(
+            target,
+            TapCommandTarget {
+                udid: None,
+                x: None,
+                y: None,
+                selector: ElementSelector {
+                    label: Some("Continue".to_owned()),
+                    ..Default::default()
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn tap_legacy_udid_coordinates_still_parse() {
+        let udid = "00000000-0000-0000-0000-000000000001";
+        let target = parse_tap_command_args(
+            vec![udid.to_owned(), "120".to_owned(), "240".to_owned()],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(target.udid.as_deref(), Some(udid));
+        assert_eq!(target.x, Some(120.0));
+        assert_eq!(target.y, Some(240.0));
+        assert!(target.selector.is_empty());
+    }
+
+    #[test]
+    fn tap_legacy_udid_label_shorthand_still_parse() {
+        let udid = "00000000-0000-0000-0000-000000000001";
+        let target = parse_tap_command_args(
+            vec![udid.to_owned(), "Continue".to_owned()],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(target.udid.as_deref(), Some(udid));
+        assert_eq!(target.selector.label.as_deref(), Some("Continue"));
+    }
+
+    #[test]
+    fn global_device_flag_is_available_for_agent_shortcuts() {
+        let parsed =
+            Cli::try_parse_from(["simdeck", "--device", "iPhone 16", "tap", "Continue"]).unwrap();
+
+        assert_eq!(parsed.device.as_deref(), Some("iPhone 16"));
     }
 
     #[test]

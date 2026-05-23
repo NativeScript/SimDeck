@@ -48,7 +48,7 @@ If Browser Use is not available, only then use `simdeck ui --open` - it would op
 
 ## Device And App
 
-Device commands take `<UDID>` immediately after the command.
+Most device commands take `<UDID>` immediately after the command. For fast agent loops, `describe` and `tap` can infer the device from `--device`, `SIMDECK_DEVICE`, `SIMDECK_UDID`, or the only booted simulator.
 
 ```bash
 simdeck list
@@ -83,6 +83,7 @@ Use targeted checks for test loops. `describe` is a diagnostic snapshot of the w
 ```bash
 simdeck describe <UDID>
 simdeck describe <UDID> --format agent --max-depth 4
+simdeck describe <UDID> --format agent --max-depth 4 --interactive
 simdeck describe <UDID> --format compact-json
 simdeck describe <UDID> --point 120,240
 simdeck describe <UDID> --source auto
@@ -100,6 +101,7 @@ simdeck assert <UDID> --id login.button --source auto --max-depth 8
 Use `--source auto` with the project daemon. Use `--direct` or `--source native-ax` for the private CoreSimulator accessibility bridge. Use `--source android-uiautomator` for Android emulator UIAutomator hierarchies. NativeScript, React Native, and Flutter inspector runtimes can add richer hierarchy data.
 For Android IDs, `describe` uses `uiautomator dump`; use `--format agent` or
 `--format compact-json` the same way as iOS.
+Use `--interactive` or `-i` when an agent only needs controls and actionable framework nodes; SimDeck keeps ancestor context so the output is still navigable.
 
 Prefer selectors, coordinates only when needed. Selector taps go through the daemon and wait for the element server-side.
 
@@ -107,6 +109,7 @@ Prefer selectors, coordinates only when needed. Selector taps go through the dae
 simdeck tap <UDID> --id LoginButton --wait-timeout-ms 5000
 simdeck tap <UDID> --label "Continue" --element-type Button
 simdeck tap <UDID> 120 240
+simdeck tap "Continue"
 ```
 
 For persistent app integration tests, use `simdeck/test` instead of shelling out repeatedly:

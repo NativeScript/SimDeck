@@ -28,6 +28,7 @@ export type QueryOptions = {
     | "android-uiautomator";
   maxDepth?: number;
   includeHidden?: boolean;
+  interactiveOnly?: boolean;
 };
 
 export type ElementSelector = {
@@ -923,6 +924,7 @@ function treeQuery(options: QueryOptions = {}): string {
   if (options.maxDepth !== undefined)
     params.set("maxDepth", String(options.maxDepth));
   if (options.includeHidden) params.set("includeHidden", "true");
+  if (options.interactiveOnly) params.set("interactiveOnly", "true");
   return params.toString();
 }
 

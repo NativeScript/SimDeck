@@ -37,7 +37,8 @@ simdeck install <udid> /path/to/App.ipa
 simdeck launch <udid> com.example.App
 simdeck open-url <udid> https://example.com
 simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
-simdeck describe <udid> --format agent --max-depth 3
+simdeck tap "Continue"
+simdeck describe <udid> --format agent --max-depth 3 --interactive
 simdeck screenshot <udid> --output screen.png
 simdeck screenshot <udid> --with-bezel --output screen-bezel.png
 simdeck record <udid> --seconds 5 --output screen-recording.mp4
@@ -45,6 +46,8 @@ simdeck logs <udid> --seconds 30 --limit 200
 simdeck stats <udid>
 simdeck sample <udid> --seconds 3
 ```
+
+`tap` and `describe` can infer their simulator from `--device`, `SIMDECK_DEVICE`, `SIMDECK_UDID`, or the only booted simulator.
 
 Most successful commands print JSON so they can be piped into tools such as `jq`.
 

@@ -96,6 +96,8 @@ CLI commands automatically use the same warm daemon:
 simdeck list
 simdeck tap <udid> 0.5 0.5 --normalized
 simdeck describe <udid> --format agent --max-depth 2
+SIMDECK_DEVICE=<udid> simdeck tap "Continue"
+simdeck --device <udid> describe --format agent --max-depth 2 --interactive
 ```
 
 ## Daemon
@@ -156,11 +158,13 @@ simdeck record <udid> --seconds 5 --output screen-recording.mp4
 simdeck stream <udid> --frames 120 > stream.h264
 simdeck describe <udid>
 simdeck describe <udid> --format agent --max-depth 4
+simdeck describe <udid> --format agent --max-depth 4 --interactive
 simdeck describe <udid> --point 120,240
 simdeck wait-for <udid> --label "Welcome" --timeout-ms 5000
 simdeck assert <udid> --id login.button --source auto --max-depth 8
 simdeck tap <udid> 120 240
 simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
+simdeck tap "Continue"
 simdeck swipe <udid> 200 700 200 200
 simdeck gesture <udid> scroll-down
 simdeck pinch <udid> --start-distance 160 --end-distance 80
@@ -216,9 +220,11 @@ external tools such as `ffplay`.
 Flutter, or UIKit in-app inspectors, then falls back to the built-in private
 CoreSimulator accessibility bridge. Use `--format agent` or
 `--format compact-json` for
-lower-token hierarchy dumps. Coordinate commands accept screen coordinates from
-the accessibility tree by default; pass `--normalized` to send `0.0..1.0`
-coordinates directly.
+lower-token hierarchy dumps, and add `--interactive`/`-i` when an agent only
+needs actionable elements plus their ancestors. `describe` and `tap` can infer a
+target from `--device`, `SIMDECK_DEVICE`, `SIMDECK_UDID`, or the only booted
+simulator. Coordinate commands accept screen coordinates from the accessibility
+tree by default; pass `--normalized` to send `0.0..1.0` coordinates directly.
 
 ## JS/TS Tests
 

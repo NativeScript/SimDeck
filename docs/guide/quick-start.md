@@ -66,7 +66,8 @@ Use selectors when you want automation to wait for UI state:
 
 ```sh
 simdeck tap <udid> --label "Continue" --wait-timeout-ms 5000
-simdeck describe <udid> --format agent --max-depth 3
+simdeck tap "Continue"
+simdeck describe <udid> --format agent --max-depth 3 --interactive
 ```
 
 ## 5. Keep It Running In The Background

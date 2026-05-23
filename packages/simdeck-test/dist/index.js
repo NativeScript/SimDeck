@@ -524,6 +524,8 @@ function treeQuery(options = {}) {
         params.set("maxDepth", String(options.maxDepth));
     if (options.includeHidden)
         params.set("includeHidden", "true");
+    if (options.interactiveOnly)
+        params.set("interactiveOnly", "true");
     return params.toString();
 }
 function logsQuery(options = {}) {

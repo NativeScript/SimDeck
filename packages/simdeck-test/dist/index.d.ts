@@ -11,6 +11,7 @@ export type QueryOptions = {
     source?: "auto" | "nativescript" | "react-native" | "flutter" | "swiftui" | "uikit" | "native-ax" | "android-uiautomator";
     maxDepth?: number;
     includeHidden?: boolean;
+    interactiveOnly?: boolean;
 };
 export type ElementSelector = {
     text?: string;
