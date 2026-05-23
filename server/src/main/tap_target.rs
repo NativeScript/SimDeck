@@ -190,4 +190,3 @@ fn is_actionable_element(node: &Value) -> bool {
         .iter()
         .any(|needle| haystack.contains(needle))
 }
-
