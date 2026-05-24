@@ -1430,16 +1430,15 @@ export function AppShell({
   );
 
   useEffect(() => {
-    const refreshMs =
-      hierarchyVisible
-        ? accessibilityPreferredSource === "react-native" ||
-          accessibilitySource === "react-native"
-          ? REACT_NATIVE_ACCESSIBILITY_REFRESH_MS
-          : accessibilityPreferredSource === "flutter" ||
-              accessibilitySource === "flutter"
-            ? FLUTTER_ACCESSIBILITY_REFRESH_MS
-            : ACCESSIBILITY_REFRESH_MS
-        : ACCESSIBILITY_BACKGROUND_REFRESH_MS;
+    const refreshMs = hierarchyVisible
+      ? accessibilityPreferredSource === "react-native" ||
+        accessibilitySource === "react-native"
+        ? REACT_NATIVE_ACCESSIBILITY_REFRESH_MS
+        : accessibilityPreferredSource === "flutter" ||
+            accessibilitySource === "flutter"
+          ? FLUTTER_ACCESSIBILITY_REFRESH_MS
+          : ACCESSIBILITY_REFRESH_MS
+      : ACCESSIBILITY_BACKGROUND_REFRESH_MS;
     let disposed = false;
     let timeout: number | null = null;
     const refreshLoop = async () => {

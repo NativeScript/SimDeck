@@ -844,7 +844,12 @@ export class SimDeckNativeScriptInspector {
           : null;
     let child =
       maxDepth == null || depth < maxDepth
-        ? this.nativeScriptNode(accessoryView, includeHidden, maxDepth, depth + 1)
+        ? this.nativeScriptNode(
+            accessoryView,
+            includeHidden,
+            maxDepth,
+            depth + 1,
+          )
         : null;
     if (child && uikitAccessory) {
       child = patchNativeScriptFramesFromUIKit(child, uikitAccessory);
@@ -1445,7 +1450,9 @@ function nativeScriptTabItems(
   sourceRoot = "",
 ): JSONObject[] {
   const rawItems = nsArray(
-    read(tabView, "items") || read(tabView, "_items") || read(tabView, "_tabItems"),
+    read(tabView, "items") ||
+      read(tabView, "_items") ||
+      read(tabView, "_tabItems"),
   );
   const children = nativeScriptChildren(tabView);
   const count = Math.max(
@@ -1462,7 +1469,8 @@ function nativeScriptTabItems(
       read(child, "_tabItem") ||
       {};
     return {
-      title: stringValue(read(item, "title")) || stringValue(read(child, "title")),
+      title:
+        stringValue(read(item, "title")) || stringValue(read(child, "title")),
       iconSource:
         stringValue(read(item, "iconSource")) ||
         stringValue(read(child, "iconSource")),
@@ -1545,7 +1553,8 @@ function patchNativeScriptFramesFromUIKit(
 ): JSONObject {
   const candidates = collectSubviews(
     uikitRoot,
-    (view) => Boolean(uikitFrameLabel(view)) && hasUsableFrame(frameInScreen(view)),
+    (view) =>
+      Boolean(uikitFrameLabel(view)) && hasUsableFrame(frameInScreen(view)),
   ).map((view) => ({
     frame: frameInScreen(view),
     label: uikitFrameLabel(view),
@@ -1595,10 +1604,7 @@ function uikitFrameLabel(view: any): string {
   );
 }
 
-function findSubview(
-  view: any,
-  predicate: (view: any) => boolean,
-): any | null {
+function findSubview(view: any, predicate: (view: any) => boolean): any | null {
   if (!view) {
     return null;
   }
@@ -1644,22 +1650,27 @@ function tabBarControls(tabBar: any): any[] {
     }
     byFrame.set(rectKey(frame), control);
   }
-  return preferLargestNonOverlappingControls([...byFrame.values()]).sort((left, right) => {
-    const leftFrame = frameInScreen(left);
-    const rightFrame = frameInScreen(right);
-    return rectNumber(leftFrame, "x") - rectNumber(rightFrame, "x");
-  });
+  return preferLargestNonOverlappingControls([...byFrame.values()]).sort(
+    (left, right) => {
+      const leftFrame = frameInScreen(left);
+      const rightFrame = frameInScreen(right);
+      return rectNumber(leftFrame, "x") - rectNumber(rightFrame, "x");
+    },
+  );
 }
 
 function preferLargestNonOverlappingControls(controls: any[]): any[] {
   const accepted: any[] = [];
   for (const control of [...controls].sort(
-    (left, right) => rectArea(frameInScreen(right)) - rectArea(frameInScreen(left)),
+    (left, right) =>
+      rectArea(frameInScreen(right)) - rectArea(frameInScreen(left)),
   )) {
     const frame = frameInScreen(control);
     if (
       !frame ||
-      accepted.some((other) => substantiallyOverlaps(frame, frameInScreen(other)))
+      accepted.some((other) =>
+        substantiallyOverlaps(frame, frameInScreen(other)),
+      )
     ) {
       continue;
     }
@@ -1737,7 +1748,10 @@ function fallbackTabBarFrame(): JSONObject {
     width: 0,
     height: 0,
   };
-  const height = Math.min(83, Math.max(49, rectNumber(screen, "height") * 0.095));
+  const height = Math.min(
+    83,
+    Math.max(49, rectNumber(screen, "height") * 0.095),
+  );
   return {
     x: rectNumber(screen, "x"),
     y: rectNumber(screen, "y") + rectNumber(screen, "height") - height,

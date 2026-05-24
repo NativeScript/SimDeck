@@ -148,34 +148,34 @@ function AccessibilityDomNode({
   const tagName = accessibilityDomTagName(node);
 
   return createElement(tagName, {
-      "aria-checked":
-        role === "checkbox" || role === "switch"
-          ? (node.checked ?? undefined)
-          : undefined,
-      "aria-label": label,
-      "aria-level": depth + 1,
-      "aria-selected": node.selected ?? undefined,
-      className: "accessibility-dom-node",
-      "data-testid": `simdeck-accessibility-${id}`,
-      "data-simdeck-accessibility-id": id,
-      "data-simdeck-accessibility-component": kind,
-      "data-simdeck-accessibility-identifier":
-        accessibilityIdentifier(node) || undefined,
-      "data-simdeck-accessibility-kind": kind,
-      "data-simdeck-accessibility-label": primaryAccessibilityText(node),
-      "data-simdeck-accessibility-image": metadata.imageName,
-      "data-simdeck-accessibility-source-file": metadata.sourceFile,
-      "data-simdeck-accessibility-source-line": metadata.sourceLine,
-      "data-simdeck-accessibility-source-column": metadata.sourceColumn,
-      "data-simdeck-accessibility-source": node.source || undefined,
-      "data-simdeck-accessibility-state": metadata.state,
-      "data-simdeck-accessibility-value": metadata.value,
-      "data-simdeck-inspector-id": node.inspectorId || undefined,
-      "data-simdeck-uikit-id": node.uikitId || undefined,
-      title: label,
-      role,
-      style: frameStyle(node.frame, rootFrame),
-    });
+    "aria-checked":
+      role === "checkbox" || role === "switch"
+        ? (node.checked ?? undefined)
+        : undefined,
+    "aria-label": label,
+    "aria-level": depth + 1,
+    "aria-selected": node.selected ?? undefined,
+    className: "accessibility-dom-node",
+    "data-testid": `simdeck-accessibility-${id}`,
+    "data-simdeck-accessibility-id": id,
+    "data-simdeck-accessibility-component": kind,
+    "data-simdeck-accessibility-identifier":
+      accessibilityIdentifier(node) || undefined,
+    "data-simdeck-accessibility-kind": kind,
+    "data-simdeck-accessibility-label": primaryAccessibilityText(node),
+    "data-simdeck-accessibility-image": metadata.imageName,
+    "data-simdeck-accessibility-source-file": metadata.sourceFile,
+    "data-simdeck-accessibility-source-line": metadata.sourceLine,
+    "data-simdeck-accessibility-source-column": metadata.sourceColumn,
+    "data-simdeck-accessibility-source": node.source || undefined,
+    "data-simdeck-accessibility-state": metadata.state,
+    "data-simdeck-accessibility-value": metadata.value,
+    "data-simdeck-inspector-id": node.inspectorId || undefined,
+    "data-simdeck-uikit-id": node.uikitId || undefined,
+    title: label,
+    role,
+    style: frameStyle(node.frame, rootFrame),
+  });
 }
 
 function frameStyle(

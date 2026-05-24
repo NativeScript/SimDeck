@@ -514,55 +514,57 @@ function NodeDetails({
   const isAndroid = isAndroidSimulator(selectedSimulator);
   const sourceText = sourceLocationText(node);
   const sourceHref = sourceLocationHref(node);
-  const details = ([
-    ["Type", accessibilityKind(node)],
-    ["Label", primaryAccessibilityText(node)],
+  const details = (
     [
-      "Source",
-      sourceHref ? (
-        <a className="hierarchy-detail-link" href={sourceHref}>
-          {sourceText}
-        </a>
-      ) : (
-        sourceText
-      ),
-    ],
-    [
-      isAndroid ? "Resource ID" : "Identifier",
-      isAndroid
-        ? (node.androidResourceId ?? "")
-        : accessibilityIdentifier(node),
-    ],
-    ["Inspector ID", node.inspectorId ?? ""],
-    ["Module", node.moduleName ?? ""],
-    ["NativeScript", nativeScriptDescription(node.nativeScript)],
-    ["React Native", reactNativeDescription(node.reactNative)],
-    ["Flutter", flutterDescription(node.flutter)],
-    [isAndroid ? "Android Class" : "UIKit Class", node.className ?? ""],
-    ["Package", isAndroid ? (node.androidPackage ?? "") : ""],
-    ["Last JS", lastUIKitScriptText(node)],
-    ["Value", node.AXValue ?? ""],
-    ["Role", node.role ?? ""],
-    ["Role Description", node.role_description ?? ""],
-    ["View Controller", objectClassName(node.viewController)],
-    ["SwiftUI", swiftUIDescription(node.swiftUI)],
-    ["Enabled", node.enabled == null ? "" : node.enabled ? "true" : "false"],
-    ["Hidden", node.isHidden == null ? "" : node.isHidden ? "true" : "false"],
-    ["Clickable", boolDetail(isAndroid, node.clickable)],
-    ["Long Clickable", boolDetail(isAndroid, node.longClickable)],
-    ["Focusable", boolDetail(isAndroid, node.focusable)],
-    ["Focused", boolDetail(isAndroid, node.focused)],
-    ["Scrollable", boolDetail(isAndroid, node.scrollable)],
-    ["Checkable", boolDetail(isAndroid, node.checkable)],
-    ["Checked", boolDetail(isAndroid, node.checked)],
-    ["Selected", boolDetail(isAndroid, node.selected)],
-    ["Password", boolDetail(isAndroid, node.password)],
-    ["Alpha", node.alpha == null ? "" : String(round(node.alpha))],
-    ["Frame", validFrame(node.frame) ? frameText(node.frame) : ""],
-    ["PID", node.pid == null ? "" : String(node.pid)],
-    ["Actions", node.custom_actions?.join(", ") ?? ""],
-    ["Help", node.help ?? ""],
-  ] as Array<[string, DetailValue]>).filter(([, value]) => value);
+      ["Type", accessibilityKind(node)],
+      ["Label", primaryAccessibilityText(node)],
+      [
+        "Source",
+        sourceHref ? (
+          <a className="hierarchy-detail-link" href={sourceHref}>
+            {sourceText}
+          </a>
+        ) : (
+          sourceText
+        ),
+      ],
+      [
+        isAndroid ? "Resource ID" : "Identifier",
+        isAndroid
+          ? (node.androidResourceId ?? "")
+          : accessibilityIdentifier(node),
+      ],
+      ["Inspector ID", node.inspectorId ?? ""],
+      ["Module", node.moduleName ?? ""],
+      ["NativeScript", nativeScriptDescription(node.nativeScript)],
+      ["React Native", reactNativeDescription(node.reactNative)],
+      ["Flutter", flutterDescription(node.flutter)],
+      [isAndroid ? "Android Class" : "UIKit Class", node.className ?? ""],
+      ["Package", isAndroid ? (node.androidPackage ?? "") : ""],
+      ["Last JS", lastUIKitScriptText(node)],
+      ["Value", node.AXValue ?? ""],
+      ["Role", node.role ?? ""],
+      ["Role Description", node.role_description ?? ""],
+      ["View Controller", objectClassName(node.viewController)],
+      ["SwiftUI", swiftUIDescription(node.swiftUI)],
+      ["Enabled", node.enabled == null ? "" : node.enabled ? "true" : "false"],
+      ["Hidden", node.isHidden == null ? "" : node.isHidden ? "true" : "false"],
+      ["Clickable", boolDetail(isAndroid, node.clickable)],
+      ["Long Clickable", boolDetail(isAndroid, node.longClickable)],
+      ["Focusable", boolDetail(isAndroid, node.focusable)],
+      ["Focused", boolDetail(isAndroid, node.focused)],
+      ["Scrollable", boolDetail(isAndroid, node.scrollable)],
+      ["Checkable", boolDetail(isAndroid, node.checkable)],
+      ["Checked", boolDetail(isAndroid, node.checked)],
+      ["Selected", boolDetail(isAndroid, node.selected)],
+      ["Password", boolDetail(isAndroid, node.password)],
+      ["Alpha", node.alpha == null ? "" : String(round(node.alpha))],
+      ["Frame", validFrame(node.frame) ? frameText(node.frame) : ""],
+      ["PID", node.pid == null ? "" : String(node.pid)],
+      ["Actions", node.custom_actions?.join(", ") ?? ""],
+      ["Help", node.help ?? ""],
+    ] as Array<[string, DetailValue]>
+  ).filter(([, value]) => value);
 
   return (
     <div className="hierarchy-details">
