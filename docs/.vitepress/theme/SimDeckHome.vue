@@ -99,20 +99,12 @@ async function copyCommand() {
               operate on while you stay focused on what matters in the current context.
             </p>
           </div>
-          <div class="sd-shot sd-shot-ide" aria-label="Screenshot placeholder for IDE simulator preview">
-            <div class="sd-shot-bar" aria-hidden="true"><span></span><span></span><span></span></div>
-            <div class="sd-shot-grid" aria-hidden="true">
-              <div class="sd-code-lines">
-                <span></span><span></span><span></span><span></span><span></span>
-              </div>
-              <div class="sd-phone-mini">
-                <span></span><strong>Continue</strong>
-              </div>
-              <div class="sd-inspector-lines">
-                <span></span><span></span><span></span><span></span>
-              </div>
-            </div>
-          </div>
+          <figure class="sd-shot sd-shot-image sd-shot-ide">
+            <img
+              src="/images/vscode-screenshot.png"
+              alt="SimDeck running beside code in VS Code"
+            />
+          </figure>
         </article>
 
         <article class="sd-moment sd-reveal">
@@ -125,16 +117,12 @@ async function copyCommand() {
               confidence.
             </p>
           </div>
-          <div class="sd-shot sd-shot-pr" aria-label="Screenshot placeholder for pull request preview">
-            <div class="sd-pr-row">
-              <span class="sd-status-dot" aria-hidden="true"></span>
-              <div><strong>Preview ready</strong><small>Started by SimDeck</small></div>
-              <em>2m ago</em>
-            </div>
-            <div class="sd-pr-device" aria-hidden="true">
-              <span></span><span></span><span></span>
-            </div>
-          </div>
+          <figure class="sd-shot sd-shot-image sd-shot-pr-image">
+            <img
+              src="/images/pr-comment.png"
+              alt="SimDeck pull request preview comment with a streamed simulator session"
+            />
+          </figure>
         </article>
 
         <article class="sd-moment sd-reveal">
@@ -146,15 +134,12 @@ async function copyCommand() {
               once, then drive the simulator from wherever the work is happening.
             </p>
           </div>
-          <div class="sd-shot sd-shot-remote" aria-label="Screenshot placeholder for remote WebRTC access">
-            <div class="sd-remote-toolbar">
-              <span>WebRTC</span><span>Connected</span><span>23ms</span>
-            </div>
-            <div class="sd-remote-controls" aria-hidden="true">
-              <span></span><span></span><span></span><span></span><span></span>
-            </div>
-            <div class="sd-remote-device" aria-hidden="true"></div>
-          </div>
+          <figure class="sd-shot sd-shot-remote-card">
+            <img
+              src="/images/remote-access.png"
+              alt="SimDeck remote access running on iOS"
+            />
+          </figure>
         </article>
 
         <article class="sd-moment sd-reveal">

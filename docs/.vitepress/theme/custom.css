@@ -220,34 +220,27 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
   margin-left: calc(50% - 50vw);
   padding-top: var(--vp-nav-height);
   overflow: hidden;
-  background: var(--sd-bg);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(0, 112, 243, 0.026) 0,
+      rgba(0, 112, 243, 0.014) 18svh,
+      rgba(0, 112, 243, 0.005) 42svh,
+      rgba(0, 112, 243, 0) 76svh
+    ),
+    var(--sd-bg);
 }
 
-.sd-home::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto;
-  height: 860px;
-  pointer-events: none;
-  background: linear-gradient(
-    180deg,
-    rgba(0, 112, 243, 0.035) 0%,
-    rgba(0, 112, 243, 0.024) 24%,
-    rgba(0, 112, 243, 0.012) 52%,
-    rgba(0, 112, 243, 0.004) 78%,
-    rgba(0, 112, 243, 0) 100%
-  );
-}
-
-.dark .sd-home::before {
-  background: linear-gradient(
-    180deg,
-    rgba(50, 145, 255, 0.065) 0%,
-    rgba(50, 145, 255, 0.045) 24%,
-    rgba(50, 145, 255, 0.022) 52%,
-    rgba(50, 145, 255, 0.007) 78%,
-    rgba(50, 145, 255, 0) 100%
-  );
+.dark .sd-home {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(50, 145, 255, 0.034) 0,
+      rgba(50, 145, 255, 0.018) 18svh,
+      rgba(50, 145, 255, 0.006) 42svh,
+      rgba(50, 145, 255, 0) 76svh
+    ),
+    var(--sd-bg);
 }
 
 .sd-home > * {
@@ -382,7 +375,7 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
 
 .sd-hero-shot {
   position: relative;
-  width: min(100%, 1040px);
+  width: min(100%, 1180px);
   margin: 36px 0 0;
   border: 0;
   border-radius: 8px;
@@ -402,9 +395,8 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
 
 .sd-hero-shot img {
   display: block;
-  width: auto;
-  max-width: 100%;
-  max-height: clamp(320px, 54svh, 700px);
+  width: 100%;
+  height: auto;
   border-radius: 8px;
   margin: 0 auto;
 }
@@ -505,6 +497,7 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
 
 .sd-shot {
   position: relative;
+  margin: 0;
   min-height: 184px;
   border: 1px solid var(--sd-line);
   border-radius: var(--sd-radius);
@@ -529,6 +522,66 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
   border-color: color-mix(in srgb, var(--sd-blue) 52%, var(--sd-line));
   box-shadow: 0 20px 70px rgba(0, 0, 0, 0.18);
   transform: translateY(-2px);
+}
+
+.sd-shot-image {
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  overflow: visible;
+}
+
+.sd-shot-image img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--sd-radius);
+}
+
+.sd-shot-image:hover {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.sd-shot-pr-image img {
+  border-radius: 10px;
+  box-shadow: 0 18px 70px rgba(0, 0, 0, 0.2);
+}
+
+.dark .sd-shot-pr-image img {
+  box-shadow: 0 22px 90px rgba(0, 0, 0, 0.5);
+}
+
+.sd-shot-remote-card {
+  display: grid;
+  min-height: 360px;
+  place-items: center;
+  padding: 28px;
+  background:
+    radial-gradient(circle at 50% 24%, rgba(0, 112, 243, 0.12), transparent 42%),
+    linear-gradient(180deg, color-mix(in srgb, var(--sd-panel-subtle) 80%, transparent), var(--sd-panel));
+  box-shadow: 0 22px 80px rgba(0, 0, 0, 0.16);
+}
+
+.dark .sd-shot-remote-card {
+  background:
+    radial-gradient(circle at 50% 24%, rgba(50, 145, 255, 0.22), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+    #050505;
+  box-shadow: 0 24px 94px rgba(0, 0, 0, 0.48);
+}
+
+.sd-shot-remote-card img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  filter: drop-shadow(0 18px 34px rgba(0, 0, 0, 0.22));
+}
+
+.dark .sd-shot-remote-card img {
+  filter: drop-shadow(0 20px 42px rgba(0, 0, 0, 0.46));
 }
 
 .sd-shot-bar {
@@ -1053,33 +1106,35 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
   }
 
   .sd-hero {
-    min-height: calc(100svh - var(--vp-nav-height));
-    padding: 36px 0 44px;
+    justify-content: flex-start;
+    min-height: 0;
+    padding: 38px 0 46px;
   }
 
   .sd-home .sd-hero h1 {
-    font-size: 32px;
+    font-size: 40px;
+    line-height: 0.96;
   }
 
   .sd-home .sd-hero-copy p {
-    font-size: 20px;
+    margin-top: 18px;
+    font-size: 23px;
+    line-height: 1.18;
   }
 
   .sd-command-wrap {
-    width: 100%;
-    min-width: 0;
+    width: fit-content;
+    max-width: 100%;
+    margin-top: 24px;
   }
 
   .sd-command {
-    font-size: 14px;
+    padding: 18px 88px 18px 20px;
+    font-size: 15px;
   }
 
   .sd-hero-shot {
-    margin-top: 34px;
-  }
-
-  .sd-hero-shot img {
-    max-height: 30svh;
+    margin-top: 30px;
   }
 
   .sd-story {
