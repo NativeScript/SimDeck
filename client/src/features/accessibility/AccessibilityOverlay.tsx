@@ -1,4 +1,4 @@
-import type { AriaRole, CSSProperties } from "react";
+import { createElement, type AriaRole, type CSSProperties } from "react";
 
 import type { AccessibilityNode } from "../../api/types";
 import {
@@ -7,7 +7,8 @@ import {
   accessibilityRootFrame,
   buildAccessibilityTree,
   findAccessibilityItem,
-  flattenAccessibilityTree,
+  isAccessibilityHitTestCandidate,
+  paintOrderedAccessibilityItems,
   primaryAccessibilityText,
   validFrame,
 } from "./accessibilityTree";
@@ -26,8 +27,8 @@ export function AccessibilityOverlay({
   const rootFrame = accessibilityRootFrame(roots);
   const tree = buildAccessibilityTree(roots);
   const overlayItems = rootFrame
-    ? flattenAccessibilityTree(tree).filter((item) =>
-        validFrame(item.node.frame),
+    ? paintOrderedAccessibilityItems(tree).filter(
+        isAccessibilityHitTestCandidate,
       )
     : [];
   const selected = selectedId
@@ -141,31 +142,40 @@ function AccessibilityDomNode({
   }
 
   const label = accessibilityDomLabel(node);
+  const metadata = accessibilityDomMetadata(node, id);
   const kind = accessibilityKind(node);
   const role = accessibilityDomRole(kind);
+  const tagName = accessibilityDomTagName(node);
 
-  return (
-    <div
-      aria-checked={
+  return createElement(tagName, {
+      "aria-checked":
         role === "checkbox" || role === "switch"
           ? (node.checked ?? undefined)
-          : undefined
-      }
-      aria-disabled={node.enabled === false ? true : undefined}
-      aria-label={label}
-      aria-level={depth + 1}
-      aria-selected={node.selected ?? undefined}
-      className="accessibility-dom-node"
-      data-simdeck-accessibility-id={id}
-      data-simdeck-accessibility-identifier={
-        accessibilityIdentifier(node) || undefined
-      }
-      data-simdeck-accessibility-kind={kind}
-      data-simdeck-accessibility-source={node.source || undefined}
-      role={role}
-      style={frameStyle(node.frame, rootFrame)}
-    />
-  );
+          : undefined,
+      "aria-label": label,
+      "aria-level": depth + 1,
+      "aria-selected": node.selected ?? undefined,
+      className: "accessibility-dom-node",
+      "data-testid": `simdeck-accessibility-${id}`,
+      "data-simdeck-accessibility-id": id,
+      "data-simdeck-accessibility-component": kind,
+      "data-simdeck-accessibility-identifier":
+        accessibilityIdentifier(node) || undefined,
+      "data-simdeck-accessibility-kind": kind,
+      "data-simdeck-accessibility-label": primaryAccessibilityText(node),
+      "data-simdeck-accessibility-image": metadata.imageName,
+      "data-simdeck-accessibility-source-file": metadata.sourceFile,
+      "data-simdeck-accessibility-source-line": metadata.sourceLine,
+      "data-simdeck-accessibility-source-column": metadata.sourceColumn,
+      "data-simdeck-accessibility-source": node.source || undefined,
+      "data-simdeck-accessibility-state": metadata.state,
+      "data-simdeck-accessibility-value": metadata.value,
+      "data-simdeck-inspector-id": node.inspectorId || undefined,
+      "data-simdeck-uikit-id": node.uikitId || undefined,
+      title: label,
+      role,
+      style: frameStyle(node.frame, rootFrame),
+    });
 }
 
 function frameStyle(
@@ -184,10 +194,33 @@ function accessibilityDomLabel(node: AccessibilityNode): string {
   const text = primaryAccessibilityText(node);
   const identifier = accessibilityIdentifier(node);
   const kind = accessibilityKind(node);
-  if (text && identifier && text !== identifier) {
-    return `${kind}: ${text} (${identifier})`;
+  const parts = [`SimDeck accessibility element`, kind];
+  if (text) {
+    parts.push(`label "${text}"`);
   }
-  return text || identifier || kind;
+  if (identifier && identifier !== text) {
+    parts.push(`identifier ${identifier}`);
+  }
+  const metadata = accessibilityDomMetadata(node);
+  if (metadata.value && metadata.value !== text) {
+    parts.push(`value "${metadata.value}"`);
+  }
+  if (metadata.placeholder && metadata.placeholder !== text) {
+    parts.push(`placeholder "${metadata.placeholder}"`);
+  }
+  if (metadata.imageName && metadata.imageName !== text) {
+    parts.push(`image ${metadata.imageName}`);
+  }
+  if (node.source) {
+    parts.push(`source ${node.source}`);
+  }
+  if (metadata.sourceLocation) {
+    parts.push(`defined at ${metadata.sourceLocation}`);
+  }
+  if (metadata.state) {
+    parts.push(metadata.state);
+  }
+  return parts.join("; ");
 }
 
 function accessibilityDomRole(kind: string): AriaRole {
@@ -223,4 +256,106 @@ function accessibilityDomRole(kind: string): AriaRole {
     return "text";
   }
   return "group";
+}
+
+export function accessibilityDomTagName(node: AccessibilityNode): string {
+  const kind = accessibilityKind(node);
+  const component = cleanTagPart(kind) ?? "element";
+  return `simdeck-${component}`;
+}
+
+function cleanTagPart(value: string | null | undefined): string | null {
+  const kebab = value
+    ?.trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+  return kebab || null;
+}
+
+function accessibilityDomMetadata(node: AccessibilityNode, id?: string) {
+  const sourceLocation = primarySourceLocation(node);
+  return {
+    imageName: cleanAccessibilityText(node.imageName),
+    placeholder: cleanAccessibilityText(node.placeholder),
+    sourceFile: sourceLocation.file || undefined,
+    sourceColumn:
+      typeof sourceLocation.column === "number"
+        ? String(sourceLocation.column)
+        : undefined,
+    sourceLine:
+      typeof sourceLocation.line === "number"
+        ? String(sourceLocation.line)
+        : undefined,
+    sourceLocation: formatSourceLocation(sourceLocation),
+    state: accessibilityStateSummary(node, id),
+    value: cleanAccessibilityText(node.AXValue),
+  };
+}
+
+function primarySourceLocation(node: AccessibilityNode): {
+  column: number | null;
+  file: string;
+  line: number | null;
+} {
+  const location =
+    node.sourceLocation ??
+    node.sourceLocations?.find((location) => location?.file) ??
+    null;
+  const file =
+    cleanAccessibilityText(location?.file) ??
+    cleanAccessibilityText(node.sourceFile) ??
+    "";
+  const line =
+    typeof location?.line === "number"
+      ? location.line
+      : typeof node.sourceLine === "number"
+        ? node.sourceLine
+        : null;
+  const column =
+    typeof location?.column === "number"
+      ? location.column
+      : typeof node.sourceColumn === "number"
+        ? node.sourceColumn
+        : null;
+  return { column, file, line };
+}
+
+function formatSourceLocation(location: {
+  column: number | null;
+  file: string;
+  line: number | null;
+}): string {
+  if (!location.file) {
+    return "";
+  }
+  return location.line == null
+    ? location.file
+    : location.column == null
+      ? `${location.file}:${location.line}`
+      : `${location.file}:${location.line}:${location.column}`;
+}
+
+function accessibilityStateSummary(
+  node: AccessibilityNode,
+  id: string | undefined,
+): string {
+  const state = [
+    id ? `tree id ${id}` : "",
+    node.enabled === false ? "disabled" : "",
+    node.focused === true ? "focused" : "",
+    node.selected === true ? "selected" : "",
+    node.checked === true ? "checked" : "",
+    node.checked === false ? "unchecked" : "",
+    node.clickable === true ? "clickable" : "",
+    node.scrollable === true ? "scrollable" : "",
+  ].filter(Boolean);
+  return state.join(", ");
+}
+
+function cleanAccessibilityText(
+  value: string | null | undefined,
+): string | null {
+  return value?.trim() || null;
 }

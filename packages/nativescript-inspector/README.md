@@ -10,7 +10,10 @@ npm install @nativescript/simdeck-inspector
 import { startSimDeckInspector } from "@nativescript/simdeck-inspector";
 
 if (__DEV__) {
-  startSimDeckInspector({ port: 4310 });
+  startSimDeckInspector({
+    port: 4310,
+    sourceRoot: "/absolute/path/to/your/app",
+  });
 }
 ```
 
@@ -36,3 +39,6 @@ back to raw UIKit when called with `{ "source": "uikit" }`.
 For Angular NativeScript apps, call `startSimDeckInspector()` before
 `runNativeScriptAngularApp()`. The package installs a small compatibility shim
 for Angular 20 dev-mode template source locations on NativeScript views.
+Pass `sourceRoot` when your framework reports project-relative source paths;
+SimDeck will publish absolute `sourceLocation.file` values for Codex context
+and local `file://` links in the inspector panel.

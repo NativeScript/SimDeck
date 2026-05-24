@@ -5159,6 +5159,7 @@ fn inspector_metadata(
         "port": port,
         "processIdentifier": process_identifier,
         "protocolVersion": info.get("protocolVersion").cloned().unwrap_or(Value::Null),
+        "sourceRoot": hierarchy.get("sourceRoot").cloned().unwrap_or_else(|| info.get("sourceRoot").cloned().unwrap_or(Value::Null)),
         "transport": transport_name,
     })
 }
@@ -5417,18 +5418,24 @@ fn normalize_inspector_node(node: &Value, pid: Option<i64>) -> Value {
     let display_name = object_string(object, "displayName")
         .or_else(|| object_string(object, "type"))
         .unwrap_or_else(|| class_name.clone());
+    let source = object_string(object, "source").unwrap_or_else(|| "in-app-inspector".to_owned());
     let inspector_id = object_string(object, "id");
-    let accessibility_label = nested_string(accessibility, "label");
+    let accessibility_label =
+        object_string(object, "AXLabel").or_else(|| nested_string(accessibility, "label"));
     let text = object_string(object, "text");
     let placeholder = object_string(object, "placeholder");
     let swiftui_tag = nested_string(swiftui, "tag");
     let view_controller_title = nested_string(view_controller, "title");
-    let image_name = object_string(object, "imageName");
+    let image_name = object_string(object, "imageName").filter(|_| {
+        source != "nativescript" || display_name.to_ascii_lowercase().contains("image")
+    });
+    let object_title = object_string(object, "title").filter(|title| title != &display_name);
     let title = first_non_empty_string([
         swiftui_tag.clone(),
+        object_title,
         text.clone(),
         view_controller_title,
-        image_name,
+        image_name.clone(),
         Some(display_name.clone()),
     ]);
     let role = if nested_bool(swiftui, "isProbe").unwrap_or(false) {
@@ -5456,10 +5463,7 @@ fn normalize_inspector_node(node: &Value, pid: Option<i64>) -> Value {
     normalized.insert("role".to_owned(), Value::String(role.to_owned()));
     normalized.insert("title".to_owned(), Value::String(title));
     normalized.insert("children".to_owned(), Value::Array(children));
-    normalized.insert(
-        "source".to_owned(),
-        Value::String("in-app-inspector".to_owned()),
-    );
+    normalized.insert("source".to_owned(), Value::String(source));
 
     if let Some(value) = inspector_id {
         normalized.insert("AXUniqueId".to_owned(), Value::String(value.clone()));
@@ -5473,10 +5477,15 @@ fn normalize_inspector_node(node: &Value, pid: Option<i64>) -> Value {
     if let Some(value) = accessibility_label.or(text.clone()) {
         normalized.insert("AXLabel".to_owned(), Value::String(value));
     }
-    if let Some(value) = nested_string(accessibility, "value").or(placeholder.clone()) {
+    if let Some(value) = object_string(object, "AXValue")
+        .or_else(|| nested_string(accessibility, "value"))
+        .or(placeholder.clone())
+    {
         normalized.insert("AXValue".to_owned(), Value::String(value));
     }
-    if let Some(value) = nested_string(accessibility, "hint") {
+    if let Some(value) =
+        object_string(object, "help").or_else(|| nested_string(accessibility, "hint"))
+    {
         normalized.insert("help".to_owned(), Value::String(value));
     }
     if let Some(frame) = object
@@ -5519,9 +5528,15 @@ fn normalize_inspector_node(node: &Value, pid: Option<i64>) -> Value {
     copy_optional_field(object, &mut normalized, "nativeScript");
     copy_optional_field(object, &mut normalized, "uikitScript");
     copy_optional_field(object, &mut normalized, "sourceLocation");
+    copy_optional_field(object, &mut normalized, "sourceLocations");
+    copy_optional_field(object, &mut normalized, "sourceFile");
+    copy_optional_field(object, &mut normalized, "sourceLine");
+    copy_optional_field(object, &mut normalized, "sourceColumn");
     copy_optional_field(object, &mut normalized, "text");
     copy_optional_field(object, &mut normalized, "placeholder");
-    copy_optional_field(object, &mut normalized, "imageName");
+    if let Some(image_name) = image_name {
+        normalized.insert("imageName".to_owned(), Value::String(image_name));
+    }
 
     if let Some(enabled) = view_enabled(object) {
         normalized.insert("enabled".to_owned(), Value::Bool(enabled));

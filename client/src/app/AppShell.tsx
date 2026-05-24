@@ -114,6 +114,7 @@ import { isMoveControlMessage } from "./controlMessages";
 const ACCESSIBILITY_REFRESH_MS = 1500;
 const REACT_NATIVE_ACCESSIBILITY_REFRESH_MS = 500;
 const FLUTTER_ACCESSIBILITY_REFRESH_MS = 1000;
+const ACCESSIBILITY_BACKGROUND_REFRESH_MS = 3000;
 const ANDROID_METADATA_REFRESH_MS = 1000;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
@@ -1429,18 +1430,16 @@ export function AppShell({
   );
 
   useEffect(() => {
-    if (!hierarchyVisible) {
-      return;
-    }
-
     const refreshMs =
-      accessibilityPreferredSource === "react-native" ||
-      accessibilitySource === "react-native"
-        ? REACT_NATIVE_ACCESSIBILITY_REFRESH_MS
-        : accessibilityPreferredSource === "flutter" ||
-            accessibilitySource === "flutter"
-          ? FLUTTER_ACCESSIBILITY_REFRESH_MS
-          : ACCESSIBILITY_REFRESH_MS;
+      hierarchyVisible
+        ? accessibilityPreferredSource === "react-native" ||
+          accessibilitySource === "react-native"
+          ? REACT_NATIVE_ACCESSIBILITY_REFRESH_MS
+          : accessibilityPreferredSource === "flutter" ||
+              accessibilitySource === "flutter"
+            ? FLUTTER_ACCESSIBILITY_REFRESH_MS
+            : ACCESSIBILITY_REFRESH_MS
+        : ACCESSIBILITY_BACKGROUND_REFRESH_MS;
     let disposed = false;
     let timeout: number | null = null;
     const refreshLoop = async () => {

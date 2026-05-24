@@ -22,6 +22,7 @@ SimDeckFlutterInspector startSimDeckFlutterInspector({
   int port = 4310,
   bool reconnect = true,
   bool secure = false,
+  String sourceRoot = '',
 }) {
   if (_sharedInspector != null) {
     return _sharedInspector!;
@@ -33,6 +34,7 @@ SimDeckFlutterInspector startSimDeckFlutterInspector({
       port: port,
       reconnect: reconnect,
       secure: secure,
+      sourceRoot: sourceRoot,
     ),
   );
   _sharedInspector = inspector;
@@ -53,6 +55,7 @@ class SimDeckFlutterInspectorOptions {
     this.port = 4310,
     this.reconnect = true,
     this.secure = false,
+    this.sourceRoot = '',
   });
 
   final String host;
@@ -60,11 +63,12 @@ class SimDeckFlutterInspectorOptions {
   final int port;
   final bool reconnect;
   final bool secure;
+  final String sourceRoot;
 }
 
 class SimDeckFlutterInspector {
   SimDeckFlutterInspector([SimDeckFlutterInspectorOptions? options])
-      : options = options ?? const SimDeckFlutterInspectorOptions();
+    : options = options ?? const SimDeckFlutterInspectorOptions();
 
   final SimDeckFlutterInspectorOptions options;
   final Expando<String> _ids = Expando<String>('simdeckFlutterInspectorId');
@@ -301,6 +305,9 @@ class SimDeckFlutterInspector {
       'displayScale': metadata['displayScale'],
       'screenBounds': metadata['screenBounds'],
       'coordinateSpace': 'screen-points',
+      'sourceRoot': _normalizeSourceRoot(options.sourceRoot).isEmpty
+          ? null
+          : _normalizeSourceRoot(options.sourceRoot),
       'methods': <String>[
         'Runtime.ping',
         'Inspector.getInfo',
@@ -320,8 +327,8 @@ class SimDeckFlutterInspector {
       },
       'flutter': <String, Object?>{
         'available': true,
-        'widgetCreationTracked':
-            WidgetInspectorService.instance.isWidgetCreationTracked(),
+        'widgetCreationTracked': WidgetInspectorService.instance
+            .isWidgetCreationTracked(),
       },
       'uikit': <String, Object?>{'available': false, 'propertyEditing': false},
     };
@@ -332,8 +339,9 @@ class SimDeckFlutterInspector {
       return _metadata!;
     }
     final view = _firstFlutterView();
-    final logicalSize =
-        view == null ? Size.zero : view.physicalSize / view.devicePixelRatio;
+    final logicalSize = view == null
+        ? Size.zero
+        : view.physicalSize / view.devicePixelRatio;
     final fallback = <String, Object?>{
       'processIdentifier': io.pid,
       'bundleIdentifier': io.Platform.resolvedExecutable,
@@ -788,10 +796,14 @@ class SimDeckFlutterInspector {
       'protocolVersion': _protocolVersion,
       'processIdentifier': metadata['processIdentifier'] ?? io.pid,
       'bundleIdentifier': metadata['bundleIdentifier'],
-      'displayScale': metadata['displayScale'] ??
+      'displayScale':
+          metadata['displayScale'] ??
           _firstFlutterView()?.devicePixelRatio ??
           1.0,
       'coordinateSpace': 'screen-points',
+      'sourceRoot': _normalizeSourceRoot(options.sourceRoot).isEmpty
+          ? null
+          : _normalizeSourceRoot(options.sourceRoot),
     };
   }
 
@@ -869,18 +881,18 @@ class SimDeckFlutterInspector {
     }
     try {
       final json = element.toDiagnosticsNode().toJsonMap(
-            InspectorSerializationDelegate(
-              service: WidgetInspectorService.instance,
-              subtreeDepth: 0,
-            ),
-          );
+        InspectorSerializationDelegate(
+          service: WidgetInspectorService.instance,
+          subtreeDepth: 0,
+        ),
+      );
       final location = _objectMap(json['creationLocation']);
       if (location == null) {
         _sourceLocations[element] = _noSourceLocation;
         return null;
       }
       final sourceLocation = <String, Object?>{
-        'file': location['file'],
+        'file': _absoluteSourceFile(_stringValue(location['file'])),
         'line': location['line'],
         'column': location['column'],
         'name': location['name'],
@@ -892,6 +904,14 @@ class SimDeckFlutterInspector {
       _sourceLocations[element] = _noSourceLocation;
       return null;
     }
+  }
+
+  String _absoluteSourceFile(String file) {
+    final root = _normalizeSourceRoot(options.sourceRoot);
+    if (file.isEmpty || _isAbsoluteSourceFile(file) || root.isEmpty) {
+      return file;
+    }
+    return '$root/${file.replaceFirst(RegExp(r'^\./?'), '')}';
   }
 
   bool _shouldReadSourceLocation(
@@ -1070,7 +1090,7 @@ class SimDeckFlutterInspectorFailure implements Exception {
 
 class _TraversalContext {
   _TraversalContext()
-      : deadline = DateTime.now().add(const Duration(seconds: 3));
+    : deadline = DateTime.now().add(const Duration(seconds: 3));
 
   final DateTime deadline;
   int remainingNodes = 3500;
@@ -1324,6 +1344,17 @@ double? _optionalDouble(Object? value) {
 }
 
 String _stringValue(Object? value) => value == null ? '' : value.toString();
+
+String _normalizeSourceRoot(String sourceRoot) {
+  final root = sourceRoot.trim().replaceFirst(RegExp(r'/+$'), '');
+  return _isAbsoluteSourceFile(root) ? root : '';
+}
+
+bool _isAbsoluteSourceFile(String file) {
+  return file.startsWith('/') ||
+      RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*:').hasMatch(file) ||
+      RegExp(r'^[A-Za-z]:[\\/]').hasMatch(file);
+}
 
 String? _firstString(Iterable<Object?> values) {
   for (final value in values) {

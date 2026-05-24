@@ -173,7 +173,10 @@ export function shouldRetainAccessibilityTreeDuringRefresh(
   }
   const retainedSource =
     currentPreference === "auto" ? currentSource : currentPreference;
-  if (retainedSource !== "flutter" && retainedSource !== "react-native") {
+  if (
+    !isAccessibilitySource(retainedSource) ||
+    !retainableRichAccessibilitySources.has(retainedSource)
+  ) {
     return false;
   }
   if (currentSource !== retainedSource) {
@@ -181,6 +184,13 @@ export function shouldRetainAccessibilityTreeDuringRefresh(
   }
   return snapshotSource !== retainedSource || nextRootCount === 0;
 }
+
+const retainableRichAccessibilitySources = new Set<AccessibilitySource>([
+  "nativescript",
+  "react-native",
+  "flutter",
+  "swiftui",
+]);
 
 export function isAccessibilitySource(
   value: unknown,

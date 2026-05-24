@@ -23,7 +23,10 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
   if (kDebugMode) {
-    startSimDeckFlutterInspector(port: 4310);
+    startSimDeckFlutterInspector(
+      port: 4310,
+      sourceRoot: '/absolute/path/to/your/app',
+    );
   }
 
   runApp(const App());
@@ -42,7 +45,7 @@ ws://127.0.0.1:4310/api/inspector/connect
 - RenderObject screen frames in logical screen points.
 - Widget diagnostics properties and state type metadata.
 - Semantics labels, values, hints, identifiers, flags, roles, and actions.
-- Source locations from Flutter's widget creation tracking in debug builds.
+- Source locations from Flutter's widget creation tracking in debug builds. Pass `sourceRoot` to publish absolute `sourceLocation.file` values when Flutter reports relative paths.
 - `View.hitTest`, `View.describeAtPoint`, `View.getProperties`, `View.listActions`, and `View.perform`.
 
 `View.perform` supports best-effort `tap`, `longPress`, `focus`, `resignFirstResponder`, `setText`, `scrollBy`, `scrollTo`, `increase`, and `decrease` actions when the selected widget exposes the matching Flutter semantics, text, focus, or scroll API.

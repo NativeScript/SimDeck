@@ -1,6 +1,6 @@
 {
   "name": "@nativescript/simdeck-inspector",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Debug-only NativeScript runtime inspector for simdeck",
   "license": "Apache-2.0",
   "repository": {

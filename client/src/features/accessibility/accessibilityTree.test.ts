@@ -4,6 +4,9 @@ import type { AccessibilityNode } from "../../api/types";
 import {
   buildAccessibilityTree,
   findAccessibilityItemAtPoint,
+  isAccessibilityHitTestCandidate,
+  paintOrderedAccessibilityItems,
+  primaryAccessibilityText,
 } from "./accessibilityTree";
 
 describe("buildAccessibilityTree", () => {
@@ -159,6 +162,19 @@ describe("buildAccessibilityTree", () => {
       "Padding",
       "Center",
     ]);
+  });
+});
+
+describe("primaryAccessibilityText", () => {
+  it("uses image source fallback instead of generated NativeScript class names", () => {
+    expect(
+      primaryAccessibilityText({
+        source: "nativescript",
+        type: "_ImageCacheIt",
+        title: "_ImageCacheIt",
+        imageName: "~/assets/album-midnight.jpg",
+      }),
+    ).toBe("~/assets/album-midnight.jpg");
   });
 });
 
@@ -359,5 +375,176 @@ describe("findAccessibilityItemAtPoint", () => {
 
     expect(item?.node.type).toBe("Text");
     expect(item?.id).toBe("0.0");
+  });
+
+  it("prefers the first application root over stale overlapping roots", () => {
+    const roots: AccessibilityNode[] = [
+      {
+        type: "CurrentApp",
+        frame: { x: 0, y: 0, width: 400, height: 800 },
+        children: [
+          {
+            type: "Button",
+            AXLabel: "Current continue",
+            frame: { x: 100, y: 300, width: 200, height: 60 },
+          },
+        ],
+      },
+      {
+        type: "PreviousApp",
+        frame: { x: 0, y: 0, width: 400, height: 800 },
+        children: [
+          {
+            type: "Button",
+            AXLabel: "Previous continue",
+            frame: { x: 100, y: 300, width: 200, height: 60 },
+          },
+        ],
+      },
+    ];
+
+    const item = findAccessibilityItemAtPoint(roots, { x: 0.5, y: 0.4125 });
+
+    expect(item?.node.AXLabel).toBe("Current continue");
+    expect(item?.id).toBe("0.0");
+  });
+
+  it("does not select full-screen NativeScript containers as fallback targets", () => {
+    const roots: AccessibilityNode[] = [
+      {
+        source: "nativescript",
+        type: "Frame",
+        title: "Frame",
+        frame: { x: 0, y: 0, width: 402, height: 874 },
+        children: [
+          {
+            source: "nativescript",
+            type: "Label",
+            title: "Now Playing",
+            frame: { x: 24, y: 120, width: 180, height: 36 },
+          },
+        ],
+      },
+    ];
+
+    expect(findAccessibilityItemAtPoint(roots, { x: 0.5, y: 0.5 })).toBeNull();
+    expect(
+      findAccessibilityItemAtPoint(roots, { x: 0.2, y: 0.158 })?.node.type,
+    ).toBe("Label");
+  });
+
+  it("selects synthetic NativeScript tab items over content under the tab bar", () => {
+    const roots: AccessibilityNode[] = [
+      {
+        source: "nativescript",
+        type: "TabView",
+        title: "TabView",
+        frame: { x: 0, y: 0, width: 402, height: 874 },
+        children: [
+          {
+            source: "nativescript",
+            type: "Label",
+            title: "Album title underneath",
+            frame: { x: 0, y: 810, width: 402, height: 44 },
+          },
+          {
+            source: "nativescript",
+            type: "TabItem",
+            title: "Home",
+            frame: { x: 20, y: 791, width: 70, height: 83 },
+          },
+        ],
+      },
+    ];
+
+    const item = findAccessibilityItemAtPoint(roots, { x: 0.14, y: 0.94 });
+
+    expect(item?.node.type).toBe("TabItem");
+    expect(item?.node.title).toBe("Home");
+  });
+
+  it("descends through NativeScript tab accessory wrappers", () => {
+    const roots: AccessibilityNode[] = [
+      {
+        source: "nativescript",
+        type: "TabView",
+        frame: { x: 0, y: 0, width: 402, height: 874 },
+        children: [
+          {
+            source: "nativescript",
+            type: "TabAccessory",
+            title: "Tab accessory",
+            frame: { x: 21, y: 735, width: 360, height: 48 },
+            children: [
+              {
+                source: "nativescript",
+                type: "Label",
+                title: "Neon Pulse",
+                frame: { x: 85, y: 742, width: 212, height: 18 },
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const item = findAccessibilityItemAtPoint(roots, {
+      x: 85 / 402,
+      y: 742 / 874,
+    });
+
+    expect(item?.node.type).toBe("Label");
+    expect(item?.node.title).toBe("Neon Pulse");
+  });
+});
+
+describe("paintOrderedAccessibilityItems", () => {
+  it("paints later roots first so the preferred root is hit-tested on top", () => {
+    const tree = buildAccessibilityTree([
+      {
+        type: "CurrentApp",
+        frame: { x: 0, y: 0, width: 400, height: 800 },
+        children: [
+          {
+            type: "Button",
+            AXLabel: "Current continue",
+            frame: { x: 100, y: 300, width: 200, height: 60 },
+          },
+        ],
+      },
+      {
+        type: "PreviousApp",
+        frame: { x: 0, y: 0, width: 400, height: 800 },
+      },
+    ]);
+
+    expect(paintOrderedAccessibilityItems(tree).map((item) => item.id)).toEqual(
+      ["1", "0", "0.0"],
+    );
+  });
+
+  it("keeps transparent NativeScript containers out of annotatable DOM targets", () => {
+    const tree = buildAccessibilityTree([
+      {
+        source: "nativescript",
+        type: "Frame",
+        title: "Frame",
+        frame: { x: 0, y: 0, width: 402, height: 874 },
+        children: [
+          {
+            source: "nativescript",
+            type: "Label",
+            title: "Albums",
+            frame: { x: 24, y: 120, width: 120, height: 36 },
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      paintOrderedAccessibilityItems(tree)
+        .filter(isAccessibilityHitTestCandidate)
+        .map((item) => item.node.type),
+    ).toEqual(["Label"]);
   });
 });

@@ -118,6 +118,36 @@ describe("uiState", () => {
     ).toBe(false);
   });
 
+  it("retains the current NativeScript tree during empty or fallback refreshes", () => {
+    expect(
+      shouldRetainAccessibilityTreeDuringRefresh(
+        "auto",
+        "nativescript",
+        "nativescript",
+        0,
+        3,
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetainAccessibilityTreeDuringRefresh(
+        "nativescript",
+        "nativescript",
+        "native-ax",
+        12,
+        3,
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetainAccessibilityTreeDuringRefresh(
+        "auto",
+        "nativescript",
+        "nativescript",
+        4,
+        3,
+      ),
+    ).toBe(false);
+  });
+
   it("sanitizes persisted viewport state and falls back to defaults", () => {
     const sanitized = sanitizePersistedUiState({
       bundleIDValue: 123 as unknown as string,

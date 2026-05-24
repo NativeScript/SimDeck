@@ -11,6 +11,7 @@ export interface SimDeckReactNativeInspectorOptions {
   ports?: number[];
   reconnect?: boolean;
   secure?: boolean;
+  sourceRoot?: string;
 }
 
 type NormalizedSimDeckReactNativeInspectorOptions = Required<
@@ -158,6 +159,7 @@ export class SimDeckReactNativeInspector {
       ports,
       reconnect: options.reconnect ?? true,
       secure: options.secure ?? false,
+      sourceRoot: normalizeSourceRoot(options.sourceRoot),
     };
   }
 
@@ -370,6 +372,7 @@ export class SimDeckReactNativeInspector {
       displayScale: metadata.displayScale,
       screenBounds: metadata.screenBounds,
       coordinateSpace: "screen-points",
+      sourceRoot: this.options.sourceRoot || undefined,
       methods: [
         "Runtime.ping",
         "Inspector.getInfo",
@@ -712,7 +715,10 @@ export class SimDeckReactNativeInspector {
     if (this.sourceLocationCache.has(key)) {
       return Promise.resolve(this.sourceLocationCache.get(key) ?? null);
     }
-    const immediate = immediateSourceLocationForFiber(fiber);
+    const immediate = normalizeSourceLocation(
+      immediateSourceLocationForFiber(fiber),
+      this.options.sourceRoot,
+    );
     if (immediate) {
       this.sourceLocationCache.set(key, immediate);
       return Promise.resolve(immediate);
@@ -721,8 +727,12 @@ export class SimDeckReactNativeInspector {
       this.pendingSourceLocations.add(key);
       void resolveSourceLocationForFiber(fiber).then((location) => {
         this.pendingSourceLocations.delete(key);
-        if (location) {
-          this.sourceLocationCache.set(key, location);
+        const normalized = normalizeSourceLocation(
+          location,
+          this.options.sourceRoot,
+        );
+        if (normalized) {
+          this.sourceLocationCache.set(key, normalized);
         }
       });
     }
@@ -779,6 +789,7 @@ export class SimDeckReactNativeInspector {
       bundleIdentifier: metadata.bundleIdentifier,
       displayScale: metadata.displayScale,
       coordinateSpace: "screen-points",
+      sourceRoot: this.options.sourceRoot || undefined,
     };
   }
 
@@ -1054,6 +1065,39 @@ function fiberDisplayName(fiber: Fiber): string {
     );
   }
   return fiber.tag === 6 ? "Text" : "Component";
+}
+
+function normalizeSourceRoot(sourceRoot: string | undefined): string {
+  const root = stringOrNull(sourceRoot)?.replace(/\/+$/, "") ?? "";
+  return isAbsoluteSourceFile(root) ? root : "";
+}
+
+function normalizeSourceLocation(
+  location: JSONObject | null | undefined,
+  sourceRoot: string,
+): JSONObject | null {
+  if (!location?.file) {
+    return null;
+  }
+  return {
+    ...location,
+    file: absoluteSourceFile(String(location.file), sourceRoot),
+  };
+}
+
+function absoluteSourceFile(file: string, sourceRoot: string): string {
+  if (!file || isAbsoluteSourceFile(file) || !sourceRoot) {
+    return file;
+  }
+  return `${sourceRoot}/${file.replace(/^\.?\//, "")}`;
+}
+
+function isAbsoluteSourceFile(file: string): boolean {
+  return (
+    file.startsWith("/") ||
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(file) ||
+    /^[A-Za-z]:[\\/]/.test(file)
+  );
 }
 
 async function resolveSourceLocationForFiber(

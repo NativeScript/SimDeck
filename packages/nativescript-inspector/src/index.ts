@@ -25,6 +25,7 @@ declare const CGPointMake: any;
 declare const CGSizeMake: any;
 declare const UIEdgeInsetsMake: any;
 declare const WebSocket: any | undefined;
+declare const global: any;
 
 type JSONObject = Record<string, unknown>;
 
@@ -34,6 +35,7 @@ export interface SimDeckInspectorOptions {
   port?: number;
   reconnect?: boolean;
   secure?: boolean;
+  sourceRoot?: string;
 }
 
 interface InspectorRequest {
@@ -249,9 +251,11 @@ export class SimDeckNativeScriptInspector {
   private readonly options: Required<SimDeckInspectorOptions>;
   private socket: InspectorSocket | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private infoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private polling = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private nextObjectId = 1;
+  private lastAnnouncedInfoKey = "";
   private readonly ids = new WeakMap<object, string>();
   private readonly nativeScriptViewsByNativeView = new WeakMap<object, View>();
   private readonly objects = new Map<string, any>();
@@ -264,6 +268,7 @@ export class SimDeckNativeScriptInspector {
       port: options.port ?? 4310,
       reconnect: options.reconnect ?? true,
       secure: options.secure ?? false,
+      sourceRoot: normalizeSourceRoot(options.sourceRoot),
     };
   }
 
@@ -271,11 +276,11 @@ export class SimDeckNativeScriptInspector {
     this.stop();
     const scheme = this.options.secure ? "wss" : "ws";
     const url = `${scheme}://${this.options.host}:${this.options.port}${this.options.path}`;
-    let announced = false;
     const socket = createInspectorSocket(url, {
       onClose: () => {
         if (this.socket === socket) {
           this.socket = null;
+          this.clearInfoRefresh();
         }
         if (this.options.reconnect) {
           this.scheduleReconnect();
@@ -294,27 +299,14 @@ export class SimDeckNativeScriptInspector {
         });
       },
       onOpen: () => {
-        if (announced) {
-          return;
-        }
-        announced = true;
-        socket.send(
-          JSON.stringify({
-            method: "Inspector.ready",
-            params: this.info(),
-          }),
-        );
+        this.announceInfo(true);
+        this.scheduleInfoRefresh(250);
       },
     });
     this.socket = socket;
     if (socket.readyState === 1) {
-      socket.send(
-        JSON.stringify({
-          method: "Inspector.ready",
-          params: this.info(),
-        }),
-      );
-      announced = true;
+      this.announceInfo(true);
+      this.scheduleInfoRefresh(250);
     }
     this.startPolling();
   }
@@ -328,7 +320,9 @@ export class SimDeckNativeScriptInspector {
       clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
+    this.clearInfoRefresh();
     this.polling = false;
+    this.lastAnnouncedInfoKey = "";
     const socket = this.socket;
     this.socket = null;
     if (socket) {
@@ -467,6 +461,48 @@ export class SimDeckNativeScriptInspector {
     this.socket.send(JSON.stringify(payload));
   }
 
+  private announceInfo(force = false): void {
+    const info = this.info();
+    const key = infoAnnouncementKey(info);
+    if (!force && key === this.lastAnnouncedInfoKey) {
+      return;
+    }
+    this.lastAnnouncedInfoKey = key;
+    this.send({
+      method: "Inspector.ready",
+      params: info,
+    });
+  }
+
+  private scheduleInfoRefresh(delay: number): void {
+    if (!this.socket || this.socket.readyState !== 1) {
+      return;
+    }
+    this.clearInfoRefresh();
+    this.infoRefreshTimer = setTimeout(() => {
+      this.infoRefreshTimer = null;
+      this.refreshInfoAnnouncement();
+    }, delay);
+  }
+
+  private clearInfoRefresh(): void {
+    if (!this.infoRefreshTimer) {
+      return;
+    }
+    clearTimeout(this.infoRefreshTimer);
+    this.infoRefreshTimer = null;
+  }
+
+  private refreshInfoAnnouncement(): void {
+    if (!this.socket || this.socket.readyState !== 1) {
+      return;
+    }
+    this.announceInfo(false);
+    if (!nativeScriptAvailable(this.info())) {
+      this.scheduleInfoRefresh(250);
+    }
+  }
+
   private dispatch(method: string, params: JSONObject): unknown {
     switch (method) {
       case "Runtime.ping":
@@ -509,6 +545,7 @@ export class SimDeckNativeScriptInspector {
       displayScale: numberValue(UIScreen.mainScreen.scale, 1),
       screenBounds: rectValue(UIScreen.mainScreen.bounds),
       coordinateSpace: "screen-points",
+      sourceRoot: this.options.sourceRoot || undefined,
       methods: [
         "Runtime.ping",
         "Inspector.getInfo",
@@ -691,6 +728,8 @@ export class SimDeckNativeScriptInspector {
     depth: number,
   ): JSONObject {
     const nativeView = nativeViewFor(view);
+    const nativeScriptType =
+      stringValue((view as any).typeName) || constructorName(view);
     const children: JSONObject[] = [];
     if (maxDepth == null || depth < maxDepth) {
       safeCall(() => {
@@ -703,32 +742,333 @@ export class SimDeckNativeScriptInspector {
           return true;
         });
       }, undefined);
+      if (nativeScriptType === "TabView") {
+        const tabAccessoryNode = this.nativeScriptTabAccessoryNode(
+          view,
+          nativeView,
+          includeHidden,
+          maxDepth,
+          depth + 1,
+        );
+        if (tabAccessoryNode) {
+          children.push(tabAccessoryNode);
+        }
+        const tabBarNodes = this.nativeScriptTabBarNodes(
+          view,
+          nativeView,
+          children,
+        );
+        children.push(...tabBarNodes);
+      }
     }
 
     const id = this.objectId("ns", view);
     const uikitId = nativeView ? this.objectId("view", nativeView) : null;
+    const nativeAccessibility = nativeView
+      ? accessibilityInfo(nativeView)
+      : null;
+    const nativeControl = nativeView ? controlInfo(nativeView) : null;
+    const nativeScroll = nativeView ? scrollInfo(nativeView) : null;
+    const nativeActions = nativeView ? actionsFor(nativeView) : [];
+    const sourceLocation = sourceLocationForView(view, this.options.sourceRoot);
+    const nativeScriptData = nativeScriptInfo(
+      view,
+      nativeScriptType,
+      this.options.sourceRoot,
+    );
+    const imageSource = nativeScriptImageSource(view, nativeScriptType);
     return {
       id,
       inspectorId: id,
-      type: stringValue((view as any).typeName) || constructorName(view),
-      title: nativeScriptTitle(view),
+      type: nativeScriptType,
+      displayName: nativeScriptType,
+      title: nativeScriptTitle(view, nativeScriptType),
+      AXIdentifier: nativeAccessibility?.identifier ?? "",
+      AXLabel: nativeAccessibility?.label ?? "",
+      AXValue: nativeAccessibility?.value ?? "",
+      help: nativeAccessibility?.hint ?? "",
+      text: nativeView ? textValue(nativeView) : "",
+      imageName: imageSource,
+      placeholder: nativeView
+        ? stringValue(read(nativeView, "placeholder"))
+        : "",
+      enabled: nativeView
+        ? isKindOf(nativeView, "UIControl")
+          ? Boolean(read(nativeView, "enabled"))
+          : Boolean(read(nativeView, "userInteractionEnabled") ?? true)
+        : null,
+      clickable: nativeActions.includes("tap"),
+      scrollable: Boolean(nativeScroll),
       source: "nativescript",
-      sourceLocation: sourceLocationForView(view),
+      sourceLocation,
+      sourceLocations: sourceLocation ? [sourceLocation] : [],
+      sourceFile: sourceString(sourceLocation, "file"),
+      sourceLine: sourceNumber(sourceLocation, "line"),
+      sourceColumn: sourceNumber(sourceLocation, "column"),
       frame: nativeView ? frameInScreen(nativeView) : null,
-      nativeScript: {
-        id: stringValue((view as any).id),
-        className: stringValue((view as any).className),
-      },
+      nativeScript: nativeScriptData,
       uikit: nativeView
         ? {
             id: uikitId,
             className: className(nativeView),
             script: this.uikitScriptFor(uikitId, nativeView),
+            accessibility: nativeAccessibility,
+            actions: nativeActions,
           }
         : null,
       uikitId,
+      control: nativeControl,
+      scroll: nativeScroll,
       children,
     };
+  }
+
+  private nativeScriptTabAccessoryNode(
+    tabView: View,
+    nativeView: any | null,
+    includeHidden: boolean,
+    maxDepth: number | null,
+    depth: number,
+  ): JSONObject | null {
+    const accessoryView = nativeScriptTabAccessoryView(tabView);
+    if (!accessoryView) {
+      return null;
+    }
+    const accessoryNativeView = nativeViewFor(accessoryView);
+    const uikitAccessory = this.findUIKitTabAccessory(nativeView);
+    const accessoryFrame =
+      accessoryNativeView && hasUsableFrame(frameInScreen(accessoryNativeView))
+        ? frameInScreen(accessoryNativeView)
+        : uikitAccessory
+          ? frameInScreen(uikitAccessory)
+          : null;
+    let child =
+      maxDepth == null || depth < maxDepth
+        ? this.nativeScriptNode(accessoryView, includeHidden, maxDepth, depth + 1)
+        : null;
+    if (child && uikitAccessory) {
+      child = patchNativeScriptFramesFromUIKit(child, uikitAccessory);
+    }
+    const sourceLocation =
+      sourceLocationForView(accessoryView, this.options.sourceRoot) ||
+      firstSourceLocationFromNodes(child ? [child] : []);
+    const id = `${this.objectId("ns", tabView)}:accessory`;
+    return {
+      id,
+      inspectorId: id,
+      type: "TabAccessory",
+      displayName: "TabAccessory",
+      title: "Tab accessory",
+      AXIdentifier: "",
+      AXLabel: "Tab accessory",
+      AXValue: "",
+      help: "",
+      text: "",
+      imageName: "",
+      placeholder: "",
+      enabled: true,
+      clickable: false,
+      scrollable: false,
+      source: "nativescript",
+      sourceLocation,
+      sourceLocations: sourceLocation ? [sourceLocation] : [],
+      sourceFile: sourceString(sourceLocation, "file"),
+      sourceLine: sourceNumber(sourceLocation, "line"),
+      sourceColumn: sourceNumber(sourceLocation, "column"),
+      frame: accessoryFrame,
+      nativeScript: {
+        type: "TabAccessory",
+        sourceLocation,
+        sourceFile: sourceString(sourceLocation, "file"),
+        sourceLine: sourceNumber(sourceLocation, "line"),
+        sourceColumn: sourceNumber(sourceLocation, "column"),
+      },
+      uikit: null,
+      uikitId: null,
+      control: null,
+      scroll: null,
+      children: child ? [child] : [],
+    };
+  }
+
+  private findUIKitTabAccessory(nativeView: any | null): any | null {
+    const root = nativeView || this.windows()[0] || null;
+    return root
+      ? findSubview(root, (view) => /TabAccessory/.test(className(view)))
+      : null;
+  }
+
+  private nativeScriptTabBarNodes(
+    tabView: View,
+    nativeView: any | null,
+    nativeScriptChildrenNodes: JSONObject[],
+  ): JSONObject[] {
+    const tabBar =
+      (nativeView
+        ? findSubview(nativeView, (view) => isKindOf(view, "UITabBar"))
+        : null) || this.findUIKitTabBar();
+    if (!tabBar) {
+      return this.fallbackNativeScriptTabBarNodes(
+        tabView,
+        null,
+        nativeScriptChildrenNodes,
+      );
+    }
+    const selectedIndex = numberValue(read(tabView, "selectedIndex"), -1);
+    const tabItems = nativeScriptTabItems(
+      tabView,
+      nativeScriptChildrenNodes,
+      this.options.sourceRoot,
+    );
+    const controls = tabBarControls(tabBar);
+    if (controls.length === 0) {
+      return this.fallbackNativeScriptTabBarNodes(
+        tabView,
+        frameInScreen(tabBar),
+        nativeScriptChildrenNodes,
+      );
+    }
+    return controls.map((control, index) => {
+      const item = tabItems[index] ?? {};
+      const title =
+        stringValue(item.title) ||
+        tabBarControlLabel(control) ||
+        `Tab ${index + 1}`;
+      const sourceLocation = tabItemSourceLocation(
+        tabView,
+        item,
+        index,
+        this.options.sourceRoot,
+      );
+      const id = this.objectId("view", control);
+      const nativeActions = actionsFor(control);
+      return {
+        id,
+        inspectorId: id,
+        type: "TabItem",
+        displayName: "TabItem",
+        title,
+        AXIdentifier: stringValue(read(control, "accessibilityIdentifier")),
+        AXLabel: title,
+        AXValue: index === selectedIndex ? "selected" : "",
+        help: stringValue(read(control, "accessibilityHint")),
+        text: title,
+        imageName: stringValue(item.iconSource),
+        placeholder: "",
+        enabled: Boolean(read(control, "enabled") ?? true),
+        clickable: nativeActions.includes("tap"),
+        scrollable: false,
+        selected: index === selectedIndex,
+        source: "nativescript",
+        sourceLocation,
+        sourceLocations: sourceLocation ? [sourceLocation] : [],
+        sourceFile: sourceString(sourceLocation, "file"),
+        sourceLine: sourceNumber(sourceLocation, "line"),
+        sourceColumn: sourceNumber(sourceLocation, "column"),
+        frame: frameInScreen(control),
+        nativeScript: {
+          type: "TabItem",
+          title,
+          iconSource: stringValue(item.iconSource),
+          index,
+          selected: index === selectedIndex,
+          sourceLocation,
+          sourceFile: sourceString(sourceLocation, "file"),
+          sourceLine: sourceNumber(sourceLocation, "line"),
+          sourceColumn: sourceNumber(sourceLocation, "column"),
+        },
+        uikit: {
+          id,
+          className: className(control),
+          script: this.uikitScriptFor(id, control),
+          accessibility: accessibilityInfo(control),
+          actions: nativeActions,
+        },
+        uikitId: id,
+        control: controlInfo(control),
+        scroll: null,
+        children: [],
+      };
+    });
+  }
+
+  private fallbackNativeScriptTabBarNodes(
+    tabView: View,
+    tabBarFrame: JSONObject | null,
+    nativeScriptChildrenNodes: JSONObject[] = [],
+  ): JSONObject[] {
+    const selectedIndex = numberValue(read(tabView, "selectedIndex"), -1);
+    const tabItems = nativeScriptTabItems(
+      tabView,
+      nativeScriptChildrenNodes,
+      this.options.sourceRoot,
+    );
+    if (tabItems.length === 0) {
+      return [];
+    }
+    const parentId = this.objectId("ns", tabView);
+    const frame = tabBarFrame ?? fallbackTabBarFrame();
+    return tabItems.map((item, index) => {
+      const title = stringValue(item.title) || `Tab ${index + 1}`;
+      const sourceLocation = tabItemSourceLocation(
+        tabView,
+        item,
+        index,
+        this.options.sourceRoot,
+      );
+      return {
+        id: `${parentId}:tab:${index}`,
+        inspectorId: `${parentId}:tab:${index}`,
+        type: "TabItem",
+        displayName: "TabItem",
+        title,
+        AXIdentifier: "",
+        AXLabel: title,
+        AXValue: index === selectedIndex ? "selected" : "",
+        help: "",
+        text: title,
+        imageName: stringValue(item.iconSource),
+        placeholder: "",
+        enabled: true,
+        clickable: false,
+        scrollable: false,
+        selected: index === selectedIndex,
+        source: "nativescript",
+        sourceLocation,
+        sourceLocations: sourceLocation ? [sourceLocation] : [],
+        sourceFile: sourceString(sourceLocation, "file"),
+        sourceLine: sourceNumber(sourceLocation, "line"),
+        sourceColumn: sourceNumber(sourceLocation, "column"),
+        frame: tabItemFallbackFrame(frame, tabItems.length, index),
+        nativeScript: {
+          type: "TabItem",
+          title,
+          iconSource: stringValue(item.iconSource),
+          index,
+          selected: index === selectedIndex,
+          synthetic: true,
+          sourceLocation,
+          sourceFile: sourceString(sourceLocation, "file"),
+          sourceLine: sourceNumber(sourceLocation, "line"),
+          sourceColumn: sourceNumber(sourceLocation, "column"),
+        },
+        uikit: null,
+        uikitId: null,
+        control: null,
+        scroll: null,
+        children: [],
+      };
+    });
+  }
+
+  private findUIKitTabBar(): any | null {
+    for (const window of this.windows()) {
+      const tabBar = findSubview(window, (view) => isKindOf(view, "UITabBar"));
+      if (tabBar) {
+        return tabBar;
+      }
+    }
+    return null;
   }
 
   private uikitNode(
@@ -761,7 +1101,7 @@ export class SimDeckNativeScriptInspector {
       debugDescription: stringValue(view),
       uikitScript: this.uikitScriptInfo(id, view),
       sourceLocation: nativeScriptView
-        ? sourceLocationForView(nativeScriptView)
+        ? sourceLocationForView(nativeScriptView, this.options.sourceRoot)
         : null,
       frame: rectValue(read(view, "frame")),
       bounds: rectValue(read(view, "bounds")),
@@ -831,6 +1171,7 @@ export class SimDeckNativeScriptInspector {
       displayScale: numberValue(UIScreen.mainScreen.scale, 1),
       coordinateSpace: "screen-points",
       source,
+      sourceRoot: this.options.sourceRoot || undefined,
     };
   }
 
@@ -1090,6 +1431,335 @@ function isNativeScriptView(value: any): value is View {
   return Boolean(value && typeof value.eachChildView === "function");
 }
 
+function nativeScriptTabAccessoryView(tabView: View): View | null {
+  return (
+    (read(tabView, "iosBottomAccessory") as View | null) ||
+    (read(tabView, "_bottomAccessoryNsView") as View | null) ||
+    null
+  );
+}
+
+function nativeScriptTabItems(
+  tabView: View,
+  nativeScriptChildrenNodes: JSONObject[] = [],
+  sourceRoot = "",
+): JSONObject[] {
+  const rawItems = nsArray(
+    read(tabView, "items") || read(tabView, "_items") || read(tabView, "_tabItems"),
+  );
+  const children = nativeScriptChildren(tabView);
+  const count = Math.max(
+    rawItems.length,
+    children.length,
+    nativeScriptChildrenNodes.length,
+  );
+  return Array.from({ length: count }, (_, index) => {
+    const child = children[index] ?? null;
+    const childNode = nativeScriptChildrenNodes[index] ?? {};
+    const item =
+      rawItems[index] ||
+      read(child, "tabItem") ||
+      read(child, "_tabItem") ||
+      {};
+    return {
+      title: stringValue(read(item, "title")) || stringValue(read(child, "title")),
+      iconSource:
+        stringValue(read(item, "iconSource")) ||
+        stringValue(read(child, "iconSource")),
+      view: read(item, "view") || child,
+      sourceLocation:
+        sourceLocationForView(item, sourceRoot) ||
+        sourceLocationForView(child, sourceRoot) ||
+        sourceLocationFromNode(childNode),
+    };
+  });
+}
+
+function tabItemSourceLocation(
+  tabView: View,
+  item: JSONObject,
+  index: number,
+  sourceRoot = "",
+): JSONObject | null {
+  const direct = item.sourceLocation as JSONObject | null | undefined;
+  return (
+    direct ||
+    sourceLocationForView(item.view, sourceRoot) ||
+    sourceLocationForView(nativeScriptChildAt(tabView, index), sourceRoot)
+  );
+}
+
+function nativeScriptChildAt(view: View, targetIndex: number): View | null {
+  return nativeScriptChildren(view)[targetIndex] ?? null;
+}
+
+function nativeScriptChildren(view: View): View[] {
+  const result: View[] = [];
+  safeCall(() => {
+    view.eachChildView((child: View) => {
+      result.push(child);
+      return true;
+    });
+  }, undefined);
+  return result;
+}
+
+function sourceLocationFromNode(node: JSONObject): JSONObject | null {
+  const location = objectValue(node.sourceLocation);
+  if (location.file) {
+    return location;
+  }
+  const file = stringValue(node.sourceFile);
+  if (!file) {
+    return null;
+  }
+  const locationFromFields: JSONObject = { file };
+  if (typeof node.sourceLine === "number") {
+    locationFromFields.line = node.sourceLine;
+  }
+  if (typeof node.sourceColumn === "number") {
+    locationFromFields.column = node.sourceColumn;
+  }
+  return locationFromFields;
+}
+
+function firstSourceLocationFromNodes(nodes: JSONObject[]): JSONObject | null {
+  for (const node of nodes) {
+    const location = sourceLocationFromNode(node);
+    if (location) {
+      return location;
+    }
+    const childLocation = firstSourceLocationFromNodes(
+      Array.isArray(node.children) ? (node.children as JSONObject[]) : [],
+    );
+    if (childLocation) {
+      return childLocation;
+    }
+  }
+  return null;
+}
+
+function patchNativeScriptFramesFromUIKit(
+  node: JSONObject,
+  uikitRoot: any,
+): JSONObject {
+  const candidates = collectSubviews(
+    uikitRoot,
+    (view) => Boolean(uikitFrameLabel(view)) && hasUsableFrame(frameInScreen(view)),
+  ).map((view) => ({
+    frame: frameInScreen(view),
+    label: uikitFrameLabel(view),
+  }));
+  const used = new Set<number>();
+  return patchNodeFramesFromUIKitCandidates(node, candidates, used);
+}
+
+function patchNodeFramesFromUIKitCandidates(
+  node: JSONObject,
+  candidates: { frame: JSONObject | null; label: string }[],
+  used: Set<number>,
+): JSONObject {
+  const patched: JSONObject = { ...node };
+  const label = nodeFrameLabel(patched);
+  if (!hasUsableFrame(patched.frame as JSONObject | null) && label) {
+    const matchIndex = candidates.findIndex(
+      (candidate, index) => !used.has(index) && candidate.label === label,
+    );
+    if (matchIndex >= 0) {
+      used.add(matchIndex);
+      patched.frame = candidates[matchIndex].frame;
+    }
+  }
+  if (Array.isArray(patched.children)) {
+    patched.children = (patched.children as JSONObject[]).map((child) =>
+      patchNodeFramesFromUIKitCandidates(child, candidates, used),
+    );
+  }
+  return patched;
+}
+
+function nodeFrameLabel(node: JSONObject): string {
+  return (
+    stringValue(node.text) ||
+    stringValue(node.title) ||
+    stringValue(node.AXLabel)
+  );
+}
+
+function uikitFrameLabel(view: any): string {
+  const accessibility = accessibilityInfo(view);
+  return (
+    textValue(view) ||
+    stringValue(accessibility.label) ||
+    stringValue(read(view, "accessibilityIdentifier"))
+  );
+}
+
+function findSubview(
+  view: any,
+  predicate: (view: any) => boolean,
+): any | null {
+  if (!view) {
+    return null;
+  }
+  if (predicate(view)) {
+    return view;
+  }
+  for (const child of nsArray(read(view, "subviews"))) {
+    const match = findSubview(child, predicate);
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
+function collectSubviews(
+  view: any,
+  predicate: (view: any) => boolean,
+  result: any[] = [],
+): any[] {
+  for (const child of nsArray(read(view, "subviews"))) {
+    if (predicate(child)) {
+      result.push(child);
+    }
+    collectSubviews(child, predicate, result);
+  }
+  return result;
+}
+
+function tabBarControls(tabBar: any): any[] {
+  const controls = collectSubviews(
+    tabBar,
+    (view) =>
+      isKindOf(view, "UIControl") &&
+      isVisible(view) &&
+      hasUsableFrame(frameInScreen(view)),
+  );
+  const byFrame = new Map<string, any>();
+  for (const control of controls) {
+    const frame = frameInScreen(control);
+    if (!frame) {
+      continue;
+    }
+    byFrame.set(rectKey(frame), control);
+  }
+  return preferLargestNonOverlappingControls([...byFrame.values()]).sort((left, right) => {
+    const leftFrame = frameInScreen(left);
+    const rightFrame = frameInScreen(right);
+    return rectNumber(leftFrame, "x") - rectNumber(rightFrame, "x");
+  });
+}
+
+function preferLargestNonOverlappingControls(controls: any[]): any[] {
+  const accepted: any[] = [];
+  for (const control of [...controls].sort(
+    (left, right) => rectArea(frameInScreen(right)) - rectArea(frameInScreen(left)),
+  )) {
+    const frame = frameInScreen(control);
+    if (
+      !frame ||
+      accepted.some((other) => substantiallyOverlaps(frame, frameInScreen(other)))
+    ) {
+      continue;
+    }
+    accepted.push(control);
+  }
+  return accepted;
+}
+
+function substantiallyOverlaps(
+  frame: JSONObject,
+  otherFrame: JSONObject | null,
+): boolean {
+  if (!otherFrame) {
+    return false;
+  }
+  const overlap = rectOverlapArea(frame, otherFrame);
+  const smallerArea = Math.min(rectArea(frame), rectArea(otherFrame));
+  return smallerArea > 0 && overlap / smallerArea > 0.6;
+}
+
+function rectArea(frame: JSONObject | null | undefined): number {
+  return rectNumber(frame, "width") * rectNumber(frame, "height");
+}
+
+function rectOverlapArea(left: JSONObject, right: JSONObject): number {
+  const x1 = Math.max(rectNumber(left, "x"), rectNumber(right, "x"));
+  const y1 = Math.max(rectNumber(left, "y"), rectNumber(right, "y"));
+  const x2 = Math.min(
+    rectNumber(left, "x") + rectNumber(left, "width"),
+    rectNumber(right, "x") + rectNumber(right, "width"),
+  );
+  const y2 = Math.min(
+    rectNumber(left, "y") + rectNumber(left, "height"),
+    rectNumber(right, "y") + rectNumber(right, "height"),
+  );
+  return Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+}
+
+function tabBarControlLabel(control: any): string {
+  const accessibility = accessibilityInfo(control);
+  const label = stringValue(accessibility.label);
+  if (label) {
+    return label;
+  }
+  const text = textValue(control);
+  if (text) {
+    return text;
+  }
+  const labelView = findSubview(
+    control,
+    (view) => isKindOf(view, "UILabel") && Boolean(textValue(view)),
+  );
+  return labelView ? textValue(labelView) : "";
+}
+
+function hasUsableFrame(frame: JSONObject | null): boolean {
+  return rectNumber(frame, "width") > 1 && rectNumber(frame, "height") > 1;
+}
+
+function rectKey(frame: JSONObject): string {
+  return ["x", "y", "width", "height"]
+    .map((key) => Math.round(rectNumber(frame, key)))
+    .join(",");
+}
+
+function rectNumber(frame: JSONObject | null | undefined, key: string): number {
+  const value = frame?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function fallbackTabBarFrame(): JSONObject {
+  const screen = rectValue(UIScreen.mainScreen.bounds) ?? {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  };
+  const height = Math.min(83, Math.max(49, rectNumber(screen, "height") * 0.095));
+  return {
+    x: rectNumber(screen, "x"),
+    y: rectNumber(screen, "y") + rectNumber(screen, "height") - height,
+    width: rectNumber(screen, "width"),
+    height,
+  };
+}
+
+function tabItemFallbackFrame(
+  tabBarFrame: JSONObject,
+  count: number,
+  index: number,
+): JSONObject {
+  const width = count > 0 ? rectNumber(tabBarFrame, "width") / count : 0;
+  return {
+    x: rectNumber(tabBarFrame, "x") + width * index,
+    y: rectNumber(tabBarFrame, "y"),
+    width,
+    height: rectNumber(tabBarFrame, "height"),
+  };
+}
+
 function isNativeScriptVisible(view: any): boolean {
   return read(view, "visibility") !== "collapse";
 }
@@ -1281,6 +1951,28 @@ function constructorName(object: any): string {
 
 function moduleName(name: string): string | null {
   return name.includes(".") ? name.split(".")[0] : null;
+}
+
+function infoAnnouncementKey(info: JSONObject): string {
+  const appHierarchy = objectValue(info.appHierarchy);
+  const nativeScript = objectValue(info.nativeScript);
+  return JSON.stringify({
+    processIdentifier: info.processIdentifier,
+    bundleIdentifier: info.bundleIdentifier,
+    sourceRoot: info.sourceRoot,
+    appHierarchyAvailable: Boolean(appHierarchy.available),
+    nativeScriptAvailable: Boolean(nativeScript.available),
+  });
+}
+
+function nativeScriptAvailable(info: JSONObject): boolean {
+  const appHierarchy = objectValue(info.appHierarchy);
+  const nativeScript = objectValue(info.nativeScript);
+  return Boolean(appHierarchy.available || nativeScript.available);
+}
+
+function objectValue(value: unknown): JSONObject {
+  return value && typeof value === "object" ? (value as JSONObject) : {};
 }
 
 function stringValue(value: unknown): string {
@@ -1523,7 +2215,28 @@ function nativeScriptViewType(view: View): string {
   return stringValue((view as any).typeName) || constructorName(view);
 }
 
-function sourceLocationForView(view: any): JSONObject | null {
+function normalizeSourceRoot(sourceRoot: string | undefined): string {
+  const root = stringValue(sourceRoot).replace(/\/+$/, "");
+  return isAbsoluteSourceFile(root) ? root : "";
+}
+
+function absoluteSourceFile(file: string, sourceRoot: string): string {
+  const cleanFile = stringValue(file);
+  if (!cleanFile || isAbsoluteSourceFile(cleanFile) || !sourceRoot) {
+    return cleanFile;
+  }
+  return `${sourceRoot}/${cleanFile.replace(/^\.?\//, "")}`;
+}
+
+function isAbsoluteSourceFile(file: string): boolean {
+  return (
+    file.startsWith("/") ||
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(file) ||
+    /^[A-Za-z]:[\\/]/.test(file)
+  );
+}
+
+function sourceLocationForView(view: any, sourceRoot = ""): JSONObject | null {
   const raw = safeCall(
     () => view.getAttribute?.(angularSourceLocationAttribute),
     null,
@@ -1534,9 +2247,11 @@ function sourceLocationForView(view: any): JSONObject | null {
   }
   const separator = value.lastIndexOf("@");
   if (separator <= 0) {
-    return { file: value };
+    return { file: absoluteSourceFile(value, sourceRoot) };
   }
-  const location: JSONObject = { file: value.slice(0, separator) };
+  const location: JSONObject = {
+    file: absoluteSourceFile(value.slice(0, separator), sourceRoot),
+  };
   for (const part of value.slice(separator + 1).split(",")) {
     const [key, rawNumber] = part.split(":");
     const parsed = Number(rawNumber);
@@ -1554,15 +2269,92 @@ function sourceLocationForView(view: any): JSONObject | null {
   return location;
 }
 
-function nativeScriptTitle(view: View): string {
+function nativeScriptInfo(
+  view: View,
+  type: string,
+  sourceRoot = "",
+): JSONObject {
+  const anyView = view as any;
+  const sourceLocation = sourceLocationForView(view, sourceRoot);
+  return {
+    id: stringValue(anyView.id),
+    className: stringValue(anyView.className),
+    type,
+    sourceLocation,
+    sourceFile: sourceString(sourceLocation, "file"),
+    sourceLine: sourceNumber(sourceLocation, "line"),
+    sourceColumn: sourceNumber(sourceLocation, "column"),
+    text: cleanGeneratedNativeScriptText(stringValue(anyView.text), type),
+    title: cleanGeneratedNativeScriptText(stringValue(anyView.title), type),
+    src: nativeScriptImageSource(view, type),
+    testID:
+      stringValue(read(view, "testID")) ||
+      stringValue(read(view, "testId")) ||
+      stringValue(read(view, "automationText")),
+    accessibilityLabel: stringValue(read(view, "accessibilityLabel")),
+    accessibilityHint: stringValue(read(view, "accessibilityHint")),
+    accessibilityValue: stringValue(read(view, "accessibilityValue")),
+  };
+}
+
+function nativeScriptTitle(view: View, type: string): string {
   const anyView = view as any;
   return (
-    stringValue(anyView.text) ||
-    stringValue(anyView.title) ||
+    cleanGeneratedNativeScriptText(stringValue(anyView.text), type) ||
+    cleanGeneratedNativeScriptText(stringValue(anyView.title), type) ||
     stringValue(anyView.id) ||
-    stringValue(anyView.typeName) ||
-    constructorName(view)
+    imageLabelFromSource(nativeScriptImageSource(view, type))
   );
+}
+
+function nativeScriptImageSource(view: View, type: string): string {
+  if (!isNativeScriptImageType(type)) {
+    return "";
+  }
+  return (
+    stringValue(read(view, "src")) || stringValue(read(view, "imageSource"))
+  );
+}
+
+function isNativeScriptImageType(type: string): boolean {
+  return /image/i.test(type);
+}
+
+function imageLabelFromSource(source: string): string {
+  if (!source) {
+    return "";
+  }
+  const fileName = source.split(/[\\/]/).pop() ?? source;
+  return fileName.replace(/\.[A-Za-z0-9]+$/, "");
+}
+
+function cleanGeneratedNativeScriptText(value: string, type: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const generated = new Set([
+    type,
+    constructorName({ constructor: { name: type } }),
+    `_${type}`,
+  ]);
+  return generated.has(trimmed) ? "" : trimmed;
+}
+
+function sourceString(
+  location: JSONObject | null | undefined,
+  key: string,
+): string | null {
+  const value = location?.[key];
+  return typeof value === "string" && value ? value : null;
+}
+
+function sourceNumber(
+  location: JSONObject | null | undefined,
+  key: string,
+): number | null {
+  const value = location?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function tap(target: any): void {

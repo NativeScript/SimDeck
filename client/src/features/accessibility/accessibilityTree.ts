@@ -23,6 +23,20 @@ export function flattenAccessibilityTree(
   ]);
 }
 
+export function paintOrderedAccessibilityItems(
+  items: AccessibilityTreeItem[],
+): AccessibilityTreeItem[] {
+  return [...items]
+    .reverse()
+    .flatMap((item) => flattenAccessibilityTree([item]));
+}
+
+export function isAccessibilityHitTestCandidate(
+  item: AccessibilityTreeItem,
+): boolean {
+  return validFrame(item.node.frame) && !isTransparentHitTestBlocker(item);
+}
+
 export function visibleAccessibilityTreeItems(
   items: AccessibilityTreeItem[],
   expandedIds: Set<string>,
@@ -64,7 +78,7 @@ export function findAccessibilityItemAtPoint(
     x: rootFrame.x + normalizedPoint.x * rootFrame.width,
     y: rootFrame.y + normalizedPoint.y * rootFrame.height,
   };
-  return findContainingItem(buildAccessibilityTree(roots), point);
+  return findContainingRootItem(buildAccessibilityTree(roots), point);
 }
 
 export function defaultExpandedAccessibilityIds(
@@ -88,13 +102,20 @@ export function ancestorAccessibilityIds(id: string): string[] {
 }
 
 export function primaryAccessibilityText(node: AccessibilityNode): string {
+  const generatedNames = generatedNodeNames(node);
   return (
-    cleanText(node.AXLabel) ??
-    cleanText(node.title) ??
-    cleanText(node.AXUniqueId) ??
-    cleanText(node.AXIdentifier) ??
-    cleanText(node.AXValue) ??
-    ""
+    [
+      node.AXLabel,
+      node.text,
+      node.title,
+      node.AXUniqueId,
+      node.AXIdentifier,
+      node.AXValue,
+      node.placeholder,
+      node.imageName,
+    ]
+      .map(cleanText)
+      .find((text) => text && !generatedNames.has(text)) ?? ""
   );
 }
 
@@ -215,7 +236,27 @@ function findContainingItem(
 
     if (
       frameContainsPoint(item.node.frame, point) &&
-      !isTransparentHitTestBlocker(item)
+      isAccessibilityHitTestCandidate(item)
+    ) {
+      return item;
+    }
+  }
+  return null;
+}
+
+function findContainingRootItem(
+  items: AccessibilityTreeItem[],
+  point: { x: number; y: number },
+): AccessibilityTreeItem | null {
+  for (const item of items) {
+    const childMatch = findContainingItem(item.children, point);
+    if (childMatch) {
+      return childMatch;
+    }
+
+    if (
+      frameContainsPoint(item.node.frame, point) &&
+      isAccessibilityHitTestCandidate(item)
     ) {
       return item;
     }
@@ -235,6 +276,13 @@ function isTransparentHitTestBlocker(item: AccessibilityTreeItem): boolean {
     );
   }
 
+  if (node.source === "nativescript") {
+    return (
+      !hasMeaningfulNodeContent(node) &&
+      isNativeScriptTransparentContainerType(cleanText(node.type))
+    );
+  }
+
   if (node.source !== "in-app-inspector" || node.nativeScript) {
     return false;
   }
@@ -249,6 +297,11 @@ function isTransparentHitTestBlocker(item: AccessibilityTreeItem): boolean {
   }
 
   return !hasMeaningfulNodeContent(node);
+}
+
+function isNativeScriptTransparentContainerType(value: string | null): boolean {
+  const type = unqualifiedClassName(value);
+  return Boolean(type && nativeScriptTransparentContainerTypes.has(type));
 }
 
 function isTransparentContainerClass(value: string | null): boolean {
@@ -418,12 +471,27 @@ const flutterFrameworkContainerTypes = new Set([
   "WidgetsApp",
 ]);
 
+const nativeScriptTransparentContainerTypes = new Set([
+  "AbsoluteLayout",
+  "ActionBar",
+  "ContentView",
+  "DockLayout",
+  "FlexboxLayout",
+  "Frame",
+  "GridLayout",
+  "HtmlView",
+  "Page",
+  "Placeholder",
+  "ProxyViewContainer",
+  "RootLayout",
+  "StackLayout",
+  "TabAccessory",
+  "TabView",
+  "WrapLayout",
+]);
+
 function hasMeaningfulNodeContent(node: AccessibilityNode): boolean {
-  const generatedNames = new Set(
-    [node.type, node.className, node.role, "UIView", "UIKit View"]
-      .map(cleanText)
-      .filter(Boolean),
-  );
+  const generatedNames = generatedNodeNames(node);
   return [
     node.AXLabel,
     node.text,
@@ -439,6 +507,13 @@ function hasMeaningfulNodeContent(node: AccessibilityNode): boolean {
     }
     return Boolean(text && !generatedNames.has(text));
   });
+}
+
+function generatedNodeNames(node: AccessibilityNode): Set<string> {
+  const names = [node.type, node.className, node.role, "UIView", "UIKit View"]
+    .map(cleanText)
+    .filter((text): text is string => Boolean(text));
+  return new Set([...names, ...names.map((name) => `_${name}`)]);
 }
 
 function primarySourceLocationFile(node: AccessibilityNode): string {
