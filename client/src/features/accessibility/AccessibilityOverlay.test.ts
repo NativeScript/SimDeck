@@ -55,4 +55,52 @@ describe("AccessibilityOverlay", () => {
     expect(markup).toContain('aria-label="SimDeck accessibility element');
     expect(markup).not.toContain(" title=");
   });
+
+  it("marks overlay nodes as app representations without bare disabled wording", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AccessibilityOverlay, {
+        hoveredId: null,
+        roots: [
+          {
+            frame: { height: 844, width: 390, x: 0, y: 0 },
+            role: "application",
+            children: [
+              {
+                AXLabel: "Upgrade",
+                enabled: false,
+                frame: { height: 48, width: 180, x: 105, y: 720 },
+                nativeScript: {
+                  testID: "upgrade-button",
+                  type: "Button",
+                },
+                source: "nativescript",
+                sourceLocation: {
+                  file: "/Users/dj/Developer/app/src/app.component.ts",
+                  line: 12,
+                  column: 8,
+                },
+                type: "Button",
+              },
+            ],
+          },
+        ],
+        selectedId: "",
+      }),
+    );
+
+    expect(markup).toContain(
+      'data-simdeck-overlay-node="accessibility-representation"',
+    );
+    expect(markup).toContain(
+      "SimDeck overlay node representing a simulator app element",
+    );
+    expect(markup).toContain('data-test-id="upgrade-button"');
+    expect(markup).toContain(
+      'data-simdeck-accessibility-source-location="/Users/dj/Developer/app/src/app.component.ts:12:8"',
+    );
+    expect(markup).toContain("simulator accessibility state enabled=false");
+    expect(markup).not.toContain(">disabled<");
+    expect(markup).not.toContain("; disabled");
+    expect(markup).not.toContain(" title=");
+  });
 });

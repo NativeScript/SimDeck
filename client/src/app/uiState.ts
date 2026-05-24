@@ -165,6 +165,7 @@ export function shouldRetainAccessibilityTreeDuringRefresh(
   currentPreference: AccessibilitySourcePreference,
   currentSource: AccessibilitySource | "",
   snapshotSource: AccessibilitySource,
+  availableSources: AccessibilitySource[],
   nextRootCount: number,
   currentRootCount: number,
 ): boolean {
@@ -177,6 +178,9 @@ export function shouldRetainAccessibilityTreeDuringRefresh(
     !isAccessibilitySource(retainedSource) ||
     !retainableRichAccessibilitySources.has(retainedSource)
   ) {
+    return false;
+  }
+  if (!availableSources.includes(retainedSource)) {
     return false;
   }
   if (currentSource !== retainedSource) {

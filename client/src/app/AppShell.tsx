@@ -1330,6 +1330,7 @@ export function AppShell({
         accessibilityPreferredSource,
         accessibilitySource,
         snapshot.source,
+        availableSources,
         roots.length,
         accessibilityRootsRef.current.length,
       );
@@ -1371,6 +1372,7 @@ export function AppShell({
         accessibilityPreferredSource,
         accessibilitySource,
         "native-ax",
+        accessibilityAvailableSources,
         0,
         accessibilityRootsRef.current.length,
       );

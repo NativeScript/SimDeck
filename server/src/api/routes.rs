@@ -62,6 +62,7 @@ const STREAM_CLIENT_FOREGROUND_TTL: Duration = Duration::from_secs(30);
 const CHROME_DEVTOOLS_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(900);
 const MULTITOUCH_INPUT_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 const FOREGROUND_APP_CACHE_TTL: Duration = Duration::from_secs(3);
+const INSPECTOR_FOREGROUND_APP_CACHE_TTL: Duration = Duration::from_millis(500);
 const FOREGROUND_APP_STALE_TTL: Duration = Duration::from_secs(30);
 const FOREGROUND_APP_ROUTE_TIMEOUT: Duration = Duration::from_millis(1200);
 const APP_UPLOAD_FILE_NAME_HEADER: &str = "x-simdeck-filename";
@@ -4073,11 +4074,15 @@ async fn inspector_session_for_state(
     state: &AppState,
     udid: &str,
 ) -> Result<InspectorSession, String> {
-    let frontmost_pid = foreground_app_for_simulator(state, udid)
-        .await
-        .ok()
-        .flatten()
-        .map(|foreground| foreground.process_identifier);
+    let frontmost_pid = foreground_app_for_simulator_with_cache_ttl(
+        state,
+        udid,
+        INSPECTOR_FOREGROUND_APP_CACHE_TTL,
+    )
+    .await
+    .ok()
+    .flatten()
+    .map(|foreground| foreground.process_identifier);
     let connected_error = match connected_inspector_session(state, udid, frontmost_pid).await {
         Ok(session) => return Ok(session),
         Err(error) => error,
@@ -4487,7 +4492,15 @@ async fn foreground_app_for_simulator(
     state: &AppState,
     udid: &str,
 ) -> Result<Option<devtools::ForegroundApp>, String> {
-    if let Some(foreground) = cached_foreground_app(udid) {
+    foreground_app_for_simulator_with_cache_ttl(state, udid, FOREGROUND_APP_CACHE_TTL).await
+}
+
+async fn foreground_app_for_simulator_with_cache_ttl(
+    state: &AppState,
+    udid: &str,
+    cache_ttl: Duration,
+) -> Result<Option<devtools::ForegroundApp>, String> {
+    if let Some(foreground) = cached_foreground_app_with_ttl(udid, cache_ttl) {
         return Ok(Some(foreground));
     }
 
@@ -4525,10 +4538,6 @@ fn cache_foreground_app(udid: &str, foreground_app: &devtools::ForegroundApp) {
             foreground_app: foreground_app.clone(),
         },
     );
-}
-
-fn cached_foreground_app(udid: &str) -> Option<devtools::ForegroundApp> {
-    cached_foreground_app_with_ttl(udid, FOREGROUND_APP_CACHE_TTL)
 }
 
 fn stale_cached_foreground_app(udid: &str) -> Option<devtools::ForegroundApp> {
@@ -4876,11 +4885,12 @@ async fn query_inspector_session(
 
 fn inspector_available_sources(info: &Value) -> Vec<String> {
     let mut sources = Vec::new();
+    let snapshot_source = info.get("source").and_then(Value::as_str).unwrap_or("");
     let react_native_available = info
         .get("reactNative")
         .and_then(|value| value.get("available"))
         .and_then(Value::as_bool)
-        .unwrap_or(false);
+        .unwrap_or(snapshot_source == SOURCE_REACT_NATIVE);
     if react_native_available {
         sources.push(SOURCE_REACT_NATIVE.to_owned());
     }
@@ -4891,6 +4901,11 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         .unwrap_or(false);
     if flutter_available {
         sources.push(SOURCE_FLUTTER.to_owned());
+    }
+    match snapshot_source {
+        SOURCE_NATIVE_SCRIPT => push_unique_source(&mut sources, SOURCE_NATIVE_SCRIPT),
+        SOURCE_SWIFTUI => push_unique_source(&mut sources, SOURCE_SWIFTUI),
+        _ => {}
     }
     let app_hierarchy = info.get("appHierarchy");
     let app_hierarchy_available = app_hierarchy
@@ -4903,7 +4918,7 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         .unwrap_or("");
     if app_hierarchy_available {
         match app_hierarchy_source {
-            SOURCE_NATIVE_SCRIPT => sources.push(SOURCE_NATIVE_SCRIPT.to_owned()),
+            SOURCE_NATIVE_SCRIPT => push_unique_source(&mut sources, SOURCE_NATIVE_SCRIPT),
             SOURCE_REACT_NATIVE => push_unique_source(&mut sources, SOURCE_REACT_NATIVE),
             SOURCE_FLUTTER => push_unique_source(&mut sources, SOURCE_FLUTTER),
             SOURCE_SWIFTUI => push_unique_source(&mut sources, SOURCE_SWIFTUI),
@@ -4917,8 +4932,11 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         .unwrap_or_else(|| {
             !(react_native_available
                 || flutter_available
+                || snapshot_source == SOURCE_NATIVE_SCRIPT
                 || app_hierarchy_source == SOURCE_REACT_NATIVE
-                || app_hierarchy_source == SOURCE_FLUTTER)
+                || app_hierarchy_source == SOURCE_FLUTTER
+                || snapshot_source == SOURCE_REACT_NATIVE
+                || snapshot_source == SOURCE_FLUTTER)
         });
     if uikit_available {
         sources.push(SOURCE_UIKIT.to_owned());
@@ -4936,11 +4954,12 @@ fn inspector_info_allows_uikit(info: &Value) -> bool {
                 .and_then(|value| value.get("source"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
+            let snapshot_source = info.get("source").and_then(Value::as_str).unwrap_or("");
             let react_native_available = info
                 .get("reactNative")
                 .and_then(|value| value.get("available"))
                 .and_then(Value::as_bool)
-                .unwrap_or(false);
+                .unwrap_or(snapshot_source == SOURCE_REACT_NATIVE);
             let flutter_available = info
                 .get("flutter")
                 .and_then(|value| value.get("available"))
@@ -4948,8 +4967,11 @@ fn inspector_info_allows_uikit(info: &Value) -> bool {
                 .unwrap_or(false);
             !(react_native_available
                 || flutter_available
+                || snapshot_source == SOURCE_NATIVE_SCRIPT
                 || app_hierarchy_source == SOURCE_REACT_NATIVE
-                || app_hierarchy_source == SOURCE_FLUTTER)
+                || app_hierarchy_source == SOURCE_FLUTTER
+                || snapshot_source == SOURCE_REACT_NATIVE
+                || snapshot_source == SOURCE_FLUTTER)
         })
 }
 
@@ -6259,6 +6281,26 @@ mod tests {
         }));
 
         assert_eq!(sources, vec![SOURCE_FLUTTER.to_owned()]);
+    }
+
+    #[test]
+    fn inspector_source_detection_uses_react_native_snapshot_source() {
+        let sources = inspector_available_sources(&json!({
+            "source": SOURCE_REACT_NATIVE,
+            "roots": []
+        }));
+
+        assert_eq!(sources, vec![SOURCE_REACT_NATIVE.to_owned()]);
+    }
+
+    #[test]
+    fn inspector_source_detection_uses_nativescript_snapshot_source() {
+        let sources = inspector_available_sources(&json!({
+            "source": SOURCE_NATIVE_SCRIPT,
+            "roots": []
+        }));
+
+        assert_eq!(sources, vec![SOURCE_NATIVE_SCRIPT.to_owned()]);
     }
 
     #[test]

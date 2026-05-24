@@ -146,6 +146,7 @@ function AccessibilityDomNode({
   const kind = accessibilityKind(node);
   const role = accessibilityDomRole(kind);
   const tagName = accessibilityDomTagName(node);
+  const description = accessibilityDomDescription(node, metadata);
 
   return createElement(tagName, {
     "aria-checked":
@@ -153,23 +154,34 @@ function AccessibilityDomNode({
         ? (node.checked ?? undefined)
         : undefined,
     "aria-label": label,
+    "aria-description": description,
     "aria-level": depth + 1,
     "aria-selected": node.selected ?? undefined,
     className: "accessibility-dom-node",
+    "data-test-id": metadata.testId,
     "data-testid": `simdeck-accessibility-${id}`,
     "data-simdeck-accessibility-id": id,
     "data-simdeck-accessibility-component": kind,
+    "data-simdeck-accessibility-description": description,
     "data-simdeck-accessibility-identifier":
       accessibilityIdentifier(node) || undefined,
     "data-simdeck-accessibility-kind": kind,
     "data-simdeck-accessibility-label": primaryAccessibilityText(node),
     "data-simdeck-accessibility-image": metadata.imageName,
+    "data-simdeck-accessibility-source-location": metadata.sourceLocation,
     "data-simdeck-accessibility-source-file": metadata.sourceFile,
     "data-simdeck-accessibility-source-line": metadata.sourceLine,
     "data-simdeck-accessibility-source-column": metadata.sourceColumn,
     "data-simdeck-accessibility-source": node.source || undefined,
+    "data-simdeck-accessibility-test-id": metadata.testId,
+    "data-simdeck-accessibility-native-id": metadata.nativeId,
+    "data-simdeck-accessibility-role": role,
     "data-simdeck-accessibility-state": metadata.state,
     "data-simdeck-accessibility-value": metadata.value,
+    "data-simdeck-framework": metadata.framework,
+    "data-simdeck-framework-id": metadata.frameworkId,
+    "data-simdeck-framework-type": metadata.frameworkType,
+    "data-simdeck-overlay-node": "accessibility-representation",
     "data-simdeck-inspector-id": node.inspectorId || undefined,
     "data-simdeck-uikit-id": node.uikitId || undefined,
     role,
@@ -220,6 +232,23 @@ function accessibilityDomLabel(node: AccessibilityNode): string {
     parts.push(metadata.state);
   }
   return parts.join("; ");
+}
+
+function accessibilityDomDescription(
+  node: AccessibilityNode,
+  metadata: ReturnType<typeof accessibilityDomMetadata>,
+): string | undefined {
+  const parts = [
+    "SimDeck overlay node representing a simulator app element, not the browser page control",
+    metadata.framework ? `framework ${metadata.framework}` : "",
+    metadata.frameworkType ? `component ${metadata.frameworkType}` : "",
+    metadata.testId ? `test id ${metadata.testId}` : "",
+    metadata.nativeId ? `native id ${metadata.nativeId}` : "",
+    metadata.sourceLocation ? `source ${metadata.sourceLocation}` : "",
+    metadata.state ? `state ${metadata.state}` : "",
+    node.help ? `hint ${node.help}` : "",
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join("; ") : undefined;
 }
 
 function accessibilityDomRole(kind: string): AriaRole {
@@ -275,8 +304,13 @@ function cleanTagPart(value: string | null | undefined): string | null {
 
 function accessibilityDomMetadata(node: AccessibilityNode, id?: string) {
   const sourceLocation = primarySourceLocation(node);
+  const framework = frameworkMetadata(node);
   return {
+    framework: framework.framework,
+    frameworkId: framework.id,
+    frameworkType: framework.type,
     imageName: cleanAccessibilityText(node.imageName),
+    nativeId: framework.nativeId,
     placeholder: cleanAccessibilityText(node.placeholder),
     sourceFile: sourceLocation.file || undefined,
     sourceColumn:
@@ -289,8 +323,58 @@ function accessibilityDomMetadata(node: AccessibilityNode, id?: string) {
         : undefined,
     sourceLocation: formatSourceLocation(sourceLocation),
     state: accessibilityStateSummary(node, id),
+    testId: framework.testId,
     value: cleanAccessibilityText(node.AXValue),
   };
+}
+
+function frameworkMetadata(node: AccessibilityNode): {
+  framework: string | undefined;
+  id: string | undefined;
+  nativeId: string | undefined;
+  testId: string | undefined;
+  type: string | undefined;
+} {
+  const nativeScript = node.nativeScript ?? {};
+  const reactNative = node.reactNative ?? {};
+  const flutter = node.flutter ?? {};
+  const semantics = node.semantics ?? {};
+  return {
+    framework: node.source || undefined,
+    id:
+      stringRecordValue(nativeScript, "id") ??
+      stringRecordValue(reactNative, "tag") ??
+      stringRecordValue(flutter, "key") ??
+      undefined,
+    nativeId:
+      stringRecordValue(reactNative, "nativeID") ??
+      stringRecordValue(nativeScript, "id") ??
+      stringRecordValue(semantics, "identifier") ??
+      undefined,
+    testId:
+      stringRecordValue(nativeScript, "testID") ??
+      stringRecordValue(reactNative, "testID") ??
+      undefined,
+    type:
+      stringRecordValue(nativeScript, "type") ??
+      stringRecordValue(reactNative, "displayName") ??
+      stringRecordValue(flutter, "widgetType") ??
+      undefined,
+  };
+}
+
+function stringRecordValue(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  if (typeof value === "string") {
+    return value.trim() || undefined;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return undefined;
 }
 
 function primarySourceLocation(node: AccessibilityNode): {
@@ -342,13 +426,17 @@ function accessibilityStateSummary(
 ): string {
   const state = [
     id ? `tree id ${id}` : "",
-    node.enabled === false ? "disabled" : "",
-    node.focused === true ? "focused" : "",
-    node.selected === true ? "selected" : "",
-    node.checked === true ? "checked" : "",
-    node.checked === false ? "unchecked" : "",
-    node.clickable === true ? "clickable" : "",
-    node.scrollable === true ? "scrollable" : "",
+    node.enabled === false ? "simulator accessibility state enabled=false" : "",
+    node.focused === true ? "simulator accessibility state focused=true" : "",
+    node.selected === true ? "simulator accessibility state selected=true" : "",
+    node.checked === true ? "simulator accessibility state checked=true" : "",
+    node.checked === false ? "simulator accessibility state checked=false" : "",
+    node.clickable === true
+      ? "simulator accessibility action clickable=true"
+      : "",
+    node.scrollable === true
+      ? "simulator accessibility action scrollable=true"
+      : "",
   ].filter(Boolean);
   return state.join(", ");
 }

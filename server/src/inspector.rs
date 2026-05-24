@@ -605,11 +605,12 @@ fn now_unix_ms() -> u64 {
 
 fn inspector_available_sources(info: &Value) -> Vec<String> {
     let mut sources = Vec::new();
+    let snapshot_source = info.get("source").and_then(Value::as_str).unwrap_or("");
     let react_native_available = info
         .get("reactNative")
         .and_then(|value| value.get("available"))
         .and_then(Value::as_bool)
-        .unwrap_or(false);
+        .unwrap_or(snapshot_source == "react-native");
     if react_native_available {
         sources.push("react-native".to_owned());
     }
@@ -620,6 +621,11 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         .unwrap_or(false);
     if flutter_available {
         sources.push("flutter".to_owned());
+    }
+    match snapshot_source {
+        "nativescript" => push_unique_source(&mut sources, "nativescript"),
+        "swiftui" => push_unique_source(&mut sources, "swiftui"),
+        _ => {}
     }
     let app_hierarchy = info.get("appHierarchy");
     let app_hierarchy_available = app_hierarchy
@@ -632,7 +638,7 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         .unwrap_or("");
     if app_hierarchy_available {
         match app_hierarchy_source {
-            "nativescript" => sources.push("nativescript".to_owned()),
+            "nativescript" => push_unique_source(&mut sources, "nativescript"),
             "react-native" => push_unique_source(&mut sources, "react-native"),
             "flutter" => push_unique_source(&mut sources, "flutter"),
             "swiftui" => push_unique_source(&mut sources, "swiftui"),
@@ -646,8 +652,11 @@ fn inspector_available_sources(info: &Value) -> Vec<String> {
         .unwrap_or_else(|| {
             !(react_native_available
                 || flutter_available
+                || snapshot_source == "nativescript"
                 || app_hierarchy_source == "react-native"
-                || app_hierarchy_source == "flutter")
+                || app_hierarchy_source == "flutter"
+                || snapshot_source == "react-native"
+                || snapshot_source == "flutter")
         });
     if uikit_available {
         sources.push("in-app-inspector".to_owned());
@@ -914,6 +923,66 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].process_identifier, 456);
         assert_eq!(entries[0].available_sources, vec!["flutter".to_owned()]);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("json.lock"));
+    }
+
+    #[tokio::test]
+    async fn registry_advertisement_preserves_react_native_snapshot_source() {
+        let path = registry_test_path("publish-react-native-snapshot");
+        let registry = registry_entry(&path);
+
+        registry
+            .upsert(
+                456,
+                json!({
+                    "protocolVersion": "1.0",
+                    "bundleIdentifier": "com.example.ReactNativeApp",
+                    "processIdentifier": 456,
+                    "roots": [],
+                    "source": "react-native"
+                }),
+            )
+            .await
+            .unwrap();
+
+        let entries = registry.read_live_entries().await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].available_sources,
+            vec!["react-native".to_owned()]
+        );
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("json.lock"));
+    }
+
+    #[tokio::test]
+    async fn registry_advertisement_preserves_nativescript_snapshot_source() {
+        let path = registry_test_path("publish-nativescript-snapshot");
+        let registry = registry_entry(&path);
+
+        registry
+            .upsert(
+                456,
+                json!({
+                    "protocolVersion": "1.0",
+                    "bundleIdentifier": "com.example.NativeScriptApp",
+                    "processIdentifier": 456,
+                    "roots": [],
+                    "source": "nativescript"
+                }),
+            )
+            .await
+            .unwrap();
+
+        let entries = registry.read_live_entries().await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].available_sources,
+            vec!["nativescript".to_owned()]
+        );
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(path.with_extension("json.lock"));
