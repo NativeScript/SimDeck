@@ -20,6 +20,9 @@ const chromePath =
   process.env.CHROME_PATH ??
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const debugPort = Number(process.env.SIMDECK_E2E_CHROME_PORT ?? 9339);
+const chromeStartupTimeoutMs = Number(
+  process.env.SIMDECK_E2E_CHROME_STARTUP_MS ?? 60_000,
+);
 const maxFrameGapMs = Number(process.env.SIMDECK_E2E_MAX_FRAME_GAP_MS ?? 250);
 const maxInteractionLatencyMs = Number(
   process.env.SIMDECK_E2E_MAX_INTERACTION_LATENCY_MS ?? 750,
@@ -112,17 +115,42 @@ async function fetchReferenceScreenshotDataUrl(udid) {
   return `data:${contentType};base64,${base64}`;
 }
 
-async function waitForDevTools() {
+async function waitForDevTools(chromeProcess, getChromeOutput, getSpawnError) {
   const versionUrl = `http://127.0.0.1:${debugPort}/json/version`;
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 10_000) {
+  while (Date.now() - startedAt < chromeStartupTimeoutMs) {
+    const spawnError = getSpawnError();
+    if (spawnError) {
+      throw new Error(
+        [`Chrome failed to start: ${spawnError.message}`, getChromeOutput()]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    }
+    if (chromeProcess.exitCode !== null || chromeProcess.signalCode !== null) {
+      throw new Error(
+        [
+          `Chrome exited before DevTools became available (exit=${chromeProcess.exitCode}, signal=${chromeProcess.signalCode}).`,
+          getChromeOutput(),
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    }
     try {
       return await fetchJson(versionUrl);
     } catch {
       await sleep(100);
     }
   }
-  throw new Error("Timed out waiting for Chrome DevTools endpoint.");
+  throw new Error(
+    [
+      `Timed out waiting ${chromeStartupTimeoutMs}ms for Chrome DevTools endpoint at ${versionUrl}.`,
+      getChromeOutput(),
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
 }
 
 function sleep(ms) {
@@ -435,6 +463,7 @@ function latestByKind(streams, kind) {
 const profileDir = await mkdtemp(join(tmpdir(), "simdeck-webrtc-e2e-"));
 const chromeArgs = [
   `--remote-debugging-port=${debugPort}`,
+  "--remote-debugging-address=127.0.0.1",
   `--user-data-dir=${profileDir}`,
   "--no-first-run",
   "--no-default-browser-check",
@@ -450,16 +479,27 @@ if (process.env.SIMDECK_E2E_HEADFUL !== "1") {
 }
 
 const chrome = spawn(chromePath, chromeArgs, {
-  stdio: ["ignore", "ignore", "pipe"],
+  stdio: ["ignore", "pipe", "pipe"],
 });
-let chromeStderr = "";
+let chromeOutput = "";
+let chromeSpawnError = null;
 let cdp;
+chrome.stdout.on("data", (chunk) => {
+  chromeOutput += chunk.toString();
+});
 chrome.stderr.on("data", (chunk) => {
-  chromeStderr += chunk.toString();
+  chromeOutput += chunk.toString();
+});
+chrome.on("error", (error) => {
+  chromeSpawnError = error;
 });
 
 try {
-  await waitForDevTools();
+  await waitForDevTools(
+    chrome,
+    () => chromeOutput.trim(),
+    () => chromeSpawnError,
+  );
   const target = await createPageTarget("about:blank");
   cdp = await connectCdp(target.webSocketDebuggerUrl);
   await cdp.send("Page.enable");
@@ -853,7 +893,7 @@ async function waitForValue(cdp, expression, predicate, timeoutMs) {
     await sleep(250);
   }
   throw new Error(
-    `Timed out waiting for expression: ${expression}\n${chromeStderr}`,
+    `Timed out waiting for expression: ${expression}\n${chromeOutput}`,
   );
 }
 
