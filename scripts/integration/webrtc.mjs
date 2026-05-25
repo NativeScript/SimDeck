@@ -14,6 +14,7 @@ const serverPort = Number(
   process.env.SIMDECK_INTEGRATION_STREAM_PORT ?? "4520",
 );
 const serverUrl = `http://127.0.0.1:${serverPort}`;
+const serverAccessToken = "integration";
 const fixtureBundleId = "dev.nativescript.simdeck.integration.fixture";
 const fixtureUrlScheme = "simdeck-fixture";
 const fixtureAnimateUrl = "simdeck-fixture://animate";
@@ -100,10 +101,15 @@ async function main() {
   const { width, height } = pngSize(screenshotPath);
   console.log(`reference screenshot ${width}x${height}`);
 
+  const viewerUrl = new URL(serverUrl);
+  viewerUrl.searchParams.set("device", simulatorUDID);
+  viewerUrl.searchParams.set("simdeckToken", serverAccessToken);
+  viewerUrl.searchParams.set("stream", "webrtc");
+
   runNodeScript(
     "scripts/e2e-webrtc-reliability.mjs",
     [
-      `${serverUrl}/?device=${encodeURIComponent(simulatorUDID)}`,
+      viewerUrl.toString(),
       String(process.env.SIMDECK_E2E_WEBRTC_MS ?? "20000"),
     ],
     {
@@ -139,7 +145,7 @@ function startServer() {
       "--client-root",
       path.join(root, "packages", "client", "dist"),
       "--access-token",
-      "integration",
+      serverAccessToken,
       "--video-codec",
       "software",
       "--stream-quality",
