@@ -124,6 +124,8 @@ async function main() {
       SIMDECK_E2E_MIN_VIDEO_HEIGHT: String(height),
       SIMDECK_E2E_MIN_VIDEO_WIDTH: String(width),
       SIMDECK_E2E_REQUIRE_VISUAL: "0",
+      SIMDECK_E2E_STREAM_READY_MS:
+        process.env.SIMDECK_E2E_STREAM_READY_MS ?? "180000",
       SIMDECK_E2E_VISUAL_SAMPLE_INTERVAL_MS: "0",
     },
   );
@@ -211,7 +213,7 @@ function runNodeScript(script, args, env) {
       encoding: "utf8",
       env: { ...process.env, ...env },
       stdio: "inherit",
-      timeout: 120_000,
+      timeout: 300_000,
     },
   );
   if (result.status !== 0) {

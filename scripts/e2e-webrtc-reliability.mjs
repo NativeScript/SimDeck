@@ -492,17 +492,28 @@ try {
     15_000,
   );
 
-  await waitForValue(
-    cdp,
-    `
+  try {
+    await waitForValue(
+      cdp,
+      `
     (() => {
       const videos = [...document.querySelectorAll("video.stream-video")];
       return videos.some((video) => video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0);
     })()
   `,
-    Boolean,
-    streamReadyTimeoutMs,
-  );
+      Boolean,
+      streamReadyTimeoutMs,
+    );
+  } catch (error) {
+    const diagnostics = await collectReadinessDiagnostics(cdp, clientId).catch(
+      (diagnosticError) => ({
+        diagnosticError: String(diagnosticError?.message ?? diagnosticError),
+      }),
+    );
+    throw new Error(
+      `${error?.message ?? error}\nReadiness diagnostics: ${JSON.stringify(diagnostics, null, 2)}`,
+    );
+  }
 
   const initialMetrics = await fetchJson(endpoint("/api/metrics"));
   const initialStreams = findClientStreams(initialMetrics, clientId);
@@ -838,6 +849,63 @@ async function waitForValue(cdp, expression, predicate, timeoutMs) {
   throw new Error(
     `Timed out waiting for expression: ${expression}\n${chromeStderr}`,
   );
+}
+
+async function collectReadinessDiagnostics(cdp, clientId) {
+  const page = await evaluate(
+    cdp,
+    `
+    (() => {
+      const videos = [...document.querySelectorAll("video.stream-video")].map((video) => ({
+        height: video.videoHeight || 0,
+        networkState: video.networkState,
+        paused: video.paused,
+        readyState: video.readyState,
+        width: video.videoWidth || 0,
+      }));
+      const peerConnections = (window.__simdeckPeerConnections || []).map((pc) => ({
+        connectionState: pc.connectionState,
+        iceConnectionState: pc.iceConnectionState,
+        iceGatheringState: pc.iceGatheringState,
+        signalingState: pc.signalingState,
+      }));
+      return {
+        bodyText: (document.body?.innerText || "").slice(0, 1000),
+        canvases: document.querySelectorAll("canvas.stream-canvas").length,
+        location: window.location.href,
+        peerConnections,
+        sessionClientId: window.sessionStorage.getItem("simdeck.streamClientId") || "",
+        statusText: document.querySelector("[data-testid='stream-status']")?.textContent || "",
+        title: document.title,
+        videos,
+      };
+    })()
+  `,
+  );
+  const metrics = await fetchJson(endpoint("/api/metrics")).catch((error) => ({
+    error: String(error?.message ?? error),
+  }));
+  return {
+    clientId,
+    page,
+    streams: Array.isArray(metrics?.client_streams)
+      ? findClientStreams(metrics, clientId).map((stream) => ({
+          codec: stream.codec,
+          decodedFrames: stream.decodedFrames,
+          detail: stream.detail,
+          droppedFrames: stream.droppedFrames,
+          height: stream.height,
+          kind: stream.kind,
+          latestFrameGapMs: stream.latestFrameGapMs,
+          receivedPackets: stream.receivedPackets,
+          reconnects: stream.reconnects,
+          renderedFrames: stream.renderedFrames,
+          status: stream.status,
+          udid: stream.udid,
+          width: stream.width,
+        }))
+      : metrics,
+  };
 }
 
 async function createPageTarget(url) {
