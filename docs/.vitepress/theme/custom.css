@@ -15,10 +15,11 @@
   --sd-shadow: 0 32px 110px rgba(0, 0, 0, 0.12);
 
   --vp-font-family-base:
-    "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
+    "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
   --vp-font-family-mono:
-    "SFMono-Regular", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+    "SFMono-Regular", ui-monospace, "SF Mono", Menlo, Monaco, Consolas,
+    monospace;
   --vp-c-bg: var(--sd-bg);
   --vp-c-bg-alt: var(--sd-bg-soft);
   --vp-c-bg-soft: var(--sd-bg-soft);
@@ -122,13 +123,23 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
   right: 0;
   left: 0;
   z-index: 50;
-  border-bottom-color: rgba(128, 128, 128, calc(var(--sd-nav-progress, 0) * 0.11));
+  border-bottom-color: rgba(
+    128,
+    128,
+    128,
+    calc(var(--sd-nav-progress, 0) * 0.11)
+  );
   background: rgba(255, 255, 255, calc(var(--sd-nav-progress, 0) * 0.76));
   backdrop-filter: blur(calc(var(--sd-nav-progress, 0) * 18px)) saturate(140%);
 }
 
 .dark.sd-home-active .VPNav {
-  border-bottom-color: rgba(128, 128, 128, calc(var(--sd-nav-progress, 0) * 0.11));
+  border-bottom-color: rgba(
+    128,
+    128,
+    128,
+    calc(var(--sd-nav-progress, 0) * 0.11)
+  );
   background: rgba(0, 0, 0, calc(var(--sd-nav-progress, 0) * 0.74));
 }
 
@@ -144,7 +155,12 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
 .sd-home-active .VPNav .divider,
 .sd-home-active .VPNav .divider-line {
   border-color: transparent !important;
-  background-color: rgba(128, 128, 128, calc(var(--sd-nav-progress, 0) * 0.11)) !important;
+  background-color: rgba(
+    128,
+    128,
+    128,
+    calc(var(--sd-nav-progress, 0) * 0.11)
+  ) !important;
 }
 
 .sd-home-active:not(.sd-nav-scrolled) .VPNav {
@@ -451,7 +467,13 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
   bottom: 8px;
   left: 26px;
   width: 1px;
-  background: linear-gradient(180deg, transparent, var(--sd-line-strong) 8%, var(--sd-line-strong) 92%, transparent);
+  background: linear-gradient(
+    180deg,
+    transparent,
+    var(--sd-line-strong) 8%,
+    var(--sd-line-strong) 92%,
+    transparent
+  );
 }
 
 .sd-moment {
@@ -513,7 +535,11 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
   border: 1px solid var(--sd-line);
   border-radius: var(--sd-radius);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--sd-panel-subtle) 74%, transparent), color-mix(in srgb, var(--sd-panel) 90%, transparent)),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--sd-panel-subtle) 74%, transparent),
+      color-mix(in srgb, var(--sd-panel) 90%, transparent)
+    ),
     var(--sd-panel);
   overflow: hidden;
   transition:
@@ -524,8 +550,16 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
 
 .dark .sd-shot {
   background:
-    radial-gradient(circle at 72% 18%, rgba(50, 145, 255, 0.14), transparent 32%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+    radial-gradient(
+      circle at 72% 18%,
+      rgba(50, 145, 255, 0.14),
+      transparent 32%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.06),
+      rgba(255, 255, 255, 0.02)
+    ),
     #050505;
 }
 
@@ -570,15 +604,31 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
   place-items: center;
   padding: 28px;
   background:
-    radial-gradient(circle at 50% 24%, rgba(0, 112, 243, 0.12), transparent 42%),
-    linear-gradient(180deg, color-mix(in srgb, var(--sd-panel-subtle) 80%, transparent), var(--sd-panel));
+    radial-gradient(
+      circle at 50% 24%,
+      rgba(0, 112, 243, 0.12),
+      transparent 42%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--sd-panel-subtle) 80%, transparent),
+      var(--sd-panel)
+    );
   box-shadow: 0 22px 80px rgba(0, 0, 0, 0.16);
 }
 
 .dark .sd-shot-remote-card {
   background:
-    radial-gradient(circle at 50% 24%, rgba(50, 145, 255, 0.22), transparent 42%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+    radial-gradient(
+      circle at 50% 24%,
+      rgba(50, 145, 255, 0.22),
+      transparent 42%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.055),
+      rgba(255, 255, 255, 0.018)
+    ),
     #050505;
   box-shadow: 0 24px 94px rgba(0, 0, 0, 0.48);
 }
@@ -824,7 +874,12 @@ html:not(.sd-home-active) .VPNavBar.screen-open {
   border: 7px solid var(--sd-text);
   border-radius: 26px;
   background:
-    linear-gradient(180deg, transparent 0 38%, var(--sd-blue-soft) 38% 40%, transparent 40%),
+    linear-gradient(
+      180deg,
+      transparent 0 38%,
+      var(--sd-blue-soft) 38% 40%,
+      transparent 40%
+    ),
     radial-gradient(circle at 50% 18%, var(--sd-line-strong), transparent 26%),
     var(--sd-bg);
 }
