@@ -135,7 +135,8 @@ function fixtureInfoPlist(bundleId, urlScheme) {
 }
 
 function fixtureSource() {
-  return `#import <UIKit/UIKit.h>
+  return `#import <QuartzCore/QuartzCore.h>
+#import <UIKit/UIKit.h>
 
 @interface FixtureViewController : UIViewController <UITextFieldDelegate>
 @property (nonatomic, strong) UILabel *statusLabel;
@@ -226,6 +227,11 @@ function fixtureSource() {
   self.animationStartedAt = CACurrentMediaTime();
   self.statusLabel.text = @"Animating";
   self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(animationTick:)];
+  if (@available(iOS 15.0, *)) {
+    self.displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60.0, 60.0, 60.0);
+  } else {
+    self.displayLink.preferredFramesPerSecond = 60;
+  }
   [self.displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 }
 
