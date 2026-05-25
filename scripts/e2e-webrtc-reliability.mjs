@@ -28,6 +28,9 @@ const interactionsEnabled = process.env.SIMDECK_E2E_INTERACTIONS !== "0";
 const maxPeerDisconnectedMs = Number(
   process.env.SIMDECK_E2E_MAX_PEER_DISCONNECTED_MS ?? 1000,
 );
+const streamReadyTimeoutMs = Number(
+  process.env.SIMDECK_E2E_STREAM_READY_MS ?? 90_000,
+);
 const maxDecoderDrops = Number(process.env.SIMDECK_E2E_MAX_DECODER_DROPS ?? 0);
 const minVideoWidth = Number(process.env.SIMDECK_E2E_MIN_VIDEO_WIDTH ?? 0);
 const minVideoHeight = Number(process.env.SIMDECK_E2E_MIN_VIDEO_HEIGHT ?? 0);
@@ -498,7 +501,7 @@ try {
     })()
   `,
     Boolean,
-    20_000,
+    streamReadyTimeoutMs,
   );
 
   const initialMetrics = await fetchJson(endpoint("/api/metrics"));
