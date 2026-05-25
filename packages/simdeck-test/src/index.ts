@@ -726,26 +726,27 @@ async function startIsolatedDaemon(
     `simdeck-test-${process.pid}-${Date.now()}-${crypto.randomUUID()}.json`,
   );
   const accessToken = crypto.randomBytes(32).toString("hex");
+  const packageRoot = options.projectRoot ?? process.cwd();
   const child = spawn(
     cliPath,
     [
-      "daemon",
+      "service",
       "run",
-      "--project-root",
-      projectRoot,
       "--metadata-path",
       metadataPath,
       "--port",
       String(port),
       "--bind",
       "127.0.0.1",
+      "--client-root",
+      path.join(packageRoot, "packages", "client", "dist"),
       "--access-token",
       accessToken,
       "--video-codec",
       options.videoCodec ?? "software",
     ],
     {
-      cwd: options.projectRoot,
+      cwd: projectRoot,
       stdio: ["ignore", "pipe", "pipe"],
     },
   );

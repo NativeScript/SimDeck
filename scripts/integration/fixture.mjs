@@ -140,7 +140,10 @@ function fixtureSource() {
 @interface FixtureViewController : UIViewController <UITextFieldDelegate>
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UITextField *messageField;
+@property (nonatomic, strong) UIView *animationBar;
+@property (nonatomic, strong) CADisplayLink *displayLink;
 @property (nonatomic) NSInteger tapCount;
+@property (nonatomic) CFTimeInterval animationStartedAt;
 - (void)openFixtureURL:(NSURL *)url;
 @end
 
@@ -178,11 +181,18 @@ function fixtureSource() {
   [self.messageField addTarget:self action:@selector(messageChanged:) forControlEvents:UIControlEventEditingChanged];
   [self.messageField.widthAnchor constraintEqualToConstant:240.0].active = YES;
 
+  self.animationBar = [[UIView alloc] initWithFrame:CGRectZero];
+  self.animationBar.backgroundColor = UIColor.systemBlueColor;
+  self.animationBar.layer.cornerRadius = 6.0;
+  self.animationBar.accessibilityIdentifier = @"fixture.animation";
+  self.animationBar.translatesAutoresizingMaskIntoConstraints = NO;
+
   UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[
     titleLabel,
     self.statusLabel,
     continueButton,
     self.messageField,
+    self.animationBar,
   ]];
   stack.axis = UILayoutConstraintAxisVertical;
   stack.alignment = UIStackViewAlignmentCenter;
@@ -195,6 +205,8 @@ function fixtureSource() {
     [stack.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
     [stack.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:24.0],
     [stack.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-24.0],
+    [self.animationBar.widthAnchor constraintEqualToConstant:220.0],
+    [self.animationBar.heightAnchor constraintEqualToConstant:12.0],
   ]];
 }
 
@@ -207,8 +219,31 @@ function fixtureSource() {
   self.statusLabel.text = sender.text ?: @"";
 }
 
+- (void)startAnimation {
+  if (self.displayLink) {
+    return;
+  }
+  self.animationStartedAt = CACurrentMediaTime();
+  self.statusLabel.text = @"Animating";
+  self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(animationTick:)];
+  [self.displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+
+- (void)animationTick:(CADisplayLink *)displayLink {
+  CFTimeInterval elapsed = CACurrentMediaTime() - self.animationStartedAt;
+  CGFloat phase = (sin(elapsed * 4.0) + 1.0) * 0.5;
+  CGFloat x = -80.0 + phase * 160.0;
+  self.animationBar.transform = CGAffineTransformMakeTranslation(x, 0.0);
+  self.animationBar.backgroundColor = [UIColor colorWithHue:fmod(elapsed * 0.18, 1.0)
+                                                 saturation:0.85
+                                                 brightness:0.92
+                                                      alpha:1.0];
+}
+
 - (void)openFixtureURL:(NSURL *)url {
-  if ([url.host isEqualToString:@"focus-message"]) {
+  if ([url.host isEqualToString:@"animate"]) {
+    [self startAnimation];
+  } else if ([url.host isEqualToString:@"focus-message"]) {
     dispatch_async(dispatch_get_main_queue(), ^{
       [self.messageField becomeFirstResponder];
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{

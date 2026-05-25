@@ -242,6 +242,42 @@ jobs:
       - name: JS API simulator integration tests
         run: npm run test:integration:js-api
 
+  integration-webrtc:
+    name: WebRTC stream benchmark
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    needs:
+      - rust
+      - client
+      - packages
+      - build-artifacts
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download integration artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: simdeck-integration-artifacts
+          path: .
+
+      - name: Make CLI executable
+        run: chmod +x build/simdeck build/simdeck-bin
+
+      - name: WebRTC software stream benchmark
+        run: npm run test:integration:webrtc
+        env:
+          SIMDECK_E2E_MIN_DECODED_FPS: "55"
+          SIMDECK_E2E_MIN_PRESENTED_FPS: "55"
+          SIMDECK_E2E_MIN_RECEIVED_FPS: "55"
+          SIMDECK_E2E_WEBRTC_MS: "20000"
+
   integration-android:
     name: Android emulator integration
     runs-on: ubuntu-latest

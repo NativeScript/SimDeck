@@ -69,6 +69,7 @@
     "test:integration:cli:verbose": "SIMDECK_INTEGRATION_VERBOSE=1 SIMDECK_INTEGRATION_SHOW_SIMULATOR=1 node scripts/integration/cli.mjs",
     "test:integration:fixture": "node scripts/integration/prebuild-fixture.mjs",
     "test:integration:js-api": "node scripts/integration/js-api.mjs",
+    "test:integration:webrtc": "node scripts/integration/webrtc.mjs",
     "test:integration:js-api:verbose": "SIMDECK_INTEGRATION_SHOW_SIMULATOR=1 node scripts/integration/js-api.mjs",
     "test:integration:android": "node scripts/integration/android.mjs",
     "test:integration:android:verbose": "SIMDECK_INTEGRATION_VERBOSE=1 node scripts/integration/android.mjs",
