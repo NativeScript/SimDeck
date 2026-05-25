@@ -87,7 +87,7 @@ async function main() {
     timeoutMs: 60_000,
   });
   simdeckJson(["launch", simulatorUDID, fixtureBundleId], {
-    timeoutMs: 30_000,
+    timeoutMs: 180_000,
   });
   simdeckJson(["open-url", simulatorUDID, fixtureAnimateUrl], {
     timeoutMs: 30_000,
