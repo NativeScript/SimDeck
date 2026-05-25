@@ -1,6 +1,6 @@
-# How It Works
+# How it works
 
-This page is a short mental model for users and contributors. For daily usage, start with [Quick Start](/guide/quick-start) and [CLI commands](/cli/commands).
+This page is a short mental model for users and contributors. For daily usage, start with [Quick start](/guide/quick-start) and [CLI commands](/cli/commands).
 
 ## Pieces
 
@@ -13,7 +13,7 @@ This page is a short mental model for users and contributors. For daily usage, s
 | Inspector runtimes | Optional app packages that publish richer UI trees                  |
 | `simdeck/test`     | JS/TS wrapper for automation                                        |
 
-## Request Flow
+## Request flow
 
 Most user actions follow the same path:
 
@@ -24,7 +24,7 @@ Most user actions follow the same path:
 
 This is why a long-lived daemon feels faster than repeatedly calling lower-level simulator tools.
 
-## Video Flow
+## Video flow
 
 The browser opens a live stream for the selected device. SimDeck sends fresh frames, drops stale ones when a client falls behind, and lets the browser request refreshes. The UI can use WebRTC or H.264-over-WebSocket fallback depending on browser support and network behavior.
 
@@ -34,7 +34,7 @@ Tune this from the user-facing controls or with:
 simdeck daemon restart --video-codec software --stream-quality low
 ```
 
-## Inspector Flow
+## Inspector flow
 
 `simdeck describe` and the browser inspector use the best available source:
 
@@ -44,7 +44,7 @@ simdeck daemon restart --video-codec software --stream-quality low
 
 The response tells you which source was used and why a requested source fell back.
 
-## Repository Layout
+## Repository layout
 
 | Folder      | Purpose                                           |
 | ----------- | ------------------------------------------------- |
@@ -55,6 +55,6 @@ The response tells you which source was used and why a requested source fell bac
 | `scripts/`  | Build, packaging, and integration helpers         |
 | `docs/`     | Documentation site                                |
 
-## Contributor Boundary
+## Contributor boundary
 
 Keep platform-specific simulator work in the native layer, server behavior in `server/`, and browser presentation in `client/`. Add API support before adding UI assumptions that cannot be scripted.

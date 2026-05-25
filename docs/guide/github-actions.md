@@ -8,7 +8,7 @@ You need:
 1. A build workflow that uploads a zipped iOS Simulator `.app` or Android APK.
 2. A comment workflow that starts the SimDeck session when someone comments `simdeck run ios` or `simdeck run android`.
 
-## iOS Build Workflow
+## iOS build workflow
 
 ```yaml
 name: Build iOS Simulator
@@ -42,7 +42,7 @@ jobs:
 
 Pin the action to a release tag when you want a stable integration point.
 
-## Android Build Workflow
+## Android build workflow
 
 ```yaml
 name: Build Android APK
@@ -71,7 +71,7 @@ jobs:
           apk-glob: app/build/outputs/apk/debug/*.apk
 ```
 
-## iOS Comment Workflow
+## iOS comment workflow
 
 ```yaml
 name: SimDeck iOS Comment
@@ -108,7 +108,7 @@ jobs:
           bundle_id: com.example.app
 ```
 
-## Android Comment Workflow
+## Android comment workflow
 
 ```yaml
 name: SimDeck Android Comment
@@ -145,7 +145,7 @@ jobs:
           package_name: com.example.app
 ```
 
-## Pull Request Commands
+## Pull request commands
 
 ```text
 simdeck run ios
@@ -171,7 +171,7 @@ simdeck run android public-health
 
 Supported quality values include `tiny`, `low`, `economy`, `fast`, `smooth`, `balanced`, `full`, `quality`, and `ci-software`.
 
-## Common Inputs
+## Common inputs
 
 | Input               | Default                             | Purpose                                     |
 | ------------------- | ----------------------------------- | ------------------------------------------- |
@@ -186,7 +186,7 @@ Supported quality values include `tiny`, `low`, `economy`, `fast`, `smooth`, `ba
 | `keepalive_seconds` | `1800`                              | Session lifetime after launch               |
 | `simulator_cache`   | `true`                              | Restore and save simulator cache            |
 
-## What The Session Does
+## What the session does
 
 - Installs SimDeck and tunnel tooling on a macOS runner.
 - Picks or creates an iOS Simulator or Android emulator.

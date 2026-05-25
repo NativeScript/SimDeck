@@ -1,17 +1,12 @@
-# VS Code Extension
+# VS Code extension
 
 The VS Code extension opens the SimDeck browser UI in an editor panel and can start the project daemon for you.
 
 ## Install
 
-From a source checkout:
-
-```sh
-npm run package:vscode
-npm run install:vscode
-```
-
-This builds and installs `build/vscode/simdeck-vscode.vsix`.
+Install the
+[SimDeck VS Code extension](https://marketplace.visualstudio.com/items?itemName=NativeScript.simdeck-vscode)
+from the Visual Studio Marketplace.
 
 If the `code` command is missing, run **Shell Command: Install 'code' command in PATH** from the VS Code command palette.
 
@@ -49,7 +44,7 @@ CLI resolution order:
 2. Workspace `build/simdeck`
 3. `simdeck` on `PATH`
 
-## Remote Or LAN Server
+## Remote or LAN server
 
 Set `simdeck.serverUrl` to the remote SimDeck URL and disable auto-start:
 

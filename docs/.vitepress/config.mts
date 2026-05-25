@@ -144,15 +144,15 @@ export default defineConfig({
           items: [
             { text: "Overview", link: "/guide/" },
             { text: "Install", link: "/guide/installation" },
-            { text: "Quick Start", link: "/guide/quick-start" },
+            { text: "Quick start", link: "/guide/quick-start" },
           ],
         },
         {
           text: "Use",
           items: [
             { text: "Daemon", link: "/guide/daemon" },
-            { text: "Video & Streaming", link: "/guide/video" },
-            { text: "LAN Access", link: "/guide/lan-access" },
+            { text: "Video and streaming", link: "/guide/video" },
+            { text: "LAN access", link: "/guide/lan-access" },
             { text: "Testing", link: "/guide/testing" },
             { text: "GitHub Actions", link: "/guide/github-actions" },
           ],
@@ -161,7 +161,7 @@ export default defineConfig({
           text: "Reference",
           items: [
             { text: "Troubleshooting", link: "/guide/troubleshooting" },
-            { text: "How It Works", link: "/guide/architecture" },
+            { text: "How it works", link: "/guide/architecture" },
             { text: "Contributing", link: "/contributing" },
           ],
         },

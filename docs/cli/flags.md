@@ -19,7 +19,7 @@ simdeck daemon start --help
 this order: positional UDID, `--device`, `SIMDECK_DEVICE`, `SIMDECK_UDID`, the
 project default from `simdeck use <udid>`, then auto-inference from the daemon.
 
-## Server Options
+## Server options
 
 Used by `simdeck ui`, `daemon start`, `daemon restart`, `service on`, and `service restart`.
 
@@ -72,7 +72,7 @@ Use `tap --expect-*` to wait for a post-tap state in the same command; use
 `back` for app-owned navigation instead of first discovering the current back
 button label.
 
-## Evidence And Batch
+## Evidence and batch
 
 | Command          | Flags                                                |
 | ---------------- | ---------------------------------------------------- |
@@ -84,7 +84,7 @@ button label.
 | `pasteboard set` | `--stdin`, `--file`                                  |
 | `batch`          | `--step`, `--file`, `--stdin`, `--continue-on-error` |
 
-## Exit Codes
+## Exit codes
 
 | Code | Meaning                    |
 | ---- | -------------------------- |

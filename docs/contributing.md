@@ -33,7 +33,7 @@ npm run dev
 
 The server log is written to `build/cli.log`.
 
-## Repository Map
+## Repository map
 
 | Folder      | Purpose                                                |
 | ----------- | ------------------------------------------------------ |
@@ -44,7 +44,7 @@ The server log is written to `build/cli.log`.
 | `scripts/`  | Build, package, and test helpers                       |
 | `docs/`     | VitePress documentation                                |
 
-## Working Rules
+## Working rules
 
 - Keep simulator-native logic in `cli/`.
 - Keep server behavior in `server/`.
@@ -53,7 +53,7 @@ The server log is written to `build/cli.log`.
 - Prefer a stable CLI command or API route over hidden environment behavior.
 - Update docs when changing CLI flags, API routes, stream behavior, or inspector methods.
 
-## Build And Check
+## Build and check
 
 ```sh
 npm run format
@@ -69,7 +69,7 @@ What `npm run ci` covers:
 3. Rust and client tests.
 4. VS Code extension package.
 
-## Integration Tests
+## Integration tests
 
 iOS:
 
@@ -112,7 +112,7 @@ npm run docs:build
 
 The docs site lives under `docs/` and deploys to GitHub Pages from `.github/workflows/docs.yml`.
 
-## Issues And PRs
+## Issues and PRs
 
 For simulator or stream bugs, include:
 

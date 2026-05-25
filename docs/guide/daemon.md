@@ -30,7 +30,7 @@ simdeck daemon killall
 
 `daemon killall` stops SimDeck project daemons from every workspace.
 
-## Open The Browser UI
+## Open the browser UI
 
 ```sh
 simdeck ui --open
@@ -38,7 +38,7 @@ simdeck ui --open
 
 This starts or reuses the daemon, then opens the authenticated local URL.
 
-## Common Server Options
+## Common server options
 
 `simdeck ui`, `daemon start`, `daemon restart`, and `service restart` use the same core options:
 
@@ -58,7 +58,7 @@ Example:
 simdeck daemon start --port 4320 --video-codec software --stream-quality low
 ```
 
-## Always-On Service
+## Always-on service
 
 Use the macOS user service when SimDeck should be reachable after login without starting a project daemon first:
 

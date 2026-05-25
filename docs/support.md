@@ -11,7 +11,7 @@ Need help with SimDeck Studio, the SimDeck CLI, browser streaming, pairing, or s
 
 Email [support@nativescript.org](mailto:support@nativescript.org) for app issues, setup questions, general feedback, and feature requests.
 
-## What To Include
+## What to include
 
 When you contact support, include the details that match your issue:
 
@@ -24,7 +24,7 @@ When you contact support, include the details that match your issue:
 
 Do not send access tokens, private pairing links, or credentials in public issue trackers. If you accidentally share a token, run `simdeck service reset` before reconnecting.
 
-## Common Help Topics
+## Common help topics
 
 - [Install SimDeck](/guide/installation)
 - [Start a local session](/guide/quick-start)
@@ -32,7 +32,7 @@ Do not send access tokens, private pairing links, or credentials in public issue
 - [Use the CLI](/cli/commands)
 - [Troubleshoot startup, streaming, and inspectors](/guide/troubleshooting)
 
-## Pairing QR Codes
+## Pairing QR codes
 
 SimDeck Studio pairs with a SimDeck server by scanning the QR code printed by:
 
@@ -42,6 +42,6 @@ simdeck pair
 
 The QR code contains a `simdeck://pair` link, the current pairing code, and detected local network addresses for your SimDeck server. The camera is used only to scan that pairing code.
 
-## Public Issues
+## Public issues
 
 For reproducible bugs that do not include private project details, you can also file an issue in the [SimDeck GitHub repository](https://github.com/NativeScript/SimDeck/issues).

@@ -75,7 +75,7 @@ async function copyCommand() {
     <section class="sd-hero" aria-labelledby="simdeck-title">
       <div class="sd-hero-copy sd-reveal">
         <h1 id="simdeck-title">SimDeck</h1>
-        <p>Simulator Superpowers for you and your fleet of agents</p>
+        <p>Control simulators from your browser, CLI, and agents</p>
         <div class="sd-command-wrap" aria-label="Install and start SimDeck">
           <pre
             class="sd-command"
@@ -115,8 +115,8 @@ async function copyCommand() {
     <section class="sd-story" aria-labelledby="simdeck-story">
       <div class="sd-story-head sd-reveal">
         <h2 id="simdeck-story">
-          SimDeck does not get in the way. It makes the way for agents to work
-          without dividing your attention.
+          Run simulators in the background, stream them wherever you work, and
+          give agents stable controls without stealing your screen.
         </h2>
       </div>
 
@@ -124,7 +124,7 @@ async function copyCommand() {
         <article class="sd-moment sd-reveal">
           <div class="sd-index" aria-hidden="true">01</div>
           <div class="sd-moment-copy">
-            <h3>Live Simulator, where your work already happens</h3>
+            <h3>Live simulator where your work already happens</h3>
             <p>
               Open Simulator side by side in your favorite IDE or agent
               orchestrator. Supported in VS Code, Codex, Cursor, Claude Code,

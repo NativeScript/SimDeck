@@ -15,7 +15,7 @@ Use the built-in accessibility fallback for any app. Add an in-app inspector whe
 | Flutter       | Flutter apps                                  | Start `simdeck_flutter_inspector`         |
 | DevTools      | WebKit, Metro, Chrome Inspector, app runtimes | Use the browser DevTools panel            |
 
-## Use From The CLI
+## Use from the CLI
 
 ```sh
 simdeck describe <udid>
@@ -28,7 +28,7 @@ simdeck describe <udid> --source react-native
 
 `describe` defaults to `native-ax` for speed. Use `--source auto` to select the best available in-app inspector and fall back to accessibility. Add `--interactive` or `-i` for a smaller agent-oriented tree of actionable elements plus ancestors. Agent output includes refs such as `@e3`; reuse them with `simdeck press @e3`.
 
-## Use From The Browser
+## Use from the browser
 
 Open the SimDeck UI and select a device. The inspector pane shows the active tree source and any fallback reason. When multiple sources are available, switch sources from the inspector controls.
 
@@ -41,7 +41,7 @@ The DevTools panel can open:
 
 For app-owned `WKWebView` on iOS 16.4 or newer, set `isInspectable = true`.
 
-## Choosing A Source
+## Choosing a source
 
 - Use **Accessibility** when you cannot modify the app or when accessibility is the thing you are testing.
 - Use **Swift** for UIKit properties, SwiftUI publishing, or debug view edits.

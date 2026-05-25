@@ -1,4 +1,4 @@
-# Quick Start
+# Quick start
 
 ## 1. Start SimDeck
 
@@ -25,7 +25,7 @@ simdeck "iPhone 17 Pro Max"
 simdeck 9750DF52-0471-48FF-B49A-B184C4BD3A3D
 ```
 
-## 2. Pick Or Boot A Device
+## 2. Pick or boot a device
 
 The UI lists available iOS Simulators and Android emulators. You can also use the CLI:
 
@@ -39,7 +39,7 @@ simdeck boot <udid>
 later device commands can omit the UDID. Android emulator IDs are prefixed with
 `android:`.
 
-## 3. Install And Launch An App
+## 3. Install and launch an app
 
 ```sh
 simdeck install /path/to/App.app
@@ -55,7 +55,7 @@ simdeck install android:<avd-name> /path/to/app.apk
 simdeck launch android:<avd-name> com.example.app
 ```
 
-## 4. Drive The UI
+## 4. Drive the UI
 
 Use coordinates when you know them:
 
@@ -81,7 +81,7 @@ one of those elements directly. `snapshot`, `press`, and `wait` are aliases for
 `describe`, `tap`, and `wait-for`. Add `--expect-*` to a tap when the next
 screen should be present before the command returns.
 
-## 5. Keep It Running In The Background
+## 5. Keep it running in the background
 
 ```sh
 simdeck -d

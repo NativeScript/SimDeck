@@ -1,10 +1,10 @@
-# Video & Streaming
+# Video and streaming
 
 SimDeck streams live device video to the browser. Local sessions default to high quality. Remote or constrained sessions can trade detail for lower CPU and latency.
 
 iOS simulator H.264 uses VideoToolbox for hardware encoding and x264 for software encoding.
 
-## When Encoding Runs
+## When encoding runs
 
 SimDeck starts encoding when a browser stream needs H.264 frames. The server
 requests an initial keyframe to answer the WebRTC or H.264 WebSocket viewer,
@@ -15,7 +15,7 @@ known viewers are hidden or the last frame subscriber disconnects, the native
 session pauses encoder input and releases the active compression session. A
 visible viewer, explicit refresh, or stream reconnect asks for a fresh keyframe.
 
-## Pick A Stream Quality
+## Pick a stream quality
 
 Start with the default:
 
@@ -44,7 +44,7 @@ Common profiles:
 
 The browser also has stream controls for transport, resolution, FPS, and refresh.
 
-## Pick A Codec
+## Pick a codec
 
 ```sh
 simdeck daemon restart --video-codec auto
@@ -69,7 +69,7 @@ For very constrained software sessions:
 simdeck daemon restart --video-codec software --low-latency
 ```
 
-## WebRTC And Fallback
+## WebRTC and fallback
 
 The browser tries WebRTC first. If WebRTC cannot render a frame, the UI can fall back to H.264 over WebSocket when the browser supports WebCodecs.
 
@@ -80,9 +80,9 @@ http://127.0.0.1:4310?stream=webrtc
 http://127.0.0.1:4310?stream=h264
 ```
 
-## Remote Browsers
+## Remote browsers
 
-For another browser on the same network, see [LAN Access](/guide/lan-access).
+For another browser on the same network, see [LAN access](/guide/lan-access).
 
 For routed remote access, use a tunnel or relay you trust. If your network requires TURN for WebRTC, set these before starting SimDeck:
 
@@ -94,7 +94,7 @@ SIMDECK_WEBRTC_ICE_TRANSPORT_POLICY=relay \
 simdeck daemon start --video-codec software --stream-quality low
 ```
 
-## Stream Diagnostics
+## Stream diagnostics
 
 Check health:
 
@@ -117,7 +117,7 @@ Signals worth watching:
 | `keyframe_requests`                | The client or server requested stream recovery             |
 | `encoders[].encoder.overloadState` | Encoder pressure: `nominal`, `strained`, or `overloaded`   |
 
-## Stuck Stream Checklist
+## Stuck stream checklist
 
 1. Click refresh in the browser toolbar.
 2. Restart with software encoding:

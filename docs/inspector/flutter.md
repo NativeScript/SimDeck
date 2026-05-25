@@ -1,4 +1,4 @@
-# Flutter Inspector
+# Flutter inspector
 
 `simdeck_flutter_inspector` publishes a Flutter widget tree to SimDeck in debug builds.
 
@@ -10,7 +10,7 @@ Use it when accessibility does not show enough widget, render, semantics, or sou
 flutter pub add simdeck_flutter_inspector
 ```
 
-## Start It
+## Start it
 
 ```dart
 import 'package:flutter/foundation.dart';
@@ -46,7 +46,7 @@ Nodes may include:
 
 Flutter enables widget creation tracking for normal debug runs.
 
-## Debug Actions
+## Debug actions
 
 The runtime supports best-effort actions such as:
 

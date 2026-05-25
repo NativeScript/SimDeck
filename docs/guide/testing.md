@@ -5,7 +5,7 @@ SimDeck supports two testing workflows:
 - App-level JS/TS automation through `simdeck/test`.
 - Repository integration tests that drive real simulators and emulators.
 
-## App Tests With `simdeck/test`
+## App tests with `simdeck/test`
 
 ```ts
 import { connect } from "simdeck/test";
@@ -31,7 +31,7 @@ fast universal accessibility path. Pass `source: "auto"` when a test
 intentionally wants connected NativeScript, React Native, Flutter, SwiftUI, or
 UIKit inspector trees before the native accessibility fallback.
 
-## Useful Test Methods
+## Useful test methods
 
 | Method                                          | Purpose                        |
 | ----------------------------------------------- | ------------------------------ |
@@ -50,7 +50,7 @@ UIKit inspector trees before the native accessibility fallback.
 
 Selectors can match `text`, `id`, `label`, `value`, `type`, `index`, `enabled`, `checked`, `focused`, or `selected`. Set `regex: true` to treat string selector fields as regular expressions.
 
-## Maestro-Compatible YAML
+## Maestro-compatible YAML
 
 The CLI includes a compatibility runner for common Maestro YAML flows:
 
@@ -61,7 +61,7 @@ simdeck maestro test flow.yaml --artifacts-dir artifacts/maestro
 
 Supported commands include `launchApp`, `openLink`, `tapOn`, `inputText`, `eraseText`, `pressKey`, `assertVisible`, `assertNotVisible`, `scrollUntilVisible`, `swipe`, `takeScreenshot`, and `waitForAnimationToEnd`. Unsupported Maestro commands fail clearly so the flow can be adjusted or the compatibility layer can be expanded.
 
-## Repository Tests
+## Repository tests
 
 Normal unit and client tests:
 
@@ -94,7 +94,7 @@ npm run test:integration:android
 
 Android tests require the Android SDK and a running or bootable AVD.
 
-## Agent Control Benchmarks
+## Agent control benchmarks
 
 Compare SimDeck against agent-device and Argent on a booted iOS simulator:
 
@@ -109,7 +109,7 @@ launching Settings, opening a URL, describing the AX tree, waiting, tapping,
 back navigation, swiping, screenshots, home, and a short tap/back batch flow.
 Setup/reset work is excluded from action timings.
 
-## Helpful Environment Variables
+## Helpful environment variables
 
 | Variable                                        | Purpose                                              |
 | ----------------------------------------------- | ---------------------------------------------------- |
@@ -121,7 +121,7 @@ Setup/reset work is excluded from action timings.
 | `SIMDECK_INTEGRATION_BOOT_ANDROID=1`            | Let SimDeck boot the Android emulator                |
 | `SIMDECK_INTEGRATION_REQUIRE_RUNNING_ANDROID=1` | Fail instead of skipping when Android is unavailable |
 
-## Stress Test A Running Daemon
+## Stress test a running daemon
 
 ```sh
 npm run test:stress -- --server-url http://127.0.0.1:4310 --iterations 1000 --concurrency 12
@@ -133,7 +133,7 @@ Include simulator refresh traffic:
 npm run test:stress -- --udid <udid> --iterations 2000 --concurrency 16
 ```
 
-## Stress Test Daemon Cleanup
+## Stress test daemon cleanup
 
 ```sh
 npm run build:cli

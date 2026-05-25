@@ -1,4 +1,4 @@
-# NativeScript Inspector
+# NativeScript inspector
 
 `@nativescript/simdeck-inspector` publishes a NativeScript app's logical view tree to SimDeck.
 
@@ -10,7 +10,7 @@ Use it when accessibility does not show enough framework context or when you wan
 npm install @nativescript/simdeck-inspector
 ```
 
-## Start It
+## Start it
 
 Call it before app bootstrap in debug builds:
 
@@ -36,7 +36,7 @@ runNativeScriptAngularApp({
 });
 ```
 
-## What You Get
+## What you get
 
 NativeScript hierarchy nodes can include:
 
@@ -58,7 +58,7 @@ Force UIKit instead:
 simdeck describe <udid> --source uikit --format agent
 ```
 
-## Angular Source Locations
+## Angular source locations
 
 Enable Angular template source locations in your NativeScript webpack config when you want nodes to point back to templates:
 
@@ -95,7 +95,7 @@ module.exports = (env) => {
 };
 ```
 
-## Stop It
+## Stop it
 
 ```ts
 import { stopSimDeckInspector } from "@nativescript/simdeck-inspector";

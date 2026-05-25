@@ -26,7 +26,7 @@ for native clients:
 { "ok": true, "accessToken": "<token>" }
 ```
 
-## Quick Examples
+## Quick examples
 
 ```sh
 curl -H "X-SimDeck-Token: $SIMDECK_TOKEN" \
@@ -52,7 +52,7 @@ curl -X POST \
 | `GET`  | `/api/stream-quality`      | Current stream quality settings                            |
 | `POST` | `/api/stream-quality`      | Update stream quality settings                             |
 
-See [Health & Metrics](/api/health) for details.
+See [Health and metrics](/api/health) for details.
 
 ## Devices
 
@@ -134,7 +134,7 @@ Performance query parameters:
 | `windowMs=...` | History window, clamped between 10 seconds and 10 minutes |
 | `seconds=3`    | Stack sample duration for `POST .../sample`               |
 
-## Live Video
+## Live video
 
 | Method | Path                                  | Purpose                                |
 | ------ | ------------------------------------- | -------------------------------------- |
@@ -169,7 +169,7 @@ Response:
 }
 ```
 
-## Actions And Input
+## Actions and input
 
 | Method | Path                            | Body                               |
 | ------ | ------------------------------- | ---------------------------------- |
@@ -244,7 +244,7 @@ Supported action tags include `tap`, `query`, `waitFor`, `assert`,
 `batch`. Touch, edge-touch, swipe, gesture, and multi-touch coordinates are
 normalized from `0.0` to `1.0`.
 
-## UI State And Inspection
+## UI state and inspection
 
 | Method | Path                                                     | Purpose                         |
 | ------ | -------------------------------------------------------- | ------------------------------- |
@@ -309,7 +309,7 @@ positive checks. `assertNot` performs negative checks.
 
 `direction` accepts `up`, `down`, `left`, and `right`.
 
-## DevTools And WebKit
+## DevTools and WebKit
 
 | Method | Path                                                        | Purpose                                             |
 | ------ | ----------------------------------------------------------- | --------------------------------------------------- |
@@ -322,7 +322,7 @@ positive checks. `assertNot` performs negative checks.
 
 For app-owned `WKWebView` on iOS 16.4 or newer, the app must set `isInspectable = true`.
 
-## Evidence And Chrome
+## Evidence and chrome
 
 | Method | Path                                                         | Purpose                                        |
 | ------ | ------------------------------------------------------------ | ---------------------------------------------- |
@@ -349,7 +349,7 @@ Log query parameters:
 | `processes=MyApp`    | Filter by process substring                  |
 | `q=Loaded`           | Message text filter                          |
 
-## Inspector Runtime Hub
+## Inspector runtime hub
 
 | Method | Path                                        | Purpose                                 |
 | ------ | ------------------------------------------- | --------------------------------------- |

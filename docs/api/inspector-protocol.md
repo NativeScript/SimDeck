@@ -1,4 +1,4 @@
-# Inspector Protocol
+# Inspector protocol
 
 In-app inspectors use SimDeck's small JSON protocol to publish richer UI trees and handle debug actions.
 
@@ -62,7 +62,7 @@ Event:
 
 If an inspector is started with an auth token, requests must include a matching top-level `token`.
 
-## Core Methods
+## Core methods
 
 | Method                 | Purpose                                                |
 | ---------------------- | ------------------------------------------------------ |
@@ -80,7 +80,7 @@ If an inspector is started with an auth token, requests must include a matching 
 
 Coordinates and frames use UIKit screen points, not pixels. Multiply by `displayScale` when you need pixels.
 
-## Hierarchy Request
+## Hierarchy request
 
 ```json
 {
@@ -123,7 +123,7 @@ Framework runtimes may return logical nodes with source locations:
 
 Common actions include `tap`, `focus`, `resignFirstResponder`, `setText`, `setValue`, `toggle`, `scrollBy`, and `scrollTo`. Support depends on the inspector runtime and selected view.
 
-## SwiftUI Publishing
+## SwiftUI publishing
 
 Swift apps can publish a SwiftUI root tree:
 
@@ -141,7 +141,7 @@ Text("Continue")
     .simDeckInspectorTag("continue-label", id: "onboarding.continue.label")
 ```
 
-## HTTP Proxy Allow List
+## HTTP proxy allow list
 
 The public proxy at `POST /api/simulators/{udid}/inspector/request` allows:
 

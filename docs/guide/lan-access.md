@@ -1,8 +1,8 @@
-# LAN Access
+# LAN access
 
 SimDeck binds to `127.0.0.1` by default. Bind to a LAN address when another device needs to open the browser UI.
 
-## Start A LAN Session
+## Start a LAN session
 
 ```sh
 simdeck ui \
@@ -19,7 +19,7 @@ http://192.168.1.50:4310
 
 Enter the pairing code printed by the CLI. After pairing, the browser receives the API cookie.
 
-## Pick The Right Host
+## Pick the right host
 
 Use an IP address or hostname that the remote device can resolve:
 
@@ -34,7 +34,7 @@ Tailscale addresses work like direct HTTP hosts; discovery does not use LAN
 broadcast across the tailnet, so use the Tailscale IP or MagicDNS name when
 pairing a native client.
 
-## Direct API Access
+## Direct API access
 
 Loopback browser sessions are authenticated automatically. Direct API callers should send the token from:
 
@@ -49,7 +49,7 @@ X-SimDeck-Token: <token>
 Authorization: Bearer <token>
 ```
 
-## Security Checklist
+## Security checklist
 
 - Use LAN mode only on networks you trust.
 - Treat the daemon token as a secret.

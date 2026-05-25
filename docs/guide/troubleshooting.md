@@ -2,7 +2,7 @@
 
 Use this page when SimDeck does not start, cannot see a device, shows a bad stream, or falls back to the wrong inspector.
 
-## First Checks
+## First checks
 
 ```sh
 simdeck --version
@@ -18,7 +18,7 @@ simdeck daemon stop
 simdeck
 ```
 
-## Server Will Not Start
+## Server will not start
 
 ### Port is already in use
 
@@ -70,7 +70,7 @@ node --version
 
 Builds must run on macOS because SimDeck links macOS simulator frameworks.
 
-## Device Does Not Boot Or List
+## Device does not boot or list
 
 ### `simdeck list` hangs or returns stale data
 
@@ -105,7 +105,7 @@ emulator -list-avds
 
 Android IDs in SimDeck use `android:<avd-name>`.
 
-## Stream Is Black Or Stuck
+## Stream is black or stuck
 
 ### Timed out waiting for the first frame
 
@@ -145,9 +145,9 @@ Force the H.264 WebSocket fallback while testing:
 http://127.0.0.1:4310?stream=h264
 ```
 
-For routed remote sessions, configure TURN as described in [Video & Streaming](/guide/video#remote-browsers).
+For routed remote sessions, configure TURN as described in [Video and streaming](/guide/video#remote-browsers).
 
-## Inspector Looks Wrong
+## Inspector looks wrong
 
 ### `describe` returns accessibility instead of framework data
 
@@ -181,7 +181,7 @@ Use a development build. Production bundles usually strip React debug source met
 
 Run a debug build with widget creation tracking. Flutter enables this by default for normal debug runs.
 
-## LAN Browser Cannot Connect
+## LAN browser cannot connect
 
 Start SimDeck with a LAN bind and reachable advertised host:
 
@@ -202,9 +202,9 @@ Then check:
 - The pairing code matches the current daemon or global service.
 - API scripts send the daemon or service token.
 
-See [LAN Access](/guide/lan-access).
+See [LAN access](/guide/lan-access).
 
-## Logs To Include In Issues
+## Logs to include in issues
 
 Include:
 

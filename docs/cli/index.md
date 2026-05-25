@@ -2,7 +2,7 @@
 
 `simdeck` is the main entrypoint for opening the browser UI, managing the daemon, and scripting simulator actions.
 
-## Common Use
+## Common use
 
 ```sh
 simdeck
@@ -14,7 +14,7 @@ simdeck -r
 
 With no subcommand, SimDeck starts a foreground server and prints browser URLs. A single simulator name or UDID selects that device in the UI. The shorthand flags start, stop, and restart the detached project daemon.
 
-## Command Shape
+## Command shape
 
 ```sh
 simdeck [SIMULATOR_NAME_OR_UDID]
@@ -32,7 +32,7 @@ Use `--server-url` or `SIMDECK_SERVER_URL` when a script should target a specifi
 SIMDECK_SERVER_URL=http://127.0.0.1:4310 simdeck list
 ```
 
-## Most-Used Commands
+## Most-used commands
 
 ```sh
 simdeck list

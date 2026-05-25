@@ -2,7 +2,7 @@
 
 Replace `simdeck` with `./build/simdeck` when running from a source checkout.
 
-## UI And Daemon
+## UI and daemon
 
 | Command                          | Purpose                                     |
 | -------------------------------- | ------------------------------------------- |
@@ -41,7 +41,7 @@ start` or `simdeck daemon restart` when you explicitly want a workspace daemon.
 clients remain paired across service restarts. Use `simdeck service reset` to
 rotate the token and pairing code, then restart the LaunchAgent.
 
-## Device Lifecycle
+## Device lifecycle
 
 ```sh
 simdeck list
@@ -60,7 +60,7 @@ inventory, including paths and display metadata.
 directory. After that, most device commands can omit `<udid>`; explicit UDIDs
 still override the default.
 
-## Apps And URLs
+## Apps and URLs
 
 ```sh
 simdeck install /path/to/App.app
@@ -186,7 +186,7 @@ Diagnostic iOS H.264 stream:
 simdeck stream --frames 120 > stream.h264
 ```
 
-## Studio And Providers
+## Studio and providers
 
 For hosted Studio workflows:
 
@@ -199,7 +199,7 @@ simdeck provider status
 
 These commands are mainly for managed remote simulator hosts.
 
-## CoreSimulator Service
+## CoreSimulator service
 
 ```sh
 simdeck core-simulator restart

@@ -1,4 +1,4 @@
-# React Native Inspector
+# React Native inspector
 
 `react-native-simdeck` publishes a React Native component tree to SimDeck in development builds.
 
@@ -11,7 +11,7 @@ npm install react-native-simdeck
 cd ios && pod install
 ```
 
-## Start It
+## Start it
 
 Import the auto entrypoint before the app registers.
 
@@ -57,7 +57,7 @@ Nodes may include:
 - Screen-point frames when the component resolves to a native host.
 - Metro dev-mode source locations.
 
-## Debug Edits
+## Debug edits
 
 `View.setProperty` is best-effort. If the node resolves to a native host instance, the runtime calls `setNativeProps(...)`. The app's next React render can overwrite the edit.
 

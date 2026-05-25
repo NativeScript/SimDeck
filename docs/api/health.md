@@ -1,4 +1,4 @@
-# Health & Metrics
+# Health and metrics
 
 Use these endpoints to check whether a daemon is reachable and to diagnose stream performance.
 
@@ -74,7 +74,7 @@ If `overloadState` is `overloaded` or dropped frames keep increasing, lower stre
 simdeck daemon restart --video-codec software --stream-quality low
 ```
 
-## Submit Client Stats
+## Submit client stats
 
 Custom clients can report their own stream stats:
 

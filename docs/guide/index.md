@@ -4,7 +4,7 @@ SimDeck is a local tool for viewing, controlling, inspecting, and automating mob
 
 Run `simdeck` from your project. It starts a local server, serves a browser UI, and exposes the same controls through the CLI and HTTP API.
 
-## What You Can Do
+## Core workflows
 
 - View a live iOS Simulator or Android emulator in a browser.
 - Tap, swipe, type, press hardware buttons, rotate, and open URLs.
@@ -15,7 +15,7 @@ Run `simdeck` from your project. It starts a local server, serves a browser UI, 
 - Share a paired browser session over your LAN.
 - Open the simulator view inside VS Code.
 
-## Daily Workflow
+## Daily workflow
 
 ```sh
 simdeck
@@ -38,12 +38,12 @@ simdeck describe --format agent --max-depth 3 --interactive
 
 Use `simdeck -d` for a detached background daemon, `simdeck -k` to stop it, and `simdeck -r` to restart it.
 
-## Pick A Page
+## Pick a page
 
 - [Install](/guide/installation): requirements and setup.
-- [Quick Start](/guide/quick-start): first browser session.
+- [Quick start](/guide/quick-start): first browser session.
 - [Daemon](/guide/daemon): foreground, detached, and always-on modes.
-- [Video & Streaming](/guide/video): stream quality and codec choices.
-- [LAN Access](/guide/lan-access): pairing and remote browser access.
+- [Video and streaming](/guide/video): stream quality and codec choices.
+- [LAN access](/guide/lan-access): pairing and remote browser access.
 - [Testing](/guide/testing): `simdeck/test` and integration tests.
 - [Troubleshooting](/guide/troubleshooting): practical fixes for common failures.

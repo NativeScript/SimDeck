@@ -1,8 +1,8 @@
-# Swift Inspector
+# Swift inspector
 
 `SimDeckInspectorAgent` is a debug-only Swift package for UIKit and SwiftUI apps. It exposes richer hierarchy data and debug actions than accessibility alone.
 
-## Add The Package
+## Add the package
 
 Add this local Swift package to your app:
 
@@ -12,7 +12,7 @@ packages/inspector-agent
 
 Link the `SimDeckInspectorAgent` product only in debug builds.
 
-## Start It
+## Start it
 
 SwiftUI:
 
@@ -51,7 +51,7 @@ func application(
 }
 ```
 
-## SwiftUI Trees
+## SwiftUI trees
 
 Publish a SwiftUI root when you want the declared SwiftUI tree instead of only the backing UIKit views:
 
@@ -76,7 +76,7 @@ simdeck describe <udid> --source swiftui --format agent
 simdeck describe <udid> --source uikit --format agent
 ```
 
-## Debug Actions
+## Debug actions
 
 When the selected view supports it, the browser can:
 
@@ -86,7 +86,7 @@ When the selected view supports it, the browser can:
 
 These edits are temporary and meant for debugging, not persistent app state.
 
-## Direct Protocol Check
+## Direct protocol check
 
 The Swift agent listens on `127.0.0.1:47370` and tries nearby ports if needed.
 
@@ -94,9 +94,9 @@ The Swift agent listens on `127.0.0.1:47370` and tries nearby ports if needed.
 printf '{"id":1,"method":"Inspector.getInfo"}\n' | nc 127.0.0.1 47370
 ```
 
-For protocol details, see [Inspector Protocol](/api/inspector-protocol).
+For protocol details, see [Inspector protocol](/api/inspector-protocol).
 
-## Shared Hosts
+## Shared hosts
 
 For shared or remote hosts, bind deliberately and set an auth token:
 
@@ -112,7 +112,7 @@ try? SimDeckInspectorAgent.shared.start(
 
 Keep the default localhost binding for normal local development.
 
-## SwiftUI Preview Runner
+## SwiftUI preview runner
 
 This repo also includes an experimental preview runner for local development:
 

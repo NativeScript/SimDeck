@@ -1,7 +1,7 @@
 ---
 layout: home
 title: SimDeck
-description: Simulator Superpowers for you and your fleet of agents.
+description: Control simulators from your browser, CLI, and agents.
 ---
 
 <SimDeckHome />

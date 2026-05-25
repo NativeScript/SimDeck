@@ -1,8 +1,8 @@
-# Browser Client
+# Browser client
 
 The browser client is the UI served by `simdeck` at `/`. It is the same surface used in normal browser sessions and inside the VS Code extension.
 
-## Open It
+## Open it
 
 ```sh
 simdeck
@@ -22,7 +22,7 @@ LAN flow:
 simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 ```
 
-## What The UI Provides
+## What the UI shows
 
 - Device list with boot and selection controls.
 - Live video with stream quality controls.
@@ -32,7 +32,7 @@ simdeck ui --bind 0.0.0.0 --advertise-host 192.168.1.50 --open
 - DevTools panel for supported WebKit, Metro, Chrome, and runtime targets.
 - Stream diagnostics.
 
-## Stream URL Options
+## Stream URL options
 
 Force a stream transport while debugging:
 
@@ -43,7 +43,7 @@ http://127.0.0.1:4310?stream=h264
 
 Use the default URL for normal operation.
 
-## Serve A Custom Client
+## Serve a custom client
 
 Point the daemon at another static bundle:
 
@@ -53,7 +53,7 @@ simdeck ui --client-root /path/to/dist --open
 
 Your client should use the [REST API](/api/rest), WebRTC offer endpoint, and control WebSocket documented in the API reference.
 
-## Develop The Built-In Client
+## Develop the built-in client
 
 ```sh
 npm run dev

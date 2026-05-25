@@ -5,9 +5,6 @@
 - macOS on Apple Silicon.
 - Xcode with the simulator runtimes you want to use.
 - Node.js 18 or newer.
-- x264 when building from source (`brew install x264`).
-- Optional Android SDK tools for Android emulator support.
-- Optional Rust stable when building from source.
 
 Check Xcode selection if you have multiple installs:
 
@@ -15,7 +12,7 @@ Check Xcode selection if you have multiple installs:
 xcode-select -p
 ```
 
-## Install From npm
+## Install from npm
 
 Use `npx` for a quick try:
 
@@ -32,28 +29,29 @@ simdeck
 
 The package installs the launcher, browser client, and native binary.
 
-## Install The Codex Skill
+## Install the agent skill
 
-For Codex workflows, install the SimDeck skill so agents use the stable commands:
+Install the SimDeck skill so agents use the stable commands:
 
 ```sh
-npx skills add NativeScript/SimDeck --skill simdeck -a codex -g
+npx skills add NativeScript/SimDeck --skill simdeck -g
 ```
 
-Restart Codex after installing the skill.
+Restart your agent after installing the skill.
 
 ## VS Code
 
-Install the VS Code extension if you want the simulator inside an editor panel:
+Install the
+[SimDeck VS Code extension](https://marketplace.visualstudio.com/items?itemName=NativeScript.simdeck-vscode)
+if you want the simulator inside an editor panel.
+
+## Build from source
+
+Source builds also need Rust stable and x264:
 
 ```sh
-npm run package:vscode
-npm run install:vscode
+brew install x264
 ```
-
-From the marketplace, use `nativescript.simdeck-vscode` when available.
-
-## Build From Source
 
 ```sh
 git clone https://github.com/NativeScript/SimDeck.git
@@ -73,7 +71,12 @@ Useful build scripts:
 | `npm run build:all`    | CLI, client, inspectors, and test package |
 | `npm run build:docs`   | Documentation site                        |
 
-## Update Or Remove
+## Android emulator support
+
+Install the Android SDK command-line tools if you want SimDeck to manage Android
+emulators too.
+
+## Update or remove
 
 ```sh
 npm install -g simdeck@latest
