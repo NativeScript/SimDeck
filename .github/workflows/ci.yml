@@ -277,6 +277,7 @@ jobs:
           SIMDECK_E2E_MIN_PRESENTED_FPS: "55"
           SIMDECK_E2E_MIN_RECEIVED_FPS: "55"
           SIMDECK_E2E_WEBRTC_MS: "20000"
+          SIMDECK_INTEGRATION_DEVICE_TYPE: iPhone SE (3rd generation)
 
   integration-android:
     name: Android emulator integration

@@ -31,6 +31,7 @@ const maxPeerDisconnectedMs = Number(
 const streamReadyTimeoutMs = Number(
   process.env.SIMDECK_E2E_STREAM_READY_MS ?? 90_000,
 );
+const warmupMs = Number(process.env.SIMDECK_E2E_WARMUP_MS ?? 0);
 const maxDecoderDrops = Number(process.env.SIMDECK_E2E_MAX_DECODER_DROPS ?? 0);
 const minVideoWidth = Number(process.env.SIMDECK_E2E_MIN_VIDEO_WIDTH ?? 0);
 const minVideoHeight = Number(process.env.SIMDECK_E2E_MIN_VIDEO_HEIGHT ?? 0);
@@ -515,6 +516,10 @@ try {
     );
   }
 
+  if (warmupMs > 0) {
+    await sleep(warmupMs);
+  }
+
   const initialMetrics = await fetchJson(endpoint("/api/metrics"));
   const initialStreams = findClientStreams(initialMetrics, clientId);
   const initialPage = latestByKind(initialStreams, "page") ?? {};
@@ -758,6 +763,7 @@ try {
     maxPeerDisconnectedObservedMs,
     maxInteractionLatencyMs,
     maxDecoderDrops,
+    warmupMs,
     interactionsEnabled,
     visualSamplesEnabled,
     interactionLatencies,

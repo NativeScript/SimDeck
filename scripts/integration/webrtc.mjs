@@ -127,6 +127,7 @@ async function main() {
       SIMDECK_E2E_STREAM_READY_MS:
         process.env.SIMDECK_E2E_STREAM_READY_MS ?? "180000",
       SIMDECK_E2E_VISUAL_SAMPLE_INTERVAL_MS: "0",
+      SIMDECK_E2E_WARMUP_MS: process.env.SIMDECK_E2E_WARMUP_MS ?? "2000",
     },
   );
 }
