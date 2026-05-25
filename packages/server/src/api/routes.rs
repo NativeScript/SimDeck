@@ -157,6 +157,9 @@ impl AccessibilitySnapshotCache {
         snapshot: &Value,
         generation: u64,
     ) {
+        if !cacheable_accessibility_snapshot(snapshot) {
+            return;
+        }
         let generations = self
             .generations
             .lock()
@@ -239,6 +242,10 @@ impl AccessibilitySnapshotCache {
             warming.remove(udid);
         }
     }
+}
+
+fn cacheable_accessibility_snapshot(snapshot: &Value) -> bool {
+    snapshot.get("fallbackReason").is_none()
 }
 
 fn cached_depth_covers(cached: Option<usize>, requested: Option<usize>) -> bool {
@@ -6101,6 +6108,34 @@ mod tests {
 
         assert_eq!(cache.latest_interactive("sim-1").unwrap()["name"], "latest");
         assert!(cache.latest_interactive("sim-2").is_none());
+    }
+
+    #[test]
+    fn accessibility_cache_skips_fallback_snapshots() {
+        let cache = AccessibilitySnapshotCache::default();
+        let key = AccessibilitySnapshotCacheKey {
+            udid: "sim-1".to_owned(),
+            source: "native-ax".to_owned(),
+            max_depth: Some(4),
+            include_hidden: false,
+            interactive_only: false,
+        };
+        cache.insert(
+            key.clone(),
+            &json!({
+                "source": SOURCE_NATIVE_AX,
+                "fallbackReason": "Native accessibility snapshot timed out."
+            }),
+        );
+        cache.insert(
+            key.clone(),
+            &json!({ "source": SOURCE_NATIVE_AX, "roots": [{ "name": "ready" }] }),
+        );
+
+        assert_eq!(
+            cache.get_compatible(&key).unwrap().1["roots"][0]["name"],
+            "ready"
+        );
     }
 
     #[test]
