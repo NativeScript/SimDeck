@@ -1178,7 +1178,7 @@
 .hierarchy-node {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
   width: max-content;
   min-width: 100%;
   min-height: 26px;
@@ -1271,9 +1271,18 @@
 }
 
 .hierarchy-node-source {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
   color: var(--text-muted);
+  flex: 0 0 auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 10px;
+  line-height: 1;
   text-decoration: none;
   white-space: nowrap;
 }
@@ -1284,6 +1293,8 @@ a.hierarchy-node-source:hover,
 }
 
 .hierarchy-node.selected .hierarchy-node-source {
+  border-color: color-mix(in srgb, var(--accent-text) 22%, transparent);
+  background: color-mix(in srgb, var(--accent-text) 9%, transparent);
   color: color-mix(in srgb, var(--accent-text) 72%, transparent);
 }
 

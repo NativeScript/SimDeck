@@ -124,7 +124,10 @@ export function accessibilityIdentifier(node: AccessibilityNode): string {
 }
 
 export function accessibilityKind(node: AccessibilityNode): string {
-  return cleanText(node.type) ?? cleanText(node.role) ?? "Element";
+  return displayAccessibilityKind(
+    node.source,
+    cleanText(node.type) ?? cleanText(node.role) ?? "Element",
+  );
 }
 
 export function accessibilityRootFrame(
@@ -559,4 +562,14 @@ function frameContainsPoint(
 function cleanText(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function displayAccessibilityKind(
+  source: AccessibilityNode["source"],
+  kind: string,
+): string {
+  if (source === "react-native" && kind === "RCTView") {
+    return "View";
+  }
+  return kind;
 }

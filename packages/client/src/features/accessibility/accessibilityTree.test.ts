@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AccessibilityNode } from "../../api/types";
 import {
+  accessibilityKind,
   buildAccessibilityTree,
   findAccessibilityItemAtPoint,
   isAccessibilityHitTestCandidate,
@@ -10,6 +11,12 @@ import {
 } from "./accessibilityTree";
 
 describe("buildAccessibilityTree", () => {
+  it("renders React Native RCTView nodes as View", () => {
+    expect(accessibilityKind({ source: "react-native", type: "RCTView" })).toBe(
+      "View",
+    );
+  });
+
   it("compacts framed React Native wrapper chains until meaningful children", () => {
     const roots: AccessibilityNode[] = [
       {

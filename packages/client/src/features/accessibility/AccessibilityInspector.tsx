@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, FormEvent, ReactNode } from "react";
+import type { CSSProperties, FormEvent, MouseEvent, ReactNode } from "react";
 
 import { sendInspectorRequest } from "../../api/simulators";
 import type {
@@ -43,6 +43,14 @@ interface AccessibilityInspectorProps {
 
 type InspectorTab = "console" | "inspector" | "performance";
 type DetailValue = ReactNode;
+
+interface SourceOpenMessage {
+  column?: number;
+  file: string;
+  href: string;
+  line?: number;
+  type: "simdeck.openSource";
+}
 
 export function AccessibilityInspector({
   availableSources,
@@ -319,6 +327,7 @@ export function AccessibilityInspector({
               const label = hierarchyNodeLabel(item.node, kind);
               const sourceBadge = sourceLocationBadgeText(item.node);
               const sourceHref = sourceLocationHref(item.node);
+              const sourceOpenMessage = sourceLocationOpenMessage(item.node);
               const sourceTitle = sourceLocationText(item.node);
               const chainBadge = compactedChainBadgeText(item.chain.length);
               const chainPath = compactedChainPathText(item);
@@ -385,6 +394,9 @@ export function AccessibilityInspector({
                       <a
                         className="hierarchy-node-source"
                         href={sourceHref}
+                        onClick={(event) =>
+                          handleSourceLocationClick(event, sourceOpenMessage)
+                        }
                         title={sourceTitle}
                       >
                         {sourceBadge}
@@ -514,6 +526,8 @@ function NodeDetails({
   const isAndroid = isAndroidSimulator(selectedSimulator);
   const sourceText = sourceLocationText(node);
   const sourceHref = sourceLocationHref(node);
+  const sourceOpenMessage = sourceLocationOpenMessage(node);
+  const scriptTargetId = dynamicInspectorTargetId(node);
   const details = (
     [
       ["Type", accessibilityKind(node)],
@@ -521,7 +535,13 @@ function NodeDetails({
       [
         "Source",
         sourceHref ? (
-          <a className="hierarchy-detail-link" href={sourceHref}>
+          <a
+            className="hierarchy-detail-link"
+            href={sourceHref}
+            onClick={(event) =>
+              handleSourceLocationClick(event, sourceOpenMessage)
+            }
+          >
             {sourceText}
           </a>
         ) : (
@@ -539,7 +559,10 @@ function NodeDetails({
       ["NativeScript", nativeScriptDescription(node.nativeScript)],
       ["React Native", reactNativeDescription(node.reactNative)],
       ["Flutter", flutterDescription(node.flutter)],
-      [isAndroid ? "Android Class" : "UIKit Class", node.className ?? ""],
+      [
+        isAndroid ? "Android Class" : "UIKit Class",
+        displayClassName(node.className),
+      ],
       ["Package", isAndroid ? (node.androidPackage ?? "") : ""],
       ["Last JS", lastUIKitScriptText(node)],
       ["Value", node.AXValue ?? ""],
@@ -575,7 +598,13 @@ function NodeDetails({
           <span className="hierarchy-detail-value">{value}</span>
         </div>
       ))}
-      <UIKitScriptEditor node={node} selectedSimulator={selectedSimulator} />
+      {scriptTargetId && !scriptTargetId.startsWith("rn:") ? (
+        <UIKitScriptEditor
+          node={node}
+          selectedSimulator={selectedSimulator}
+          targetId={scriptTargetId}
+        />
+      ) : null}
     </div>
   );
 }
@@ -595,14 +624,13 @@ function boolDetail(include: boolean, value: boolean | null | undefined) {
 function UIKitScriptEditor({
   node,
   selectedSimulator,
+  targetId,
 }: {
   node: AccessibilityNode;
   selectedSimulator: SimulatorMetadata | null;
+  targetId: string;
 }) {
-  const targetId = dynamicInspectorTargetId(node);
   const lastScript = lastUIKitScriptText(node);
-  const isReactNativeTarget = targetId.startsWith("rn:");
-  const scriptTitle = isReactNativeTarget ? "React Native JS" : "UIKit JS";
   const udid = selectedSimulator?.udid ?? "";
   const [script, setScript] = useState("");
   const [result, setResult] = useState("");
@@ -610,14 +638,10 @@ function UIKitScriptEditor({
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    setScript(lastScript || (isReactNativeTarget ? "props" : ""));
+    setScript(lastScript || "");
     setResult("");
     setError("");
-  }, [isReactNativeTarget, lastScript, targetId, udid]);
-
-  if (!targetId) {
-    return null;
-  }
+  }, [lastScript, targetId, udid]);
 
   async function runScript(event: FormEvent) {
     event.preventDefault();
@@ -653,7 +677,7 @@ function UIKitScriptEditor({
     <section className="uikit-script">
       <div className="uikit-script-header">
         <div>
-          <div className="uikit-script-title">{scriptTitle}</div>
+          <div className="uikit-script-title">UIKit JS</div>
           <div className="uikit-script-target">{targetId}</div>
         </div>
       </div>
@@ -661,9 +685,7 @@ function UIKitScriptEditor({
         <textarea
           className="uikit-script-input"
           onChange={(event) => setScript(event.target.value)}
-          placeholder={
-            isReactNativeTarget ? "props" : "view.textColor = UIColor.redColor"
-          }
+          placeholder="view.textColor = UIColor.redColor"
           spellCheck={false}
           value={script}
         />
@@ -698,22 +720,90 @@ function sourceLocationText(node: AccessibilityNode): string {
   return `${location.file}:${line}:${column}`;
 }
 
-function sourceLocationHref(node: AccessibilityNode): string {
-  const location = primarySourceLocation(node);
-  return location?.file ? fileUrl(location.file) : "";
+export function sourceLocationHref(node: AccessibilityNode): string {
+  return sourceLocationOpenMessage(node)?.href ?? "";
 }
 
-function fileUrl(file: string): string {
-  if (file.startsWith("file://")) {
-    return file;
+function sourceLocationOpenMessage(
+  node: AccessibilityNode,
+): SourceOpenMessage | null {
+  const location = primarySourceLocation(node);
+  if (!location?.file) {
+    return null;
   }
+
+  const file = sourceFilePath(location.file);
+  if (!file.startsWith("/")) {
+    return null;
+  }
+
+  const line = finiteNumber(location.line);
+  const column = finiteNumber(location.column);
+  return {
+    column: column ?? undefined,
+    file,
+    href: vscodeFileUrl(file, line, column),
+    line: line ?? undefined,
+    type: "simdeck.openSource",
+  };
+}
+
+function vscodeFileUrl(
+  file: string,
+  line: number | null | undefined,
+  column: number | null | undefined,
+): string {
   if (!file.startsWith("/")) {
     return "";
   }
-  return `file://${file
+
+  const suffix = filePositionSuffix(line, column);
+  return `vscode://file${file
     .split("/")
     .map((part, index) => (index === 0 ? "" : encodeURIComponent(part)))
-    .join("/")}`;
+    .join("/")}${suffix}`;
+}
+
+function handleSourceLocationClick(
+  event: MouseEvent<HTMLAnchorElement>,
+  message: SourceOpenMessage | null,
+) {
+  if (!message || window.parent === window) {
+    return;
+  }
+
+  window.parent.postMessage(message, "*");
+  if (isInsideVsCodeWebview()) {
+    event.preventDefault();
+  }
+}
+
+function isInsideVsCodeWebview(): boolean {
+  return window.parent !== window && document.referrer.startsWith("vscode-");
+}
+
+function sourceFilePath(file: string): string {
+  if (!file.startsWith("file://")) {
+    return file;
+  }
+  try {
+    return decodeURIComponent(new URL(file).pathname);
+  } catch {
+    return file.replace(/^file:\/\//, "");
+  }
+}
+
+function filePositionSuffix(
+  line: number | null | undefined,
+  column: number | null | undefined,
+): string {
+  const safeLine = finiteNumber(line);
+  if (safeLine == null) {
+    return "";
+  }
+
+  const safeColumn = finiteNumber(column);
+  return safeColumn == null ? `:${safeLine}` : `:${safeLine}:${safeColumn}`;
 }
 
 function sourceLocationBadgeText(node: AccessibilityNode): string {
@@ -894,7 +984,11 @@ function emptyAccessibilityMessage(
 
 function objectClassName(value: Record<string, unknown> | null | undefined) {
   const className = value?.className;
-  return typeof className === "string" ? className : "";
+  return displayClassName(typeof className === "string" ? className : "");
+}
+
+function displayClassName(value: string | null | undefined): string {
+  return value === "RCTView" ? "View" : (value ?? "");
 }
 
 function nativeScriptDescription(

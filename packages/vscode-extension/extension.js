@@ -191,15 +191,53 @@ function openSimulatorPanel(serverUrl) {
   );
 
   simulatorPanel.webview.html = getWebviewHtml(serverUrl);
+  simulatorPanel.webview.onDidReceiveMessage((message) => {
+    if (message?.type === "simdeck.openSource") {
+      openSourceLocation(message).catch((error) => {
+        outputChannel.appendLine(
+          `Unable to open source location: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    }
+  });
   simulatorPanel.onDidDispose(() => {
     simulatorPanel = undefined;
   });
+}
+
+async function openSourceLocation(message) {
+  const file = typeof message.file === "string" ? message.file : "";
+  if (!file || !path.isAbsolute(file)) {
+    throw new Error("source location did not include an absolute file path");
+  }
+
+  const line = positiveInteger(message.line);
+  const column = positiveInteger(message.column);
+  const document = await vscode.workspace.openTextDocument(
+    vscode.Uri.file(file),
+  );
+  const position = new vscode.Position(
+    Math.max(0, (line ?? 1) - 1),
+    Math.max(0, (column ?? 1) - 1),
+  );
+
+  await vscode.window.showTextDocument(document, {
+    preview: true,
+    selection: new vscode.Range(position, position),
+    viewColumn: vscode.ViewColumn.Active,
+  });
+}
+
+function positiveInteger(value) {
+  return Number.isInteger(value) && value > 0 ? value : null;
 }
 
 function getWebviewHtml(serverUrl) {
   const origin = getOrigin(serverUrl);
   const escapedUrl = escapeHtml(serverUrl);
   const escapedOrigin = escapeHtml(origin);
+  const nonce = createNonce();
+  const serializedOrigin = JSON.stringify(origin);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -207,7 +245,7 @@ function getWebviewHtml(serverUrl) {
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; frame-src ${escapedOrigin};"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; frame-src ${escapedOrigin};"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
@@ -233,8 +271,30 @@ function getWebviewHtml(serverUrl) {
   </head>
   <body>
     <iframe src="${escapedUrl}" title="SimDeck Simulator"></iframe>
+    <script nonce="${nonce}">
+      const vscode = acquireVsCodeApi();
+      const simdeckOrigin = ${serializedOrigin};
+      window.addEventListener("message", (event) => {
+        if (event.origin !== simdeckOrigin) {
+          return;
+        }
+        if (event.data?.type === "simdeck.openSource") {
+          vscode.postMessage(event.data);
+        }
+      });
+    </script>
   </body>
 </html>`;
+}
+
+function createNonce() {
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let value = "";
+  for (let index = 0; index < 32; index += 1) {
+    value += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return value;
 }
 
 function resolveCliPath(context, configuredPath) {
