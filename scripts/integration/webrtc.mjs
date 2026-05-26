@@ -21,6 +21,9 @@ const fixtureAnimateUrl = "simdeck-fixture://animate";
 const coreSimulatorCommandTimeoutMs = Number(
   process.env.SIMDECK_INTEGRATION_SIMCTL_TIMEOUT_MS ?? "300000",
 );
+const simdeckBootTimeoutMs = Number(
+  process.env.SIMDECK_INTEGRATION_BOOT_TIMEOUT_MS ?? "300000",
+);
 
 let simulatorUDID = "";
 let serverProcess = null;
@@ -73,7 +76,11 @@ async function main() {
 
   startServer();
   await waitForHealth();
-  simdeckJson(["boot", simulatorUDID], { timeoutMs: 180_000 });
+  await retrySimdeckJson(["boot", simulatorUDID], "WebRTC boot simulator", {
+    attempts: 3,
+    delayMs: 3_000,
+    timeoutMs: simdeckBootTimeoutMs,
+  });
   runText("xcrun", ["simctl", "bootstatus", simulatorUDID, "-b"], {
     timeoutMs: 600_000,
   });
@@ -187,6 +194,28 @@ function simdeckJson(args, options = {}) {
   return JSON.parse(runText(simdeck, args, options));
 }
 
+async function retrySimdeckJson(args, label, options = {}) {
+  const attempts = options.attempts ?? 3;
+  const delayMs = options.delayMs ?? 2_000;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return simdeckJson(args, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        console.warn(
+          `${label} attempt ${attempt}/${attempts} failed; retrying in ${delayMs}ms: ${error?.message ?? error}`,
+        );
+        await sleep(delayMs);
+      }
+    }
+  }
+  throw new Error(
+    `${label} failed after ${attempts} attempts: ${lastError?.message ?? lastError}`,
+  );
+}
+
 function runJson(command, args, options = {}) {
   return JSON.parse(runText(command, args, options));
 }
@@ -199,7 +228,7 @@ function runText(command, args, options = {}) {
   });
   if (result.status !== 0) {
     throw new Error(
-      `${command} ${args.join(" ")} failed with ${result.status}\n${result.stdout}\n${result.stderr}`,
+      `${command} ${args.join(" ")} failed with ${result.status ?? result.signal}\n${result.stdout}\n${result.stderr}\n${result.error?.message ?? ""}`,
     );
   }
   return result.stdout;
