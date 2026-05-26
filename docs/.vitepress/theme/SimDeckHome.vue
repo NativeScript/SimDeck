@@ -204,11 +204,11 @@ async function copyCommand() {
 
     <section class="sd-close sd-reveal" aria-label="Start using SimDeck">
       <div>
-        <h2>Don't switch context. Give the simulator a URL.</h2>
+        <h2>Simulator infrastructure your workflow needed.</h2>
         <p>
-          Run it headlessly on your Mac, stream it into your editor or pull
-          request, and let agents tap, type, inspect, screenshot, and verify
-          without taking over your screen.
+          Run it headlessly on your Mac, stream it into your editor, or from a
+          PR on GitHub actions. Let agents tap, type, inspect, screenshot, and
+          verify without taking over your desktop.
         </p>
       </div>
       <a href="/guide/quick-start">Start with the quick start</a>
