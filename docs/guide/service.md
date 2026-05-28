@@ -54,6 +54,9 @@ service that `simdeck` uses. `service reset` rotates the LaunchAgent token and
 pairing code. `service off` removes the LaunchAgent. `service kill` and
 `service killall` stop every SimDeck service process they can find, including
 services started by another SimDeck binary.
+When `service restart` is run without `--port`, it keeps the installed
+LaunchAgent port or the current singleton service port before falling back to
+`4310`.
 
 ## Options
 

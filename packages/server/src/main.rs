@@ -618,8 +618,11 @@ enum ServiceCommand {
         access_token: Option<String>,
     },
     Restart {
-        #[arg(long, default_value_t = SERVICE_PORT)]
-        port: u16,
+        #[arg(
+            long,
+            help = "Defaults to the existing service port, or 4310 when no service state exists"
+        )]
+        port: Option<u16>,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
         #[arg(long)]
@@ -2510,6 +2513,19 @@ fn restart_detached_service(options: ServiceLaunchOptions) -> anyhow::Result<()>
     start_detached_service(options)
 }
 
+fn service_restart_port(explicit_port: Option<u16>) -> anyhow::Result<u16> {
+    if let Some(port) = explicit_port {
+        return Ok(port);
+    }
+    if let Some(port) = service::installed_port()? {
+        return Ok(port);
+    }
+    if let Some(metadata) = read_service_metadata().ok().flatten() {
+        return Ok(metadata.port);
+    }
+    Ok(SERVICE_PORT)
+}
+
 struct PairGlobalServiceOptions {
     port: Option<u16>,
     bind: IpAddr,
@@ -3508,6 +3524,7 @@ fn main() -> anyhow::Result<()> {
                 stream_quality,
                 local_stream_fps,
             } => {
+                let port = service_restart_port(port)?;
                 cleanup_orphaned_workspace_services_for_root(None);
                 restart_detached_service(ServiceLaunchOptions {
                     port,
@@ -6035,6 +6052,27 @@ mod tests {
         };
         assert_eq!(port, 4315);
         assert_eq!(access_token.as_deref(), Some("explicit-token"));
+    }
+
+    #[test]
+    fn service_restart_command_preserves_omitted_port() {
+        let cli = Cli::parse_from(["simdeck", "service", "restart"]);
+        let Command::Service {
+            command: ServiceCommand::Restart { port, .. },
+        } = cli.command
+        else {
+            panic!("expected service restart command");
+        };
+        assert_eq!(port, None);
+
+        let cli = Cli::parse_from(["simdeck", "service", "restart", "--port", "4315"]);
+        let Command::Service {
+            command: ServiceCommand::Restart { port, .. },
+        } = cli.command
+        else {
+            panic!("expected service restart command");
+        };
+        assert_eq!(port, Some(4315));
     }
 
     #[test]

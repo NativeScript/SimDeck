@@ -22,10 +22,13 @@ project default from `simdeck use <udid>`, then auto-inference from the service.
 ## Server options
 
 Used by `simdeck`, `service start`, `service restart`, `service on`, and `service reset`.
+When `service restart` is run without `--port`, it preserves the installed
+LaunchAgent port or the current singleton service port before falling back to
+`4310`.
 
 | Flag                         | Default        | Notes                                                                             |
 | ---------------------------- | -------------- | --------------------------------------------------------------------------------- |
-| `--port <port>` / `-p`       | `4310`         | HTTP port                                                                         |
+| `--port <port>` / `-p`       | `4310`         | HTTP port; `service restart` preserves the existing service port when omitted     |
 | `--bind <ip>`                | `127.0.0.1`    | Use `0.0.0.0` or `::` for LAN access                                              |
 | `--advertise-host <host>`    | detected       | Host printed for remote browsers                                                  |
 | `--client-root <path>`       | bundled client | Static client directory                                                           |

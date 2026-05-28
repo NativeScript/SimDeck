@@ -212,6 +212,11 @@ jobs:
         env:
           SIMDECK_INTEGRATION_VERBOSE: "1"
 
+      - name: LaunchAgent service restart integration test
+        run: npm run test:integration:service
+        env:
+          SIMDECK_INTEGRATION_LAUNCHAGENT: "1"
+
   integration-js-api:
     name: JS API simulator integration
     runs-on: macos-15
