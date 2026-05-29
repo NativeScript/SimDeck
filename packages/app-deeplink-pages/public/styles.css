@@ -211,6 +211,10 @@ details > summary {
   outline: none;
 }
 
+details[open] button.primary {
+  margin-top: 16px;
+}
+
 details[open] > summary {
   margin-bottom: 8px;
 }
