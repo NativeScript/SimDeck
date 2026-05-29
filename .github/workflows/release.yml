@@ -152,7 +152,7 @@ jobs:
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install native build dependencies
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
@@ -265,21 +265,34 @@ jobs:
 
       # ---------- Build (kind-specific) ----------
 
-      - name: Build root simdeck (arm64 native binary + client + simdeck-test)
+      - name: Build root simdeck (macOS arm64+x64 binaries + client + simdeck-test)
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
-        env:
-          SIMDECK_BUILD_TARGET: aarch64-apple-darwin
         run: |
-          npm run build:cli
+          SIMDECK_BUILD_TARGET=aarch64-apple-darwin npm run build:cli
+          cp build/simdeck-bin build/simdeck-bin-darwin-arm64
+
+          SIMDECK_BUILD_TARGET=x86_64-apple-darwin npm run build:cli
+          cp build/simdeck-bin build/simdeck-bin-darwin-x64
+
+          lipo -create \
+            -output build/simdeck-bin \
+            build/simdeck-bin-darwin-arm64 \
+            build/simdeck-bin-darwin-x64
+
           npm run build:client
           npm run build:simdeck-test
 
-      - name: Verify CLI artifact is an arm64 Mach-O
+      - name: Verify CLI artifacts are macOS arm64+x64 binaries
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
         run: |
           test -x build/simdeck-bin
+          test -x build/simdeck-bin-darwin-arm64
+          test -x build/simdeck-bin-darwin-x64
           file build/simdeck-bin
           file build/simdeck-bin | grep -q 'arm64'
+          file build/simdeck-bin | grep -q 'x86_64'
+          file build/simdeck-bin-darwin-arm64 | grep -q 'arm64'
+          file build/simdeck-bin-darwin-x64 | grep -q 'x86_64'
 
       # ---------- Apple codesign + notarize (root simdeck only) ----------
 
@@ -474,7 +487,6 @@ jobs:
           NODE_AUTH_TOKEN: ""
           DIST_TAG: ${{ steps.tag.outputs.dist_tag }}
           PKG_DIR: ${{ steps.meta.outputs.dir }}
-          SIMDECK_BUILD_TARGET: aarch64-apple-darwin
         run: |
           set -euo pipefail
           unset NODE_AUTH_TOKEN
@@ -493,7 +505,6 @@ jobs:
           NODE_AUTH_TOKEN: ""
           DIST_TAG: ${{ steps.tag.outputs.dist_tag }}
           PKG_DIR: ${{ steps.meta.outputs.dir }}
-          SIMDECK_BUILD_TARGET: aarch64-apple-darwin
         run: |
           set -euo pipefail
           unset NODE_AUTH_TOKEN

@@ -20,6 +20,10 @@
     "scripts/postinstall.mjs",
     "build/simdeck-bin",
     "build/camera/",
+    "build/simdeck-bin-darwin-arm64",
+    "build/simdeck-bin-darwin-x64",
+    "build/simdeck-bin-linux-arm64",
+    "build/simdeck-bin-linux-x64",
     "packages/client/dist/",
     "packages/simdeck-test/dist/"
   ],
@@ -34,10 +38,12 @@
     "node": ">=18"
   },
   "os": [
-    "darwin"
+    "darwin",
+    "linux"
   ],
   "cpu": [
-    "arm64"
+    "arm64",
+    "x64"
   ],
   "publishConfig": {
     "access": "public"
