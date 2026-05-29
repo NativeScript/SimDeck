@@ -31,36 +31,42 @@ function findPackageRoot(startDir) {
     if (existsSync(path.join(current, "build", "simdeck-bin"))) {
       return current;
     }
-
-    function resolveBinaryPath(rootDir) {
-      const platform = process.platform;
-      const arch = process.arch;
-      const suffixByHost = {
-        "darwin-arm64": "darwin-arm64",
-        "darwin-x64": "darwin-x64",
-        "linux-arm64": "linux-arm64",
-        "linux-x64": "linux-x64",
-      };
-
-      const suffix = suffixByHost[`${platform}-${arch}`];
-      if (!suffix) {
-        return null;
-      }
-
-      const platformBinaryPath = path.join(rootDir, "build", `simdeck-bin-${suffix}`);
-      if (existsSync(platformBinaryPath)) {
-        return platformBinaryPath;
-      }
-
-      const fallbackBinaryPath = path.join(rootDir, "build", "simdeck-bin");
-      return existsSync(fallbackBinaryPath) ? fallbackBinaryPath : platformBinaryPath;
-    }
     const parent = path.dirname(current);
     if (parent === current) {
       return path.resolve(startDir, "../../..");
     }
     current = parent;
   }
+}
+
+function resolveBinaryPath(rootDir) {
+  const platform = process.platform;
+  const arch = process.arch;
+  const suffixByHost = {
+    "darwin-arm64": "darwin-arm64",
+    "darwin-x64": "darwin-x64",
+    "linux-arm64": "linux-arm64",
+    "linux-x64": "linux-x64",
+  };
+
+  const suffix = suffixByHost[`${platform}-${arch}`];
+  if (!suffix) {
+    return null;
+  }
+
+  const platformBinaryPath = path.join(
+    rootDir,
+    "build",
+    `simdeck-bin-${suffix}`,
+  );
+  if (existsSync(platformBinaryPath)) {
+    return platformBinaryPath;
+  }
+
+  const fallbackBinaryPath = path.join(rootDir, "build", "simdeck-bin");
+  return existsSync(fallbackBinaryPath)
+    ? fallbackBinaryPath
+    : platformBinaryPath;
 }
 
 let child;
