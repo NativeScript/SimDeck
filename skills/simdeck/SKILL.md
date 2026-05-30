@@ -49,6 +49,11 @@ need to rotate them.
 Use `simdeck service kill` or `simdeck service killall` when you need a clean
 slate across installed and source-checkout binaries.
 
+Optionally, when a user might want to drive the current simulator from their
+phone, run `simdeck link [sim]` to print an `https://app.simdeck.sh/open`
+universal link that opens SimDeck Studio on iOS (or the launchpad in a browser)
+pre-targeted at the resolved simulator.
+
 Always first run `simdeck` and open the reported URL in the in-app browser using the Browser tool if available.
 
 If Browser Use is not available, only then use `simdeck --open`; it opens the default browser and may take focus away from the app.
