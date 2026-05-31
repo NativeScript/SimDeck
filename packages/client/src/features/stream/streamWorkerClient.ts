@@ -97,6 +97,10 @@ export function sendWebRtcStreamControl(options: {
   );
 }
 
+export function setActiveStreamAudioMuted(muted: boolean) {
+  activeStreamClient?.setAudioMuted(muted);
+}
+
 function sendStreamQualityConfig(config: StreamConfig): boolean {
   const encoded = JSON.stringify({
     config: streamQualityPayload(config),
@@ -230,6 +234,7 @@ function compareVideoToImage(
 export function buildStreamTarget(
   udid: string,
   options: {
+    audioMuted?: boolean;
     clientId?: string;
     platform?: string;
     remote?: boolean;
@@ -238,6 +243,7 @@ export function buildStreamTarget(
   } = {},
 ): StreamConnectTarget {
   return {
+    audioMuted: options.audioMuted,
     clientId: options.clientId,
     platform: options.platform,
     remote: options.remote,
@@ -290,6 +296,7 @@ interface StreamClientBackend {
   disconnect(): void;
   applyStreamConfig?(config?: StreamConfig): void | Promise<void>;
   sendControl?(payload: unknown): boolean;
+  setAudioMuted?(muted: boolean): void;
 }
 
 export interface VisualArtifactSample {
@@ -389,6 +396,11 @@ interface WebCodecsVideoDecoderConstructor {
 }
 
 interface WebRtcAnswerPayload extends RTCSessionDescriptionInit {
+  audio?: {
+    channels?: number;
+    codec?: string;
+    sampleRate?: number;
+  };
   video?: {
     height?: number;
     width?: number;
@@ -1295,6 +1307,8 @@ function hexByte(byte: number): string {
 }
 
 class WebRtcStreamClient implements StreamClientBackend {
+  private audioElement: HTMLAudioElement | null = null;
+  private audioMuted = true;
   private animationFrame = 0;
   private canvas: HTMLCanvasElement | null = null;
   private canvasContext: CanvasRenderingContext2D | null = null;
@@ -1408,6 +1422,7 @@ class WebRtcStreamClient implements StreamClientBackend {
     this.shouldReconnect = true;
     this.remoteMode = Boolean(target.remote);
     this.streamTarget = target;
+    this.audioMuted = target.audioMuted ?? true;
     if (!wasReconnecting) {
       this.reconnectDelayMs = WEBRTC_RECONNECT_BASE_DELAY_MS;
     }
@@ -1435,6 +1450,14 @@ class WebRtcStreamClient implements StreamClientBackend {
       const useRgbaTransport = shouldUseLocalAndroidRgbaWebRtc(target);
       this.rgbaMode = useRgbaTransport;
       this.attachDiagnostics(peerConnection, target, generation);
+      const audioTransceiver = peerConnection.addTransceiver("audio", {
+        direction: "recvonly",
+      });
+      configureAudioReceiverCodecPreferences(audioTransceiver);
+      configureLowLatencyReceiver(
+        audioTransceiver.receiver,
+        receiverBufferSeconds(target),
+      );
       if (!useRgbaTransport) {
         this.startReceiverStatsPolling(peerConnection, target, generation);
         const transceiver = peerConnection.addTransceiver("video", {
@@ -1485,17 +1508,21 @@ class WebRtcStreamClient implements StreamClientBackend {
       };
 
       peerConnection.ontrack = (event) => {
-        if (useRgbaTransport) {
+        if (generation !== this.connectGeneration) {
           return;
         }
-        if (generation !== this.connectGeneration) {
+        if (event.track.kind === "audio") {
+          this.attachAudioTrack(event.track, generation);
+          return;
+        }
+        if (useRgbaTransport || event.track.kind !== "video") {
           return;
         }
         event.track.contentHint = "motion";
         for (const receiver of peerConnection.getReceivers()) {
           configureLowLatencyReceiver(receiver, receiverBufferSeconds(target));
         }
-        const stream = event.streams[0] ?? new MediaStream([event.track]);
+        const stream = new MediaStream([event.track]);
         const video = document.createElement("video");
         video.autoplay = true;
         video.className = "stream-video";
@@ -1606,6 +1633,19 @@ class WebRtcStreamClient implements StreamClientBackend {
     return sendDataChannelMessage(this.controlChannel, JSON.stringify(payload));
   }
 
+  setAudioMuted(muted: boolean) {
+    this.audioMuted = muted;
+    if (!this.audioElement) {
+      return;
+    }
+    this.audioElement.muted = muted;
+    if (!muted) {
+      void this.audioElement.play().catch(() => {
+        // Some browsers require the menu click that unmutes to happen in the page.
+      });
+    }
+  }
+
   async applyStreamConfig(config?: StreamConfig) {
     if (!config) {
       return;
@@ -1703,6 +1743,12 @@ class WebRtcStreamClient implements StreamClientBackend {
       this.video.remove();
     }
     this.video = null;
+    this.audioElement?.pause();
+    if (this.audioElement) {
+      this.audioElement.srcObject = null;
+      this.audioElement.remove();
+    }
+    this.audioElement = null;
     this.reportedVideoHeight = 0;
     this.reportedVideoWidth = 0;
     this.controlChannel?.close();
@@ -2120,6 +2166,33 @@ class WebRtcStreamClient implements StreamClientBackend {
     if (sendStreamClientStats(payload) || this.remoteMode) {
       return;
     }
+  }
+
+  private attachAudioTrack(track: MediaStreamTrack, generation: number) {
+    this.audioElement?.pause();
+    if (this.audioElement) {
+      this.audioElement.srcObject = null;
+      this.audioElement.remove();
+    }
+    const audio = document.createElement("audio");
+    audio.autoplay = true;
+    audio.muted = this.audioMuted;
+    audio.preload = "auto";
+    audio.srcObject = new MediaStream([track]);
+    audio.style.display = "none";
+    document.body.appendChild(audio);
+    this.audioElement = audio;
+    const startPlayback = () => {
+      if (generation !== this.connectGeneration || audio !== this.audioElement) {
+        return;
+      }
+      void audio.play().catch(() => {
+        // Muted autoplay is best effort; unmuting from the menu retries playback.
+      });
+    };
+    audio.addEventListener("loadedmetadata", startPlayback);
+    audio.addEventListener("canplay", startPlayback);
+    startPlayback();
   }
 
   private attachRgbaDataChannel(channel: RTCDataChannel, generation: number) {
@@ -2756,6 +2829,24 @@ function configureReceiverCodecPreferences(transceiver: RTCRtpTransceiver) {
   ]);
 }
 
+function configureAudioReceiverCodecPreferences(transceiver: RTCRtpTransceiver) {
+  if (!transceiver.setCodecPreferences) {
+    return;
+  }
+  const capabilities = RTCRtpReceiver.getCapabilities("audio");
+  const codecs = capabilities?.codecs ?? [];
+  const preferred = codecs.filter(
+    (codec) => codec.mimeType.toLowerCase() === "audio/pcmu",
+  );
+  if (preferred.length === 0) {
+    return;
+  }
+  transceiver.setCodecPreferences([
+    ...preferred,
+    ...codecs.filter((codec) => codec.mimeType.toLowerCase() !== "audio/pcmu"),
+  ]);
+}
+
 function safariBaselineH264Offer(
   offer: RTCSessionDescriptionInit,
 ): RTCSessionDescriptionInit {
@@ -3031,6 +3122,10 @@ export class StreamWorkerClient {
     return Boolean(
       this.backend?.sendControl?.({ ...options, type: "streamControl" }),
     );
+  }
+
+  setAudioMuted(muted: boolean) {
+    this.backend?.setAudioMuted?.(muted);
   }
 
   applyStreamConfig(config?: StreamConfig) {

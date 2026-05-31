@@ -324,7 +324,6 @@ impl AndroidBridge {
                 "-avd",
                 &avd_name,
                 "-no-window",
-                "-no-audio",
                 "-gpu",
                 "swiftshader_indirect",
                 "-grpc",

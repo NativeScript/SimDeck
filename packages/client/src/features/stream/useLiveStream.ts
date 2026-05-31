@@ -28,6 +28,7 @@ const CLIENT_TELEMETRY_ID_STORAGE_KEY = "simdeck.streamClientId";
 const VISUAL_ARTIFACT_TELEMETRY_INTERVAL_MS = 30000;
 
 interface UseLiveStreamOptions {
+  audioMuted?: boolean;
   canvasElement: HTMLCanvasElement | null;
   paused?: boolean;
   remote?: boolean;
@@ -108,6 +109,7 @@ function isViewerForeground(canvasVisible: boolean): boolean {
 }
 
 export function useLiveStream({
+  audioMuted = true,
   canvasElement,
   paused = false,
   remote = false,
@@ -370,6 +372,7 @@ export function useLiveStream({
     workerClient.connect(
       buildStreamTarget(simulator.udid, {
         clientId: clientTelemetryIdRef.current,
+        audioMuted,
         platform: simulator.platform,
         remote,
         streamConfig,
@@ -387,7 +390,12 @@ export function useLiveStream({
     paused,
     remote,
     streamTransport,
+    audioMuted,
   ]);
+
+  useEffect(() => {
+    workerClientRef.current?.setAudioMuted(audioMuted);
+  }, [audioMuted]);
 
   useEffect(() => {
     if (!simulator?.udid || paused) {

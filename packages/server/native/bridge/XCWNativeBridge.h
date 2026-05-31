@@ -28,7 +28,15 @@ typedef struct xcw_native_frame {
     xcw_native_shared_bytes data;
 } xcw_native_frame;
 
+typedef struct xcw_native_audio_sample {
+    uint64_t timestamp_us;
+    uint32_t sample_rate;
+    uint16_t channels;
+    xcw_native_shared_bytes data;
+} xcw_native_audio_sample;
+
 typedef void (*xcw_native_frame_callback)(const xcw_native_frame * _Nonnull frame, void * _Nullable user_data);
+typedef void (*xcw_native_audio_callback)(const xcw_native_audio_sample * _Nonnull sample, void * _Nullable user_data);
 
 void xcw_native_initialize_app(void);
 void xcw_native_run_main_loop_slice(double duration_seconds);
@@ -108,6 +116,10 @@ void * _Nullable xcw_native_h264_encoder_create(xcw_native_frame_callback _Nulla
 void xcw_native_h264_encoder_destroy(void * _Nullable handle);
 bool xcw_native_h264_encoder_encode_rgba(void * _Nonnull handle, const uint8_t * _Nonnull rgba, size_t length, uint32_t width, uint32_t height, uint64_t timestamp_us, char * _Nullable * _Nullable error_message);
 void xcw_native_h264_encoder_request_keyframe(void * _Nonnull handle);
+
+void * _Nullable xcw_native_audio_capture_create(const int32_t * _Nullable process_ids, size_t process_count, xcw_native_audio_callback _Nullable callback, void * _Nullable user_data, char * _Nullable * _Nullable error_message);
+bool xcw_native_audio_capture_update_processes(void * _Nonnull handle, const int32_t * _Nullable process_ids, size_t process_count, char * _Nullable * _Nullable error_message);
+void xcw_native_audio_capture_destroy(void * _Nullable handle);
 
 void xcw_native_free_string(char * _Nullable value);
 void xcw_native_free_bytes(xcw_native_owned_bytes bytes);

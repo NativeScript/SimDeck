@@ -26,9 +26,21 @@ pub struct xcw_native_frame {
     pub data: xcw_native_shared_bytes,
 }
 
+#[repr(C)]
+pub struct xcw_native_audio_sample {
+    pub timestamp_us: u64,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub data: xcw_native_shared_bytes,
+}
+
 #[allow(non_camel_case_types)]
 pub type xcw_native_frame_callback =
     unsafe extern "C" fn(frame: *const xcw_native_frame, user_data: *mut c_void);
+
+#[allow(non_camel_case_types)]
+pub type xcw_native_audio_callback =
+    unsafe extern "C" fn(sample: *const xcw_native_audio_sample, user_data: *mut c_void);
 
 unsafe extern "C" {
     pub fn simdeck_camera_list_webcams_json(error_message: *mut *mut c_char) -> *mut c_char;
@@ -350,6 +362,21 @@ unsafe extern "C" {
         error_message: *mut *mut c_char,
     ) -> bool;
     pub fn xcw_native_h264_encoder_request_keyframe(handle: *mut c_void);
+
+    pub fn xcw_native_audio_capture_create(
+        process_ids: *const i32,
+        process_count: usize,
+        callback: Option<xcw_native_audio_callback>,
+        user_data: *mut c_void,
+        error_message: *mut *mut c_char,
+    ) -> *mut c_void;
+    pub fn xcw_native_audio_capture_update_processes(
+        handle: *mut c_void,
+        process_ids: *const i32,
+        process_count: usize,
+        error_message: *mut *mut c_char,
+    ) -> bool;
+    pub fn xcw_native_audio_capture_destroy(handle: *mut c_void);
 
     pub fn xcw_native_free_string(value: *mut c_char);
     pub fn xcw_native_free_bytes(bytes: xcw_native_owned_bytes);

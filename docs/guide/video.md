@@ -4,6 +4,10 @@ SimDeck streams live device video to the browser. Local sessions default to high
 
 iOS simulator H.264 uses VideoToolbox for hardware encoding and x264 for software encoding.
 
+WebRTC streams also include simulator audio. The browser menu exposes a Sound
+toggle so viewers can keep playback muted until they want to hear the device.
+H.264 WebSocket fallback remains video-only.
+
 ## When encoding runs
 
 SimDeck starts encoding when a browser stream needs H.264 frames. The server
@@ -72,6 +76,17 @@ simdeck service restart --video-codec software --low-latency
 ## WebRTC and fallback
 
 The browser tries WebRTC first. If WebRTC cannot render a frame, the UI can fall back to H.264 over WebSocket when the browser supports WebCodecs.
+
+Audio is carried on the WebRTC path using a browser-compatible PCMU track. On
+macOS 14.2 and newer, SimDeck uses Core Audio process taps over the selected
+simulator or emulator process tree, then routes that tap through a private
+aggregate device into the WebRTC audio track. If macOS has not granted system
+audio recording access, video still streams and the server logs the
+audio-capture failure. While the tap is being read, Core Audio mutes the tapped
+simulator process at the hardware output; browser playback is controlled by the
+Sound toggle. Android emulators launched by SimDeck are started with host audio
+enabled, so restart older no-audio emulator processes before testing Android
+sound.
 
 Force a mode while debugging:
 
