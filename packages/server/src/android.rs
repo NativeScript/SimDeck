@@ -319,16 +319,22 @@ impl AndroidBridge {
             return Ok(false);
         }
         let grpc_port = self.grpc_port_for_avd(&avd_name)?;
+        let grpc_port = grpc_port.to_string();
+        let window_mode = if cfg!(target_os = "windows") {
+            "-qt-hide-window"
+        } else {
+            "-no-window"
+        };
         Command::new(self.emulator_path())
             .args([
                 "-avd",
                 &avd_name,
-                "-no-window",
+                window_mode,
                 "-no-audio",
                 "-gpu",
                 "swiftshader_indirect",
                 "-grpc",
-                &grpc_port.to_string(),
+                &grpc_port,
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::null())

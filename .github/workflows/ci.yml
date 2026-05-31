@@ -375,9 +375,9 @@ jobs:
           $avdmanager = Join-Path $toolsBin "avdmanager.bat"
           $adb = Join-Path $sdk "platform-tools\adb.exe"
           $emulator = Join-Path $sdk "emulator\emulator.exe"
-          $windowsApi = "30"
+          $windowsApi = "35"
           $windowsPlatform = "platforms;android-$windowsApi"
-          $windowsSystemImage = "system-images;android-$windowsApi;google_apis;x86_64"
+          $windowsSystemImage = "system-images;android-$windowsApi;google_atd;x86_64"
 
           $yesFile = Join-Path $env:RUNNER_TEMP "android-sdk-yes.txt"
           1..200 | ForEach-Object { "y" } | Set-Content -Path $yesFile -Encoding ascii
@@ -410,15 +410,22 @@ jobs:
           $stderr = Join-Path $env:RUNNER_TEMP "simdeck-android-emulator.err.log"
           $args = @(
             "-avd", "SimDeck_Pixel_CI",
-            "-no-window",
+            "-qt-hide-window",
             "-no-audio",
             "-no-boot-anim",
-            "-no-snapshot",
+            "-no-snapshot-load",
+            "-no-snapshot-save",
+            "-wipe-data",
             "-gpu", "swiftshader_indirect",
             "-grpc", "8554",
             "-port", "5554",
             "-no-metrics",
-            "-skip-adb-auth"
+            "-skip-adb-auth",
+            "-camera-back", "none",
+            "-camera-front", "none",
+            "-cores", "2",
+            "-memory", "2048",
+            "-verbose"
           )
           if ($accelSupported) {
             $args += @("-accel", "on")
