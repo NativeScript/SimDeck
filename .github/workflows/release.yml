@@ -19,6 +19,7 @@
 #
 # Repository secrets / vars:
 #   VSCE_PAT      (only required when publishing simdeck-vscode)
+#   APPLE_TEAM_ID (required when publishing simdeck)
 #
 # Tag scheme:
 #   <slug>-v<version>        e.g. simdeck-v0.2.0
@@ -289,23 +290,37 @@ jobs:
         env:
           HAS_CERT: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
           HAS_NOTARY: ${{ secrets.APPLE_NOTARY_KEY_BASE64 != '' }}
-          HAS_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY != '' }}
+          HAS_TEAM_ID: ${{ vars.APPLE_TEAM_ID != '' }}
+          IS_DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -euo pipefail
-          if [[ "$HAS_CERT" == "true" && "$HAS_NOTARY" == "true" && "$HAS_IDENTITY" == "true" ]]; then
+
+          missing=()
+          [[ "$HAS_CERT" == "true" ]] || missing+=("APPLE_CERT_P12_BASE64")
+          [[ "$HAS_NOTARY" == "true" ]] || missing+=("APPLE_NOTARY_KEY_BASE64")
+          [[ "$HAS_TEAM_ID" == "true" ]] || missing+=("APPLE_TEAM_ID")
+
+          if [[ "${#missing[@]}" -eq 0 ]]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
             echo "Apple signing + notarization enabled."
+          elif [[ "$IS_DRY_RUN" == "true" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Apple signing secrets/vars missing for dry-run: ${missing[*]}"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Apple signing secrets/vars missing in this environment. The published binary will be UNSIGNED."
+            echo "::error::Apple signing secrets/vars missing: ${missing[*]}"
+            echo "Refusing to publish an unsigned SimDeck native binary."
+            exit 1
           fi
 
       - name: Setup signing keychain
         if: ${{ steps.signing.outputs.enabled == 'true' }}
+        id: signing_keychain
         shell: bash
         env:
           APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
           APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
 
@@ -336,13 +351,32 @@ jobs:
           rm -f "$CERT_PATH"
 
           echo "Signing keychain ready at $KEYCHAIN_PATH"
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          IDENTITY_REPORT="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH")"
+          echo "$IDENTITY_REPORT"
+
+          SIGNING_IDENTITY="$(
+            printf '%s\n' "$IDENTITY_REPORT" |
+              awk -v team="(${APPLE_TEAM_ID})" '
+                $0 ~ /"Developer ID Application:/ && index($0, team) {
+                  print $2
+                  exit
+                }
+              '
+          )"
+
+          if [[ -z "$SIGNING_IDENTITY" ]]; then
+            echo "::error::No Developer ID Application identity for team ${APPLE_TEAM_ID} was found in the imported certificate." >&2
+            exit 1
+          fi
+
+          echo "Using Developer ID Application identity for team ${APPLE_TEAM_ID}: ${SIGNING_IDENTITY}"
+          echo "identity=$SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
 
       - name: Codesign simdeck binary
         if: ${{ steps.signing.outputs.enabled == 'true' }}
         shell: bash
         env:
-          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.signing_keychain.outputs.identity }}
         run: |
           set -euo pipefail
 
@@ -449,7 +483,7 @@ jobs:
             rm -f "$NPM_CONFIG_USERCONFIG" || true
           fi
           cd "$PKG_DIR"
-          npm publish --provenance --access public --tag "$DIST_TAG" --dry-run
+          npm publish --ignore-scripts --provenance --access public --tag "$DIST_TAG" --dry-run
 
       - name: Publish to npm (OIDC)
         if: ${{ !inputs.dry-run && (steps.meta.outputs.kind == 'npm' || steps.meta.outputs.kind == 'npm-cli') }}
@@ -468,7 +502,7 @@ jobs:
             rm -f "$NPM_CONFIG_USERCONFIG" || true
           fi
           cd "$PKG_DIR"
-          npm publish --provenance --access public --tag "$DIST_TAG"
+          npm publish --ignore-scripts --provenance --access public --tag "$DIST_TAG"
 
       # ---------- Publish (VS Code Marketplace) ----------
 
