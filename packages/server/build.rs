@@ -9,8 +9,8 @@ fn main() {
         println!("cargo:rerun-if-changed={}", stub.display());
         cc::Build::new()
             .file(&stub)
-            .flag("-Wall")
-            .flag("-Wextra")
+            .flag_if_supported("-Wall")
+            .flag_if_supported("-Wextra")
             .compile("xcw_native_bridge");
         return;
     }
@@ -42,8 +42,8 @@ fn main() {
         .include(&native)
         .flag("-fobjc-arc")
         .flag("-fmodules")
-        .flag("-Wall")
-        .flag("-Wextra");
+        .flag_if_supported("-Wall")
+        .flag_if_supported("-Wextra");
     apply_pkg_config_compile_flags(&mut build, &x264_flags);
 
     for file in &files {

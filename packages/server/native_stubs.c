@@ -2,7 +2,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <time.h>
+#endif
 
 typedef struct {
   uint8_t *data;
@@ -65,6 +69,9 @@ void xcw_native_run_main_loop_slice(double duration_seconds) {
   if (duration_seconds <= 0.0) {
     return;
   }
+#ifdef _WIN32
+  Sleep((DWORD)(duration_seconds * 1000.0));
+#else
   time_t seconds = (time_t)duration_seconds;
   long nanos = (long)((duration_seconds - (double)seconds) * 1000000000.0);
   if (nanos < 0) {
@@ -72,6 +79,7 @@ void xcw_native_run_main_loop_slice(double duration_seconds) {
   }
   struct timespec delay = {.tv_sec = seconds, .tv_nsec = nanos};
   nanosleep(&delay, NULL);
+#endif
 }
 
 char *simdeck_camera_list_webcams_json(char **error_message) {

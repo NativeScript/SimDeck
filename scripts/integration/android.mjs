@@ -7,7 +7,7 @@ import path from "node:path";
 import { connect } from "simdeck/test";
 
 const root = path.resolve(new URL("../..", import.meta.url).pathname);
-const simdeck = path.join(root, "build", "simdeck");
+const simdeck = resolveSimDeckCli();
 const verbose = process.env.SIMDECK_INTEGRATION_VERBOSE === "1";
 const keepAndroid = process.env.SIMDECK_INTEGRATION_KEEP_ANDROID === "1";
 const bootAndroid = process.env.SIMDECK_INTEGRATION_BOOT_ANDROID === "1";
@@ -509,16 +509,45 @@ function androidSdkTool(relativePath) {
   const roots = [
     process.env.ANDROID_HOME,
     process.env.ANDROID_SDK_ROOT,
+    process.platform === "win32"
+      ? path.join(os.homedir(), "AppData", "Local", "Android", "Sdk")
+      : null,
     path.join(os.homedir(), "Library", "Android", "sdk"),
     path.join(os.homedir(), "Android", "Sdk"),
   ].filter(Boolean);
   for (const root of roots) {
-    const candidate = path.join(root, relativePath);
+    const candidate = androidSdkToolCandidate(root, relativePath);
     if (fs.existsSync(candidate)) {
       return candidate;
     }
   }
   return null;
+}
+
+function resolveSimDeckCli() {
+  const candidates =
+    process.platform === "win32"
+      ? ["simdeck-bin.exe", "simdeck-bin-win32-x64.exe", "simdeck"]
+      : ["simdeck", "simdeck-bin"];
+  for (const candidate of candidates) {
+    const absolute = path.join(root, "build", candidate);
+    if (fs.existsSync(absolute)) {
+      return absolute;
+    }
+  }
+  return path.join(
+    root,
+    "build",
+    process.platform === "win32" ? "simdeck-bin.exe" : "simdeck",
+  );
+}
+
+function androidSdkToolCandidate(root, relativePath) {
+  const candidate = path.join(root, relativePath);
+  if (process.platform !== "win32" || path.extname(candidate)) {
+    return candidate;
+  }
+  return `${candidate}.exe`;
 }
 
 function simulatorList(payload) {

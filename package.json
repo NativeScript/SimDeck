@@ -24,6 +24,7 @@
     "build/simdeck-bin-darwin-x64",
     "build/simdeck-bin-linux-arm64",
     "build/simdeck-bin-linux-x64",
+    "build/simdeck-bin-win32-x64.exe",
     "packages/client/dist/",
     "packages/simdeck-test/dist/"
   ],
@@ -39,7 +40,8 @@
   },
   "os": [
     "darwin",
-    "linux"
+    "linux",
+    "win32"
   ],
   "cpu": [
     "arm64",
@@ -49,7 +51,7 @@
     "access": "public"
   },
   "scripts": {
-    "build:cli": "scripts/build-cli.sh",
+    "build:cli": "node scripts/build-cli.mjs",
     "build:client": "scripts/build-client.sh",
     "build:app": "npm run build:cli && npm run build:client",
     "build:inspectors": "npm run build:nativescript-inspector && npm run build:react-native-inspector",

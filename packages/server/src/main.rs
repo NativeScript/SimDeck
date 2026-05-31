@@ -17,7 +17,64 @@ mod service;
 mod simulators;
 mod static_files;
 mod transport;
+#[cfg(target_os = "macos")]
 mod webkit;
+#[cfg(not(target_os = "macos"))]
+mod webkit {
+    use crate::error::AppError;
+    use axum::extract::ws::WebSocket;
+    use serde::Serialize;
+    use std::path::PathBuf;
+
+    #[derive(Clone, Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WebKitTarget {
+        pub id: String,
+        pub app_id: String,
+        pub app_name: Option<String>,
+        pub app_active: bool,
+        pub page_active: bool,
+        pub page_id: u64,
+        pub title: Option<String>,
+        pub url: Option<String>,
+        pub kind: String,
+        pub inspector_url: String,
+        pub web_socket_url: String,
+    }
+
+    #[derive(Clone, Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WebKitTargetDiscovery {
+        pub udid: String,
+        pub socket_path: Option<String>,
+        pub targets: Vec<WebKitTarget>,
+        pub warnings: Vec<String>,
+    }
+
+    pub async fn discover_targets(
+        udid: &str,
+        _http_origin: Option<&str>,
+    ) -> Result<WebKitTargetDiscovery, AppError> {
+        Ok(WebKitTargetDiscovery {
+            udid: udid.to_owned(),
+            socket_path: None,
+            targets: Vec::new(),
+            warnings: vec![
+                "WebKit inspection is only available for iOS simulators on macOS.".to_owned(),
+            ],
+        })
+    }
+
+    pub async fn attach_websocket(_udid: String, _target_id: String, _socket: WebSocket) {}
+
+    pub fn webkit_inspector_ui_root() -> Option<PathBuf> {
+        None
+    }
+
+    pub fn inject_frontend_host(main_html: &str) -> String {
+        main_html.to_owned()
+    }
+}
 
 use accessibility::{interactive_accessibility_snapshot, AccessibilitySource};
 use anyhow::Context;
@@ -1279,6 +1336,7 @@ fn start_project_service(options: ServiceLaunchOptions) -> anyhow::Result<Servic
     let log_stderr = log_stdout
         .try_clone()
         .with_context(|| format!("clone service log {}", log_path.display()))?;
+    #[cfg(unix)]
     let supervisor_script = format!(
         r#"terminating=0
 trap 'terminating=1; if [ -n "$child" ]; then kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; fi' TERM INT HUP
@@ -1303,7 +1361,9 @@ done
         recoverable_restart_exit_code = RECOVERABLE_RESTART_EXIT_CODE
     );
 
+    #[cfg(unix)]
     let mut command = ProcessCommand::new("/bin/sh");
+    #[cfg(unix)]
     command
         .arg("-c")
         .arg(supervisor_script)
@@ -1318,6 +1378,19 @@ done
                 "0"
             },
         );
+    #[cfg(not(unix))]
+    let mut command = {
+        let mut command = ProcessCommand::new(&executable);
+        command.args(&args).env(
+            "SIMDECK_REALTIME_STREAM",
+            if options.realtime_stream || options.stream_quality_profile.is_some() {
+                "1"
+            } else {
+                "0"
+            },
+        );
+        command
+    };
     if let Some(local_stream_fps) = options.local_stream_fps {
         command.env("SIMDECK_LOCAL_STREAM_FPS", local_stream_fps.to_string());
     }

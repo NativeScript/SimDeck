@@ -1,4 +1,5 @@
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
 use std::ffi::CStr;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -78,27 +79,39 @@ impl ServerKind {
 }
 
 fn local_host_name() -> String {
+    platform_host_name()
+        .and_then(|value| {
+            value
+                .trim()
+                .trim_end_matches(".local")
+                .trim_end_matches('.')
+                .split('.')
+                .next()
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "localhost".to_owned())
+}
+
+#[cfg(unix)]
+fn platform_host_name() -> Option<String> {
     let mut buffer = [0 as libc::c_char; 256];
-    let name = unsafe {
+    unsafe {
         if libc::gethostname(buffer.as_mut_ptr(), buffer.len()) != 0 {
             None
         } else {
             buffer[buffer.len() - 1] = 0;
             CStr::from_ptr(buffer.as_ptr()).to_str().ok()
         }
-    };
+    }
+    .map(ToOwned::to_owned)
+}
 
-    name.and_then(|value| {
-        value
-            .trim()
-            .trim_end_matches(".local")
-            .trim_end_matches('.')
-            .split('.')
-            .next()
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    })
-    .unwrap_or_else(|| "localhost".to_owned())
+#[cfg(not(unix))]
+fn platform_host_name() -> Option<String> {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
 }
 
 fn host_identity(host_name: &str) -> String {

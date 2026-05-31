@@ -27,6 +27,7 @@ pub struct ServiceInstallResult {
 }
 
 pub fn enable(mut options: ServiceOptions) -> anyhow::Result<()> {
+    ensure_launch_agent_supported()?;
     preserve_or_create_credentials(&mut options);
     if let Some(result) = reuse_running_service_if_matching(&options)? {
         return print_install_result(&result);
@@ -36,18 +37,21 @@ pub fn enable(mut options: ServiceOptions) -> anyhow::Result<()> {
 }
 
 pub fn restart(mut options: ServiceOptions) -> anyhow::Result<()> {
+    ensure_launch_agent_supported()?;
     preserve_or_create_credentials(&mut options);
     let result = install(options)?;
     print_install_result(&result)
 }
 
 pub fn reset(mut options: ServiceOptions) -> anyhow::Result<()> {
+    ensure_launch_agent_supported()?;
     reset_credentials(&mut options);
     let result = install(options)?;
     print_install_result(&result)
 }
 
 pub fn pair(mut options: ServiceOptions) -> anyhow::Result<ServiceInstallResult> {
+    ensure_launch_agent_supported()?;
     preserve_or_create_credentials(&mut options);
     if let Some(result) = reuse_running_service_if_matching(&options)? {
         return Ok(result);
@@ -94,10 +98,16 @@ fn apply_credentials(
 }
 
 pub fn installed_port() -> anyhow::Result<Option<u16>> {
+    if !launch_agent_supported() {
+        return Ok(None);
+    }
     Ok(installed_argument_value("--port")?.and_then(|value| value.parse::<u16>().ok()))
 }
 
 pub fn active() -> anyhow::Result<Option<ServiceInstallResult>> {
+    if !launch_agent_supported() {
+        return Ok(None);
+    }
     let domain = launchctl_domain()?;
     if launchagent_pid(&domain, SERVICE_LABEL).is_none() {
         return Ok(None);
@@ -191,6 +201,7 @@ fn print_install_result(result: &ServiceInstallResult) -> anyhow::Result<()> {
 }
 
 pub fn disable() -> anyhow::Result<()> {
+    ensure_launch_agent_supported()?;
     let plist_path = plist_path()?;
     let _ = kill_installed()?;
 
@@ -206,6 +217,7 @@ pub fn disable() -> anyhow::Result<()> {
 }
 
 pub fn kill_installed() -> anyhow::Result<Vec<u32>> {
+    ensure_launch_agent_supported()?;
     let domain = launchctl_domain()?;
     let killed = unload_existing_services(&domain)?;
     for path in service_plist_paths()? {
@@ -214,6 +226,18 @@ pub fn kill_installed() -> anyhow::Result<Vec<u32>> {
         }
     }
     Ok(killed)
+}
+
+fn launch_agent_supported() -> bool {
+    cfg!(target_os = "macos")
+}
+
+fn ensure_launch_agent_supported() -> anyhow::Result<()> {
+    if launch_agent_supported() {
+        Ok(())
+    } else {
+        bail!("SimDeck persistent LaunchAgent services are only available on macOS.")
+    }
 }
 
 fn plist_path() -> anyhow::Result<PathBuf> {
