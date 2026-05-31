@@ -4,6 +4,10 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import {
+  activationRecoveryReason,
+  shouldRecycleSimulatorForFixtureLaunch,
+} from "./activation-recovery.mjs";
 import { buildCachedFixtureApp } from "./fixture.mjs";
 import { selectIntegrationSimulator } from "./simulator-selection.mjs";
 
@@ -91,15 +95,7 @@ async function main() {
     bundleId: fixtureBundleId,
     urlScheme: fixtureUrlScheme,
   });
-  simdeckJson(["install", simulatorUDID, fixture.appPath], {
-    timeoutMs: 60_000,
-  });
-  simdeckJson(["launch", simulatorUDID, fixtureBundleId], {
-    timeoutMs: 180_000,
-  });
-  simdeckJson(["open-url", simulatorUDID, fixtureAnimateUrl], {
-    timeoutMs: 30_000,
-  });
+  await launchFixtureWithRecovery(fixture.appPath);
 
   const screenshotPath = path.join(tempRoot, "reference.png");
   simdeckJson(["screenshot", simulatorUDID, "--output", screenshotPath], {
@@ -188,6 +184,83 @@ async function waitForHealth() {
     await sleep(100);
   }
   throw new Error(`Timed out waiting for ${serverUrl}/api/health`);
+}
+
+async function launchFixtureWithRecovery(appPath, options = {}) {
+  const recoveryCount = options.recoveryCount ?? 0;
+  const maxRecoveries = options.maxRecoveries ?? 1;
+
+  simdeckJson(["install", simulatorUDID, appPath], {
+    timeoutMs: 60_000,
+  });
+
+  let launchError = null;
+  try {
+    simdeckJson(["launch", simulatorUDID, fixtureBundleId], {
+      timeoutMs: 180_000,
+    });
+  } catch (error) {
+    launchError = error;
+  }
+
+  let urlError = null;
+  if (launchError === null) {
+    try {
+      simdeckJson(["open-url", simulatorUDID, fixtureAnimateUrl], {
+        timeoutMs: 60_000,
+      });
+      return;
+    } catch (error) {
+      urlError = error;
+    }
+  }
+
+  if (
+    !shouldRecycleSimulatorForFixtureLaunch({
+      launchError,
+      urlError,
+      recoveryCount,
+      maxRecoveries,
+    })
+  ) {
+    throw urlError ?? launchError;
+  }
+
+  console.warn(
+    `WebRTC fixture activation hit ${activationRecoveryReason({
+      launchError,
+      urlError,
+    })}; recycling simulator and retrying once.`,
+  );
+  await recycleSimulatorForFixtureLaunch();
+  return launchFixtureWithRecovery(appPath, {
+    recoveryCount: recoveryCount + 1,
+    maxRecoveries,
+  });
+}
+
+async function recycleSimulatorForFixtureLaunch() {
+  try {
+    simdeckJson(["shutdown", simulatorUDID], {
+      timeoutMs: 180_000,
+    });
+  } catch (error) {
+    console.warn(
+      `WebRTC fixture recovery shutdown failed; continuing with boot: ${error?.message ?? error}`,
+    );
+  }
+  await retrySimdeckJson(
+    ["boot", simulatorUDID],
+    "WebRTC fixture recovery boot",
+    {
+      attempts: 3,
+      delayMs: 3_000,
+      timeoutMs: simdeckBootTimeoutMs,
+    },
+  );
+  runText("xcrun", ["simctl", "bootstatus", simulatorUDID, "-b"], {
+    timeoutMs: 600_000,
+  });
 }
 
 function simdeckJson(args, options = {}) {
