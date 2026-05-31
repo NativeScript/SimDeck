@@ -99,6 +99,11 @@ test("Windows Android CI boot path is bounded and diagnostic", () => {
 });
 
 test("Android integration runner resolves Windows executables", () => {
+  assert.match(androidIntegration, /fileURLToPath/);
+  assert.doesNotMatch(
+    androidIntegration,
+    /new URL\("\.\.\/\.\.", import\.meta\.url\)\.pathname/,
+  );
   assert.match(androidIntegration, /simdeck-bin\.exe/);
   assert.match(androidIntegration, /simdeck-bin-win32-x64\.exe/);
   assert.match(androidIntegration, /AppData", "Local", "Android", "Sdk/);

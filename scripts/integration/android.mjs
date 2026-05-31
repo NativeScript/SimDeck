@@ -4,9 +4,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { connect } from "simdeck/test";
 
-const root = path.resolve(new URL("../..", import.meta.url).pathname);
+const root = fileURLToPath(new URL("../..", import.meta.url));
 const simdeck = resolveSimDeckCli();
 const verbose = process.env.SIMDECK_INTEGRATION_VERBOSE === "1";
 const keepAndroid = process.env.SIMDECK_INTEGRATION_KEEP_ANDROID === "1";
