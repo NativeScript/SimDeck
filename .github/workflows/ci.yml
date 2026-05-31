@@ -408,6 +408,7 @@ jobs:
 
           $stdout = Join-Path $env:RUNNER_TEMP "simdeck-android-emulator.out.log"
           $stderr = Join-Path $env:RUNNER_TEMP "simdeck-android-emulator.err.log"
+          $serial = "emulator-5554"
           $args = @(
             "-avd", "SimDeck_Pixel_CI",
             "-qt-hide-window",
@@ -456,7 +457,7 @@ jobs:
               throw "Android emulator exited early with code $($process.ExitCode)."
             }
             $devices = (& $adb devices)
-            if ($devices -match "emulator-5554\s+(device|offline)") {
+            if ($devices -match "$serial\s+device") {
               $deviceSeen = $true
               break
             }
@@ -472,7 +473,7 @@ jobs:
               Write-EmulatorDiagnostics
               throw "Android emulator exited early with code $($process.ExitCode)."
             }
-            $booted = (& $adb shell getprop sys.boot_completed).Trim()
+            $booted = (& $adb -s $serial shell getprop sys.boot_completed 2>$null | Out-String).Trim()
             if ($booted -eq "1") {
               break
             }
@@ -482,9 +483,9 @@ jobs:
             Write-EmulatorDiagnostics
             throw "Android emulator did not boot before the timeout."
           }
-          & $adb shell settings put global window_animation_scale 0
-          & $adb shell settings put global transition_animation_scale 0
-          & $adb shell settings put global animator_duration_scale 0
+          & $adb -s $serial shell settings put global window_animation_scale 0
+          & $adb -s $serial shell settings put global transition_animation_scale 0
+          & $adb -s $serial shell settings put global animator_duration_scale 0
 
       - name: Android emulator integration tests (Windows)
         if: runner.os == 'Windows'

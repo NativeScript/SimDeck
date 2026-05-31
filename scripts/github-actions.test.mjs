@@ -86,6 +86,9 @@ test("Windows Android CI boot path is bounded and diagnostic", () => {
   assert.match(windowsBootStep, /"-feature", "-Vulkan"/);
   assert.match(windowsBootStep, /"-accel", "on"/);
   assert.match(windowsBootStep, /"-accel", "off"/);
+  assert.match(windowsBootStep, /\$serial = "emulator-5554"/);
+  assert.match(windowsBootStep, /\$devices -match "\$serial\\s\+device"/);
+  assert.doesNotMatch(windowsBootStep, /device\|offline/);
   assert.match(windowsBootStep, /-RedirectStandardOutput \$stdout/);
   assert.match(windowsBootStep, /Write-EmulatorDiagnostics/);
   assert.match(
