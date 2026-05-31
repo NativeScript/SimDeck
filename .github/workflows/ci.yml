@@ -346,7 +346,7 @@ jobs:
           SIMDECK_INTEGRATION_REQUIRE_RUNNING_ANDROID: "1"
           SIMDECK_INTEGRATION_VERBOSE: "1"
 
-      - name: Create and boot Android emulator (Windows)
+      - name: Create, boot, and test Android emulator (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         timeout-minutes: 45
@@ -486,14 +486,14 @@ jobs:
           & $adb -s $serial shell settings put global window_animation_scale 0
           & $adb -s $serial shell settings put global transition_animation_scale 0
           & $adb -s $serial shell settings put global animator_duration_scale 0
-
-      - name: Android emulator integration tests (Windows)
-        if: runner.os == 'Windows'
-        run: npm run test:integration:android
-        env:
-          SIMDECK_INTEGRATION_ANDROID_AVD: SimDeck_Pixel_CI
-          SIMDECK_INTEGRATION_REQUIRE_RUNNING_ANDROID: "1"
-          SIMDECK_INTEGRATION_VERBOSE: "1"
+          $env:SIMDECK_INTEGRATION_ANDROID_AVD = "SimDeck_Pixel_CI"
+          $env:SIMDECK_INTEGRATION_REQUIRE_RUNNING_ANDROID = "1"
+          $env:SIMDECK_INTEGRATION_VERBOSE = "1"
+          npm run test:integration:android
+          if ($LASTEXITCODE -ne 0) {
+            Write-EmulatorDiagnostics
+            throw "Android integration tests failed with exit code $LASTEXITCODE."
+          }
 
       - name: Stop Android emulator (Windows)
         if: always() && runner.os == 'Windows'

@@ -76,8 +76,8 @@ test("CI runs Android emulator integration on Linux and Windows", () => {
 test("Windows Android CI boot path is bounded and diagnostic", () => {
   const windowsBootStep = stepSlice(
     ciWorkflow,
-    "Create and boot Android emulator (Windows)",
-    "Android emulator integration tests (Windows)",
+    "Create, boot, and test Android emulator (Windows)",
+    "Stop Android emulator (Windows)",
   );
 
   assert.match(windowsBootStep, /\$accelSupported = \$LASTEXITCODE -eq 0/);
@@ -95,6 +95,11 @@ test("Windows Android CI boot path is bounded and diagnostic", () => {
     windowsBootStep,
     /deviceDeadline = \(Get-Date\)\.AddMinutes\(10\)/,
   );
+  assert.match(
+    windowsBootStep,
+    /\$env:SIMDECK_INTEGRATION_REQUIRE_RUNNING_ANDROID = "1"/,
+  );
+  assert.match(windowsBootStep, /npm run test:integration:android/);
   assert.doesNotMatch(windowsBootStep, /wait-for-device/);
 });
 
