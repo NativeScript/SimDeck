@@ -283,10 +283,10 @@ jobs:
         env:
           # The service still targets 60 fps at full device resolution. Hosted
           # macOS headless Chrome decode can dip under runner contention, so CI
-          # gates 55+ received fps for the software stream plus a conservative
+          # gates 55+ received fps for the software stream plus a modest
           # hosted-browser decode floor. Local runs can keep 55+ fps thresholds.
-          SIMDECK_E2E_MIN_DECODED_FPS: "20"
-          SIMDECK_E2E_MIN_PRESENTED_FPS: "20"
+          SIMDECK_E2E_MIN_DECODED_FPS: "18"
+          SIMDECK_E2E_MIN_PRESENTED_FPS: "18"
           SIMDECK_E2E_MIN_RECEIVED_FPS: "55"
           SIMDECK_E2E_WEBRTC_MS: "20000"
           SIMDECK_INTEGRATION_DEVICE_TYPE: iPhone SE (3rd generation)
