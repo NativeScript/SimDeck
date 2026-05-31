@@ -349,6 +349,7 @@ jobs:
       - name: Create and boot Android emulator (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        timeout-minutes: 30
         run: |
           $ErrorActionPreference = "Stop"
           $sdk = $env:ANDROID_HOME
@@ -375,12 +376,26 @@ jobs:
           $adb = Join-Path $sdk "platform-tools\adb.exe"
           $emulator = Join-Path $sdk "emulator\emulator.exe"
 
+          $yesFile = Join-Path $env:RUNNER_TEMP "android-sdk-yes.txt"
+          1..200 | ForEach-Object { "y" } | Set-Content -Path $yesFile -Encoding ascii
+          $noFile = Join-Path $env:RUNNER_TEMP "android-avd-no.txt"
+          "no" | Set-Content -Path $noFile -Encoding ascii
+
+          function Invoke-AndroidToolWithInput($tool, $arguments, $inputFile) {
+            $line = "`"$tool`" $arguments < `"$inputFile`""
+            Write-Host "cmd /c $line"
+            cmd /c $line
+            if ($LASTEXITCODE -ne 0) {
+              throw "$tool $arguments failed with exit code $LASTEXITCODE."
+            }
+          }
+
           Write-Host "Accepting Android SDK licenses"
-          1..100 | ForEach-Object { "y" } | & $sdkmanager --licenses
+          Invoke-AndroidToolWithInput $sdkmanager "--licenses" $yesFile
           Write-Host "Installing Android SDK emulator packages"
-          1..100 | ForEach-Object { "y" } | & $sdkmanager --install "platform-tools" "emulator" "platforms;android-35" "system-images;android-35;google_apis;x86_64"
+          Invoke-AndroidToolWithInput $sdkmanager "--install `"platform-tools`" `"emulator`" `"platforms;android-35`" `"system-images;android-35;google_apis;x86_64`"" $yesFile
           Write-Host "Creating Android AVD"
-          "no" | & $avdmanager create avd --force --name SimDeck_Pixel_CI --package "system-images;android-35;google_apis;x86_64" --device "pixel_6"
+          Invoke-AndroidToolWithInput $avdmanager "create avd --force --name SimDeck_Pixel_CI --package `"system-images;android-35;google_apis;x86_64`" --device `"pixel_6`"" $noFile
 
           $args = @(
             "-avd", "SimDeck_Pixel_CI",
