@@ -206,9 +206,15 @@ async function launchFixtureWithRecovery(appPath, options = {}) {
   let urlError = null;
   if (launchError === null) {
     try {
-      simdeckJson(["open-url", simulatorUDID, fixtureAnimateUrl], {
-        timeoutMs: 60_000,
-      });
+      await retrySimdeckJson(
+        ["open-url", simulatorUDID, fixtureAnimateUrl],
+        "WebRTC start fixture animation",
+        {
+          attempts: 3,
+          delayMs: 5_000,
+          timeoutMs: 180_000,
+        },
+      );
       return;
     } catch (error) {
       urlError = error;

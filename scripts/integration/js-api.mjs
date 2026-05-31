@@ -224,6 +224,7 @@ async function main() {
   await measuredStep("JS focus URL and type", async () => {
     await retryAsync(
       async () => {
+        await resolveKnownSystemPrompts("JS focus URL and type before focus");
         await session.tapElement(
           simulatorUDID,
           { id: "fixture.message" },
@@ -234,9 +235,12 @@ async function main() {
             durationMs: 30,
           },
         );
+        await resolveKnownSystemPrompts("JS focus URL and type after tap");
         await session.openUrl(simulatorUDID, fixtureFocusUrl);
+        await resolveKnownSystemPrompts("JS focus URL and type after open URL");
         await expectFixtureText("Message Focused", { timeoutMs: 20_000 });
         await sleep(1_000);
+        await resolveKnownSystemPrompts("JS focus URL and type before type");
         await session.batch(simulatorUDID, [
           { action: "type", text: "agent-ready", delayMs: 20 },
         ]);
@@ -360,6 +364,147 @@ async function expectElementContains(selector, text, options = {}) {
   }
   throw new Error(
     `Timed out waiting for fixture text ${JSON.stringify(text)}: ${last}`,
+  );
+}
+
+async function resolveKnownSystemPrompts(label) {
+  await resolveOpenUrlPrompt(label);
+  await resolveKeyboardTipPrompt(label);
+}
+
+async function resolveOpenUrlPrompt(label) {
+  const matches = await safeQuery({ label: "Open" }, { maxDepth: 6 });
+  if (matches.length === 0) {
+    return;
+  }
+  console.log(`[prompt] handling open-url prompt during ${label}`);
+  await session.tapElement(
+    simulatorUDID,
+    { label: "Open" },
+    {
+      source: "native-ax",
+      maxDepth: 6,
+      waitTimeoutMs: 2_000,
+      durationMs: 80,
+    },
+  );
+  await sleep(500);
+}
+
+async function resolveKeyboardTipPrompt(label) {
+  const snapshot = await safeQuery({}, { maxDepth: 8 });
+  if (!looksLikeKeyboardTipQuery(snapshot)) {
+    return;
+  }
+
+  console.log(`[prompt] handling keyboard-tip prompt during ${label}`);
+  const target = keyboardTipContinueTapTarget(snapshot);
+  if (target) {
+    await session.tap(simulatorUDID, target.x, target.y);
+  } else {
+    await session.tapElement(
+      simulatorUDID,
+      { label: "Continue" },
+      {
+        source: "native-ax",
+        maxDepth: 8,
+        waitTimeoutMs: 2_000,
+        durationMs: 80,
+      },
+    );
+  }
+  await sleep(500);
+}
+
+async function safeQuery(selector, options = {}) {
+  try {
+    return await session.query(simulatorUDID, selector, {
+      source: "native-ax",
+      ...options,
+    });
+  } catch {
+    return [];
+  }
+}
+
+function looksLikeKeyboardTipQuery(snapshot) {
+  const text = JSON.stringify(snapshot);
+  return /Speed up your typing/i.test(text) && /\bContinue\b/.test(text);
+}
+
+function keyboardTipContinueTapTarget(snapshot) {
+  const nodes = compactQueryNodes(snapshot);
+  const rootFrame = nodes
+    .map((node) => node.frame)
+    .filter(validFrame)
+    .sort((a, b) => b.width * b.height - a.width * a.height)[0];
+  const continueButton =
+    nodes.find(
+      (node) =>
+        node.label === "Continue" &&
+        node.id !== "fixture.continue" &&
+        String(node.role ?? "")
+          .toLowerCase()
+          .includes("button") &&
+        validFrame(node.frame),
+    ) ??
+    nodes.find(
+      (node) =>
+        node.label === "Continue" &&
+        String(node.role ?? "")
+          .toLowerCase()
+          .includes("button") &&
+        validFrame(node.frame),
+    );
+
+  if (!rootFrame || !continueButton?.frame) {
+    return null;
+  }
+
+  return {
+    x:
+      (continueButton.frame.x + continueButton.frame.width / 2 - rootFrame.x) /
+      rootFrame.width,
+    y:
+      (continueButton.frame.y + continueButton.frame.height / 2 - rootFrame.y) /
+      rootFrame.height,
+  };
+}
+
+function compactQueryNodes(snapshot) {
+  const nodes = [];
+  const visit = (node) => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (
+      "role" in node ||
+      "id" in node ||
+      "label" in node ||
+      "value" in node ||
+      "frame" in node
+    ) {
+      nodes.push(node);
+    }
+    for (const child of Array.isArray(node.children) ? node.children : []) {
+      visit(child);
+    }
+  };
+  for (const match of Array.isArray(snapshot) ? snapshot : []) {
+    visit(match);
+  }
+  return nodes;
+}
+
+function validFrame(frame) {
+  return (
+    frame &&
+    Number.isFinite(frame.x) &&
+    Number.isFinite(frame.y) &&
+    Number.isFinite(frame.width) &&
+    Number.isFinite(frame.height) &&
+    frame.width > 0 &&
+    frame.height > 0
   );
 }
 

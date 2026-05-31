@@ -853,9 +853,7 @@ export function DevToolsPanel({
     (isLoading || isWebKitLoading || isHoldingEmptyDiscovery);
   const effectivelyDisconnected =
     disconnected || error === NOT_CONNECTED_MESSAGE;
-  const chromeDevToolsBlocked = Boolean(
-    selectedTarget && isChromeTarget(selectedTarget) && isSafariBrowser(),
-  );
+  const chromeDevToolsBlocked = shouldBlockDevToolsHostBrowser(selectedTarget);
   const safariAutoWaiting = Boolean(
     selectedTarget &&
     isSafariAutoTarget(selectedTarget) &&
@@ -1192,7 +1190,7 @@ export function resolveDevToolsTargetSelection({
           pendingForegroundApp,
           currentTargetId,
         )
-      : isSafariForegroundApp(foregroundApp)
+      : foregroundApp
         ? highlyCompatibleTargetForForeground(
             targets,
             foregroundApp,
@@ -1308,6 +1306,15 @@ function foregroundCompatibilityScore(
 
   if (foregroundBundle && target.bundleIdentifier === foregroundBundle) {
     score = Math.max(score, target.source === "React Native Metro" ? 98 : 90);
+  }
+
+  if (
+    foregroundAppName &&
+    (target.appName === foregroundAppName ||
+      target.title === foregroundAppName ||
+      target.title.startsWith(`${foregroundAppName}:`))
+  ) {
+    score = Math.max(score, target.source === "React Native Metro" ? 94 : 86);
   }
 
   if (webKitMatchesForeground && target.appActive) {
@@ -1532,6 +1539,27 @@ function normalizedUrlHost(value: string): string {
 
 function isChromeTarget(target: DevToolsTarget): boolean {
   return target.id.startsWith("chrome:");
+}
+
+export function shouldBlockDevToolsHostBrowser(
+  target: DevToolsTarget | null,
+  safariHostBrowser = isSafariBrowser(),
+): boolean {
+  return Boolean(
+    target &&
+    safariHostBrowser &&
+    isChromeTarget(target) &&
+    !isMetroDevToolsTarget(target),
+  );
+}
+
+function isMetroDevToolsTarget(target: DevToolsTarget): boolean {
+  return (
+    target.source === "React Native Metro" ||
+    target.frameUrl.includes("/api/metro/") ||
+    target.frameUrl.includes("/rozenite/") ||
+    target.frameUrl.includes("/debugger-frontend/")
+  );
 }
 
 function isSafariAutoTarget(target: DevToolsTarget): boolean {

@@ -496,6 +496,26 @@ async fn fetch_devtools_json(host: &str, port: u16, path: &str) -> Result<Value,
         .map_err(|error| format!("DevTools {path} returned malformed JSON: {error}"))
 }
 
+async fn connect_loopback_devtools_service(
+    port: u16,
+    timeout_duration: Duration,
+    service_name: &str,
+) -> Result<(String, TcpStream), String> {
+    let mut errors = Vec::new();
+    for host in DEVTOOLS_DISCOVERY_HOSTS {
+        let address = format!("{host}:{port}");
+        match timeout(timeout_duration, TcpStream::connect(&address)).await {
+            Ok(Ok(stream)) => return Ok((address, stream)),
+            Ok(Err(error)) => errors.push(format!("{address}: {error}")),
+            Err(_) => errors.push(format!("{address}: timed out")),
+        }
+    }
+    Err(format!(
+        "Unable to connect to {service_name} on loopback port {port}: {}",
+        errors.join("; ")
+    ))
+}
+
 async fn candidate_devtools_ports() -> Vec<u16> {
     let mut ports = BTreeSet::new();
     ports.extend(COMMON_METRO_PORTS.iter().copied());
@@ -763,7 +783,7 @@ fn metro_devtools_frontend_url(port: u16, entry: &Value, web_socket_debugger_url
 }
 
 fn metro_frontend_proxy_base(port: u16, asset_path: &str) -> String {
-    format!("/api/metro-frontend/{port}{asset_path}")
+    format!("/api/metro/{port}{asset_path}")
 }
 
 fn metro_frontend_asset_path(frontend: Option<&str>) -> String {
@@ -793,6 +813,19 @@ pub fn is_metro_frontend_path(path: &str) -> bool {
     path.starts_with("/debugger-frontend/") || path.starts_with("/rozenite/")
 }
 
+pub fn is_metro_proxy_path(path: &str) -> bool {
+    path.starts_with('/')
+        && !path.starts_with("//")
+        && !path
+            .bytes()
+            .any(|byte| byte < 0x20 || byte == 0x7f || byte == b'\\')
+        && !path.split('/').any(|part| part == "..")
+}
+
+pub fn is_metro_proxy_method(method: &str) -> bool {
+    matches!(method, "GET" | "HEAD" | "POST")
+}
+
 fn metro_frontend_query_with_socket(query: Option<&str>, web_socket_debugger_url: &str) -> String {
     let socket_param = web_socket_debugger_url
         .trim_start_matches("ws://")
@@ -802,6 +835,7 @@ fn metro_frontend_query_with_socket(query: Option<&str>, web_socket_debugger_url
         percent_encode_query_component(socket_param)
     )];
     if let Some(query) = query {
+        let metadata_params = metro_frontend_metadata_params(query);
         params.extend(
             query
                 .split('&')
@@ -810,8 +844,54 @@ fn metro_frontend_query_with_socket(query: Option<&str>, web_socket_debugger_url
                 })
                 .map(ToOwned::to_owned),
         );
+        for (key, param) in metadata_params {
+            if !query_has_param(query, &key) {
+                params.push(param);
+            }
+        }
     }
     params.join("&")
+}
+
+fn metro_frontend_metadata_params(query: &str) -> Vec<(String, String)> {
+    query
+        .split('&')
+        .filter_map(|param| {
+            let (key, value) = param.split_once('=')?;
+            matches!(key, "ws" | "wss").then_some(value)
+        })
+        .flat_map(|value| {
+            let decoded = percent_decode_query_component(value);
+            split_path_query(&decoded)
+                .1
+                .map(metro_frontend_inspector_params)
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+fn metro_frontend_inspector_params(query: &str) -> Vec<(String, String)> {
+    query
+        .split('&')
+        .filter_map(|param| {
+            let (key, value) = param.split_once('=')?;
+            matches!(key, "device" | "page").then(|| {
+                (
+                    key.to_owned(),
+                    format!("{key}={}", percent_encode_query_component(value)),
+                )
+            })
+        })
+        .collect()
+}
+
+fn query_has_param(query: &str, needle: &str) -> bool {
+    query.split('&').any(|param| {
+        param
+            .split_once('=')
+            .map(|(key, _)| key == needle)
+            .unwrap_or(false)
+    })
 }
 
 fn websocket_path_with_access_token(path: String, access_token: Option<&str>) -> String {
@@ -828,33 +908,50 @@ fn websocket_path_with_access_token(path: String, access_token: Option<&str>) ->
     )
 }
 
-/// Reverse-proxies a single Metro DevTools frontend asset (`/debugger-frontend/*`
-/// or `/rozenite/*`) over the SimDeck origin. The upstream request omits the
-/// browser `Origin` so Metro's dev-middleware does not reject it.
-pub async fn fetch_metro_frontend_asset(
+/// Reverse-proxies a Metro HTTP path over the SimDeck origin. The upstream
+/// request omits the browser `Origin` so Metro's dev-middleware does not reject
+/// DevTools resources.
+pub async fn fetch_metro_resource(
     port: u16,
     path: &str,
     query: Option<&str>,
+    method: &str,
+    body: Option<&[u8]>,
+    content_type: Option<&str>,
 ) -> Result<ProxiedAsset, String> {
-    if !is_metro_frontend_path(path) {
-        return Err("Not a Metro DevTools frontend asset path.".to_owned());
+    if !is_metro_proxy_path(path) {
+        return Err("Not a safe Metro proxy path.".to_owned());
     }
-    let address = format!("{DEVTOOLS_HOST}:{port}");
+    if !is_metro_proxy_method(method) {
+        return Err("Not an allowed Metro proxy method.".to_owned());
+    }
     let target = match query {
         Some(query) => format!("{path}?{query}"),
         None => path.to_owned(),
     };
-    let mut stream = timeout(METRO_ASSET_TIMEOUT, TcpStream::connect(&address))
-        .await
-        .map_err(|_| format!("Timed out connecting to Metro at {address}."))?
-        .map_err(|error| format!("Unable to connect to Metro at {address}: {error}"))?;
-    let request = format!(
-        "GET {target} HTTP/1.1\r\nHost: {address}\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+    let body = body.unwrap_or(&[]);
+    let (address, mut stream) =
+        connect_loopback_devtools_service(port, METRO_ASSET_TIMEOUT, "Metro").await?;
+    let mut request = format!(
+        "{method} {target} HTTP/1.1\r\nHost: {address}\r\nAccept: */*\r\nConnection: close\r\n"
     );
+    if !body.is_empty() {
+        request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        if let Some(content_type) = content_type {
+            request.push_str(&format!("Content-Type: {content_type}\r\n"));
+        }
+    }
+    request.push_str("\r\n");
     timeout(METRO_ASSET_TIMEOUT, stream.write_all(request.as_bytes()))
         .await
         .map_err(|_| "Timed out requesting Metro asset.".to_owned())?
         .map_err(|error| format!("Unable to request Metro asset: {error}"))?;
+    if !body.is_empty() {
+        timeout(METRO_ASSET_TIMEOUT, stream.write_all(body))
+            .await
+            .map_err(|_| "Timed out writing Metro request body.".to_owned())?
+            .map_err(|error| format!("Unable to write Metro request body: {error}"))?;
+    }
 
     let mut response = Vec::new();
     let mut chunk = [0_u8; 16384];
@@ -884,10 +981,7 @@ pub async fn fetch_metro_frontend_asset(
         .and_then(|status| status.parse::<u16>().ok())
         .unwrap_or(0);
     let content_type = header_value(&headers, "content-type");
-    let body = content_length(&headers)
-        .and_then(|length| body.get(..length))
-        .unwrap_or(body)
-        .to_vec();
+    let body = decoded_http_body(&headers, body)?;
     Ok(ProxiedAsset {
         status,
         content_type,
@@ -901,6 +995,114 @@ pub struct ProxiedAsset {
     pub body: Vec<u8>,
 }
 
+pub fn rewrite_metro_proxy_asset(
+    port: u16,
+    asset_path: &str,
+    content_type: Option<&str>,
+    body: Vec<u8>,
+) -> Vec<u8> {
+    if !is_rewritable_metro_proxy_asset(asset_path, content_type) {
+        return body;
+    }
+
+    match String::from_utf8(body) {
+        Ok(text) => rewrite_metro_proxy_text(port, &text).into_bytes(),
+        Err(error) => error.into_bytes(),
+    }
+}
+
+fn is_rewritable_metro_proxy_asset(asset_path: &str, content_type: Option<&str>) -> bool {
+    let path = asset_path
+        .split_once('?')
+        .map(|(path, _)| path)
+        .unwrap_or(asset_path)
+        .to_ascii_lowercase();
+    if matches!(
+        Path::new(&path)
+            .extension()
+            .and_then(|extension| extension.to_str()),
+        Some("css" | "html" | "js" | "json" | "map" | "mjs")
+    ) {
+        return true;
+    }
+
+    let Some(content_type) = content_type else {
+        return false;
+    };
+    let media_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    media_type.starts_with("text/")
+        || matches!(
+            media_type.as_str(),
+            "application/ecmascript"
+                | "application/javascript"
+                | "application/json"
+                | "application/manifest+json"
+                | "application/x-javascript"
+        )
+}
+
+fn rewrite_metro_proxy_text(port: u16, text: &str) -> String {
+    let proxy_prefix = format!("/api/metro/{port}");
+    let text = rewrite_loopback_metro_origins(port, text, &proxy_prefix);
+    rewrite_absolute_metro_paths(&text, &proxy_prefix)
+}
+
+fn rewrite_loopback_metro_origins(port: u16, text: &str, proxy_prefix: &str) -> String {
+    [
+        format!("http://127.0.0.1:{port}"),
+        format!("http://localhost:{port}"),
+        format!("http://[::1]:{port}"),
+    ]
+    .into_iter()
+    .fold(text.to_owned(), |rewritten, origin| {
+        rewritten.replace(&origin, proxy_prefix)
+    })
+}
+
+fn rewrite_absolute_metro_paths(text: &str, proxy_prefix: &str) -> String {
+    let mut rewritten = String::with_capacity(text.len());
+    let mut index = 0;
+    while index < text.len() {
+        let remaining = &text[index..];
+        let metro_path = ["/rozenite/", "/debugger-frontend/"]
+            .into_iter()
+            .find(|prefix| remaining.starts_with(prefix));
+        if let Some(metro_path) = metro_path {
+            let previous = text[..index].chars().next_back();
+            if previous
+                .map(is_absolute_metro_path_boundary)
+                .unwrap_or(true)
+            {
+                rewritten.push_str(proxy_prefix);
+                rewritten.push_str(metro_path);
+                index += metro_path.len();
+                continue;
+            }
+        }
+
+        let character = remaining
+            .chars()
+            .next()
+            .expect("remaining text is non-empty");
+        rewritten.push(character);
+        index += character.len_utf8();
+    }
+    rewritten
+}
+
+fn is_absolute_metro_path_boundary(character: char) -> bool {
+    character.is_ascii_whitespace()
+        || matches!(
+            character,
+            '"' | '\'' | '`' | '(' | '[' | '{' | '=' | ':' | ',' | ';'
+        )
+}
+
 fn header_value(headers: &str, name: &str) -> Option<String> {
     headers.lines().find_map(|line| {
         let (key, value) = line.split_once(':')?;
@@ -908,6 +1110,44 @@ fn header_value(headers: &str, name: &str) -> Option<String> {
             .eq_ignore_ascii_case(name)
             .then(|| value.trim().to_owned())
     })
+}
+
+fn decoded_http_body(headers: &str, body: &[u8]) -> Result<Vec<u8>, String> {
+    if header_value(headers, "transfer-encoding").is_some_and(|value| {
+        value
+            .split(',')
+            .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
+    }) {
+        return decode_chunked_body(body);
+    }
+    Ok(content_length(headers)
+        .and_then(|length| body.get(..length))
+        .unwrap_or(body)
+        .to_vec())
+}
+
+fn decode_chunked_body(mut body: &[u8]) -> Result<Vec<u8>, String> {
+    let mut decoded = Vec::new();
+    loop {
+        let line_end = body
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .ok_or_else(|| "Metro returned malformed chunked HTTP.".to_owned())?;
+        let size_line = std::str::from_utf8(&body[..line_end])
+            .map_err(|_| "Metro returned non-UTF-8 chunk metadata.".to_owned())?;
+        let size_text = size_line.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_text, 16)
+            .map_err(|_| "Metro returned invalid chunk size.".to_owned())?;
+        body = &body[line_end + 2..];
+        if size == 0 {
+            return Ok(decoded);
+        }
+        if body.len() < size + 2 || body.get(size..size + 2) != Some(b"\r\n") {
+            return Err("Metro returned truncated chunked HTTP.".to_owned());
+        }
+        decoded.extend_from_slice(&body[..size]);
+        body = &body[size + 2..];
+    }
 }
 
 fn split_path_query(value: &str) -> (&str, Option<&str>) {
@@ -953,6 +1193,39 @@ fn percent_encode_query_component(value: &str) -> String {
         }
     }
     encoded
+}
+
+fn percent_decode_query_component(value: &str) -> String {
+    let mut decoded = Vec::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = hex_value(bytes[index + 1]);
+            let low = hex_value(bytes[index + 2]);
+            if let (Some(high), Some(low)) = (high, low) {
+                decoded.push((high << 4) | low);
+                index += 3;
+                continue;
+            }
+        }
+        if bytes[index] == b'+' {
+            decoded.push(b' ');
+        } else {
+            decoded.push(bytes[index]);
+        }
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn unique_strings(values: Vec<String>) -> Vec<String> {
@@ -1772,6 +2045,7 @@ fn timestamp_ms() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::TcpListener;
 
     #[test]
     fn upstream_websocket_origin_matches_metro_dev_server() {
@@ -1801,7 +2075,26 @@ mod tests {
 
         assert_eq!(
             url,
-            "/api/metro-frontend/8081/rozenite/rn_fusebox.html?ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket&device=ios"
+            "/api/metro/8081/rozenite/rn_fusebox.html?ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket&device=ios"
+        );
+    }
+
+    #[test]
+    fn metro_devtools_frontend_url_preserves_rozenite_inspector_metadata_from_encoded_socket() {
+        let entry = json!({
+            "devtoolsFrontendUrl": "/rozenite/rn_fusebox.html?ws=%2Finspector%2Fdebug%3Fdevice%3D8067dc%26page%3D1&sources.hide_add_folder=true",
+            "webSocketDebuggerUrl": "ws://127.0.0.1:8081/inspector/debug?device=8067dc&page=1"
+        });
+
+        let url = metro_devtools_frontend_url(
+            8081,
+            &entry,
+            "ws://127.0.0.1:4310/api/simulators/ABC/devtools/targets/metro-8081-target/socket",
+        );
+
+        assert_eq!(
+            url,
+            "/api/metro/8081/rozenite/rn_fusebox.html?ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket&sources.hide_add_folder=true&device=8067dc&page=1"
         );
     }
 
@@ -1820,7 +2113,7 @@ mod tests {
 
         assert_eq!(
             url,
-            "/api/metro-frontend/8081/rozenite/rn_fusebox.html?ws=simdeck.local%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket&panel=redux"
+            "/api/metro/8081/rozenite/rn_fusebox.html?ws=simdeck.local%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket&panel=redux"
         );
     }
 
@@ -1839,7 +2132,7 @@ mod tests {
 
         assert_eq!(
             url,
-            "/api/metro-frontend/8081/debugger-frontend/rn_fusebox.html?ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket&device=ios"
+            "/api/metro/8081/debugger-frontend/rn_fusebox.html?ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket&device=ios"
         );
     }
 
@@ -1857,7 +2150,7 @@ mod tests {
 
         assert_eq!(
             url,
-            "/api/metro-frontend/8081/debugger-frontend/rn_fusebox.html?ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket"
+            "/api/metro/8081/debugger-frontend/rn_fusebox.html?ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target%2Fsocket"
         );
     }
 
@@ -1898,9 +2191,191 @@ mod tests {
         ));
         assert!(target
             .devtools_frontend_url
-            .starts_with("/api/metro-frontend/8081/debugger-frontend/rn_fusebox.html?"));
+            .starts_with("/api/metro/8081/debugger-frontend/rn_fusebox.html?"));
         assert!(target.devtools_frontend_url.contains(
             "ws=127.0.0.1%3A4310%2Fapi%2Fsimulators%2FABC%2Fdevtools%2Ftargets%2Fmetro-8081-target-1%2Fsocket%3FsimdeckToken%3Dsecret%2520token"
         ));
+    }
+
+    #[test]
+    fn metro_proxy_path_allows_full_metro_server_surface() {
+        assert!(is_metro_proxy_path("/debugger-frontend/rn_fusebox.html"));
+        assert!(is_metro_proxy_path("/rozenite/panel.js"));
+        assert!(is_metro_proxy_path("/json/list"));
+        assert!(is_metro_proxy_path("/symbolicate"));
+        assert!(is_metro_proxy_path("/index.bundle"));
+        assert!(!is_metro_proxy_path(""));
+        assert!(!is_metro_proxy_path("http://localhost:8081/json/list"));
+        assert!(!is_metro_proxy_path("/../Info.plist"));
+        assert!(is_metro_proxy_method("GET"));
+        assert!(is_metro_proxy_method("HEAD"));
+        assert!(is_metro_proxy_method("POST"));
+        assert!(!is_metro_proxy_method("DELETE"));
+    }
+
+    #[test]
+    fn metro_proxy_rewrites_absolute_rozenite_assets_to_port_scoped_proxy() {
+        let body = br#"
+            import * as UI from "/rozenite/ui/legacy/legacy.js";
+            import "/debugger-frontend/models/react_native/react_native.js";
+            const url = new URL(location.href);
+            url.pathname = "/rozenite/plugins/@rozenite_controls-plugin";
+            const nested = "https://example.com/rozenite/docs";
+            const alreadyProxied = "/api/metro/8091/rozenite/host.js";
+        "#;
+
+        let rewritten = rewrite_metro_proxy_asset(
+            8091,
+            "/rozenite/host.js",
+            Some("application/javascript"),
+            body.to_vec(),
+        );
+        let rewritten = String::from_utf8(rewritten).unwrap();
+
+        assert!(rewritten.contains("from \"/api/metro/8091/rozenite/ui/legacy/legacy.js\""));
+        assert!(rewritten.contains(
+            "import \"/api/metro/8091/debugger-frontend/models/react_native/react_native.js\""
+        ));
+        assert!(rewritten.contains(
+            "url.pathname = \"/api/metro/8091/rozenite/plugins/@rozenite_controls-plugin\""
+        ));
+        assert!(rewritten.contains("https://example.com/rozenite/docs"));
+        assert!(rewritten.contains("\"/api/metro/8091/rozenite/host.js\""));
+    }
+
+    #[test]
+    fn metro_proxy_rewrites_loopback_metro_origins() {
+        let rewritten = rewrite_metro_proxy_asset(
+            8091,
+            "/rozenite/plugin.json",
+            Some("application/json"),
+            br#"{"script":"http://localhost:8091/rozenite/plugin.js","ipv4":"http://127.0.0.1:8091/debugger-frontend/main.js"}"#.to_vec(),
+        );
+        let rewritten = String::from_utf8(rewritten).unwrap();
+
+        assert!(rewritten.contains("\"/api/metro/8091/rozenite/plugin.js\""));
+        assert!(rewritten.contains("\"/api/metro/8091/debugger-frontend/main.js\""));
+    }
+
+    #[tokio::test]
+    async fn fetch_metro_asset_proxies_full_path_without_origin_header() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0_u8; 1024];
+            let count = socket.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            assert!(request.starts_with("GET /json/list?platform=ios HTTP/1.1\r\n"));
+            assert!(!request.to_ascii_lowercase().contains("\r\norigin:"));
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n[]",
+                )
+                .await
+                .unwrap();
+        });
+
+        let asset =
+            fetch_metro_resource(port, "/json/list", Some("platform=ios"), "GET", None, None)
+                .await
+                .unwrap();
+
+        server.await.unwrap();
+        assert_eq!(asset.status, 200);
+        assert_eq!(asset.content_type.as_deref(), Some("application/json"));
+        assert_eq!(asset.body, b"[]");
+    }
+
+    #[tokio::test]
+    async fn fetch_metro_resource_falls_back_to_ipv6_loopback() {
+        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0_u8; 1024];
+            let count = socket.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            assert!(request.starts_with("GET /rozenite/rn_fusebox.html HTTP/1.1\r\n"));
+            assert!(request.contains(&format!("\r\nHost: [::1]:{port}\r\n")));
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 11\r\n\r\nroze-ready!",
+                )
+                .await
+                .unwrap();
+        });
+
+        let asset =
+            fetch_metro_resource(port, "/rozenite/rn_fusebox.html", None, "GET", None, None)
+                .await
+                .unwrap();
+
+        server.await.unwrap();
+        assert_eq!(asset.status, 200);
+        assert_eq!(asset.content_type.as_deref(), Some("text/html"));
+        assert_eq!(asset.body, b"roze-ready!");
+    }
+
+    #[tokio::test]
+    async fn fetch_metro_resource_proxies_post_body_for_symbolication() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            loop {
+                let count = socket.read(&mut chunk).await.unwrap();
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..count]);
+                if request
+                    .windows(12)
+                    .any(|window| window == b"{\"stack\":[]}")
+                {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&request);
+            assert!(request.starts_with("POST /symbolicate HTTP/1.1\r\n"));
+            assert!(request.contains("\r\nContent-Length: 12\r\n"));
+            assert!(request.contains("\r\nContent-Type: application/json\r\n"));
+            assert!(request.ends_with("{\"stack\":[]}"));
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        });
+
+        let asset = fetch_metro_resource(
+            port,
+            "/symbolicate",
+            None,
+            "POST",
+            Some(br#"{"stack":[]}"#),
+            Some("application/json"),
+        )
+        .await
+        .unwrap();
+
+        server.await.unwrap();
+        assert_eq!(asset.status, 200);
+        assert_eq!(asset.content_type.as_deref(), Some("application/json"));
+        assert_eq!(asset.body, b"{}");
+    }
+
+    #[test]
+    fn decoded_http_body_decodes_chunked_metro_responses() {
+        let body = decoded_http_body(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n",
+            b"5\r\nhello\r\n6;ext=1\r\n world\r\n0\r\n\r\n",
+        )
+        .unwrap();
+
+        assert_eq!(body, b"hello world");
     }
 }

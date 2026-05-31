@@ -28,7 +28,7 @@ use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, Method, Request, StatusCode, Uri};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use bytes::{Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
@@ -778,10 +778,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/inspector/response", post(inspector_response))
         .route("/chrome-devtools-ui", get(chrome_devtools_ui_redirect))
         .route("/chrome-devtools-ui/{*path}", get(chrome_devtools_ui_file))
-        .route(
-            "/api/metro-frontend/{port}/{*path}",
-            get(metro_frontend_asset),
-        )
+        .route("/api/metro/{port}", any(metro_proxy_root))
+        .route("/api/metro/{port}/{*path}", any(metro_proxy_asset))
+        .route("/api/metro-frontend/{port}/{*path}", any(metro_proxy_asset))
         .route("/webkit-inspector-ui", get(webkit_inspector_ui_redirect))
         .route(
             "/webkit-inspector-ui/{*path}",
@@ -1084,7 +1083,11 @@ async fn chrome_devtools_targets(
     };
     let foreground_app_future = timeout(
         FOREGROUND_APP_ROUTE_TIMEOUT,
-        foreground_app_for_simulator(&state, &udid),
+        foreground_app_for_simulator_with_cache_ttl(
+            &state,
+            &udid,
+            INSPECTOR_FOREGROUND_APP_CACHE_TTL,
+        ),
     );
     let external_targets_future = timeout(
         CHROME_DEVTOOLS_DISCOVERY_TIMEOUT,
@@ -1230,11 +1233,63 @@ async fn webkit_inspector_ui_redirect() -> Redirect {
     Redirect::temporary("/webkit-inspector-ui/Main.html")
 }
 
-async fn metro_frontend_asset(Path((port, path)): Path<(u16, String)>, uri: Uri) -> Response {
-    let asset_path = format!("/{path}");
-    match devtools::fetch_metro_frontend_asset(port, &asset_path, uri.query()).await {
+async fn metro_proxy_root(
+    Path(port): Path<u16>,
+    method: Method,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    metro_proxy_response(port, "/", uri.query(), method, headers, body).await
+}
+
+async fn metro_proxy_asset(
+    Path((port, path)): Path<(u16, String)>,
+    method: Method,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    metro_proxy_response(
+        port,
+        &format!("/{path}"),
+        uri.query(),
+        method,
+        headers,
+        body,
+    )
+    .await
+}
+
+async fn metro_proxy_response(
+    port: u16,
+    asset_path: &str,
+    query: Option<&str>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    match devtools::fetch_metro_resource(
+        port,
+        asset_path,
+        query,
+        method.as_str(),
+        Some(body.as_ref()),
+        content_type,
+    )
+    .await
+    {
         Ok(asset) => {
             let status = StatusCode::from_u16(asset.status).unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = devtools::rewrite_metro_proxy_asset(
+                port,
+                asset_path,
+                asset.content_type.as_deref(),
+                asset.body,
+            );
             let mut builder = Response::builder()
                 .status(status)
                 .header(header::CACHE_CONTROL, "no-store");
@@ -1242,12 +1297,13 @@ async fn metro_frontend_asset(Path((port, path)): Path<(u16, String)>, uri: Uri)
                 builder = builder.header(header::CONTENT_TYPE, content_type);
             }
             builder
-                .body(Body::from(asset.body))
+                .body(Body::from(body))
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Err(error) => {
-            tracing::debug!("Metro frontend asset proxy failed for {port}{asset_path}: {error}");
-            AppError::not_found("Metro DevTools frontend asset is not available.").into_response()
+            tracing::debug!("Metro proxy failed for {port}{asset_path}: {error}");
+            AppError::not_found("Metro resource is not available through the proxy.")
+                .into_response()
         }
     }
 }
@@ -4642,7 +4698,11 @@ async fn foreground_app_for_simulator_with_cache_ttl(
     }
 
     let mut last_error: Option<String> = None;
-    match foreground_app_from_launchctl(udid).await {
+
+    // DevTools selection needs the app currently under the private display.
+    // launchctl can leave recently active UIKit services marked as active, so
+    // prefer the frontmost accessibility root when it is available.
+    match foreground_app_metadata(state, udid).await {
         Ok(Some(foreground)) => {
             cache_foreground_app(udid, &foreground);
             return Ok(Some(foreground));
@@ -4651,7 +4711,7 @@ async fn foreground_app_for_simulator_with_cache_ttl(
         Err(error) => last_error = Some(error),
     }
 
-    match foreground_app_metadata(state, udid).await {
+    match foreground_app_from_launchctl(udid).await {
         Ok(Some(foreground)) => {
             cache_foreground_app(udid, &foreground);
             Ok(Some(foreground))

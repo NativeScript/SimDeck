@@ -340,14 +340,15 @@ positive checks. `assertNot` performs negative checks.
 
 ## DevTools and WebKit
 
-| Method | Path                                                        | Purpose                                             |
-| ------ | ----------------------------------------------------------- | --------------------------------------------------- |
-| `GET`  | `/api/simulators/{udid}/webkit/targets`                     | Inspectable Safari or WKWebView targets             |
-| `GET`  | `/api/simulators/{udid}/webkit/targets/{targetId}/socket`   | WebKit inspector WebSocket                          |
-| `GET`  | `/webkit-inspector-ui/Main.html`                            | WebInspectorUI frontend                             |
-| `GET`  | `/api/simulators/{udid}/devtools/targets`                   | React Native, app runtime, Metro, or Chrome targets |
-| `GET`  | `/api/simulators/{udid}/devtools/targets/{targetId}/socket` | DevTools WebSocket                                  |
-| `GET`  | `/chrome-devtools-ui/inspector.html`                        | Chrome DevTools frontend                            |
+| Method        | Path                                                        | Purpose                                             |
+| ------------- | ----------------------------------------------------------- | --------------------------------------------------- |
+| `GET`         | `/api/simulators/{udid}/webkit/targets`                     | Inspectable Safari or WKWebView targets             |
+| `GET`         | `/api/simulators/{udid}/webkit/targets/{targetId}/socket`   | WebKit inspector WebSocket                          |
+| `GET`         | `/webkit-inspector-ui/Main.html`                            | WebInspectorUI frontend                             |
+| `GET`         | `/api/simulators/{udid}/devtools/targets`                   | React Native, app runtime, Metro, or Chrome targets |
+| `GET`         | `/api/simulators/{udid}/devtools/targets/{targetId}/socket` | DevTools WebSocket                                  |
+| `GET`         | `/chrome-devtools-ui/inspector.html`                        | Chrome DevTools frontend                            |
+| `GET`, `POST` | `/api/metro/{port}/{path}`                                  | Proxied Metro HTTP resources and DevTools frontend  |
 
 For app-owned `WKWebView` on iOS 16.4 or newer, the app must set `isInspectable = true`.
 

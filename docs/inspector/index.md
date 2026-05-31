@@ -35,7 +35,7 @@ Open the SimDeck UI and select a device. The inspector pane shows the active tre
 The DevTools panel can open:
 
 - Safari and inspectable `WKWebView` targets.
-- React Native Metro targets.
+- React Native Metro targets through Metro's own proxied DevTools frontend.
 - Local Chrome Inspector targets.
 - Connected app runtime inspector targets.
 

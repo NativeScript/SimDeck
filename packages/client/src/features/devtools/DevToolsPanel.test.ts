@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveDevToolsTargetSelection,
+  shouldBlockDevToolsHostBrowser,
   shouldRemountWebKitFrameForHealth,
   withSafariAutoTarget,
   type DevToolsTarget,
@@ -162,6 +163,52 @@ describe("resolveDevToolsTargetSelection", () => {
       targetId: first.id,
     });
   });
+
+  it("selects a React Native Metro target for the foreground app instead of Safari auto", () => {
+    const safari = safariTarget("webkit:active", "https://metro.example/", {
+      pageActive: true,
+    });
+    const metroTarget: DevToolsTarget = {
+      appName: "Example",
+      bundleIdentifier: "com.example.app",
+      frameUrl: "/api/metro/8081/debugger-frontend/rn_fusebox.html",
+      id: "chrome:metro-8081-example",
+      meta: "com.example.app",
+      processIdentifier: 0,
+      source: "React Native Metro",
+      title: "Example",
+    };
+    const runtimeTarget: DevToolsTarget = {
+      appName: "Example",
+      bundleIdentifier: "com.example.app",
+      frameUrl: "/chrome-devtools-ui/inspector.html",
+      id: "chrome:sdi-123",
+      meta: "com.example.app",
+      processIdentifier: 123,
+      source: "React Native",
+      title: "Example",
+    };
+    const targets = withSafariAutoTarget([safari, runtimeTarget, metroTarget]);
+
+    expect(
+      resolveDevToolsTargetSelection({
+        currentForegroundKey: "com.example.app",
+        currentTargetId: "webkit:safari:auto",
+        foregroundApp: {
+          appName: "Example",
+          bundleIdentifier: "com.example.app",
+          processIdentifier: 123,
+        },
+        manualOverride: false,
+        pendingForegroundApp: null,
+        pendingForegroundKey: "",
+        targets,
+      }),
+    ).toMatchObject({
+      automaticTargetId: metroTarget.id,
+      targetId: metroTarget.id,
+    });
+  });
 });
 
 describe("shouldRemountWebKitFrameForHealth", () => {
@@ -218,6 +265,57 @@ describe("shouldRemountWebKitFrameForHealth", () => {
         },
         state: "failed",
       }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldBlockDevToolsHostBrowser", () => {
+  it("allows Metro/Rozenite DevTools in Safari", () => {
+    expect(
+      shouldBlockDevToolsHostBrowser(
+        {
+          appName: "Rozenite",
+          bundleIdentifier: "com.callstackcincubator.rozenite",
+          frameUrl: "/api/metro/8091/rozenite/rn_fusebox.html",
+          id: "chrome:metro-8091-rozenite",
+          meta: "com.callstackcincubator.rozenite",
+          source: "React Native Metro",
+          title: "Rozenite",
+        },
+        true,
+      ),
+    ).toBe(false);
+  });
+
+  it("still blocks non-Metro Chrome DevTools in Safari", () => {
+    expect(
+      shouldBlockDevToolsHostBrowser(
+        {
+          appName: "Chrome",
+          frameUrl: "/chrome-devtools-ui/inspector.html",
+          id: "chrome:cdp-9222-page",
+          meta: "http://localhost:3000",
+          source: "Chrome Inspector",
+          title: "Localhost",
+        },
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  it("allows Chrome DevTools targets outside Safari hosts", () => {
+    expect(
+      shouldBlockDevToolsHostBrowser(
+        {
+          appName: "Chrome",
+          frameUrl: "/chrome-devtools-ui/inspector.html",
+          id: "chrome:cdp-9222-page",
+          meta: "http://localhost:3000",
+          source: "Chrome Inspector",
+          title: "Localhost",
+        },
+        false,
+      ),
     ).toBe(false);
   });
 });
