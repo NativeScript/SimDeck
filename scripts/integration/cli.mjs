@@ -180,42 +180,44 @@ async function main() {
     { phase: phaseSetup },
   );
 
-  const agentTree = await measuredStep("server describe agent", () =>
-    simdeckText([
-      "describe",
-      "--source",
-      "native-ax",
-      "--format",
-      "agent",
-      "--max-depth",
-      "1",
-    ]),
-  );
-  if (!agentTree.includes("source:") || !agentTree.includes("- ")) {
-    throw new Error("agent describe output did not look like a hierarchy");
-  }
-  const interactiveTree = await measuredStep(
-    "server describe agent interactive",
-    () =>
-      simdeckText([
+  await measuredStep("server describe agent", () =>
+    retrySimdeckTextUntil(
+      [
         "describe",
         "--source",
         "native-ax",
         "--format",
         "agent",
         "--max-depth",
-        "8",
-        "--interactive",
-      ]),
+        "1",
+      ],
+      "server describe agent",
+      looksLikeAgentHierarchy,
+      "agent describe output did not look like a hierarchy",
+      { attempts: 4, delayMs: 3_000, timeoutMs: 90_000 },
+    ),
   );
-  if (
-    !interactiveTree.includes("source:") ||
-    !interactiveTree.includes("Continue")
-  ) {
-    throw new Error(
-      "interactive agent describe did not include fixture controls",
-    );
-  }
+  const interactiveTree = await measuredStep(
+    "server describe agent interactive",
+    () =>
+      retrySimdeckTextUntil(
+        [
+          "describe",
+          "--source",
+          "native-ax",
+          "--format",
+          "agent",
+          "--max-depth",
+          "8",
+          "--interactive",
+        ],
+        "server describe agent interactive",
+        (output) =>
+          looksLikeAgentHierarchy(output) && output.includes("Continue"),
+        "interactive agent describe did not include fixture controls",
+        { attempts: 4, delayMs: 3_000, timeoutMs: 90_000 },
+      ),
+  );
   await runRestControls();
   await runCliControls();
 
@@ -799,6 +801,47 @@ async function retrySimdeckText(args, label, options = {}) {
   throw new Error(
     `${label} failed after ${attempts} attempts: ${lastError?.message ?? lastError}`,
   );
+}
+
+async function retrySimdeckTextUntil(
+  args,
+  label,
+  predicate,
+  failureMessage,
+  options = {},
+) {
+  const attempts = options.attempts ?? 4;
+  const delayMs = options.delayMs ?? 2_000;
+  let lastDetail = "";
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const output = await retrySimdeckText(args, label, {
+        ...options,
+        attempts: 1,
+      });
+      if (predicate(output)) {
+        return output;
+      }
+      lastDetail = summarizeText(output);
+    } catch (error) {
+      lastDetail = error?.message ?? String(error);
+    }
+    if (attempt < attempts) {
+      logStep(`${label} attempt ${attempt}/${attempts} did not pass; retrying`);
+      await sleep(delayMs);
+    }
+  }
+  throw new Error(
+    `${failureMessage} after ${attempts} attempts:\n${lastDetail}`,
+  );
+}
+
+function looksLikeAgentHierarchy(output) {
+  return output.includes("source:") && output.includes("- ");
+}
+
+function summarizeText(output) {
+  return output.split("\n").slice(0, 12).join("\n").slice(0, 1000);
 }
 
 async function cliStep(label, args, commandOptions = {}, verifyOptions = {}) {
