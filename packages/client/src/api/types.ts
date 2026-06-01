@@ -211,6 +211,10 @@ export interface SimulatorResponse {
   simulator: SimulatorMetadata;
 }
 
+export interface BootPayload {
+  androidEmulatorArgs?: string[];
+}
+
 export interface InstallUploadResponse {
   action: "install";
   fileName: string;

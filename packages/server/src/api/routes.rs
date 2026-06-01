@@ -1,5 +1,5 @@
 use crate::accessibility::{interactive_accessibility_snapshot, AccessibilitySource};
-use crate::android::{self, AndroidBridge, AndroidEmulatorSpec};
+use crate::android::{self, AndroidBootOptions, AndroidBridge, AndroidEmulatorSpec};
 use crate::api::json::json;
 use crate::auth;
 use crate::camera::{self, CameraStartRequest, CameraSwitchRequest};
@@ -509,6 +509,13 @@ struct CreateSimulatorPayload {
     device_type_identifier: String,
     runtime_identifier: Option<String>,
     paired_watch: Option<CreatePairedWatchPayload>,
+    android_emulator_args: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BootSimulatorPayload {
+    android_emulator_args: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1749,6 +1756,7 @@ async fn create_simulator(
     }
 
     let runtime_identifier = trimmed_optional_string(payload.runtime_identifier);
+    let android_emulator_args = payload.android_emulator_args.unwrap_or_default();
     if platform.eq_ignore_ascii_case("android") {
         let system_image_identifier = runtime_identifier.ok_or_else(|| {
             AppError::bad_request("Android emulator creation requires `runtimeIdentifier`.")
@@ -1770,7 +1778,14 @@ async fn create_simulator(
             .and_then(Value::as_str)
             .ok_or_else(|| AppError::internal("Android create did not return an emulator ID."))?
             .to_owned();
-        boot_android_device(state.clone(), udid.clone()).await?;
+        boot_android_device(
+            state.clone(),
+            udid.clone(),
+            AndroidBootOptions {
+                emulator_args: android_emulator_args,
+            },
+        )
+        .await?;
         let devices = all_device_values(state, true).await?;
         let simulator = devices
             .iter()
@@ -1785,6 +1800,11 @@ async fn create_simulator(
             "simulator": simulator,
             "pairedWatchSimulator": null,
         })));
+    }
+    if !android_emulator_args.is_empty() {
+        return Err(AppError::bad_request(
+            "`androidEmulatorArgs` only apply to Android emulator creation.",
+        ));
     }
 
     let paired_watch = payload
@@ -2129,9 +2149,13 @@ fn performance_log_entry_matches(
     .any(|needle| haystack.contains(needle))
 }
 
-async fn boot_android_device(state: AppState, udid: String) -> Result<(), AppError> {
+async fn boot_android_device(
+    state: AppState,
+    udid: String,
+    options: AndroidBootOptions,
+) -> Result<(), AppError> {
     run_android_action(state, move |android| {
-        android.boot(&udid)?;
+        android.boot_with_options(&udid, &options)?;
         android.wait_until_booted(&udid, Duration::from_secs(240))?;
         Ok(())
     })
@@ -2153,13 +2177,41 @@ async fn boot_ios_device(state: AppState, udid: String) -> Result<(), AppError> 
 async fn boot_simulator(
     State(state): State<AppState>,
     Path(udid): Path<String>,
+    body: Bytes,
 ) -> Result<Json<Value>, AppError> {
+    let payload = boot_simulator_payload_from_body(&body)?;
+    let options = android_boot_options(payload.android_emulator_args);
     if android::is_android_id(&udid) {
-        boot_android_device(state.clone(), udid.clone()).await?;
+        boot_android_device(state.clone(), udid.clone(), options).await?;
         return android_simulator_payload(state, udid).await;
+    }
+    if !options.emulator_args.is_empty() {
+        return Err(AppError::bad_request(
+            "`androidEmulatorArgs` only apply to Android emulator IDs.",
+        ));
     }
     boot_ios_device(state.clone(), udid.clone()).await?;
     simulator_payload(state, udid).await
+}
+
+fn boot_simulator_payload_from_body(body: &Bytes) -> Result<BootSimulatorPayload, AppError> {
+    if body.is_empty() || body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(BootSimulatorPayload::default());
+    }
+    if body
+        .strip_prefix(b"null")
+        .is_some_and(|rest| rest.iter().all(u8::is_ascii_whitespace))
+    {
+        return Ok(BootSimulatorPayload::default());
+    }
+    serde_json::from_slice::<BootSimulatorPayload>(body)
+        .map_err(|error| AppError::bad_request(format!("Invalid boot request body: {error}")))
+}
+
+fn android_boot_options(android_emulator_args: Option<Vec<String>>) -> AndroidBootOptions {
+    AndroidBootOptions {
+        emulator_args: android_emulator_args.unwrap_or_default(),
+    }
 }
 
 async fn shutdown_simulator(
@@ -6036,15 +6088,16 @@ async fn accessibility_snapshot_with_options(
 #[cfg(test)]
 mod tests {
     use super::{
-        accessibility_point_snapshot, attach_tree_metadata, available_sources_for_snapshot,
-        available_sources_with_native_ax, best_inspector_session,
-        chrome_devtools_source_for_session, client_stats_foreground,
-        compact_accessibility_snapshot, element_matches_selector, first_matching_element,
-        inspector_available_sources, inspector_metadata, inspector_session_from_published,
-        inspector_session_score, is_inspector_agent_transport_path,
-        is_transient_native_ax_snapshot_error, logical_screen_size_from_display_pixels,
-        normalize_inspector_node, normalize_screen_point_from_snapshot,
-        normalized_gesture_coordinates, parse_lsof_tcp_listener, parse_ui_application_service_line,
+        accessibility_point_snapshot, android_boot_options, attach_tree_metadata,
+        available_sources_for_snapshot, available_sources_with_native_ax, best_inspector_session,
+        boot_simulator_payload_from_body, chrome_devtools_source_for_session,
+        client_stats_foreground, compact_accessibility_snapshot, element_matches_selector,
+        first_matching_element, inspector_available_sources, inspector_metadata,
+        inspector_session_from_published, inspector_session_score,
+        is_inspector_agent_transport_path, is_transient_native_ax_snapshot_error,
+        logical_screen_size_from_display_pixels, normalize_inspector_node,
+        normalize_screen_point_from_snapshot, normalized_gesture_coordinates,
+        parse_lsof_tcp_listener, parse_ui_application_service_line,
         process_identifier_from_accessibility_snapshot, resolved_stream_quality_limits,
         scroll_input_plan_for_udid, split_filter_values, stream_quality_profile,
         suppress_native_ax_translation_error, tap_point_from_snapshot, trim_tree_depth,
@@ -6075,6 +6128,25 @@ mod tests {
             selected: None,
             regex: None,
         }
+    }
+
+    #[test]
+    fn boot_simulator_payload_reads_android_emulator_args() {
+        let payload = boot_simulator_payload_from_body(&Bytes::from_static(
+            br#"{"androidEmulatorArgs":["-no-snapshot","-gpu","host"]}"#,
+        ))
+        .unwrap();
+        let options = android_boot_options(payload.android_emulator_args);
+
+        assert_eq!(options.emulator_args, vec!["-no-snapshot", "-gpu", "host"]);
+    }
+
+    #[test]
+    fn boot_simulator_payload_allows_legacy_null_body() {
+        let payload = boot_simulator_payload_from_body(&Bytes::from_static(b"null")).unwrap();
+        let options = android_boot_options(payload.android_emulator_args);
+
+        assert!(options.emulator_args.is_empty());
     }
 
     fn accessibility_snapshot() -> Value {

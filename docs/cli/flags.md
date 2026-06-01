@@ -53,6 +53,15 @@ Alias: `snapshot`.
 | `--point <x>,<y>`     | Describe the element at a screen point                                                                                                       |
 | `--direct`            | Skip service and use native accessibility directly                                                                                           |
 
+## Device lifecycle
+
+| Command | Useful flags                                                                                                            |
+| ------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `boot`  | `--android-emulator-arg=<arg>` for Android emulator startup flags; repeat once per argument, for example `-no-snapshot` |
+
+SimDeck reserves Android emulator target and stream flags such as `-avd` and
+`-grpc` so browser streaming remains attached to the selected emulator.
+
 ## Input
 
 | Command          | Useful flags                                                                                                                                                            |

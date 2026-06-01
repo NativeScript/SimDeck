@@ -188,21 +188,22 @@ Supported quality values include `tiny`, `low`, `economy`, `fast`, `smooth`, `ba
 
 ## Common inputs
 
-| Input               | Default                             | Purpose                                     |
-| ------------------- | ----------------------------------- | ------------------------------------------- |
-| `bundle_id`         | empty                               | Bundle ID to launch                         |
-| `package_name`      | empty                               | Android package name to launch              |
-| `build_workflow`    | `build-ios-simulator.yml`           | Workflow file that uploads the app artifact |
-| `artifact_prefix`   | `ios-simulator-app` / `android-apk` | Artifact prefix                             |
-| `simdeck_version`   | `latest`                            | npm version or dist-tag                     |
-| `stream_profile`    | `tiny`                              | Default stream quality                      |
-| `simulator_name`    | `iPhone 17 Pro`                     | Preferred simulator                         |
-| `avd_name`          | `SimDeck_Pixel_CI`                  | Preferred Android emulator                  |
-| `keepalive_seconds` | `1800`                              | Session lifetime after launch               |
-| `simulator_cache`   | `true`                              | Restore and save simulator cache            |
-| `proxy_links`       | `true`                              | Post SimDeck CI proxy links                 |
-| `ci_proxy_url`      | `https://ci.simdeck.sh`             | Optional SimDeck CI proxy URL               |
-| `session_password`  | empty                               | Optional password for proxy-gated sessions  |
+| Input                   | Default                             | Purpose                                        |
+| ----------------------- | ----------------------------------- | ---------------------------------------------- |
+| `bundle_id`             | empty                               | Bundle ID to launch                            |
+| `package_name`          | empty                               | Android package name to launch                 |
+| `build_workflow`        | `build-ios-simulator.yml`           | Workflow file that uploads the app artifact    |
+| `artifact_prefix`       | `ios-simulator-app` / `android-apk` | Artifact prefix                                |
+| `simdeck_version`       | `latest`                            | npm version or dist-tag                        |
+| `stream_profile`        | `tiny`                              | Default stream quality                         |
+| `simulator_name`        | `iPhone 17 Pro`                     | Preferred simulator                            |
+| `avd_name`              | `SimDeck_Pixel_CI`                  | Preferred Android emulator                     |
+| `android_emulator_args` | empty                               | Extra emulator startup arguments, one per line |
+| `keepalive_seconds`     | `1800`                              | Session lifetime after launch                  |
+| `simulator_cache`       | `true`                              | Restore and save simulator cache               |
+| `proxy_links`           | `true`                              | Post SimDeck CI proxy links                    |
+| `ci_proxy_url`          | `https://ci.simdeck.sh`             | Optional SimDeck CI proxy URL                  |
+| `session_password`      | empty                               | Optional password for proxy-gated sessions     |
 
 ## Password-protected links
 

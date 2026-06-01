@@ -71,6 +71,7 @@ simdeck list
 simdeck list --format json
 simdeck use <UDID>
 simdeck boot <UDID>
+simdeck boot android:<AVD_NAME> --android-emulator-arg=-no-snapshot
 simdeck shutdown
 simdeck erase
 simdeck core-simulator restart

@@ -98,6 +98,10 @@ export type ScreenRecordingOptions = {
   seconds?: number;
 };
 
+export type AndroidBootOptions = {
+  androidEmulatorArgs?: string[];
+};
+
 type DeviceMethod<TArgs extends unknown[], TResult> = {
   (udid: string, ...args: TArgs): TResult;
   (...args: TArgs): TResult;
@@ -110,7 +114,7 @@ export type SimDeckSession = {
   udid?: string;
   device(udid: string): SimDeckSession;
   list(): Promise<unknown>;
-  boot: DeviceMethod<[], Promise<unknown>>;
+  boot: DeviceMethod<[options?: AndroidBootOptions], Promise<unknown>>;
   shutdown: DeviceMethod<[], Promise<unknown>>;
   erase: DeviceMethod<[], Promise<unknown>>;
   install: DeviceMethod<[appPath: string], Promise<void>>;
@@ -283,13 +287,16 @@ export async function connect(
       udid: defaultUdid,
       device: (udid: string) => createSession(udid),
       list: () => requestJson(endpoint, "GET", "/api/simulators"),
-      boot: (...args: [] | [string]) => {
-        const { udid } = resolveNoArgDeviceCall(args);
+      boot: (
+        ...args: [string, AndroidBootOptions?] | [AndroidBootOptions?]
+      ) => {
+        const { udid, options } =
+          resolveOptionalObjectDeviceCall<AndroidBootOptions>(args);
         return requestJson(
           endpoint,
           "POST",
           simulatorPath(udid, "/boot"),
-          null,
+          androidBootRequestBody(options),
         );
       },
       shutdown: (...args: [] | [string]) => {
@@ -901,6 +908,12 @@ function requestOk(
   body: unknown,
 ): Promise<void> {
   return requestJson(endpoint, "POST", pathName, body).then(() => undefined);
+}
+
+function androidBootRequestBody(options?: AndroidBootOptions): unknown {
+  return options?.androidEmulatorArgs?.length
+    ? { androidEmulatorArgs: options.androidEmulatorArgs }
+    : null;
 }
 
 function requestJson<T = unknown>(
