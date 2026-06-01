@@ -2,7 +2,7 @@ use crate::error::AppError;
 use bytes::BytesMut;
 use http::uri::PathAndQuery;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -83,6 +83,11 @@ pub struct AndroidEmulatorSpec {
     pub name: String,
     pub device_profile_identifier: String,
     pub system_image_identifier: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AndroidBootOptions {
+    pub emulator_args: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -313,31 +318,18 @@ impl AndroidBridge {
         }))
     }
 
-    pub fn boot(&self, id: &str) -> Result<bool, AppError> {
+    pub fn boot_with_options(
+        &self,
+        id: &str,
+        options: &AndroidBootOptions,
+    ) -> Result<bool, AppError> {
         let avd_name = avd_from_id(id)?;
         if self.resolve_serial(&avd_name).is_ok() {
             return Ok(false);
         }
         let grpc_port = self.grpc_port_for_avd(&avd_name)?;
-        let grpc_port = grpc_port.to_string();
-        let is_windows = cfg!(target_os = "windows");
-        let window_mode = if is_windows {
-            "-qt-hide-window"
-        } else {
-            "-no-window"
-        };
-        let mut args = vec![
-            "-avd",
-            &avd_name,
-            window_mode,
-            "-no-audio",
-            "-gpu",
-            "swiftshader_indirect",
-        ];
-        if is_windows {
-            args.extend(["-feature", "-Vulkan"]);
-        }
-        args.extend(["-grpc", &grpc_port]);
+        let args =
+            android_emulator_launch_args(&avd_name, grpc_port, options, std::env::consts::OS)?;
         Command::new(self.emulator_path())
             .args(args)
             .stdin(Stdio::null())
@@ -1191,6 +1183,76 @@ impl AndroidBridge {
         let contents = std::fs::read_to_string(path).ok()?;
         grpc_token_from_discovery_ini(&contents, port)
     }
+}
+
+fn android_emulator_launch_args(
+    avd_name: &str,
+    grpc_port: u16,
+    options: &AndroidBootOptions,
+    os: &str,
+) -> Result<Vec<String>, AppError> {
+    let user_args = sanitized_android_emulator_args(&options.emulator_args)?;
+    let user_option_keys = user_args
+        .iter()
+        .filter_map(|arg| android_emulator_option_key(arg))
+        .collect::<HashSet<_>>();
+
+    let mut args = vec!["-avd".to_owned(), avd_name.to_owned()];
+    let window_mode = if os == "windows" {
+        "-qt-hide-window"
+    } else {
+        "-no-window"
+    };
+    let window_is_configured =
+        user_option_keys.contains("-no-window") || user_option_keys.contains("-qt-hide-window");
+    if !window_is_configured {
+        args.push(window_mode.to_owned());
+    }
+    if !user_option_keys.contains("-no-audio") {
+        args.push("-no-audio".to_owned());
+    }
+    if !user_option_keys.contains("-gpu") {
+        args.extend(["-gpu".to_owned(), "swiftshader_indirect".to_owned()]);
+    }
+    if os == "windows" && !user_option_keys.contains("-feature") {
+        args.extend(["-feature".to_owned(), "-Vulkan".to_owned()]);
+    }
+    args.extend(user_args);
+    args.extend(["-grpc".to_owned(), grpc_port.to_string()]);
+    Ok(args)
+}
+
+fn sanitized_android_emulator_args(args: &[String]) -> Result<Vec<String>, AppError> {
+    let mut output = Vec::new();
+    for arg in args {
+        let trimmed = arg.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::bad_request(
+                "Android emulator startup args must not be empty.",
+            ));
+        }
+        if android_emulator_arg_is_simdeck_owned(trimmed) {
+            return Err(AppError::bad_request(format!(
+                "Android emulator startup arg `{trimmed}` is managed by SimDeck."
+            )));
+        }
+        output.push(trimmed.to_owned());
+    }
+    Ok(output)
+}
+
+fn android_emulator_arg_is_simdeck_owned(arg: &str) -> bool {
+    if arg.starts_with('@') {
+        return true;
+    }
+    matches!(android_emulator_option_key(arg), Some("-avd" | "-grpc"))
+}
+
+fn android_emulator_option_key(arg: &str) -> Option<&str> {
+    if !arg.starts_with('-') {
+        return None;
+    }
+    Some(arg.split_once('=').map(|(key, _)| key).unwrap_or(arg))
 }
 
 impl AndroidGrpcFrameStream {
@@ -2301,6 +2363,76 @@ fn ensure_android_clipboard_available(output: &str) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn android_emulator_launch_args_include_user_startup_flags() {
+        let args = android_emulator_launch_args(
+            "Pixel_8_API_36",
+            8554,
+            &AndroidBootOptions {
+                emulator_args: vec!["-no-snapshot".to_owned()],
+            },
+            "linux",
+        )
+        .unwrap();
+
+        assert_eq!(
+            args,
+            vec![
+                "-avd",
+                "Pixel_8_API_36",
+                "-no-window",
+                "-no-audio",
+                "-gpu",
+                "swiftshader_indirect",
+                "-no-snapshot",
+                "-grpc",
+                "8554",
+            ]
+        );
+    }
+
+    #[test]
+    fn android_emulator_launch_args_let_user_replace_default_gpu() {
+        let args = android_emulator_launch_args(
+            "Pixel_8_API_36",
+            8554,
+            &AndroidBootOptions {
+                emulator_args: vec!["-gpu".to_owned(), "host".to_owned()],
+            },
+            "linux",
+        )
+        .unwrap();
+
+        assert_eq!(args.iter().filter(|arg| *arg == "-gpu").count(), 1);
+        assert!(args.contains(&"host".to_owned()));
+        assert!(!args.contains(&"swiftshader_indirect".to_owned()));
+    }
+
+    #[test]
+    fn android_emulator_launch_args_keep_simdeck_owned_flags_protected() {
+        let grpc_error = android_emulator_launch_args(
+            "Pixel_8_API_36",
+            8554,
+            &AndroidBootOptions {
+                emulator_args: vec!["-grpc".to_owned(), "9000".to_owned()],
+            },
+            "linux",
+        )
+        .unwrap_err();
+        assert!(grpc_error.to_string().contains("managed by SimDeck"));
+
+        let avd_error = android_emulator_launch_args(
+            "Pixel_8_API_36",
+            8554,
+            &AndroidBootOptions {
+                emulator_args: vec!["@Other_AVD".to_owned()],
+            },
+            "linux",
+        )
+        .unwrap_err();
+        assert!(avd_error.to_string().contains("managed by SimDeck"));
+    }
 
     #[test]
     fn android_nodes_keep_class_type_and_semantic_role() {

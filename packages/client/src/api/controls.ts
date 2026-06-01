@@ -2,6 +2,7 @@ import { accessTokenFromLocation, apiHeaders, apiRequest } from "./client";
 import { apiUrl } from "./config";
 import type {
   ButtonPayload,
+  BootPayload,
   CrownPayload,
   EdgeTouchPayload,
   InstallUploadResponse,
@@ -37,7 +38,7 @@ export interface ScreenRecordingStartResponse {
 async function postSimulatorAction(
   udid: string,
   action: string,
-  payload?: LaunchPayload | OpenUrlPayload,
+  payload?: BootPayload | LaunchPayload | OpenUrlPayload,
 ): Promise<SimulatorMetadata | null> {
   if (action === "launch" || action === "open-url") {
     const response = await apiRequest<{
@@ -63,8 +64,8 @@ async function postSimulatorAction(
   return "simulator" in response ? response.simulator : null;
 }
 
-export function bootSimulator(udid: string) {
-  return postSimulatorAction(udid, "boot");
+export function bootSimulator(udid: string, payload?: BootPayload) {
+  return postSimulatorAction(udid, "boot", payload);
 }
 
 export function shutdownSimulator(udid: string) {

@@ -82,6 +82,10 @@ inputs:
     description: Android SDK build-tools version used to inspect APK metadata.
     required: false
     default: "36.0.0"
+  android_emulator_args:
+    description: Extra Android emulator startup arguments, one argument per line.
+    required: false
+    default: ""
   public_health_check:
     description: Verify the public Cloudflare Tunnel health endpoint before continuing.
     required: false
@@ -123,6 +127,7 @@ runs:
         INPUT_ANDROID_TARGET_VALUE: ${{ inputs.android_target }}
         INPUT_ANDROID_ARCH_VALUE: ${{ inputs.android_arch }}
         INPUT_ANDROID_BUILD_TOOLS_VALUE: ${{ inputs.android_build_tools }}
+        INPUT_ANDROID_EMULATOR_ARGS_VALUE: ${{ inputs.android_emulator_args }}
         INPUT_PUBLIC_HEALTH_CHECK_VALUE: ${{ inputs.public_health_check }}
         INPUT_CI_PROXY_URL_VALUE: ${{ inputs.ci_proxy_url }}
         INPUT_PROXY_LINKS_VALUE: ${{ inputs.proxy_links }}
@@ -163,6 +168,7 @@ runs:
         write_env "SIMDECK_ANDROID_TARGET" "${INPUT_ANDROID_TARGET_VALUE}"
         write_env "SIMDECK_ANDROID_ARCH" "${INPUT_ANDROID_ARCH_VALUE}"
         write_env "SIMDECK_ANDROID_BUILD_TOOLS" "${INPUT_ANDROID_BUILD_TOOLS_VALUE}"
+        write_env "SIMDECK_ANDROID_EMULATOR_ARGS" "${INPUT_ANDROID_EMULATOR_ARGS_VALUE}"
         write_env "SIMDECK_CI_PROXY_URL" "${INPUT_CI_PROXY_URL_VALUE}"
         write_env "SIMDECK_PROXY_LINKS" "${INPUT_PROXY_LINKS_VALUE}"
         write_env "SIMDECK_SESSION_PASSWORD" "${INPUT_SESSION_PASSWORD_VALUE}"
@@ -656,7 +662,15 @@ runs:
         echo "ANDROID_UDID=${udid}" >> "${GITHUB_ENV}"
         echo "udid=${udid}" >> "${GITHUB_OUTPUT}"
         echo "Booting ${udid}"
-        simdeck --server-url "http://127.0.0.1:${SIMDECK_PORT}" boot "${udid}"
+        boot_args=()
+        if [[ -n "${SIMDECK_ANDROID_EMULATOR_ARGS:-}" ]]; then
+          while IFS= read -r arg; do
+            if [[ -n "${arg//[[:space:]]/}" ]]; then
+              boot_args+=(--android-emulator-arg="${arg}")
+            fi
+          done <<< "${SIMDECK_ANDROID_EMULATOR_ARGS}"
+        fi
+        simdeck --server-url "http://127.0.0.1:${SIMDECK_PORT}" boot "${udid}" "${boot_args[@]}"
         date +%s > /tmp/sim-boot-end
 
     - name: Update status comment with booted emulator URL

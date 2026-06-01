@@ -123,6 +123,21 @@ test("Android integration runner resolves Windows executables", () => {
   assert.match(androidIntegration, /\.exe/);
 });
 
+test("Android PR comment forwards configured emulator startup args", () => {
+  assert.match(androidAction, /android_emulator_args:/);
+  assert.match(androidAction, /INPUT_ANDROID_EMULATOR_ARGS_VALUE/);
+
+  const bootStep = stepSlice(
+    androidAction,
+    "Boot Android emulator",
+    "Update status comment with booted emulator URL",
+  );
+
+  assert.match(bootStep, /SIMDECK_ANDROID_EMULATOR_ARGS/);
+  assert.match(bootStep, /--android-emulator-arg=/);
+  assert.match(bootStep, /simdeck --server-url .* boot "\$\{udid\}"/);
+});
+
 test("iOS PR comment waits for public simulator list access", () => {
   const prebootIndex = iosAction.indexOf(
     "- name: Select and preboot simulator",

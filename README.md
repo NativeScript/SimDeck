@@ -111,6 +111,7 @@ simdeck --device <other-udid> describe --format agent --max-depth 2
 simdeck list
 simdeck use <udid>
 simdeck boot <udid>
+simdeck boot android:<avd-name> --android-emulator-arg=-no-snapshot
 simdeck shutdown
 simdeck erase
 simdeck install /path/to/App.app

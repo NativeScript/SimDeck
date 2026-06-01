@@ -230,6 +230,12 @@ enum Command {
     },
     Boot {
         udid: Option<String>,
+        #[arg(
+            long = "android-emulator-arg",
+            value_name = "ARG",
+            allow_hyphen_values = true
+        )]
+        android_emulator_args: Vec<String>,
     },
     Shutdown {
         udid: Option<String>,
@@ -2587,6 +2593,14 @@ fn removed_service_process_name() -> String {
     ['d', 'a', 'e', 'm', 'o', 'n'].into_iter().collect()
 }
 
+fn android_boot_request_body(android_emulator_args: &[String]) -> Value {
+    if android_emulator_args.is_empty() {
+        Value::Null
+    } else {
+        serde_json::json!({ "androidEmulatorArgs": android_emulator_args })
+    }
+}
+
 fn run_no_command_action(action: NoCommandAction) -> anyhow::Result<()> {
     match action {
         NoCommandAction::Service(options) => run_default_service(options),
@@ -3815,15 +3829,22 @@ fn main() -> anyhow::Result<()> {
             }))?;
             Ok(())
         }
-        Command::Boot { udid } => {
+        Command::Boot {
+            udid,
+            android_emulator_args,
+        } => {
             let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
-            service_post_ok(&service_url, &udid, "boot", &Value::Null)?;
+            let request_body = android_boot_request_body(&android_emulator_args);
+            service_post_ok(&service_url, &udid, "boot", &request_body)?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(
-                    &serde_json::json!({ "ok": true, "udid": udid, "action": "boot" })
-                )?
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "udid": udid,
+                    "action": "boot",
+                    "androidEmulatorArgs": android_emulator_args,
+                }))?
             );
             Ok(())
         }
@@ -6119,11 +6140,12 @@ fn default_client_root() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        batch_line_to_json_step, http_url_for_host, interactive_accessibility_snapshot,
-        is_tailscale_ip, maestro_commands_from_flow, maestro_selector,
-        no_command_action_from_args_slice, normalize_accessibility_point_for_display,
-        parse_maestro_flow_yaml, parse_maestro_point, parse_optional_udid_f64_args,
-        parse_optional_udid_text_args, parse_optional_udid_value_args, parse_tap_command_args,
+        android_boot_request_body, batch_line_to_json_step, http_url_for_host,
+        interactive_accessibility_snapshot, is_tailscale_ip, maestro_commands_from_flow,
+        maestro_selector, no_command_action_from_args_slice,
+        normalize_accessibility_point_for_display, parse_maestro_flow_yaml, parse_maestro_point,
+        parse_optional_udid_f64_args, parse_optional_udid_text_args,
+        parse_optional_udid_value_args, parse_tap_command_args,
         parse_workspace_service_process_line, removed_service_process_name,
         render_agent_accessibility_tree, render_qr_code, run_maestro_command,
         server_health_watchdog_should_restart, service_addresses, service_matches_launch_options,
@@ -6918,10 +6940,15 @@ mod tests {
     #[test]
     fn device_commands_accept_omitted_udid() {
         let parsed = Cli::try_parse_from(["simdeck", "boot"]).unwrap();
-        let Command::Boot { udid } = parsed.command else {
+        let Command::Boot {
+            udid,
+            android_emulator_args,
+        } = parsed.command
+        else {
             panic!("expected boot command");
         };
         assert_eq!(udid, None);
+        assert!(android_emulator_args.is_empty());
 
         let parsed = Cli::try_parse_from(["simdeck", "home"]).unwrap();
         let Command::Home { udid } = parsed.command else {
@@ -6935,6 +6962,36 @@ mod tests {
         };
         assert_eq!(udid, None);
         assert!(stdout);
+    }
+
+    #[test]
+    fn boot_command_accepts_android_emulator_startup_args() {
+        let parsed = Cli::try_parse_from([
+            "simdeck",
+            "boot",
+            "android:Pixel_8_API_36",
+            "--android-emulator-arg=-no-snapshot",
+            "--android-emulator-arg=-gpu",
+            "--android-emulator-arg=host",
+        ])
+        .unwrap();
+
+        let Command::Boot {
+            udid,
+            android_emulator_args,
+        } = parsed.command
+        else {
+            panic!("expected boot command");
+        };
+
+        assert_eq!(udid.as_deref(), Some("android:Pixel_8_API_36"));
+        assert_eq!(android_emulator_args, vec!["-no-snapshot", "-gpu", "host"]);
+        assert_eq!(
+            android_boot_request_body(&android_emulator_args),
+            serde_json::json!({
+                "androidEmulatorArgs": ["-no-snapshot", "-gpu", "host"]
+            })
+        );
     }
 
     #[test]
