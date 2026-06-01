@@ -56,6 +56,7 @@ simdeck list
 simdeck list --format json
 simdeck use <udid>
 simdeck boot <udid>
+simdeck boot android:<avd-name> --android-emulator-arg=-no-snapshot
 simdeck shutdown
 simdeck erase
 ```
@@ -67,6 +68,10 @@ inventory, including paths and display metadata.
 `simdeck use <udid>` saves a default simulator for the current project
 directory. After that, most device commands can omit `<udid>`; explicit UDIDs
 still override the default.
+
+For Android emulator startup flags, repeat `--android-emulator-arg=<arg>` on
+`simdeck boot`. SimDeck still owns the AVD selector, emulator ports, and
+shared-video flag used for the browser stream.
 
 ## Apps and URLs
 

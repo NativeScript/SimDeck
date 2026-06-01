@@ -70,6 +70,25 @@ Device IDs come from `/api/simulators`. Android IDs use the `android:` prefix.
 Booted devices are listed first. Paired iPhone and Apple Watch entries include
 `pairedWatchUDID` or `pairedPhoneUDID` when CoreSimulator reports a pairing.
 
+Android emulator boot accepts optional startup arguments:
+
+```json
+{
+  "androidEmulatorArgs": ["-no-snapshot"],
+  "androidDisableAudio": true
+}
+```
+
+`androidDisableAudio` inherits the configured `android.disableAudio` value,
+which defaults to `true`. SimDeck also reads global Android defaults from
+`~/.simdeck/config.json` before applying request arguments. Request arguments
+are appended after config arguments, so one-off boots can override safe defaults
+such as `-gpu`.
+
+SimDeck appends its own selected AVD, emulator console/ADB ports, and
+shared-video flags around those arguments; `-avd`, `@AVD`, `-ports`, and
+`-share-vid` are reserved.
+
 Create requests use identifiers from `/api/simulators/create-options`. New
 devices are booted before the response is returned. If an iOS simulator is
 created with `pairedWatch`, the watch is created, paired, and booted too.
@@ -97,7 +116,9 @@ Android:
   "platform": "android",
   "name": "Pixel_8_API_36",
   "deviceTypeIdentifier": "pixel_8",
-  "runtimeIdentifier": "system-images;android-36;google_apis;arm64-v8a"
+  "runtimeIdentifier": "system-images;android-36;google_apis;arm64-v8a",
+  "androidEmulatorArgs": ["-no-snapshot"],
+  "androidDisableAudio": true
 }
 ```
 

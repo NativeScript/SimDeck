@@ -61,8 +61,8 @@ export async function connect(options = {}) {
             device: (udid) => createSession(udid),
             list: () => requestJson(endpoint, "GET", "/api/simulators"),
             boot: (...args) => {
-                const { udid } = resolveNoArgDeviceCall(args);
-                return requestJson(endpoint, "POST", simulatorPath(udid, "/boot"), null);
+                const { udid, options } = resolveOptionalObjectDeviceCall(args);
+                return requestJson(endpoint, "POST", simulatorPath(udid, "/boot"), androidBootRequestBody(options));
             },
             shutdown: (...args) => {
                 const { udid } = resolveNoArgDeviceCall(args);
@@ -525,6 +525,19 @@ function runJson(command, args, options = {}) {
 }
 function requestOk(endpoint, pathName, body) {
     return requestJson(endpoint, "POST", pathName, body).then(() => undefined);
+}
+function androidBootRequestBody(options) {
+    if (!options) {
+        return null;
+    }
+    const body = {};
+    if (options.androidEmulatorArgs?.length) {
+        body.androidEmulatorArgs = options.androidEmulatorArgs;
+    }
+    if (options.androidDisableAudio !== undefined) {
+        body.androidDisableAudio = options.androidDisableAudio;
+    }
+    return Object.keys(body).length ? body : null;
 }
 function requestJson(endpoint, method, pathName, body) {
     return requestBuffer(endpoint, pathName, method, body).then((buffer) => JSON.parse(buffer.toString("utf8")));

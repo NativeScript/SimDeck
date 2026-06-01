@@ -68,6 +68,10 @@ export type ScreenshotOptions = {
 export type ScreenRecordingOptions = {
     seconds?: number;
 };
+export type AndroidBootOptions = {
+    androidEmulatorArgs?: string[];
+    androidDisableAudio?: boolean;
+};
 type DeviceMethod<TArgs extends unknown[], TResult> = {
     (udid: string, ...args: TArgs): TResult;
     (...args: TArgs): TResult;
@@ -79,7 +83,7 @@ export type SimDeckSession = {
     udid?: string;
     device(udid: string): SimDeckSession;
     list(): Promise<unknown>;
-    boot: DeviceMethod<[], Promise<unknown>>;
+    boot: DeviceMethod<[options?: AndroidBootOptions], Promise<unknown>>;
     shutdown: DeviceMethod<[], Promise<unknown>>;
     erase: DeviceMethod<[], Promise<unknown>>;
     install: DeviceMethod<[appPath: string], Promise<void>>;

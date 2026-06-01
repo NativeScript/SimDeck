@@ -18,6 +18,18 @@ simdeck -p 4311
 `--open` opens the local browser URL. `-p` or `--port` selects a non-default
 port; the default is `4310`.
 
+You can set a user default in `~/.simdeck/config.json`:
+
+```json
+{
+  "service": {
+    "port": 4311
+  }
+}
+```
+
+Explicit `--port` flags still win over the config file.
+
 When that port is already used by a SimDeck service from another binary,
 `simdeck` leaves it running and uses the next available port. This keeps source
 checkout builds fast without touching your installed service.
@@ -56,7 +68,7 @@ pairing code. `service off` removes the LaunchAgent. `service kill` and
 services started by another SimDeck binary.
 When `service restart` is run without `--port`, it keeps the installed
 LaunchAgent port or the current singleton service port before falling back to
-`4310`.
+the configured service port and then `4310`.
 
 ## Options
 

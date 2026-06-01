@@ -88,10 +88,14 @@ routes with the same service token.
 Normal service restarts preserve that token so paired clients stay connected.
 Use `simdeck service reset` only when you want to rotate the service token and
 restart the LaunchAgent.
-The service uses port 4310 unless you pass `-p` or `--port`.
+The service uses port 4310 unless you pass `-p` or `--port`, or set a default
+in `~/.simdeck/config.json`.
 SimDeck-owned Android emulator boots use host GPU rendering by default; use
 `simdeck service restart --android-gpu auto` or
 `--android-gpu swiftshader_indirect` only as a machine-specific fallback.
+Managed Android boots also add `-no-audio` by default. Set
+`android.disableAudio` to `false` in `~/.simdeck/config.json` when you need
+emulator audio.
 Use `simdeck service kill` when you want to stop every SimDeck service process,
 including services started from another checkout or installed binary.
 
@@ -114,6 +118,7 @@ simdeck --device <other-udid> describe --format agent --max-depth 2
 simdeck list
 simdeck use <udid>
 simdeck boot <udid>
+simdeck boot android:<avd-name> --android-emulator-arg=-no-snapshot
 simdeck shutdown
 simdeck erase
 simdeck install /path/to/App.app
