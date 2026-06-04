@@ -161,6 +161,11 @@ static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
              width:(uint32_t)width
             height:(uint32_t)height
              error:(NSError * _Nullable __autoreleasing *)error;
+- (BOOL)encodeBGRA:(const uint8_t *)bgra
+            length:(size_t)length
+             width:(uint32_t)width
+            height:(uint32_t)height
+             error:(NSError * _Nullable __autoreleasing *)error;
 - (void)requestKeyFrame;
 - (void)invalidate;
 
@@ -186,11 +191,14 @@ static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
     @synchronized (XCWNativeH264Encoder.class) {
         const char *previousCodec = getenv("SIMDECK_VIDEO_CODEC");
         char *previousCodecCopy = previousCodec != NULL ? strdup(previousCodec) : NULL;
+        const char *previousRealtimeStream = getenv("SIMDECK_REALTIME_STREAM");
+        char *previousRealtimeStreamCopy = previousRealtimeStream != NULL ? strdup(previousRealtimeStream) : NULL;
         const char *androidCodec = getenv("SIMDECK_ANDROID_VIDEO_CODEC");
         if (androidCodec == NULL || strlen(androidCodec) == 0) {
             androidCodec = "software";
         }
         setenv("SIMDECK_VIDEO_CODEC", androidCodec, 1);
+        setenv("SIMDECK_REALTIME_STREAM", "1", 1);
         _encoder = [[XCWH264Encoder alloc] initWithOutputHandler:^(NSData *sampleData,
                                                                    uint64_t timestampUs,
                                                                    BOOL isKeyFrame,
@@ -219,6 +227,12 @@ static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
             free(previousCodecCopy);
         } else {
             unsetenv("SIMDECK_VIDEO_CODEC");
+        }
+        if (previousRealtimeStreamCopy != NULL) {
+            setenv("SIMDECK_REALTIME_STREAM", previousRealtimeStreamCopy, 1);
+            free(previousRealtimeStreamCopy);
+        } else {
+            unsetenv("SIMDECK_REALTIME_STREAM");
         }
     }
     return self;
@@ -298,6 +312,76 @@ static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
             pixel[2] = src[0];
             pixel[3] = src[3];
         }
+    }
+    CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
+    [_encoder encodePixelBuffer:pixelBuffer];
+    CVPixelBufferRelease(pixelBuffer);
+    return YES;
+}
+
+- (BOOL)encodeBGRA:(const uint8_t *)bgra
+            length:(size_t)length
+             width:(uint32_t)width
+            height:(uint32_t)height
+             error:(NSError * _Nullable __autoreleasing *)error {
+    if (bgra == NULL || width == 0 || height == 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"SimDeck.NativeH264Encoder"
+                                         code:1
+                                     userInfo:@{ NSLocalizedDescriptionKey: @"BGRA frame input was empty." }];
+        }
+        return NO;
+    }
+    size_t expectedLength = (size_t)width * (size_t)height * 4;
+    if (length < expectedLength) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"SimDeck.NativeH264Encoder"
+                                         code:2
+                                     userInfo:@{ NSLocalizedDescriptionKey: @"BGRA frame input was truncated." }];
+        }
+        return NO;
+    }
+
+    NSDictionary *attributes = @{
+        (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+        (__bridge NSString *)kCVPixelBufferWidthKey: @(width),
+        (__bridge NSString *)kCVPixelBufferHeightKey: @(height),
+        (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
+    };
+    CVPixelBufferRef pixelBuffer = NULL;
+    CVReturn createStatus = CVPixelBufferCreate(kCFAllocatorDefault,
+                                                (size_t)width,
+                                                (size_t)height,
+                                                kCVPixelFormatType_32BGRA,
+                                                (__bridge CFDictionaryRef)attributes,
+                                                &pixelBuffer);
+    if (createStatus != kCVReturnSuccess || pixelBuffer == NULL) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"SimDeck.NativeH264Encoder"
+                                         code:createStatus
+                                     userInfo:@{ NSLocalizedDescriptionKey: @"Unable to allocate a VideoToolbox pixel buffer." }];
+        }
+        return NO;
+    }
+
+    CVReturn lockStatus = CVPixelBufferLockBaseAddress(pixelBuffer, 0);
+    if (lockStatus != kCVReturnSuccess) {
+        CVPixelBufferRelease(pixelBuffer);
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"SimDeck.NativeH264Encoder"
+                                         code:lockStatus
+                                     userInfo:@{ NSLocalizedDescriptionKey: @"Unable to lock a VideoToolbox pixel buffer." }];
+        }
+        return NO;
+    }
+
+    uint8_t *dst = CVPixelBufferGetBaseAddress(pixelBuffer);
+    size_t dstRowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer);
+    size_t srcRowBytes = (size_t)width * 4;
+    for (uint32_t y = 0; y < height; y += 1) {
+        memcpy(dst + ((size_t)y * dstRowBytes),
+               bgra + ((size_t)y * srcRowBytes),
+               srcRowBytes);
     }
     CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
     [_encoder encodePixelBuffer:pixelBuffer];
@@ -1350,6 +1434,28 @@ bool xcw_native_h264_encoder_encode_rgba(void *handle,
     @autoreleasepool {
         NSError *error = nil;
         BOOL ok = [XCWNativeH264EncoderFromHandle(handle) encodeRGBA:rgba
+                                                              length:length
+                                                               width:width
+                                                              height:height
+                                                               error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+bool xcw_native_h264_encoder_encode_bgra(void *handle,
+                                         const uint8_t *bgra,
+                                         size_t length,
+                                         uint32_t width,
+                                         uint32_t height,
+                                         uint64_t timestamp_us,
+                                         char **error_message) {
+    (void)timestamp_us;
+    @autoreleasepool {
+        NSError *error = nil;
+        BOOL ok = [XCWNativeH264EncoderFromHandle(handle) encodeBGRA:bgra
                                                               length:length
                                                                width:width
                                                               height:height

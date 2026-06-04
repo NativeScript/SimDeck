@@ -386,12 +386,12 @@ struct ActiveStreamQualityState {
     video_codec: String,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct StreamQualityLimits {
-    max_edge: u32,
-    fps: u32,
-    min_bitrate: u32,
-    bits_per_pixel: u32,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct StreamQualityLimits {
+    pub(crate) max_edge: u32,
+    pub(crate) fps: u32,
+    pub(crate) min_bitrate: u32,
+    pub(crate) bits_per_pixel: u32,
 }
 
 const STREAM_QUALITY_PROFILES: &[StreamQualityProfile] = &[
@@ -1529,6 +1529,19 @@ fn stream_quality_profile_value(profile: &StreamQualityProfile) -> Value {
         "minBitrate": profile.min_bitrate,
         "bitsPerPixel": profile.bits_per_pixel,
     })
+}
+
+pub(crate) fn stream_quality_limits_for_payload(
+    payload: &StreamQualityPayload,
+) -> Result<StreamQualityLimits, AppError> {
+    let profile = payload
+        .profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(stream_quality_profile)
+        .transpose()?;
+    Ok(resolved_stream_quality_limits(payload, profile))
 }
 
 fn resolved_stream_quality_limits(
@@ -2940,8 +2953,13 @@ async fn handle_android_h264_socket(
         state.android.clone(),
         state.metrics.clone(),
         udid.clone(),
-        initial_quality.max_edge,
-        true,
+        match android_h264_quality_from_stream_payload(&initial_quality) {
+            Ok(quality) => quality,
+            Err(error) => {
+                tracing::debug!("Invalid Android H264 WebSocket quality for {udid}: {error}");
+                return;
+            }
+        },
     )
     .await
     {
@@ -3149,11 +3167,28 @@ fn handle_android_h264_socket_message(
                 source.request_refresh();
             }
         }
-        H264SocketMessage::StreamQuality { config: _ } => {
-            source.request_keyframe();
+        H264SocketMessage::StreamQuality { config } => {
+            match android_h264_quality_from_stream_payload(&config) {
+                Ok(quality) => source.reconfigure_h264(quality),
+                Err(error) => {
+                    tracing::debug!("Android H264 WebSocket stream quality update failed: {error}");
+                    source.request_keyframe();
+                }
+            }
         }
     }
     true
+}
+
+fn android_h264_quality_from_stream_payload(
+    payload: &StreamQualityPayload,
+) -> Result<android::AndroidH264StreamQuality, AppError> {
+    let limits = stream_quality_limits_for_payload(payload)?;
+    Ok(android::AndroidH264StreamQuality {
+        max_edge: Some(limits.max_edge),
+        min_bitrate: Some(limits.min_bitrate),
+        bits_per_pixel: Some(limits.bits_per_pixel),
+    })
 }
 
 #[derive(Debug, Deserialize)]

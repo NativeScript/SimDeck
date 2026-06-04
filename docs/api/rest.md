@@ -173,7 +173,7 @@ Performance query parameters:
 | `GET`  | `/api/simulators/{udid}/control`      | Alias for input control WebSocket      |
 | `POST` | `/api/simulators/{udid}/refresh`      | Request a fresh frame or keyframe      |
 
-For normal clients, copy the browser behavior instead of hand-coding a raw decoder. The UI supports WebRTC first and H.264 WebSocket fallback.
+For normal clients, copy the browser behavior instead of hand-coding a raw decoder. The UI supports WebRTC first and H.264 WebSocket fallback. Android emulator IDs use the same endpoints; their H.264 frames are produced from the emulator `-share-vid` display surface, not screenshot polling.
 
 Minimal WebRTC request:
 

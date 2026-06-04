@@ -340,9 +340,9 @@ unsafe extern "C" {
         error_message: *mut *mut c_char,
     ) -> *mut c_void;
     pub fn xcw_native_h264_encoder_destroy(handle: *mut c_void);
-    pub fn xcw_native_h264_encoder_encode_rgba(
+    pub fn xcw_native_h264_encoder_encode_bgra(
         handle: *mut c_void,
-        rgba: *const u8,
+        bgra: *const u8,
         length: usize,
         width: u32,
         height: u32,

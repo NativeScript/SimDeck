@@ -3,12 +3,15 @@
 SimDeck streams live device video to the browser. Local sessions default to high quality. Remote or constrained sessions can trade detail for lower CPU and latency.
 
 iOS simulator H.264 uses VideoToolbox for hardware encoding and x264 for software encoding.
+Android emulator H.264 uses the emulator `-share-vid` display surface. SimDeck reads BGRA frames from the `videmulator<console-port>` shared memory region and encodes them on the Mac, so normal Android live video stays on the native shared display path.
 
 ## When encoding runs
 
-SimDeck starts encoding when a browser stream needs H.264 frames. The server
-requests an initial keyframe to answer the WebRTC or H.264 WebSocket viewer,
-then keeps a shared refresh pump active while frame subscribers exist.
+SimDeck starts encoding when a browser stream needs H.264 frames. For iOS, the
+server requests an initial keyframe to answer the WebRTC or H.264 WebSocket
+viewer, then keeps a shared refresh pump active while frame subscribers exist.
+For Android, SimDeck starts emulators with `-share-vid`, maps the shared display
+region, and feeds changed BGRA frames into the native host H.264 encoder.
 
 The browser reports whether the page and stream canvas are foreground. When all
 known viewers are hidden or the last frame subscriber disconnects, the native
@@ -57,6 +60,12 @@ simdeck service restart --video-codec software
 | `auto`     | Normal use. SimDeck can move between hardware and software as needed.               |
 | `hardware` | Dedicated local machines where VideoToolbox hardware H.264 is reliable.             |
 | `software` | x264 software H.264 for CI, screen recording conflicts, or hardware encoder stalls. |
+
+The codec setting controls iOS simulator host encoding. Android emulator streams
+use a dedicated host encoder for shared display frames; set
+`SIMDECK_ANDROID_VIDEO_CODEC=hardware` or `software` before starting the service
+when you need to override Android's encoder choice. Stream quality controls the
+encoded Android frame size.
 
 When multiple simulator streams run at the same time, `auto` keeps one active
 stream on the hardware encoder path and routes additional active auto streams to

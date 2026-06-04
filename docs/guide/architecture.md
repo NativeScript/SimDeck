@@ -26,7 +26,7 @@ This is why a long-lived service feels faster than repeatedly calling lower-leve
 
 ## Video flow
 
-The browser opens a live stream for the selected device. SimDeck sends fresh frames, drops stale ones when a client falls behind, and lets the browser request refreshes. The UI can use WebRTC or H.264-over-WebSocket fallback depending on browser support and network behavior.
+The browser opens a live stream for the selected device. SimDeck sends fresh frames, drops stale ones when a client falls behind, and lets the browser request refreshes. iOS frames come from the native display bridge and are encoded on the Mac; Android frames come from the emulator `-share-vid` shared display surface and are encoded on the Mac. The UI can use WebRTC or H.264-over-WebSocket fallback depending on browser support and network behavior.
 
 Tune this from the user-facing controls or with:
 

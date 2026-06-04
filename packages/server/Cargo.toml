@@ -15,7 +15,6 @@ hex = "0.4"
 http = "1.1"
 libc = "0.2"
 plist = "1.7"
-prost = "0.13"
 qrcode = "0.14"
 roxmltree = "0.20"
 regex = "1.11"
@@ -25,9 +24,7 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 thiserror = "2.0"
 tokio = { version = "1.42", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-stream = "0.1"
 tokio-tungstenite = "0.29"
-tonic = { version = "0.12", features = ["transport"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

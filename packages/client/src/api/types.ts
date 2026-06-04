@@ -50,7 +50,7 @@ export interface SimulatorMetadata {
   isBooted: boolean;
   android?: {
     avdName?: string;
-    grpcPort?: number;
+    consolePort?: number;
     serial?: string;
   };
   privateDisplay?: PrivateDisplayInfo;

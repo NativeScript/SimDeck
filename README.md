@@ -39,7 +39,7 @@ view inside the editor.
 
 ## Features
 
-- Supports streaming both iOS simulators and Android emulators
+- Supports native H.264 streaming for both iOS simulators and Android emulators
 - Full simulator control & inspection using private iOS accessibility APIs and Android UIAutomator - available using `simdeck` CLI
 - Real-time screen `describe` command using accessibility view tree - available in token-efficient format for agents
 - Profiling built-in: CPU, memory, disk writes, network throughput, hang signals, and stack sampling
