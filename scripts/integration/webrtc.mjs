@@ -102,9 +102,15 @@ async function main() {
   await launchFixtureWithRecovery(fixture.appPath);
 
   const screenshotPath = path.join(tempRoot, "reference.png");
-  simdeckJson(["screenshot", simulatorUDID, "--output", screenshotPath], {
-    timeoutMs: 30_000,
-  });
+  await retrySimdeckJson(
+    ["screenshot", simulatorUDID, "--output", screenshotPath],
+    "WebRTC reference screenshot",
+    {
+      attempts: process.env.CI === "true" ? 3 : 2,
+      delayMs: 5_000,
+      timeoutMs: process.env.CI === "true" ? 120_000 : 60_000,
+    },
+  );
   const { width, height } = pngSize(screenshotPath);
   console.log(`reference screenshot ${width}x${height}`);
 
