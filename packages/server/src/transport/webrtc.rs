@@ -11,17 +11,18 @@ use crate::native::ffi;
 use crate::transport::packet::{FramePacket, SharedFrame};
 use bytes::{BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::ffi::{c_void, CStr};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task;
 use tokio::time::{self, Instant};
 use tracing::{info, warn};
 use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
@@ -29,6 +30,7 @@ use webrtc::data_channel::data_channel_state::RTCDataChannelState;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
+use webrtc::media::Sample as WebRtcSample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy;
@@ -44,6 +46,7 @@ use webrtc::rtp_transceiver::rtp_codec::{
 };
 use webrtc::rtp_transceiver::RTCPFeedback;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_local::TrackLocalWriter;
 
@@ -57,6 +60,7 @@ const WEBRTC_MAX_LOCAL_STREAM_FPS: u32 = 240;
 const WEBRTC_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 const WEBRTC_REALTIME_WRITE_TIMEOUT: Duration = Duration::from_millis(45);
 const WEBRTC_REALTIME_KEYFRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(90);
+const WEBRTC_AUDIO_WRITE_TIMEOUT: Duration = Duration::from_millis(120);
 const WEBRTC_INITIAL_KEYFRAME_TIMEOUT: Duration = Duration::from_secs(5);
 const WEBRTC_FAST_ICE_GATHER_TIMEOUT: Duration = Duration::from_millis(250);
 const WEBRTC_FULL_ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(3);
@@ -72,6 +76,14 @@ const ANDROID_WEBRTC_RGBA_VERSION: u8 = 1;
 const ANDROID_WEBRTC_RGBA_FORMAT_RGBA8888: u8 = 1;
 const ANDROID_WEBRTC_RGBA_BUFFERED_FRAME_LIMIT: usize = 2;
 const ANDROID_WEBRTC_FPS: u64 = 30;
+const WEBRTC_AUDIO_PROCESS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const WEBRTC_AUDIO_SAMPLE_RATE: u32 = 48_000;
+const WEBRTC_AUDIO_CHANNELS: u16 = 2;
+const WEBRTC_AUDIO_FRAME_DURATION: Duration = Duration::from_millis(20);
+const WEBRTC_AUDIO_SILENCE_TIMEOUT: Duration = Duration::from_millis(18);
+const WEBRTC_OPUS_SILENCE_PACKET: &[u8] = &[
+    0x28, 0x0B, 0xE4, 0x89, 0x1A, 0x2C, 0x08, 0x8A, 0xAE, 0xF8, 0x3A, 0xEC,
+];
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<WebRtcMediaStreamToken>>>> =
     OnceLock::new();
 const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 16;
@@ -100,7 +112,17 @@ pub struct WebRtcAnswerPayload {
     pub sdp: String,
     #[serde(rename = "type")]
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<WebRtcAudioMetadata>,
     pub video: WebRtcVideoMetadata,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebRtcAudioMetadata {
+    pub channels: u16,
+    pub codec: String,
+    pub sample_rate: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -206,6 +228,7 @@ pub async fn create_answer(
             "WebRTC preview requires H.264. Restart SimDeck with `--video-codec auto`, `hardware`, or `software`.",
         ));
     }
+    let wants_audio = sdp_has_media_type(&payload.sdp, "audio");
 
     let h264_fmtp_line = h264_sdp_fmtp_line(&codec, &payload.sdp);
     let mut media_engine = MediaEngine::default();
@@ -225,6 +248,9 @@ pub async fn create_answer(
             RTPCodecType::Video,
         )
         .map_err(|error| AppError::internal(format!("register WebRTC H.264 codec: {error}")))?;
+    if wants_audio {
+        register_opus_audio_codec(&mut media_engine)?;
+    }
     let mut registry = Registry::new();
     registry = register_default_interceptors(registry, &mut media_engine)
         .map_err(|error| AppError::internal(format!("register WebRTC interceptors: {error}")))?;
@@ -261,6 +287,21 @@ pub async fn create_answer(
         ),
     }
 
+    let audio_track = if wants_audio {
+        let track = Arc::new(TrackLocalStaticSample::new(
+            opus_audio_codec_capability(),
+            "simdeck-audio".to_owned(),
+            "simdeck".to_owned(),
+        ));
+        let audio_sender = peer_connection
+            .add_track(track.clone() as Arc<dyn TrackLocal + Send + Sync>)
+            .await
+            .map_err(|error| AppError::internal(format!("add WebRTC audio track: {error}")))?;
+        tokio::spawn(async move { while audio_sender.read_rtcp().await.is_ok() {} });
+        Some(track)
+    } else {
+        None
+    };
     let video_track = Arc::new(TrackLocalStaticRTP::new(
         RTCRtpCodecCapability {
             mime_type: MIME_TYPE_H264.to_owned(),
@@ -346,6 +387,7 @@ pub async fn create_answer(
             first_frame,
             peer_connection,
             video_track,
+            audio_track,
             cancellation_token,
             cancellation,
             stream_control_rx,
@@ -356,6 +398,11 @@ pub async fn create_answer(
     Ok(WebRtcAnswerPayload {
         sdp: local_description.sdp,
         kind: "answer".to_owned(),
+        audio: wants_audio.then(|| WebRtcAudioMetadata {
+            channels: WEBRTC_AUDIO_CHANNELS,
+            codec: "opus".to_owned(),
+            sample_rate: WEBRTC_AUDIO_SAMPLE_RATE,
+        }),
         video: WebRtcVideoMetadata {
             width: first_frame_width,
             height: first_frame_height,
@@ -368,6 +415,7 @@ async fn create_android_rgba_answer(
     udid: String,
     payload: WebRtcOfferPayload,
 ) -> Result<WebRtcAnswerPayload, AppError> {
+    let wants_audio = sdp_has_media_type(&payload.sdp, "audio");
     let source = AndroidWebRtcSource::start(
         state.android.clone(),
         state.metrics.clone(),
@@ -387,7 +435,22 @@ async fn create_android_rgba_answer(
         ice_transport_policy_label()
     );
 
-    let api = APIBuilder::new().build();
+    let api = if wants_audio {
+        let mut media_engine = MediaEngine::default();
+        register_opus_audio_codec(&mut media_engine)?;
+        let mut registry = Registry::new();
+        registry = register_default_interceptors(registry, &mut media_engine).map_err(|error| {
+            AppError::internal(format!(
+                "register Android RGBA WebRTC interceptors: {error}"
+            ))
+        })?;
+        APIBuilder::new()
+            .with_media_engine(media_engine)
+            .with_interceptor_registry(registry)
+            .build()
+    } else {
+        APIBuilder::new().build()
+    };
     let peer_connection = Arc::new(
         api.new_peer_connection(RTCConfiguration {
             ice_servers: ice_servers(),
@@ -417,6 +480,23 @@ async fn create_android_rgba_answer(
         )
         .await
         .map_err(|error| AppError::internal(format!("create RGBA WebRTC data channel: {error}")))?;
+    let audio_track = if wants_audio {
+        let track = Arc::new(TrackLocalStaticSample::new(
+            opus_audio_codec_capability(),
+            "simdeck-audio".to_owned(),
+            "simdeck".to_owned(),
+        ));
+        let audio_sender = peer_connection
+            .add_track(track.clone() as Arc<dyn TrackLocal + Send + Sync>)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("add Android RGBA WebRTC audio track: {error}"))
+            })?;
+        tokio::spawn(async move { while audio_sender.read_rtcp().await.is_ok() {} });
+        Some(track)
+    } else {
+        None
+    };
 
     let fast_gather =
         has_sdp_candidate_type(&payload.sdp, "host") && ice_transport_policy_label() == "all";
@@ -467,6 +547,7 @@ async fn create_android_rgba_answer(
             source,
             peer_connection,
             rgba_channel,
+            audio_track,
             cancellation_token,
             cancellation,
             stream_control_rx,
@@ -477,6 +558,11 @@ async fn create_android_rgba_answer(
     Ok(WebRtcAnswerPayload {
         sdp: local_description.sdp,
         kind: "answer".to_owned(),
+        audio: wants_audio.then(|| WebRtcAudioMetadata {
+            channels: WEBRTC_AUDIO_CHANNELS,
+            codec: "opus".to_owned(),
+            sample_rate: WEBRTC_AUDIO_SAMPLE_RATE,
+        }),
         video: WebRtcVideoMetadata {
             width: 0,
             height: 0,
@@ -580,6 +666,13 @@ fn summarize_sdp_candidate_types(sdp: &str) -> String {
         }
     }
     format!("host={host},srflx={srflx},prflx={prflx},relay={relay},other={other}")
+}
+
+fn sdp_has_media_type(sdp: &str, media_type: &str) -> bool {
+    let prefix = format!("m={media_type} ");
+    sdp.lines()
+        .map(str::trim_start)
+        .any(|line| line.starts_with(&prefix))
 }
 
 fn redact_candidate_address(address: &str) -> String {
@@ -1259,6 +1352,29 @@ fn h264_rtcp_feedback() -> Vec<RTCPFeedback> {
     ]
 }
 
+fn opus_audio_codec_capability() -> RTCRtpCodecCapability {
+    RTCRtpCodecCapability {
+        mime_type: MIME_TYPE_OPUS.to_owned(),
+        clock_rate: WEBRTC_AUDIO_SAMPLE_RATE,
+        channels: WEBRTC_AUDIO_CHANNELS,
+        sdp_fmtp_line: "minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1".to_owned(),
+        rtcp_feedback: Vec::new(),
+    }
+}
+
+fn register_opus_audio_codec(media_engine: &mut MediaEngine) -> Result<(), AppError> {
+    media_engine
+        .register_codec(
+            RTCRtpCodecParameters {
+                capability: opus_audio_codec_capability(),
+                payload_type: 111,
+                ..Default::default()
+            },
+            RTPCodecType::Audio,
+        )
+        .map_err(|error| AppError::internal(format!("register WebRTC Opus codec: {error}")))
+}
+
 fn rtcp_packet_requests_keyframe(packet: &(dyn RtcpPacket + Send + Sync)) -> bool {
     packet.as_any().is::<PictureLossIndication>() || packet.as_any().is::<FullIntraRequest>()
 }
@@ -1423,6 +1539,442 @@ fn ice_transport_policy() -> RTCIceTransportPolicy {
         "relay" => RTCIceTransportPolicy::Relay,
         _ => RTCIceTransportPolicy::All,
     }
+}
+
+#[derive(Clone)]
+struct SimulatorAudioCapture {
+    inner: Arc<SimulatorAudioCaptureInner>,
+}
+
+struct SimulatorAudioCaptureInner {
+    handle: AtomicUsize,
+    callback_user_data: AtomicUsize,
+    sender: watch::Sender<Option<SharedEncodedAudioSample>>,
+}
+
+#[derive(Debug)]
+struct EncodedAudioSample {
+    sample_rate: u32,
+    channels: u16,
+    data: Bytes,
+}
+
+type SharedEncodedAudioSample = Arc<EncodedAudioSample>;
+
+impl SimulatorAudioCapture {
+    fn start(
+        process_ids: &[i32],
+        sender: watch::Sender<Option<SharedEncodedAudioSample>>,
+    ) -> Result<Self, AppError> {
+        if process_ids.is_empty() {
+            return Err(AppError::native(
+                "No simulator audio process IDs were available.",
+            ));
+        }
+        let inner = Arc::new(SimulatorAudioCaptureInner {
+            handle: AtomicUsize::new(0),
+            callback_user_data: AtomicUsize::new(0),
+            sender,
+        });
+        let user_data = Weak::into_raw(Arc::downgrade(&inner)) as *mut c_void;
+        let mut error = std::ptr::null_mut();
+        let handle = unsafe {
+            ffi::xcw_native_audio_capture_create(
+                process_ids.as_ptr(),
+                process_ids.len(),
+                Some(host_audio_capture_callback),
+                user_data,
+                &mut error,
+            )
+        };
+        if handle.is_null() {
+            unsafe {
+                let _ = Weak::from_raw(user_data as *const SimulatorAudioCaptureInner);
+            }
+            return Err(unsafe { take_native_error(error) }
+                .unwrap_or_else(|| AppError::native("Unable to start simulator audio capture.")));
+        }
+        inner.handle.store(handle as usize, Ordering::Release);
+        inner
+            .callback_user_data
+            .store(user_data as usize, Ordering::Release);
+        Ok(Self { inner })
+    }
+
+    fn update_processes(&self, process_ids: &[i32]) -> Result<(), AppError> {
+        if process_ids.is_empty() {
+            return Ok(());
+        }
+        let handle = self.inner.handle.load(Ordering::Acquire);
+        if handle == 0 {
+            return Err(AppError::native(
+                "Simulator audio capture handle was already closed.",
+            ));
+        }
+        let mut error = std::ptr::null_mut();
+        let ok = unsafe {
+            ffi::xcw_native_audio_capture_update_processes(
+                handle as *mut c_void,
+                process_ids.as_ptr(),
+                process_ids.len(),
+                &mut error,
+            )
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(unsafe { take_native_error(error) }.unwrap_or_else(|| {
+                AppError::native("Unable to update simulator audio capture processes.")
+            }))
+        }
+    }
+}
+
+impl Drop for SimulatorAudioCaptureInner {
+    fn drop(&mut self) {
+        let handle = self.handle.load(Ordering::Acquire);
+        let callback_user_data = self.callback_user_data.load(Ordering::Acquire);
+        unsafe {
+            if handle != 0 {
+                ffi::xcw_native_audio_capture_destroy(handle as *mut c_void);
+            }
+            if callback_user_data != 0 {
+                let _ = Weak::from_raw(callback_user_data as *const SimulatorAudioCaptureInner);
+            }
+        }
+    }
+}
+
+unsafe extern "C" fn host_audio_capture_callback(
+    sample: *const ffi::xcw_native_audio_sample,
+    user_data: *mut c_void,
+) {
+    if sample.is_null() || user_data.is_null() {
+        return;
+    }
+
+    let weak = unsafe { Weak::from_raw(user_data as *const SimulatorAudioCaptureInner) };
+    if let Some(inner) = weak.upgrade() {
+        unsafe {
+            inner.handle_audio_sample(&*sample);
+        }
+    }
+    let _ = Weak::into_raw(weak);
+}
+
+impl SimulatorAudioCaptureInner {
+    unsafe fn handle_audio_sample(&self, sample: &ffi::xcw_native_audio_sample) {
+        if sample.sample_rate == 0 || sample.channels == 0 {
+            unsafe {
+                ffi::xcw_native_release_shared_bytes(sample.data);
+            }
+            return;
+        }
+        let Some(data) = (unsafe { copy_native_shared_bytes(sample.data) }) else {
+            return;
+        };
+        if data.is_empty() {
+            return;
+        }
+        let packet = Arc::new(EncodedAudioSample {
+            sample_rate: sample.sample_rate,
+            channels: sample.channels,
+            data,
+        });
+        self.sender.send_replace(Some(packet));
+    }
+}
+
+fn spawn_simulator_audio_stream(
+    state: AppState,
+    udid: String,
+    audio_track: Arc<TrackLocalStaticSample>,
+    mut cancellation: broadcast::Receiver<()>,
+) {
+    tokio::spawn(async move {
+        let (sample_tx, mut sample_rx) = watch::channel(None);
+        let (audio_stop_tx, _) = broadcast::channel(1);
+        let mut capture_cancellation = cancellation.resubscribe();
+        let mut capture_stop = audio_stop_tx.subscribe();
+        let capture_state = state.clone();
+        let capture_udid = udid.clone();
+        tokio::spawn(async move {
+            let mut capture: Option<SimulatorAudioCapture> = None;
+            let mut refresh = time::interval(WEBRTC_AUDIO_PROCESS_REFRESH_INTERVAL);
+            loop {
+                tokio::select! {
+                    _ = capture_cancellation.recv() => break,
+                    _ = capture_stop.recv() => break,
+                    _ = refresh.tick() => {
+                        let process_ids = match resolve_simulator_audio_process_ids(capture_state.clone(), &capture_udid).await {
+                            Ok(process_ids) => process_ids,
+                            Err(error) => {
+                                warn!("WebRTC audio process discovery failed for {capture_udid}: {error}");
+                                continue;
+                            }
+                        };
+                        if process_ids.is_empty() {
+                            capture = None;
+                            continue;
+                        }
+                        if let Some(active_capture) = capture.as_ref().cloned() {
+                            let update_process_ids = process_ids.clone();
+                            let update_result = task::spawn_blocking(move || {
+                                active_capture.update_processes(&update_process_ids)
+                            }).await;
+                            let update_result = match update_result {
+                                Ok(result) => result,
+                                Err(error) => Err(AppError::internal(format!(
+                                    "Failed to join audio capture update task: {error}"
+                                ))),
+                            };
+                            if let Err(error) = update_result {
+                                warn!("WebRTC audio capture update failed for {capture_udid}: {error}");
+                                capture = None;
+                            }
+                            continue;
+                        }
+                        let tx = sample_tx.clone();
+                        match task::spawn_blocking(move || SimulatorAudioCapture::start(&process_ids, tx)).await {
+                            Ok(Ok(new_capture)) => {
+                                capture = Some(new_capture);
+                            }
+                            Ok(Err(error)) => {
+                                warn!("WebRTC audio capture unavailable for {capture_udid}: {error}");
+                            }
+                            Err(error) => {
+                                warn!("WebRTC audio capture task failed for {capture_udid}: {error}");
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let mut silence = time::interval(WEBRTC_AUDIO_FRAME_DURATION);
+        silence.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+        let mut last_audio_write_at: Option<Instant> = None;
+        loop {
+            tokio::select! {
+                _ = cancellation.recv() => break,
+                _ = silence.tick() => {
+                    if last_audio_write_at.is_some_and(|instant| instant.elapsed() < WEBRTC_AUDIO_SILENCE_TIMEOUT) {
+                        continue;
+                    }
+                    match write_webrtc_audio_sample(&audio_track, Bytes::from_static(WEBRTC_OPUS_SILENCE_PACKET)).await {
+                        Ok(true) => {
+                            last_audio_write_at = Some(Instant::now());
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            warn!("WebRTC audio write failed for {udid}: {error}");
+                            let _ = audio_stop_tx.send(());
+                            return;
+                        }
+                    }
+                }
+                sample = sample_rx.changed() => {
+                    if sample.is_err() {
+                        break;
+                    }
+                    let Some(sample) = sample_rx.borrow_and_update().clone() else {
+                        continue;
+                    };
+                    if sample.sample_rate != WEBRTC_AUDIO_SAMPLE_RATE || sample.channels != WEBRTC_AUDIO_CHANNELS {
+                        warn!(
+                            "Ignoring unexpected WebRTC Opus audio packet format for {udid}: {} Hz, {} channels",
+                            sample.sample_rate,
+                            sample.channels
+                        );
+                        continue;
+                    }
+                    match write_webrtc_audio_sample(&audio_track, sample.data.clone()).await {
+                        Ok(true) => {
+                            last_audio_write_at = Some(Instant::now());
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            warn!("WebRTC audio write failed for {udid}: {error}");
+                            let _ = audio_stop_tx.send(());
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        let _ = audio_stop_tx.send(());
+    });
+}
+
+async fn write_webrtc_audio_sample(
+    audio_track: &TrackLocalStaticSample,
+    data: Bytes,
+) -> Result<bool, String> {
+    let sample = WebRtcSample {
+        data,
+        duration: WEBRTC_AUDIO_FRAME_DURATION,
+        ..Default::default()
+    };
+    match time::timeout(
+        WEBRTC_AUDIO_WRITE_TIMEOUT,
+        audio_track.write_sample(&sample),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(true),
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(_) => Ok(false),
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HostAudioProcess {
+    pid: i32,
+    parent_pid: i32,
+    command: String,
+}
+
+async fn resolve_simulator_audio_process_ids(
+    state: AppState,
+    udid: &str,
+) -> Result<Vec<i32>, AppError> {
+    let udid = udid.to_owned();
+    task::spawn_blocking(move || simulator_audio_process_ids_blocking(&state, &udid))
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "Failed to join audio process discovery task: {error}"
+            ))
+        })?
+}
+
+fn simulator_audio_process_ids_blocking(
+    state: &AppState,
+    udid: &str,
+) -> Result<Vec<i32>, AppError> {
+    let processes = list_host_audio_processes()?;
+    let root_processes = if android::is_android_id(udid) {
+        android_audio_root_process_ids(udid, &processes)?
+    } else {
+        let bridge = state.registry.bridge().clone();
+        let simulator = bridge
+            .simulator(udid)?
+            .ok_or_else(|| AppError::not_found(format!("Unknown simulator `{udid}`.")))?;
+        let data_path = simulator
+            .data_path
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned);
+        ios_simulator_audio_root_process_ids(udid, data_path.as_deref(), &processes)
+    };
+    Ok(process_tree_process_ids(&processes, root_processes))
+}
+
+fn list_host_audio_processes() -> Result<Vec<HostAudioProcess>, AppError> {
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,ppid=,command="])
+        .output()
+        .map_err(|error| AppError::native(format!("Unable to list host processes: {error}")))?;
+    if !output.status.success() {
+        return Err(AppError::native("Unable to list host processes."));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(parse_host_audio_process_line)
+        .collect())
+}
+
+fn parse_host_audio_process_line(line: &str) -> Option<HostAudioProcess> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut parts = trimmed.split_whitespace();
+    let pid = parts.next()?.parse::<i32>().ok()?;
+    let parent_pid = parts.next()?.parse::<i32>().ok()?;
+    let command = parts.collect::<Vec<_>>().join(" ");
+    if command.is_empty() {
+        return None;
+    }
+    Some(HostAudioProcess {
+        pid,
+        parent_pid,
+        command,
+    })
+}
+
+fn ios_simulator_audio_root_process_ids(
+    udid: &str,
+    data_path: Option<&str>,
+    processes: &[HostAudioProcess],
+) -> BTreeSet<i32> {
+    let device_path = data_path
+        .and_then(|path| path.strip_suffix("/data"))
+        .filter(|path| !path.is_empty());
+    processes
+        .iter()
+        .filter(|process| {
+            !is_simulator_audio_probe_process(&process.command)
+                && (process.command.contains(udid)
+                    || data_path.is_some_and(|path| process.command.contains(path))
+                    || device_path.is_some_and(|path| process.command.contains(path)))
+        })
+        .map(|process| process.pid)
+        .collect()
+}
+
+fn android_audio_root_process_ids(
+    udid: &str,
+    processes: &[HostAudioProcess],
+) -> Result<BTreeSet<i32>, AppError> {
+    let avd_name = android::avd_from_id(udid)?;
+    let avd_arg = format!("-avd {avd_name}");
+    let avd_at_arg = format!("@{avd_name}");
+    let avd_dir = format!(".android/avd/{avd_name}.avd");
+    Ok(processes
+        .iter()
+        .filter(|process| {
+            let command = process.command.as_str();
+            !is_simulator_audio_probe_process(command)
+                && (command.contains(&avd_arg)
+                    || command.contains(&avd_at_arg)
+                    || command.contains(&avd_dir))
+        })
+        .map(|process| process.pid)
+        .collect())
+}
+
+fn process_tree_process_ids(processes: &[HostAudioProcess], roots: BTreeSet<i32>) -> Vec<i32> {
+    let mut by_parent: HashMap<i32, Vec<i32>> = HashMap::new();
+    for process in processes {
+        by_parent
+            .entry(process.parent_pid)
+            .or_default()
+            .push(process.pid);
+    }
+
+    let mut selected = roots;
+    let mut stack = selected.iter().copied().collect::<Vec<_>>();
+    while let Some(parent_pid) = stack.pop() {
+        if let Some(children) = by_parent.get(&parent_pid) {
+            for child_pid in children {
+                if selected.insert(*child_pid) {
+                    stack.push(*child_pid);
+                }
+            }
+        }
+    }
+    selected.into_iter().collect()
+}
+
+fn is_simulator_audio_probe_process(command: &str) -> bool {
+    let executable = command
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.rsplit('/').next())
+        .unwrap_or_default();
+    executable == "simctl"
+        || executable == "xcrun" && command.contains(" simctl ")
+        || executable == "ps"
 }
 
 #[derive(Clone)]
@@ -1904,6 +2456,7 @@ struct WebRtcMediaStream {
     first_frame: SharedFrame,
     peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
     video_track: Arc<TrackLocalStaticRTP>,
+    audio_track: Option<Arc<TrackLocalStaticSample>>,
     cancellation_token: broadcast::Sender<()>,
     cancellation: broadcast::Receiver<()>,
     stream_control_rx: mpsc::UnboundedReceiver<WebRtcStreamCommand>,
@@ -1915,6 +2468,7 @@ struct WebRtcRgbaStream {
     udid: String,
     peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
     rgba_channel: Arc<RTCDataChannel>,
+    audio_track: Option<Arc<TrackLocalStaticSample>>,
     cancellation_token: broadcast::Sender<()>,
     cancellation: broadcast::Receiver<()>,
     stream_control_rx: mpsc::UnboundedReceiver<WebRtcStreamCommand>,
@@ -1928,6 +2482,7 @@ impl WebRtcRgbaStream {
             udid,
             peer_connection,
             rgba_channel,
+            audio_track,
             cancellation_token,
             mut cancellation,
             mut stream_control_rx,
@@ -1937,6 +2492,14 @@ impl WebRtcRgbaStream {
         let mut peer_disconnected_since: Option<time::Instant> = None;
         let mut sequence = 0u64;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
+        if let Some(audio_track) = audio_track {
+            spawn_simulator_audio_stream(
+                state.clone(),
+                udid.clone(),
+                audio_track,
+                cancellation_token.subscribe(),
+            );
+        }
         rgba_channel.on_open(Box::new({
             let udid = udid.clone();
             move || {
@@ -2048,6 +2611,7 @@ impl WebRtcMediaStream {
             first_frame,
             peer_connection,
             video_track,
+            audio_track,
             cancellation_token,
             mut cancellation,
             mut stream_control_rx,
@@ -2067,6 +2631,14 @@ impl WebRtcMediaStream {
         let mut waiting_for_keyframe = false;
         let mut peer_disconnected_since: Option<time::Instant> = None;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
+        if let Some(audio_track) = audio_track {
+            spawn_simulator_audio_stream(
+                state.clone(),
+                udid.clone(),
+                audio_track,
+                cancellation_token.subscribe(),
+            );
+        }
         let first_frame_duration = send_timing.duration_for(&first_frame, realtime_stream);
 
         match write_frame_sample_with_timeout(
@@ -2645,10 +3217,12 @@ mod tests {
     use super::{
         android_rgba_webrtc_frame_chunks, append_avcc_parameter_sets, append_length_prefixed_nalus,
         h264_annex_b_sample, h264_frame_has_idr, h264_frame_is_decoder_sync, h264_sdp_fmtp_line,
-        is_annex_b, is_h264_codec, rtcp_packet_requests_keyframe, rtp_packet_pacing,
-        WebRtcMetricsGuard, WebRtcSendTiming, ANDROID_WEBRTC_RGBA_CHUNK_BYTES,
-        ANDROID_WEBRTC_RGBA_CHUNK_HEADER_BYTES, ANDROID_WEBRTC_RGBA_CHUNK_MAGIC,
-        ANDROID_WEBRTC_RGBA_FORMAT_RGBA8888, ANDROID_WEBRTC_RGBA_VERSION, ANNEX_B_START_CODE,
+        is_annex_b, is_h264_codec, opus_audio_codec_capability, rtcp_packet_requests_keyframe,
+        rtp_packet_pacing, sdp_has_media_type, WebRtcMetricsGuard, WebRtcSendTiming,
+        ANDROID_WEBRTC_RGBA_CHUNK_BYTES, ANDROID_WEBRTC_RGBA_CHUNK_HEADER_BYTES,
+        ANDROID_WEBRTC_RGBA_CHUNK_MAGIC, ANDROID_WEBRTC_RGBA_FORMAT_RGBA8888,
+        ANDROID_WEBRTC_RGBA_VERSION, ANNEX_B_START_CODE, WEBRTC_AUDIO_CHANNELS,
+        WEBRTC_AUDIO_SAMPLE_RATE, WEBRTC_OPUS_SILENCE_PACKET,
     };
     use crate::android;
     use crate::metrics::counters::Metrics;
@@ -2703,6 +3277,110 @@ mod tests {
         ));
         assert!(rtcp_packet_requests_keyframe(&FullIntraRequest::default()));
         assert!(!rtcp_packet_requests_keyframe(&SenderReport::default()));
+    }
+
+    #[test]
+    fn detects_audio_m_lines_in_browser_offers() {
+        assert!(sdp_has_media_type(
+            "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n",
+            "audio"
+        ));
+        assert!(!sdp_has_media_type(
+            "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n",
+            "audio"
+        ));
+    }
+
+    #[test]
+    fn opus_audio_codec_uses_browser_native_wideband_settings() {
+        let codec = opus_audio_codec_capability();
+
+        assert_eq!(codec.mime_type, "audio/opus");
+        assert_eq!(codec.clock_rate, WEBRTC_AUDIO_SAMPLE_RATE);
+        assert_eq!(codec.channels, WEBRTC_AUDIO_CHANNELS);
+        assert!(codec.sdp_fmtp_line.contains("stereo=1"));
+        assert!(codec.sdp_fmtp_line.contains("useinbandfec=1"));
+    }
+
+    #[test]
+    fn opus_silence_packet_uses_real_low_bitrate_audio_frame() {
+        assert_eq!(WEBRTC_OPUS_SILENCE_PACKET.len(), 12);
+        assert_ne!(WEBRTC_OPUS_SILENCE_PACKET, &[0xF8, 0xFF, 0xFE]);
+    }
+
+    #[test]
+    fn parses_host_audio_process_lines_with_commands_containing_spaces() {
+        assert_eq!(
+            super::parse_host_audio_process_line("  42     1 /tmp/My App.app/My App --flag value"),
+            Some(super::HostAudioProcess {
+                pid: 42,
+                parent_pid: 1,
+                command: "/tmp/My App.app/My App --flag value".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn ios_audio_process_discovery_includes_device_descendants() {
+        let processes = vec![
+            super::HostAudioProcess {
+                pid: 10,
+                parent_pid: 1,
+                command: "/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS.simruntime/Contents/Resources/RuntimeRoot/usr/libexec/launchd_sim /Users/me/Library/Developer/CoreSimulator/Devices/UDID-1/data"
+                    .to_owned(),
+            },
+            super::HostAudioProcess {
+                pid: 11,
+                parent_pid: 10,
+                command: "/Applications/Fixture.app/Fixture".to_owned(),
+            },
+            super::HostAudioProcess {
+                pid: 12,
+                parent_pid: 1,
+                command: "/usr/bin/xcrun simctl spawn UDID-1 launchctl print user/501"
+                    .to_owned(),
+            },
+        ];
+        let roots = super::ios_simulator_audio_root_process_ids(
+            "UDID-1",
+            Some("/Users/me/Library/Developer/CoreSimulator/Devices/UDID-1/data"),
+            &processes,
+        );
+
+        assert_eq!(
+            super::process_tree_process_ids(&processes, roots),
+            vec![10, 11]
+        );
+    }
+
+    #[test]
+    fn android_audio_process_discovery_includes_emulator_descendants() {
+        let processes = vec![
+            super::HostAudioProcess {
+                pid: 20,
+                parent_pid: 1,
+                command:
+                    "/Users/me/Library/Android/sdk/emulator/emulator -avd Pixel_8_API_36 -no-window"
+                        .to_owned(),
+            },
+            super::HostAudioProcess {
+                pid: 21,
+                parent_pid: 20,
+                command: "qemu-system-aarch64 -some-child-arg".to_owned(),
+            },
+            super::HostAudioProcess {
+                pid: 22,
+                parent_pid: 1,
+                command: "/Users/me/Library/Android/sdk/emulator/emulator -avd Other".to_owned(),
+            },
+        ];
+        let roots =
+            super::android_audio_root_process_ids("android:Pixel_8_API_36", &processes).unwrap();
+
+        assert_eq!(
+            super::process_tree_process_ids(&processes, roots),
+            vec![20, 21]
+        );
     }
 
     #[test]

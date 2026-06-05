@@ -173,7 +173,7 @@ Performance query parameters:
 | `GET`  | `/api/simulators/{udid}/control`      | Alias for input control WebSocket      |
 | `POST` | `/api/simulators/{udid}/refresh`      | Request a fresh frame or keyframe      |
 
-For normal clients, copy the browser behavior instead of hand-coding a raw decoder. The UI supports WebRTC first and H.264 WebSocket fallback.
+For normal clients, copy the browser behavior instead of hand-coding a raw decoder. The UI supports WebRTC first and H.264 WebSocket fallback. WebRTC carries H.264 video and, when the offer includes an audio receiver, an Opus simulator-audio track sourced from the selected simulator or emulator process tree. The H.264 WebSocket fallback is video-only.
 
 Minimal WebRTC request:
 
@@ -194,7 +194,16 @@ Response:
 ```json
 {
   "type": "answer",
-  "sdp": "v=0..."
+  "sdp": "v=0...",
+  "audio": {
+    "codec": "opus",
+    "sampleRate": 48000,
+    "channels": 2
+  },
+  "video": {
+    "width": 1179,
+    "height": 2556
+  }
 }
 ```
 

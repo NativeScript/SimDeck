@@ -579,9 +579,14 @@ function frameContainsPoint(
   );
 }
 
-function cleanText(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
+function cleanText(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value.trim() || null;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return null;
 }
 
 function displayAccessibilityKind(

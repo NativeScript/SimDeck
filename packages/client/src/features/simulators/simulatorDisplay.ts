@@ -65,13 +65,14 @@ function simulatorMetadataText(simulator: SimulatorMetadata): string {
     simulator.runtimeName,
     simulator.runtimeIdentifier,
   ]
-    .filter(Boolean)
+    .map(metadataTextValue)
+    .filter((value): value is string => Boolean(value))
     .join(" ")
     .toLowerCase();
 }
 
-function formatRuntimeLabel(value: string | undefined): string | null {
-  const trimmed = value?.trim();
+function formatRuntimeLabel(value: unknown): string | null {
+  const trimmed = metadataTextValue(value);
   if (!trimmed) {
     return null;
   }
@@ -88,4 +89,14 @@ function formatRuntimeLabel(value: string | undefined): string | null {
     }
   }
   return trimmed;
+}
+
+function metadataTextValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value.trim() || null;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return null;
 }

@@ -30,7 +30,16 @@ typedef struct {
   xcw_native_shared_bytes data;
 } xcw_native_frame;
 
+typedef struct {
+  uint64_t timestamp_us;
+  uint32_t sample_rate;
+  uint16_t channels;
+  xcw_native_shared_bytes data;
+} xcw_native_audio_sample;
+
 typedef void (*xcw_native_frame_callback)(const xcw_native_frame *frame,
+                                          void *user_data);
+typedef void (*xcw_native_audio_callback)(const xcw_native_audio_sample *sample,
                                           void *user_data);
 
 static char *xcw_strdup(const char *value) {
@@ -584,6 +593,34 @@ bool xcw_native_h264_encoder_encode_rgba(void *handle, const uint8_t *rgba,
 }
 
 void xcw_native_h264_encoder_request_keyframe(void *handle) { (void)handle; }
+
+void *xcw_native_audio_capture_create(const int32_t *process_ids,
+                                      uintptr_t process_count,
+                                      xcw_native_audio_callback callback,
+                                      void *user_data,
+                                      char **error_message) {
+  (void)process_ids;
+  (void)process_count;
+  (void)callback;
+  (void)user_data;
+  xcw_set_error(error_message,
+                "Audio capture is only available in the macOS native bridge.");
+  return NULL;
+}
+
+bool xcw_native_audio_capture_update_processes(void *handle,
+                                               const int32_t *process_ids,
+                                               uintptr_t process_count,
+                                               char **error_message) {
+  (void)handle;
+  (void)process_ids;
+  (void)process_count;
+  xcw_set_error(error_message,
+                "Audio capture is only available in the macOS native bridge.");
+  return false;
+}
+
+void xcw_native_audio_capture_destroy(void *handle) { (void)handle; }
 
 void xcw_native_free_string(char *value) { free(value); }
 

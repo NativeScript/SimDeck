@@ -330,7 +330,6 @@ impl AndroidBridge {
             "-avd",
             &avd_name,
             window_mode,
-            "-no-audio",
             "-gpu",
             "swiftshader_indirect",
         ];

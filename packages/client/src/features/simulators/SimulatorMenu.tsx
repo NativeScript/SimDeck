@@ -34,6 +34,7 @@ interface SimulatorMenuProps {
   onStreamFpsChange: (fps: StreamFps) => void;
   onStreamQualityChange: (quality: StreamQualityPreset) => void;
   onStreamTransportChange: (transport: StreamTransport) => void;
+  onToggleStreamAudioMuted: () => void;
   onToggleAppearance: () => void;
   onToggleDebug: () => void;
   onToggleMenu: () => void;
@@ -47,6 +48,7 @@ interface SimulatorMenuProps {
   showBootButton: boolean;
   showStopButton: boolean;
   streamConfig: StreamConfig;
+  streamAudioMuted: boolean;
   streamTransport: StreamTransport;
   touchOverlayVisible: boolean;
 }
@@ -74,6 +76,7 @@ export function SimulatorMenu({
   onStreamFpsChange,
   onStreamQualityChange,
   onStreamTransportChange,
+  onToggleStreamAudioMuted,
   onToggleAppearance,
   onToggleDebug,
   onToggleMenu,
@@ -87,6 +90,7 @@ export function SimulatorMenu({
   showBootButton,
   showStopButton,
   streamConfig,
+  streamAudioMuted,
   streamTransport,
   touchOverlayVisible,
 }: SimulatorMenuProps) {
@@ -199,6 +203,14 @@ export function SimulatorMenu({
                       ),
                     )}
                   </select>
+                </label>
+                <label className="menu-toggle">
+                  <input
+                    checked={!streamAudioMuted}
+                    onChange={() => onToggleStreamAudioMuted()}
+                    type="checkbox"
+                  />
+                  <span>Sound</span>
                 </label>
               </div>
               <div className="menu-divider" />

@@ -51,6 +51,7 @@ interface ToolbarProps {
   onStreamFpsChange: (fps: StreamFps) => void;
   onStreamQualityChange: (quality: StreamQualityPreset) => void;
   onStreamTransportChange: (transport: StreamTransport) => void;
+  onToggleStreamAudioMuted: () => void;
   onToggleAppearance: () => void;
   onToggleDebug: () => void;
   onToggleDevTools: () => void;
@@ -71,6 +72,7 @@ interface ToolbarProps {
   showBootButton: boolean;
   showStopButton: boolean;
   streamConfig: StreamConfig;
+  streamAudioMuted: boolean;
   streamTransport: StreamTransport;
   touchOverlayVisible: boolean;
   menuOpen: boolean;
@@ -114,6 +116,7 @@ export function Toolbar({
   onStreamFpsChange,
   onStreamQualityChange,
   onStreamTransportChange,
+  onToggleStreamAudioMuted,
   onToggleAppearance,
   onToggleDebug,
   onToggleDevTools,
@@ -133,6 +136,7 @@ export function Toolbar({
   showBootButton,
   showStopButton,
   streamConfig,
+  streamAudioMuted,
   streamTransport,
   simulatorMenuOpen,
   simulatorMenuRef,
@@ -194,6 +198,7 @@ export function Toolbar({
           onStreamFpsChange={onStreamFpsChange}
           onStreamQualityChange={onStreamQualityChange}
           onStreamTransportChange={onStreamTransportChange}
+          onToggleStreamAudioMuted={onToggleStreamAudioMuted}
           onToggleAppearance={onToggleAppearance}
           onToggleDebug={onToggleDebug}
           onToggleMenu={onToggleMenu}
@@ -208,6 +213,7 @@ export function Toolbar({
           showStopButton={showStopButton}
           canInstallApp={canInstallApp}
           streamConfig={streamConfig}
+          streamAudioMuted={streamAudioMuted}
           streamTransport={streamTransport}
           touchOverlayVisible={touchOverlayVisible}
         />

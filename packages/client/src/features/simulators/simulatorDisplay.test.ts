@@ -30,6 +30,17 @@ describe("simulatorDisplay", () => {
     ).toBe("watchOS 26.0");
   });
 
+  it("ignores non-string runtime metadata", () => {
+    expect(
+      simulatorRuntimeLabel(
+        simulator({
+          runtimeIdentifier: { identifier: "unexpected" } as unknown as string,
+          runtimeName: null as unknown as string,
+        }),
+      ),
+    ).toBe("");
+  });
+
   it("enables native chrome for Apple Watch simulators", () => {
     expect(
       shouldRenderNativeChrome(

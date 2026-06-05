@@ -413,6 +413,22 @@
   text-transform: uppercase;
 }
 
+.menu-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.menu-toggle input {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+
 .menu-select {
   width: 100%;
   height: 32px;

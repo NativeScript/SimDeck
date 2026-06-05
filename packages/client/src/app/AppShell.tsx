@@ -54,7 +54,10 @@ import {
   simulatorUsesInsetChromeButtons,
 } from "../features/simulators/simulatorDisplay";
 import { useSimulatorList } from "../features/simulators/useSimulatorList";
-import { sendWebRtcControlMessage } from "../features/stream/streamWorkerClient";
+import {
+  sendWebRtcControlMessage,
+  setActiveStreamAudioMuted,
+} from "../features/stream/streamWorkerClient";
 import type {
   StreamConfig,
   StreamEncoder,
@@ -560,6 +563,8 @@ export function AppShell({
   const [streamTransport, setStreamTransport] = useState<StreamTransport>(
     initialStreamTransportRef.current,
   );
+  const [streamAudioMuted, setStreamAudioMuted] = useState(true);
+  const streamAudioMutedRef = useRef(streamAudioMuted);
   const [streamConfigApplyKey, setStreamConfigApplyKey] = useState(0);
   const [streamConfigReady, setStreamConfigReady] = useState(false);
   const [touchIndicators, setTouchIndicators] = useState<TouchIndicator[]>([]);
@@ -812,6 +817,7 @@ export function AppShell({
     streamBackend,
     streamCanvasKey,
   } = useLiveStream({
+    audioMuted: streamAudioMuted,
     canvasElement: streamCanvasElement,
     paused: !streamConfigReady,
     remote: remoteStream,
@@ -876,6 +882,17 @@ export function AppShell({
     },
     [remoteStream],
   );
+
+  const toggleStreamAudioMuted = useCallback(() => {
+    const next = !streamAudioMutedRef.current;
+    streamAudioMutedRef.current = next;
+    setActiveStreamAudioMuted(next);
+    setStreamAudioMuted(next);
+  }, []);
+
+  useEffect(() => {
+    streamAudioMutedRef.current = streamAudioMuted;
+  }, [streamAudioMuted]);
 
   useEffect(() => {
     if (
@@ -2931,6 +2948,7 @@ export function AppShell({
         onStreamFpsChange={updateStreamFps}
         onStreamQualityChange={updateStreamQuality}
         onStreamTransportChange={updateStreamTransport}
+        onToggleStreamAudioMuted={toggleStreamAudioMuted}
         onShutdown={() => {
           if (!selectedSimulator) {
             return;
@@ -2989,6 +3007,7 @@ export function AppShell({
           !selectedSimulatorTransitionKind,
         )}
         streamConfig={streamConfig}
+        streamAudioMuted={streamAudioMuted}
         streamTransport={streamTransport}
         simulatorMenuOpen={simulatorMenuOpen}
         simulatorMenuRef={simulatorMenuRef}

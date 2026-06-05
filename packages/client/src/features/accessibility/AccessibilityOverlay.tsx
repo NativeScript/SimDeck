@@ -292,9 +292,12 @@ export function accessibilityDomTagName(node: AccessibilityNode): string {
   return `simdeck-${component}`;
 }
 
-function cleanTagPart(value: string | null | undefined): string | null {
-  const kebab = value
-    ?.trim()
+function cleanTagPart(value: unknown): string | null {
+  const text = cleanAccessibilityText(value);
+  if (!text) {
+    return null;
+  }
+  const kebab = text
     .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
     .replace(/[^A-Za-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
@@ -441,8 +444,12 @@ function accessibilityStateSummary(
   return state.join(", ");
 }
 
-function cleanAccessibilityText(
-  value: string | null | undefined,
-): string | null {
-  return value?.trim() || null;
+function cleanAccessibilityText(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value.trim() || null;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return null;
 }

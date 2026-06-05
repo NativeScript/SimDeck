@@ -28,6 +28,9 @@ const maxInteractionLatencyMs = Number(
   process.env.SIMDECK_E2E_MAX_INTERACTION_LATENCY_MS ?? 750,
 );
 const interactionsEnabled = process.env.SIMDECK_E2E_INTERACTIONS !== "0";
+const audioEnabled = process.env.SIMDECK_E2E_ENABLE_AUDIO === "1";
+const capturePeerSnapshot =
+  process.env.SIMDECK_E2E_CAPTURE_PEER_SNAPSHOT === "1";
 const maxPeerDisconnectedMs = Number(
   process.env.SIMDECK_E2E_MAX_PEER_DISCONNECTED_MS ?? 1000,
 );
@@ -41,6 +44,7 @@ const minVideoHeight = Number(process.env.SIMDECK_E2E_MIN_VIDEO_HEIGHT ?? 0);
 const minDecodedFps = Number(process.env.SIMDECK_E2E_MIN_DECODED_FPS ?? 0);
 const minPresentedFps = Number(process.env.SIMDECK_E2E_MIN_PRESENTED_FPS ?? 0);
 const minReceivedFps = Number(process.env.SIMDECK_E2E_MIN_RECEIVED_FPS ?? 0);
+const minAudioPackets = Number(process.env.SIMDECK_E2E_MIN_AUDIO_PACKETS ?? 0);
 const visualSampleIntervalMs = Number(
   process.env.SIMDECK_E2E_VISUAL_SAMPLE_INTERVAL_MS ?? 5000,
 );
@@ -559,12 +563,20 @@ try {
   if (warmupMs > 0) {
     await sleep(warmupMs);
   }
+  let streamAudioEnabled = false;
+  if (audioEnabled) {
+    streamAudioEnabled = await enableStreamAudio(cdp);
+    await sleep(500);
+  }
 
   const initialMetrics = await fetchJson(endpoint("/api/metrics"));
   const initialStreams = findClientStreams(initialMetrics, clientId);
   const initialPage = latestByKind(initialStreams, "page") ?? {};
   const initialWebRtc = latestByKind(initialStreams, "webrtc") ?? {};
   const directStatsStart = await collectDirectWebRtcStats(cdp);
+  const peerConnectionStart = capturePeerSnapshot
+    ? await collectPeerConnectionSnapshot(cdp)
+    : [];
   let maxObservedFrameGapMs = 0;
   let maxObservedDecodeQueue = 0;
 
@@ -652,6 +664,9 @@ try {
   const finalPage = latestByKind(finalStreams, "page") ?? {};
   const finalWebRtc = latestByKind(finalStreams, "webrtc") ?? {};
   const directStatsEnd = await collectDirectWebRtcStats(cdp);
+  const peerConnectionEnd = capturePeerSnapshot
+    ? await collectPeerConnectionSnapshot(cdp)
+    : [];
   const failures = [];
 
   const renderedDelta =
@@ -673,6 +688,8 @@ try {
     directStatsEnd.packetsReceived - directStatsStart.packetsReceived;
   const directPresentedDelta =
     directStatsEnd.totalVideoFrames - directStatsStart.totalVideoFrames;
+  const directAudioPacketsDelta =
+    directStatsEnd.audioPacketsReceived - directStatsStart.audioPacketsReceived;
   const observedDurationSeconds = Math.max(
     0.001,
     (directStatsEnd.timestampMs - directStatsStart.timestampMs) / 1000,
@@ -738,6 +755,11 @@ try {
       `received packet fps ${receivedFps.toFixed(2)} did not meet minimum ${minReceivedFps}`,
     );
   }
+  if (minAudioPackets > 0 && directAudioPacketsDelta < minAudioPackets) {
+    failures.push(
+      `audio RTP packets ${directAudioPacketsDelta} did not meet minimum ${minAudioPackets}`,
+    );
+  }
   if (maxPeerDisconnectedObservedMs > maxPeerDisconnectedMs) {
     failures.push(
       `peer disconnected for ${maxPeerDisconnectedObservedMs}ms, exceeded ${maxPeerDisconnectedMs}ms`,
@@ -794,6 +816,7 @@ try {
     initialPage,
     initialWebRtc,
     observedDurationSeconds,
+    ...(capturePeerSnapshot ? { peerConnectionEnd, peerConnectionStart } : {}),
     decodedFps,
     presentedFps,
     receivedFps,
@@ -803,8 +826,11 @@ try {
     maxPeerDisconnectedObservedMs,
     maxInteractionLatencyMs,
     maxDecoderDrops,
+    minAudioPackets,
     warmupMs,
     interactionsEnabled,
+    audioEnabled,
+    streamAudioEnabled,
     visualSamplesEnabled,
     interactionLatencies,
     presentedInteractionLatencies,
@@ -823,6 +849,7 @@ try {
     renderedDelta,
     decodedDelta,
     receivedDelta,
+    directAudioPacketsDelta,
     droppedDelta,
     reconnectDelta,
     streams: finalStreams.map((stream) => ({
@@ -851,6 +878,27 @@ try {
   cdp?.close();
   await stopChrome(chrome);
   await rm(profileDir, { force: true, recursive: true });
+}
+
+async function enableStreamAudio(cdp) {
+  return evaluate(
+    cdp,
+    `
+    (async () => {
+      const menuButton = [...document.querySelectorAll("button")]
+        .find((button) => button.title === "Open menu" || button.getAttribute("aria-label") === "Open menu" || button.textContent?.trim() === "Open menu");
+      menuButton?.click();
+      await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+      const soundLabel = [...document.querySelectorAll("label")]
+        .find((label) => label.textContent?.trim() === "Sound");
+      const input = soundLabel?.querySelector("input[type='checkbox']");
+      if (input && !input.checked) {
+        input.click();
+      }
+      return Boolean(input?.checked);
+    })()
+  `,
+  );
 }
 
 async function writeSummary(summary) {
@@ -973,6 +1021,12 @@ async function collectDirectWebRtcStats(cdp) {
     `
     (async () => {
       const totals = {
+        audioBytesReceived: 0,
+        audioConcealedSamples: 0,
+        audioJitter: 0,
+        audioPacketsLost: 0,
+        audioPacketsReceived: 0,
+        audioSilentConcealedSamples: 0,
         framesDecoded: 0,
       framesDropped: 0,
       jitter: 0,
@@ -986,6 +1040,14 @@ async function collectDirectWebRtcStats(cdp) {
       for (const pc of window.__simdeckPeerConnections || []) {
         const reports = await pc.getStats();
         for (const report of reports.values()) {
+          if (report.type === "inbound-rtp" && (report.kind === "audio" || report.mediaType === "audio")) {
+            totals.audioBytesReceived += report.bytesReceived || 0;
+            totals.audioConcealedSamples += report.concealedSamples || 0;
+            totals.audioJitter = Math.max(totals.audioJitter, report.jitter || 0);
+            totals.audioPacketsLost += report.packetsLost || 0;
+            totals.audioPacketsReceived += report.packetsReceived || 0;
+            totals.audioSilentConcealedSamples += report.silentConcealedSamples || 0;
+          }
           if (report.type === "inbound-rtp" && (report.kind === "video" || report.mediaType === "video")) {
             totals.framesDecoded += report.framesDecoded || 0;
             totals.framesDropped += report.framesDropped || 0;
@@ -1002,6 +1064,66 @@ async function collectDirectWebRtcStats(cdp) {
         totals.videoHeight = Math.max(totals.videoHeight, video.videoHeight || 0);
       }
       return totals;
+    })()
+  `,
+  );
+}
+
+async function collectPeerConnectionSnapshot(cdp) {
+  return evaluate(
+    cdp,
+    `
+    (() => {
+      const sectionSummaries = (sdp) => String(sdp || "")
+        .split(/\\r?\\nm=/)
+        .map((section, index) => {
+          const text = index === 0 ? section : "m=" + section;
+          const lines = text.split(/\\r?\\n/).filter(Boolean);
+          return lines.filter((line) =>
+            line.startsWith("m=") ||
+            line.startsWith("a=mid:") ||
+            line === "a=sendonly" ||
+            line === "a=recvonly" ||
+            line === "a=sendrecv" ||
+            line === "a=inactive" ||
+            line.startsWith("a=rtpmap:") ||
+            line.startsWith("a=fmtp:") ||
+            line.startsWith("a=ssrc:") ||
+            line.startsWith("a=msid:")
+          );
+        });
+      return (window.__simdeckPeerConnections || []).map((pc) => ({
+        connectionState: pc.connectionState,
+        iceConnectionState: pc.iceConnectionState,
+        localDescription: {
+          sections: sectionSummaries(pc.localDescription?.sdp || ""),
+          type: pc.localDescription?.type || "",
+        },
+        remoteDescription: {
+          sections: sectionSummaries(pc.remoteDescription?.sdp || ""),
+          type: pc.remoteDescription?.type || "",
+        },
+        signalingState: pc.signalingState,
+        transceivers: pc.getTransceivers().map((transceiver) => ({
+          currentDirection: transceiver.currentDirection || "",
+          direction: transceiver.direction,
+          mid: transceiver.mid,
+          receiverTrack: transceiver.receiver?.track ? {
+            enabled: transceiver.receiver.track.enabled,
+            id: transceiver.receiver.track.id,
+            kind: transceiver.receiver.track.kind,
+            muted: transceiver.receiver.track.muted,
+            readyState: transceiver.receiver.track.readyState,
+          } : null,
+          senderTrack: transceiver.sender?.track ? {
+            enabled: transceiver.sender.track.enabled,
+            id: transceiver.sender.track.id,
+            kind: transceiver.sender.track.kind,
+            muted: transceiver.sender.track.muted,
+            readyState: transceiver.sender.track.readyState,
+          } : null,
+        })),
+      }));
     })()
   `,
   );

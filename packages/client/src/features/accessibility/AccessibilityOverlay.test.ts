@@ -28,6 +28,15 @@ describe("accessibilityDomTagName", () => {
       }),
     ).toBe("simdeck-range-and-filter-bar");
   });
+
+  it("falls back when component metadata is not string-like", () => {
+    expect(
+      accessibilityDomTagName({
+        source: "in-app-inspector",
+        type: { kind: "Button" } as unknown as string,
+      }),
+    ).toBe("simdeck-element");
+  });
 });
 
 describe("AccessibilityOverlay", () => {
@@ -102,5 +111,43 @@ describe("AccessibilityOverlay", () => {
     expect(markup).not.toContain(">disabled<");
     expect(markup).not.toContain("; disabled");
     expect(markup).not.toContain(" title=");
+  });
+
+  it("renders object-shaped accessibility metadata without crashing", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AccessibilityOverlay, {
+        hoveredId: null,
+        roots: [
+          {
+            frame: { height: 844, width: 390, x: 0, y: 0 },
+            role: "application",
+            children: [
+              {
+                AXLabel: { localized: "Continue" } as unknown as string,
+                AXValue: 42 as unknown as string,
+                frame: { height: 48, width: 180, x: 105, y: 720 },
+                nativeScript: {
+                  testID: 123,
+                  type: { kind: "Button" },
+                },
+                placeholder: false as unknown as string,
+                source: "nativescript",
+                sourceLocation: {
+                  file: { path: "/app/app.component.ts" } as unknown as string,
+                  line: 12,
+                },
+                type: { kind: "Button" } as unknown as string,
+              },
+            ],
+          },
+        ],
+        selectedId: "",
+      }),
+    );
+
+    expect(markup).toContain("<simdeck-element");
+    expect(markup).toContain('data-test-id="123"');
+    expect(markup).toContain('data-simdeck-accessibility-value="42"');
+    expect(markup).not.toContain("[object Object]");
   });
 });

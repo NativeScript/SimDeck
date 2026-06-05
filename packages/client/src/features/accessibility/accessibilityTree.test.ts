@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AccessibilityNode } from "../../api/types";
 import {
+  accessibilityIdentifier,
   accessibilityKind,
   buildAccessibilityTree,
   findAccessibilityItemAtPoint,
@@ -215,6 +216,24 @@ describe("primaryAccessibilityText", () => {
         imageName: "~/assets/album-midnight.jpg",
       }),
     ).toBe("~/assets/album-midnight.jpg");
+  });
+
+  it("ignores object-shaped accessibility text fields without crashing", () => {
+    const node: AccessibilityNode = {
+      AXIdentifier: { id: "continue-button" } as unknown as string,
+      AXLabel: { localized: "Continue" } as unknown as string,
+      AXUniqueId: { value: "unique" } as unknown as string,
+      AXValue: 42 as unknown as string,
+      role: { name: "button" } as unknown as string,
+      source: "in-app-inspector",
+      title: { value: "Continue" } as unknown as string,
+      type: { kind: "Button" } as unknown as string,
+    };
+
+    expect(() => buildAccessibilityTree([node])).not.toThrow();
+    expect(primaryAccessibilityText(node)).toBe("42");
+    expect(accessibilityIdentifier(node)).toBe("");
+    expect(accessibilityKind(node)).toBe("Element");
   });
 });
 

@@ -8,8 +8,15 @@
 #import "XCWSimctl.h"
 
 #import <AppKit/AppKit.h>
+#import <AudioToolbox/AudioToolbox.h>
+#import <CoreAudio/CoreAudio.h>
+#import <CoreAudio/AudioHardwareTapping.h>
+#import <CoreAudio/CATapDescription.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
+#include <math.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -314,6 +321,820 @@ static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
 }
 
 @end
+
+static NSString *XCWAudioDictionaryKey(const char *key) {
+    return [NSString stringWithUTF8String:key] ?: @"";
+}
+
+static NSString *XCWAudioOSStatusString(OSStatus status) {
+    UInt32 code = CFSwapInt32HostToBig((UInt32)status);
+    char text[5] = {0};
+    memcpy(text, &code, 4);
+    BOOL printable = YES;
+    for (NSUInteger index = 0; index < 4; index++) {
+        if (text[index] < 32 || text[index] > 126) {
+            printable = NO;
+            break;
+        }
+    }
+    if (printable) {
+        return [NSString stringWithFormat:@"%d ('%s')", (int)status, text];
+    }
+    return [NSString stringWithFormat:@"%d", (int)status];
+}
+
+static NSError *XCWAudioCaptureError(NSInteger code, NSString *description) {
+    return [NSError errorWithDomain:@"SimDeck.AudioCapture"
+                               code:code
+                           userInfo:@{ NSLocalizedDescriptionKey: description ?: @"Audio capture failed." }];
+}
+
+static NSError *XCWAudioCaptureStatusError(NSInteger code, NSString *operation, OSStatus status) {
+    return XCWAudioCaptureError(code, [NSString stringWithFormat:@"%@ failed with OSStatus %@.", operation, XCWAudioOSStatusString(status)]);
+}
+
+static const uint32_t XCWOpusSampleRate = 48000;
+static const uint16_t XCWOpusChannels = 2;
+static const UInt32 XCWOpusFramesPerPacket = 960;
+static const UInt32 XCWOpusBitRate = 96000;
+static const UInt32 XCWOpusFallbackMaxPacketBytes = 1500;
+static const NSUInteger XCWAudioProcessStableRefreshes = 3;
+static const OSStatus XCWAudioConverterNoDataStatus = -1;
+
+static int16_t XCWClampPCM16(double value) {
+    if (!isfinite(value)) {
+        return 0;
+    }
+    if (value <= -1.0) {
+        return INT16_MIN;
+    }
+    if (value >= 1.0) {
+        return INT16_MAX;
+    }
+    return (int16_t)lrint(value * 32767.0);
+}
+
+static int16_t XCWReadPCM16Sample(const AudioBufferList *bufferList,
+                                  const AudioStreamBasicDescription *asbd,
+                                  NSUInteger frame,
+                                  NSUInteger channel) {
+    if (bufferList == NULL || asbd == NULL || bufferList->mNumberBuffers == 0) {
+        return 0;
+    }
+
+    const UInt32 bitsPerChannel = asbd->mBitsPerChannel;
+    const NSUInteger bytesPerSample = MAX((NSUInteger)bitsPerChannel / 8, 1);
+    const BOOL nonInterleaved = (asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
+    const BOOL isFloat = (asbd->mFormatFlags & kAudioFormatFlagIsFloat) != 0;
+    const BOOL isSigned = (asbd->mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0;
+    const BOOL isBigEndian = (asbd->mFormatFlags & kAudioFormatFlagIsBigEndian) != 0;
+    const NSUInteger sourceChannels = MAX((NSUInteger)asbd->mChannelsPerFrame, 1);
+    const NSUInteger bufferIndex = nonInterleaved
+        ? MIN(channel, (NSUInteger)bufferList->mNumberBuffers - 1)
+        : 0;
+    const NSUInteger channelInBuffer = nonInterleaved ? 0 : MIN(channel, sourceChannels - 1);
+    const AudioBuffer buffer = bufferList->mBuffers[bufferIndex];
+    if (buffer.mData == NULL || buffer.mDataByteSize == 0) {
+        return 0;
+    }
+
+    const NSUInteger fallbackBytesPerFrame = bytesPerSample * (nonInterleaved ? 1 : sourceChannels);
+    const NSUInteger bytesPerFrame = MAX((NSUInteger)asbd->mBytesPerFrame, fallbackBytesPerFrame);
+    const NSUInteger offset = frame * bytesPerFrame + channelInBuffer * bytesPerSample;
+    if (offset + bytesPerSample > buffer.mDataByteSize) {
+        return 0;
+    }
+
+    const uint8_t *sample = (const uint8_t *)buffer.mData + offset;
+    if (isFloat && bytesPerSample == sizeof(float)) {
+        float value = 0.0f;
+        memcpy(&value, sample, sizeof(value));
+        return XCWClampPCM16((double)value);
+    }
+    if (isFloat && bytesPerSample == sizeof(double)) {
+        double value = 0.0;
+        memcpy(&value, sample, sizeof(value));
+        return XCWClampPCM16(value);
+    }
+    if (bytesPerSample == sizeof(int16_t)) {
+        uint16_t raw = 0;
+        memcpy(&raw, sample, sizeof(raw));
+        if (isBigEndian) {
+            raw = CFSwapInt16BigToHost(raw);
+        }
+        return (int16_t)raw;
+    }
+    if (bytesPerSample == sizeof(int32_t)) {
+        uint32_t raw = 0;
+        memcpy(&raw, sample, sizeof(raw));
+        if (isBigEndian) {
+            raw = CFSwapInt32BigToHost(raw);
+        }
+        return (int16_t)(((int32_t)raw) >> 16);
+    }
+    if (bytesPerSample == sizeof(uint8_t)) {
+        if (isSigned) {
+            return (int16_t)(((int8_t)sample[0]) << 8);
+        }
+        return (int16_t)(((int)sample[0] - 128) << 8);
+    }
+
+    return 0;
+}
+
+static NSUInteger XCWAudioFrameCount(const AudioBufferList *bufferList,
+                                     const AudioStreamBasicDescription *asbd) {
+    if (bufferList == NULL || asbd == NULL || bufferList->mNumberBuffers == 0) {
+        return 0;
+    }
+    const AudioBuffer buffer = bufferList->mBuffers[0];
+    if (buffer.mData == NULL || buffer.mDataByteSize == 0) {
+        return 0;
+    }
+    const NSUInteger bytesPerSample = MAX((NSUInteger)asbd->mBitsPerChannel / 8, 1);
+    const BOOL nonInterleaved = (asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
+    const NSUInteger sourceChannels = MAX((NSUInteger)asbd->mChannelsPerFrame, 1);
+    const NSUInteger fallbackBytesPerFrame = bytesPerSample * (nonInterleaved ? 1 : sourceChannels);
+    const NSUInteger bytesPerFrame = MAX((NSUInteger)asbd->mBytesPerFrame, fallbackBytesPerFrame);
+    if (bytesPerFrame == 0) {
+        return 0;
+    }
+    return (NSUInteger)buffer.mDataByteSize / bytesPerFrame;
+}
+
+static NSData *XCWPCM16InterleavedDataFromAudioBufferList(const AudioBufferList *bufferList,
+                                                          const AudioStreamBasicDescription *asbd,
+                                                          uint32_t *sampleRate,
+                                                          uint16_t *channels) {
+    if (bufferList == NULL || asbd == NULL || asbd->mFormatID != kAudioFormatLinearPCM) {
+        return nil;
+    }
+    const NSUInteger frameCount = XCWAudioFrameCount(bufferList, asbd);
+    const NSUInteger sourceChannels = MAX((NSUInteger)asbd->mChannelsPerFrame, 1);
+    const NSUInteger outputChannels = MIN(sourceChannels, (NSUInteger)2);
+    if (frameCount == 0 || outputChannels == 0) {
+        return nil;
+    }
+
+    NSMutableData *output = [NSMutableData dataWithLength:frameCount * outputChannels * sizeof(int16_t)];
+    int16_t *outputSamples = (int16_t *)output.mutableBytes;
+    for (NSUInteger frame = 0; frame < frameCount; frame++) {
+        for (NSUInteger channel = 0; channel < outputChannels; channel++) {
+            outputSamples[frame * outputChannels + channel] = XCWReadPCM16Sample(bufferList, asbd, frame, channel);
+        }
+    }
+
+    if (sampleRate != NULL) {
+        *sampleRate = (uint32_t)llround(asbd->mSampleRate > 0 ? asbd->mSampleRate : 48000.0);
+    }
+    if (channels != NULL) {
+        *channels = (uint16_t)outputChannels;
+    }
+    return output;
+}
+
+static uint64_t XCWAudioTimestampUS(const AudioTimeStamp *timeStamp) {
+    if (timeStamp != NULL && (timeStamp->mFlags & kAudioTimeStampHostTimeValid) != 0 && timeStamp->mHostTime != 0) {
+        return AudioConvertHostTimeToNanos(timeStamp->mHostTime) / 1000;
+    }
+    return (uint64_t)llround([[NSDate date] timeIntervalSince1970] * 1000000.0);
+}
+
+static AudioObjectID XCWAudioProcessObjectIDForPID(pid_t pid) {
+    if (pid <= 0) {
+        return kAudioObjectUnknown;
+    }
+    AudioObjectPropertyAddress address = {
+        .mSelector = kAudioHardwarePropertyTranslatePIDToProcessObject,
+        .mScope = kAudioObjectPropertyScopeGlobal,
+        .mElement = kAudioObjectPropertyElementMain,
+    };
+    AudioObjectID processObjectID = kAudioObjectUnknown;
+    UInt32 size = sizeof(processObjectID);
+    OSStatus status = AudioObjectGetPropertyData(kAudioObjectSystemObject,
+                                                 &address,
+                                                 sizeof(pid),
+                                                 &pid,
+                                                 &size,
+                                                 &processObjectID);
+    if (status != noErr) {
+        return kAudioObjectUnknown;
+    }
+    return processObjectID;
+}
+
+static NSArray<NSNumber *> *XCWAudioProcessObjectIDsForProcessIDs(const int32_t *processIDs,
+                                                                  size_t processCount) {
+    NSMutableSet<NSNumber *> *seen = [NSMutableSet set];
+    NSMutableArray<NSNumber *> *objects = [NSMutableArray array];
+    for (size_t index = 0; index < processCount; index++) {
+        pid_t pid = (pid_t)processIDs[index];
+        if (pid <= 0) {
+            continue;
+        }
+        AudioObjectID objectID = XCWAudioProcessObjectIDForPID(pid);
+        if (objectID == kAudioObjectUnknown) {
+            continue;
+        }
+        NSNumber *boxed = @(objectID);
+        if ([seen containsObject:boxed]) {
+            continue;
+        }
+        [seen addObject:boxed];
+        [objects addObject:boxed];
+    }
+    [objects sortUsingSelector:@selector(compare:)];
+    return objects;
+}
+
+static CATapDescription *XCWAudioTapDescription(NSArray<NSNumber *> *processObjectIDs) API_AVAILABLE(macos(14.2)) {
+    CATapDescription *description = [[CATapDescription alloc] initStereoMixdownOfProcesses:processObjectIDs];
+    description.name = @"SimDeck Simulator Audio";
+    description.privateTap = YES;
+    description.muteBehavior = CATapMutedWhenTapped;
+    description.mixdown = YES;
+    description.mono = NO;
+    description.exclusive = NO;
+    return description;
+}
+
+static NSString *XCWAudioTapUID(AudioObjectID tapID, NSError * _Nullable __autoreleasing *error) {
+    AudioObjectPropertyAddress address = {
+        .mSelector = kAudioTapPropertyUID,
+        .mScope = kAudioObjectPropertyScopeGlobal,
+        .mElement = kAudioObjectPropertyElementMain,
+    };
+    CFStringRef uid = NULL;
+    UInt32 size = sizeof(uid);
+    OSStatus status = AudioObjectGetPropertyData(tapID, &address, 0, NULL, &size, &uid);
+    if (status != noErr || uid == NULL) {
+        if (error != NULL) {
+            *error = XCWAudioCaptureStatusError(22, @"Read Core Audio tap UID", status);
+        }
+        return nil;
+    }
+    return CFBridgingRelease(uid);
+}
+
+static BOOL XCWAudioGetObjectStreamFormat(AudioObjectID objectID,
+                                          AudioObjectPropertySelector selector,
+                                          AudioObjectPropertyScope scope,
+                                          AudioStreamBasicDescription *asbd) {
+    if (asbd == NULL || objectID == kAudioObjectUnknown) {
+        return NO;
+    }
+    AudioObjectPropertyAddress address = {
+        .mSelector = selector,
+        .mScope = scope,
+        .mElement = kAudioObjectPropertyElementMain,
+    };
+    UInt32 size = sizeof(*asbd);
+    OSStatus status = AudioObjectGetPropertyData(objectID, &address, 0, NULL, &size, asbd);
+    return status == noErr && asbd->mSampleRate > 0 && asbd->mChannelsPerFrame > 0;
+}
+
+typedef struct XCWOpusInputContext {
+    const uint8_t *bytes;
+    UInt32 byteCount;
+    UInt32 bytesPerFrame;
+    UInt16 channels;
+    UInt32 consumedBytes;
+} XCWOpusInputContext;
+
+static OSStatus XCWOpusEncoderInputProc(AudioConverterRef inAudioConverter,
+                                        UInt32 *ioNumberDataPackets,
+                                        AudioBufferList *ioData,
+                                        AudioStreamPacketDescription **outDataPacketDescription,
+                                        void *inUserData) {
+    (void)inAudioConverter;
+    if (outDataPacketDescription != NULL) {
+        *outDataPacketDescription = NULL;
+    }
+    if (ioNumberDataPackets == NULL || ioData == NULL || inUserData == NULL) {
+        return paramErr;
+    }
+    XCWOpusInputContext *context = (XCWOpusInputContext *)inUserData;
+    if (context->bytes == NULL || context->bytesPerFrame == 0 || context->consumedBytes >= context->byteCount) {
+        *ioNumberDataPackets = 0;
+        return XCWAudioConverterNoDataStatus;
+    }
+
+    UInt32 availableBytes = context->byteCount - context->consumedBytes;
+    UInt32 availablePackets = availableBytes / context->bytesPerFrame;
+    UInt32 packets = MIN(*ioNumberDataPackets, availablePackets);
+    if (packets == 0) {
+        *ioNumberDataPackets = 0;
+        return XCWAudioConverterNoDataStatus;
+    }
+
+    UInt32 bytes = packets * context->bytesPerFrame;
+    ioData->mNumberBuffers = 1;
+    ioData->mBuffers[0].mNumberChannels = context->channels;
+    ioData->mBuffers[0].mDataByteSize = bytes;
+    ioData->mBuffers[0].mData = (void *)(context->bytes + context->consumedBytes);
+    context->consumedBytes += bytes;
+    *ioNumberDataPackets = packets;
+    return noErr;
+}
+
+@interface XCWOpusAudioEncoder : NSObject
+
+@property (nonatomic, readonly) uint16_t channels;
+
+- (NSArray<NSData *> *)encodePCM:(NSData *)pcm
+                      sampleRate:(uint32_t)sampleRate
+                        channels:(uint16_t)channels
+                           error:(NSError * _Nullable __autoreleasing *)error;
+- (void)invalidate;
+
+@end
+
+@implementation XCWOpusAudioEncoder {
+    AudioConverterRef _converter;
+    NSMutableData *_pendingPCM;
+    uint32_t _inputSampleRate;
+    uint16_t _inputChannels;
+    UInt32 _inputBytesPerFrame;
+    UInt32 _maxOutputPacketSize;
+    NSUInteger _inputFramesPerOpusPacket;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self == nil) {
+        return nil;
+    }
+    _pendingPCM = [NSMutableData data];
+    _channels = XCWOpusChannels;
+    return self;
+}
+
+- (void)dealloc {
+    [self invalidate];
+}
+
+- (NSArray<NSData *> *)encodePCM:(NSData *)pcm
+                      sampleRate:(uint32_t)sampleRate
+                        channels:(uint16_t)channels
+                           error:(NSError * _Nullable __autoreleasing *)error {
+    if (pcm.length == 0 || sampleRate == 0 || channels == 0) {
+        return @[];
+    }
+    if (_converter == NULL || _inputSampleRate != sampleRate || _inputChannels != channels) {
+        [self invalidate];
+        if (![self configureWithSampleRate:sampleRate channels:channels error:error]) {
+            return @[];
+        }
+    }
+
+    [_pendingPCM appendData:pcm];
+    NSMutableArray<NSData *> *packets = [NSMutableArray array];
+    while ([self pendingFrameCount] >= _inputFramesPerOpusPacket) {
+        NSData *packet = [self encodeNextPacket:error];
+        if (packet == nil) {
+            break;
+        }
+        if (packet.length > 0) {
+            [packets addObject:packet];
+        }
+    }
+    return packets;
+}
+
+- (BOOL)configureWithSampleRate:(uint32_t)sampleRate
+                       channels:(uint16_t)channels
+                          error:(NSError * _Nullable __autoreleasing *)error {
+    _inputSampleRate = sampleRate;
+    _inputChannels = channels;
+    _inputBytesPerFrame = MAX((UInt32)channels * (UInt32)sizeof(int16_t), 1);
+    _inputFramesPerOpusPacket = MAX((NSUInteger)llround(((double)sampleRate * (double)XCWOpusFramesPerPacket) / (double)XCWOpusSampleRate), (NSUInteger)1);
+
+    AudioStreamBasicDescription input = {0};
+    input.mSampleRate = sampleRate;
+    input.mFormatID = kAudioFormatLinearPCM;
+    input.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+    input.mBytesPerPacket = _inputBytesPerFrame;
+    input.mFramesPerPacket = 1;
+    input.mBytesPerFrame = _inputBytesPerFrame;
+    input.mChannelsPerFrame = channels;
+    input.mBitsPerChannel = 16;
+
+    AudioStreamBasicDescription output = {0};
+    output.mSampleRate = XCWOpusSampleRate;
+    output.mFormatID = kAudioFormatOpus;
+    output.mChannelsPerFrame = XCWOpusChannels;
+    output.mFramesPerPacket = XCWOpusFramesPerPacket;
+
+    OSStatus status = AudioConverterNew(&input, &output, &_converter);
+    if (status != noErr || _converter == NULL) {
+        if (error != NULL) {
+            *error = XCWAudioCaptureStatusError(31, @"Create Core Audio Opus encoder", status);
+        }
+        _converter = NULL;
+        return NO;
+    }
+
+    UInt32 bitRate = XCWOpusBitRate;
+    (void)AudioConverterSetProperty(_converter, kAudioConverterEncodeBitRate, sizeof(bitRate), &bitRate);
+
+    _maxOutputPacketSize = 0;
+    UInt32 propertySize = sizeof(_maxOutputPacketSize);
+    status = AudioConverterGetProperty(_converter,
+                                       kAudioConverterPropertyMaximumOutputPacketSize,
+                                       &propertySize,
+                                       &_maxOutputPacketSize);
+    if (status != noErr || _maxOutputPacketSize == 0) {
+        _maxOutputPacketSize = XCWOpusFallbackMaxPacketBytes;
+    }
+    _maxOutputPacketSize = MIN(MAX(_maxOutputPacketSize, (UInt32)256), (UInt32)4096);
+    [_pendingPCM setLength:0];
+    return YES;
+}
+
+- (NSUInteger)pendingFrameCount {
+    if (_inputBytesPerFrame == 0) {
+        return 0;
+    }
+    return _pendingPCM.length / _inputBytesPerFrame;
+}
+
+- (NSData *)encodeNextPacket:(NSError * _Nullable __autoreleasing *)error {
+    if (_converter == NULL || _inputBytesPerFrame == 0 || _inputFramesPerOpusPacket == 0) {
+        return nil;
+    }
+    const NSUInteger inputBytes = MIN(_pendingPCM.length, _inputFramesPerOpusPacket * (NSUInteger)_inputBytesPerFrame);
+    if (inputBytes == 0 || inputBytes > UINT32_MAX) {
+        return nil;
+    }
+
+    XCWOpusInputContext context = {
+        .bytes = (const uint8_t *)_pendingPCM.bytes,
+        .byteCount = (UInt32)inputBytes,
+        .bytesPerFrame = _inputBytesPerFrame,
+        .channels = _inputChannels,
+        .consumedBytes = 0,
+    };
+    NSMutableData *output = [NSMutableData dataWithLength:_maxOutputPacketSize];
+    AudioBufferList outputBuffer = {
+        .mNumberBuffers = 1,
+        .mBuffers = {
+            {
+                .mNumberChannels = XCWOpusChannels,
+                .mDataByteSize = _maxOutputPacketSize,
+                .mData = output.mutableBytes,
+            },
+        },
+    };
+    UInt32 outputPackets = 1;
+    AudioStreamPacketDescription packetDescription = {0};
+    OSStatus status = AudioConverterFillComplexBuffer(_converter,
+                                                      XCWOpusEncoderInputProc,
+                                                      &context,
+                                                      &outputPackets,
+                                                      &outputBuffer,
+                                                      &packetDescription);
+    if (context.consumedBytes > 0 && context.consumedBytes <= _pendingPCM.length) {
+        [_pendingPCM replaceBytesInRange:NSMakeRange(0, context.consumedBytes)
+                               withBytes:NULL
+                                  length:0];
+    }
+    if (status == XCWAudioConverterNoDataStatus || outputPackets == 0 || outputBuffer.mBuffers[0].mDataByteSize == 0) {
+        if (context.consumedBytes == 0) {
+            return nil;
+        }
+        return [NSData data];
+    }
+    if (status != noErr) {
+        if (error != NULL) {
+            *error = XCWAudioCaptureStatusError(32, @"Encode Opus audio packet", status);
+        }
+        return nil;
+    }
+    output.length = outputBuffer.mBuffers[0].mDataByteSize;
+    return output;
+}
+
+- (void)invalidate {
+    if (_converter != NULL) {
+        AudioConverterDispose(_converter);
+        _converter = NULL;
+    }
+    [_pendingPCM setLength:0];
+    _inputSampleRate = 0;
+    _inputChannels = 0;
+    _inputBytesPerFrame = 0;
+    _maxOutputPacketSize = 0;
+    _inputFramesPerOpusPacket = 0;
+}
+
+@end
+
+@class XCWNativeAudioCapture;
+static OSStatus XCWNativeAudioDeviceIOProc(AudioObjectID inDevice,
+                                           const AudioTimeStamp *inNow,
+                                           const AudioBufferList *inInputData,
+                                           const AudioTimeStamp *inInputTime,
+                                           AudioBufferList *outOutputData,
+                                           const AudioTimeStamp *inOutputTime,
+                                           void *inClientData);
+
+@interface XCWNativeAudioCapture : NSObject
+
+- (instancetype)initWithAudioCallback:(xcw_native_audio_callback)callback
+                             userData:(void *)userData;
+- (BOOL)startWithProcessIDs:(const int32_t *)processIDs
+                      count:(size_t)processCount
+                      error:(NSError * _Nullable __autoreleasing *)error;
+- (BOOL)updateProcessIDs:(const int32_t *)processIDs
+                   count:(size_t)processCount
+                   error:(NSError * _Nullable __autoreleasing *)error;
+- (BOOL)applyProcessIDs:(const int32_t *)processIDs
+                  count:(size_t)processCount
+       requireProcesses:(BOOL)requireProcesses
+        debounceChanges:(BOOL)debounceChanges
+                  error:(NSError * _Nullable __autoreleasing *)error;
+- (BOOL)shouldApplyProcessObjectIDs:(NSArray<NSNumber *> *)processObjectIDs;
+- (void)clearPendingProcessObjectIDs;
+- (void)invalidate;
+- (void)handleInputData:(const AudioBufferList *)inputData
+              inputTime:(const AudioTimeStamp *)inputTime;
+
+@end
+
+@implementation XCWNativeAudioCapture {
+    xcw_native_audio_callback _callback;
+    void *_callbackUserData;
+    BOOL _invalidated;
+    AudioObjectID _tapID;
+    AudioObjectID _aggregateDeviceID;
+    AudioDeviceIOProcID _ioProcID;
+    AudioStreamBasicDescription _streamDescription;
+    NSArray<NSNumber *> *_processObjectIDs;
+    NSArray<NSNumber *> *_pendingProcessObjectIDs;
+    NSUInteger _pendingProcessObjectIDRefreshes;
+    XCWOpusAudioEncoder *_opusEncoder;
+}
+
+- (instancetype)initWithAudioCallback:(xcw_native_audio_callback)callback
+                             userData:(void *)userData {
+    self = [super init];
+    if (self == nil) {
+        return nil;
+    }
+    _callback = callback;
+    _callbackUserData = userData;
+    _tapID = kAudioObjectUnknown;
+    _aggregateDeviceID = kAudioObjectUnknown;
+    _ioProcID = NULL;
+    _processObjectIDs = @[];
+    _pendingProcessObjectIDs = nil;
+    _pendingProcessObjectIDRefreshes = 0;
+    _opusEncoder = [[XCWOpusAudioEncoder alloc] init];
+    return self;
+}
+
+- (void)dealloc {
+    [self invalidate];
+}
+
+- (BOOL)startWithProcessIDs:(const int32_t *)processIDs
+                      count:(size_t)processCount
+                      error:(NSError * _Nullable __autoreleasing *)error {
+    return [self applyProcessIDs:processIDs count:processCount requireProcesses:YES debounceChanges:NO error:error];
+}
+
+- (BOOL)updateProcessIDs:(const int32_t *)processIDs
+                   count:(size_t)processCount
+                   error:(NSError * _Nullable __autoreleasing *)error {
+    return [self applyProcessIDs:processIDs count:processCount requireProcesses:NO debounceChanges:YES error:error];
+}
+
+- (BOOL)applyProcessIDs:(const int32_t *)processIDs
+                  count:(size_t)processCount
+       requireProcesses:(BOOL)requireProcesses
+        debounceChanges:(BOOL)debounceChanges
+                  error:(NSError * _Nullable __autoreleasing *)error {
+    if (@available(macOS 14.2, *)) {
+        NSArray<NSNumber *> *processObjectIDs = XCWAudioProcessObjectIDsForProcessIDs(processIDs, processCount);
+        if (_aggregateDeviceID != kAudioObjectUnknown && [_processObjectIDs isEqualToArray:processObjectIDs]) {
+            [self clearPendingProcessObjectIDs];
+            return YES;
+        }
+        if (debounceChanges && _aggregateDeviceID != kAudioObjectUnknown && ![self shouldApplyProcessObjectIDs:processObjectIDs]) {
+            return YES;
+        }
+        if (processObjectIDs.count == 0) {
+            [self clearPendingProcessObjectIDs];
+            [self stopGraph];
+            if (requireProcesses && error != NULL) {
+                *error = XCWAudioCaptureError(20, @"No simulator audio processes are currently connected to Core Audio.");
+            }
+            return !requireProcesses;
+        }
+        [self stopGraph];
+        return [self startGraphWithProcessObjectIDs:processObjectIDs error:error];
+    }
+
+    if (error != NULL) {
+        *error = XCWAudioCaptureError(21, @"Per-simulator audio capture requires macOS 14.2 or newer.");
+    }
+    return NO;
+}
+
+- (BOOL)shouldApplyProcessObjectIDs:(NSArray<NSNumber *> *)processObjectIDs {
+    if (_pendingProcessObjectIDs != nil && [_pendingProcessObjectIDs isEqualToArray:processObjectIDs]) {
+        _pendingProcessObjectIDRefreshes += 1;
+    } else {
+        _pendingProcessObjectIDs = [processObjectIDs copy];
+        _pendingProcessObjectIDRefreshes = 1;
+    }
+    return _pendingProcessObjectIDRefreshes >= XCWAudioProcessStableRefreshes;
+}
+
+- (void)clearPendingProcessObjectIDs {
+    _pendingProcessObjectIDs = nil;
+    _pendingProcessObjectIDRefreshes = 0;
+}
+
+- (BOOL)startGraphWithProcessObjectIDs:(NSArray<NSNumber *> *)processObjectIDs
+                                 error:(NSError * _Nullable __autoreleasing *)error API_AVAILABLE(macos(14.2)) {
+    CATapDescription *tapDescription = XCWAudioTapDescription(processObjectIDs);
+    OSStatus status = AudioHardwareCreateProcessTap(tapDescription, &_tapID);
+    if (status != noErr || _tapID == kAudioObjectUnknown) {
+        if (error != NULL) {
+            *error = XCWAudioCaptureStatusError(23, @"Create Core Audio process tap", status);
+        }
+        _tapID = kAudioObjectUnknown;
+        return NO;
+    }
+
+    NSError *tapUIDError = nil;
+    NSString *tapUID = XCWAudioTapUID(_tapID, &tapUIDError);
+    if (tapUID.length == 0) {
+        if (error != NULL) {
+            *error = tapUIDError ?: XCWAudioCaptureError(24, @"Core Audio process tap did not expose a UID.");
+        }
+        [self stopGraph];
+        return NO;
+    }
+
+    NSString *aggregateUID = [NSString stringWithFormat:@"dev.simdeck.audio.%@", NSUUID.UUID.UUIDString];
+    NSDictionary *aggregateDescription = @{
+        XCWAudioDictionaryKey(kAudioAggregateDeviceNameKey): @"SimDeck Simulator Audio",
+        XCWAudioDictionaryKey(kAudioAggregateDeviceUIDKey): aggregateUID,
+        XCWAudioDictionaryKey(kAudioAggregateDeviceIsPrivateKey): @YES,
+        XCWAudioDictionaryKey(kAudioAggregateDeviceTapListKey): @[
+            @{ XCWAudioDictionaryKey(kAudioSubTapUIDKey): tapUID }
+        ],
+    };
+    status = AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)aggregateDescription, &_aggregateDeviceID);
+    if (status != noErr || _aggregateDeviceID == kAudioObjectUnknown) {
+        if (error != NULL) {
+            *error = XCWAudioCaptureStatusError(25, @"Create Core Audio aggregate device", status);
+        }
+        [self stopGraph];
+        return NO;
+    }
+
+    CFArrayRef tapList = (__bridge CFArrayRef)@[ tapUID ];
+    AudioObjectPropertyAddress tapListAddress = {
+        .mSelector = kAudioAggregateDevicePropertyTapList,
+        .mScope = kAudioObjectPropertyScopeGlobal,
+        .mElement = kAudioObjectPropertyElementMain,
+    };
+    status = AudioObjectSetPropertyData(_aggregateDeviceID,
+                                        &tapListAddress,
+                                        0,
+                                        NULL,
+                                        sizeof(tapList),
+                                        &tapList);
+    if (status != noErr) {
+        if (error != NULL) {
+            *error = XCWAudioCaptureStatusError(26, @"Attach Core Audio tap to aggregate device", status);
+        }
+        [self stopGraph];
+        return NO;
+    }
+
+    memset(&_streamDescription, 0, sizeof(_streamDescription));
+    if (!XCWAudioGetObjectStreamFormat(_aggregateDeviceID, kAudioDevicePropertyStreamFormat, kAudioObjectPropertyScopeInput, &_streamDescription) &&
+        !XCWAudioGetObjectStreamFormat(_tapID, kAudioTapPropertyFormat, kAudioObjectPropertyScopeGlobal, &_streamDescription)) {
+        if (error != NULL) {
+            *error = XCWAudioCaptureError(27, @"Core Audio tap did not expose a readable linear PCM format.");
+        }
+        [self stopGraph];
+        return NO;
+    }
+
+    status = AudioDeviceCreateIOProcID(_aggregateDeviceID,
+                                       XCWNativeAudioDeviceIOProc,
+                                       (__bridge void *)self,
+                                       &_ioProcID);
+    if (status != noErr || _ioProcID == NULL) {
+        if (error != NULL) {
+            *error = XCWAudioCaptureStatusError(28, @"Create Core Audio tap IOProc", status);
+        }
+        [self stopGraph];
+        return NO;
+    }
+
+    status = AudioDeviceStart(_aggregateDeviceID, _ioProcID);
+    if (status != noErr) {
+        if (error != NULL) {
+            *error = XCWAudioCaptureStatusError(29, @"Start Core Audio tap device", status);
+        }
+        [self stopGraph];
+        return NO;
+    }
+
+    _processObjectIDs = [processObjectIDs copy];
+    [self clearPendingProcessObjectIDs];
+    return YES;
+}
+
+- (void)stopGraph {
+    if (_aggregateDeviceID != kAudioObjectUnknown && _ioProcID != NULL) {
+        AudioDeviceStop(_aggregateDeviceID, _ioProcID);
+        AudioDeviceDestroyIOProcID(_aggregateDeviceID, _ioProcID);
+        _ioProcID = NULL;
+    }
+    if (_aggregateDeviceID != kAudioObjectUnknown) {
+        AudioHardwareDestroyAggregateDevice(_aggregateDeviceID);
+        _aggregateDeviceID = kAudioObjectUnknown;
+    }
+    if (_tapID != kAudioObjectUnknown) {
+        AudioHardwareDestroyProcessTap(_tapID);
+        _tapID = kAudioObjectUnknown;
+    }
+    _processObjectIDs = @[];
+    [self clearPendingProcessObjectIDs];
+    memset(&_streamDescription, 0, sizeof(_streamDescription));
+    [_opusEncoder invalidate];
+}
+
+- (void)invalidate {
+    _invalidated = YES;
+    [self stopGraph];
+}
+
+- (void)handleInputData:(const AudioBufferList *)inputData
+              inputTime:(const AudioTimeStamp *)inputTime {
+    if (_invalidated || _callback == NULL || inputData == NULL) {
+        return;
+    }
+
+    AudioStreamBasicDescription streamDescription = _streamDescription;
+    uint32_t sampleRate = 0;
+    uint16_t channels = 0;
+    NSData *pcm = XCWPCM16InterleavedDataFromAudioBufferList(inputData, &streamDescription, &sampleRate, &channels);
+    if (pcm.length == 0 || sampleRate == 0 || channels == 0) {
+        return;
+    }
+
+    NSError *encodeError = nil;
+    NSArray<NSData *> *packets = [_opusEncoder encodePCM:pcm
+                                              sampleRate:sampleRate
+                                                channels:channels
+                                                   error:&encodeError];
+    if (encodeError != nil) {
+        NSLog(@"SimDeck audio capture failed to encode Opus packet: %@", encodeError.localizedDescription);
+        return;
+    }
+
+    uint64_t timestampUS = XCWAudioTimestampUS(inputTime);
+    for (NSData *packet in packets) {
+        if (packet.length == 0) {
+            continue;
+        }
+        xcw_native_audio_sample sample = {
+            .timestamp_us = timestampUS,
+            .sample_rate = XCWOpusSampleRate,
+            .channels = _opusEncoder.channels,
+            .data = XCWSharedBytesFromData(packet),
+        };
+        _callback(&sample, _callbackUserData);
+    }
+}
+
+@end
+
+static OSStatus XCWNativeAudioDeviceIOProc(AudioObjectID inDevice,
+                                           const AudioTimeStamp *inNow,
+                                           const AudioBufferList *inInputData,
+                                           const AudioTimeStamp *inInputTime,
+                                           AudioBufferList *outOutputData,
+                                           const AudioTimeStamp *inOutputTime,
+                                           void *inClientData) {
+    (void)inDevice;
+    (void)inNow;
+    (void)outOutputData;
+    (void)inOutputTime;
+    @autoreleasepool {
+        XCWNativeAudioCapture *capture = (__bridge XCWNativeAudioCapture *)inClientData;
+        [capture handleInputData:inInputData inputTime:inInputTime];
+    }
+    return noErr;
+}
 
 static XCWNativeH264Encoder *XCWNativeH264EncoderFromHandle(void *handle) {
     return (__bridge XCWNativeH264Encoder *)handle;
@@ -1364,6 +2185,46 @@ bool xcw_native_h264_encoder_encode_rgba(void *handle,
 void xcw_native_h264_encoder_request_keyframe(void *handle) {
     @autoreleasepool {
         [XCWNativeH264EncoderFromHandle(handle) requestKeyFrame];
+    }
+}
+
+void *xcw_native_audio_capture_create(const int32_t *process_ids, size_t process_count, xcw_native_audio_callback callback, void *user_data, char **error_message) {
+    @autoreleasepool {
+        XCWNativeAudioCapture *capture = [[XCWNativeAudioCapture alloc] initWithAudioCallback:callback
+                                                                                    userData:user_data];
+        NSError *error = nil;
+        BOOL ok = [capture startWithProcessIDs:process_ids count:process_count error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+            return NULL;
+        }
+        return (__bridge_retained void *)capture;
+    }
+}
+
+bool xcw_native_audio_capture_update_processes(void *handle, const int32_t *process_ids, size_t process_count, char **error_message) {
+    if (handle == NULL) {
+        XCWSetErrorMessage(error_message, XCWAudioCaptureError(30, @"Audio capture handle is null."));
+        return false;
+    }
+    @autoreleasepool {
+        XCWNativeAudioCapture *capture = (__bridge XCWNativeAudioCapture *)handle;
+        NSError *error = nil;
+        BOOL ok = [capture updateProcessIDs:process_ids count:process_count error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
+void xcw_native_audio_capture_destroy(void *handle) {
+    if (handle == NULL) {
+        return;
+    }
+    @autoreleasepool {
+        XCWNativeAudioCapture *capture = CFBridgingRelease(handle);
+        [capture invalidate];
     }
 }
 
