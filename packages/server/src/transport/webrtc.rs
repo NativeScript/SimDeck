@@ -3,7 +3,7 @@ use crate::api::routes::{
     apply_stream_client_foreground_from_stats, apply_stream_quality_payload,
     bridge_input_session_for_control, run_bridge_multitouch_control_message, run_control_message,
     run_toggle_appearance_control, run_tvos_control_message, stream_quality_limits_for_payload,
-    AppState, ControlMessage, StreamQualityLimits, StreamQualityPayload, TvosControlTouchGesture,
+    AppState, ControlMessage, StreamQualityPayload, TvosControlTouchGesture,
 };
 use crate::error::AppError;
 use crate::metrics::counters::ClientStreamStats;
@@ -63,8 +63,8 @@ const WEBRTC_FULL_ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(3);
 const WEBRTC_MULTITOUCH_INPUT_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 const WEBRTC_PEER_DISCONNECTED_TIMEOUT: Duration = Duration::from_secs(12);
-const ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY: usize = 128;
-const ANDROID_WEBRTC_FPS: u64 = 60;
+const ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY: usize = 1;
+const ANDROID_WEBRTC_DEFAULT_POLL_FPS: u64 = 120;
 const ANDROID_SHARED_VIDEO_RETRY_DELAY: Duration = Duration::from_millis(200);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<WebRtcMediaStreamToken>>>> =
     OnceLock::new();
@@ -111,17 +111,20 @@ fn android_h264_quality_from_payload(
         return Ok(android::AndroidH264StreamQuality::default());
     };
     let limits = stream_quality_limits_for_payload(payload)?;
-    Ok(android_h264_quality_from_limits(limits))
-}
-
-fn android_h264_quality_from_limits(
-    limits: StreamQualityLimits,
-) -> android::AndroidH264StreamQuality {
-    android::AndroidH264StreamQuality {
-        max_edge: Some(limits.max_edge),
+    let unscaled_profile = payload
+        .profile
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|profile| matches!(profile, "full" | "quality" | "smooth"));
+    Ok(android::AndroidH264StreamQuality {
+        max_edge: if unscaled_profile {
+            None
+        } else {
+            Some(limits.max_edge)
+        },
         min_bitrate: Some(limits.min_bitrate),
         bits_per_pixel: Some(limits.bits_per_pixel),
-    }
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -709,7 +712,6 @@ async fn run_android_webrtc_control_queue(
     mut receiver: mpsc::UnboundedReceiver<ControlMessage>,
 ) {
     let mut pending = VecDeque::new();
-    let mut active_touch: Option<android::AndroidTouchGesture> = None;
     loop {
         let mut message = match pending.pop_front() {
             Some(message) => message,
@@ -729,13 +731,8 @@ async fn run_android_webrtc_control_queue(
             }
         }
 
-        if let Err(error) = run_android_webrtc_control_message(
-            state.clone(),
-            udid.clone(),
-            message,
-            &mut active_touch,
-        )
-        .await
+        if let Err(error) =
+            run_android_webrtc_control_message(state.clone(), udid.clone(), message).await
         {
             warn!("Android WebRTC control message failed for {udid}: {error}");
         }
@@ -746,7 +743,6 @@ async fn run_android_webrtc_control_message(
     state: AppState,
     udid: String,
     message: ControlMessage,
-    active_touch: &mut Option<android::AndroidTouchGesture>,
 ) -> Result<(), AppError> {
     match message {
         ControlMessage::Touch { x, y, phase } => {
@@ -761,7 +757,6 @@ async fn run_android_webrtc_control_message(
                 x.clamp(0.0, 1.0),
                 y.clamp(0.0, 1.0),
                 phase,
-                active_touch,
             )
             .await;
         }
@@ -777,7 +772,6 @@ async fn run_android_webrtc_control_message(
                 x.clamp(0.0, 1.0),
                 y.clamp(0.0, 1.0),
                 phase,
-                active_touch,
             )
             .await;
         }
@@ -793,7 +787,6 @@ async fn run_android_webrtc_control_message(
                 x1.clamp(0.0, 1.0),
                 y1.clamp(0.0, 1.0),
                 phase,
-                active_touch,
             )
             .await;
         }
@@ -849,13 +842,8 @@ async fn handle_android_webrtc_touch(
     x: f64,
     y: f64,
     phase: String,
-    active_touch: &mut Option<android::AndroidTouchGesture>,
 ) -> Result<(), AppError> {
-    let action = android::update_touch_gesture(active_touch, x, y, &phase)?;
-    if matches!(action, android::AndroidTouchAction::None) {
-        return Ok(());
-    }
-    task::spawn_blocking(move || action.perform(&state.android, &udid))
+    task::spawn_blocking(move || state.android.send_touch(&udid, x, y, &phase))
         .await
         .map_err(|error| {
             AppError::internal(format!("Failed to join Android touch task: {error}"))
@@ -1422,6 +1410,8 @@ fn spawn_android_shared_video_encoder(
             }
         };
         info!("Android shared-video stream attached for {udid}");
+        let poll_interval = android_webrtc_poll_interval();
+        let mut next_poll_at = Instant::now();
         loop {
             if android_shutdown_requested(&mut shutdown_rx) {
                 return;
@@ -1443,7 +1433,7 @@ fn spawn_android_shared_video_encoder(
                     break;
                 }
             }
-            thread::sleep(android_webrtc_frame_interval());
+            sleep_until_next_android_poll(&mut next_poll_at, poll_interval);
         }
     });
 }
@@ -1629,8 +1619,26 @@ unsafe fn take_native_error(error: *mut i8, fallback: &str) -> AppError {
     AppError::native(message)
 }
 
-fn android_webrtc_frame_interval() -> Duration {
-    Duration::from_micros(1_000_000 / ANDROID_WEBRTC_FPS)
+fn android_webrtc_poll_interval() -> Duration {
+    let fps = std::env::var("SIMDECK_ANDROID_SHARED_VIDEO_POLL_FPS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(ANDROID_WEBRTC_DEFAULT_POLL_FPS)
+        .clamp(60, u64::from(WEBRTC_MAX_LOCAL_STREAM_FPS));
+    Duration::from_micros(1_000_000 / fps)
+}
+
+fn sleep_until_next_android_poll(next_poll_at: &mut Instant, interval: Duration) {
+    let target = next_poll_at
+        .checked_add(interval)
+        .unwrap_or_else(Instant::now);
+    *next_poll_at = target;
+    let now = Instant::now();
+    if target > now {
+        thread::sleep(target - now);
+    } else {
+        *next_poll_at = now;
+    }
 }
 
 #[derive(Clone)]
@@ -1640,6 +1648,10 @@ enum WebRtcVideoSource {
 }
 
 impl WebRtcVideoSource {
+    fn uses_frame_timestamps_for_realtime(&self) -> bool {
+        matches!(self, Self::Android(_))
+    }
+
     fn subscribe(&self) -> WebRtcFrameReceiver {
         match self {
             Self::Simulator(session) => WebRtcFrameReceiver::Simulator(session.subscribe()),
@@ -1746,7 +1758,12 @@ impl WebRtcMediaStream {
         let mut waiting_for_keyframe = false;
         let mut peer_disconnected_since: Option<time::Instant> = None;
         let _guard = WebRtcMetricsGuard::new(state.metrics.clone());
-        let first_frame_duration = send_timing.duration_for(&first_frame, realtime_stream);
+        let uses_frame_timestamps_for_realtime = source.uses_frame_timestamps_for_realtime();
+        let first_frame_duration = send_timing.duration_for(
+            &first_frame,
+            realtime_stream,
+            uses_frame_timestamps_for_realtime,
+        );
 
         match write_frame_sample_with_timeout(
             &video_track,
@@ -1844,7 +1861,11 @@ impl WebRtcMediaStream {
                         state.metrics.frames_dropped_server.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
-                    let duration = send_timing.duration_for(&frame, realtime_stream);
+                    let duration = send_timing.duration_for(
+                        &frame,
+                        realtime_stream,
+                        uses_frame_timestamps_for_realtime,
+                    );
                     let write_result = write_frame_sample_with_timeout(
                         &video_track,
                         &mut packetizer,
@@ -2253,6 +2274,7 @@ impl WebRtcSendTiming {
         &mut self,
         frame: &crate::transport::packet::FramePacket,
         realtime_stream: bool,
+        use_frame_timestamps_for_realtime: bool,
     ) -> Duration {
         const MIN_FRAME_DURATION_US: u64 = 1_000;
         const DEFAULT_FRAME_DURATION_US: u64 = 16_667;
@@ -2267,7 +2289,7 @@ impl WebRtcSendTiming {
             .try_into()
             .unwrap_or(DEFAULT_FRAME_DURATION_US);
 
-        if realtime_stream {
+        if realtime_stream && !use_frame_timestamps_for_realtime {
             self.last_timestamp_us = Some(frame.timestamp_us);
             return default_duration;
         }
@@ -2322,11 +2344,13 @@ impl Drop for WebRtcMetricsGuard {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_avcc_parameter_sets, append_length_prefixed_nalus, h264_annex_b_sample,
-        h264_frame_has_idr, h264_frame_is_decoder_sync, h264_sdp_fmtp_line, is_annex_b,
-        is_h264_codec, rtcp_packet_requests_keyframe, rtp_packet_pacing, WebRtcMetricsGuard,
-        WebRtcSendTiming, ANNEX_B_START_CODE,
+        android_h264_quality_from_payload, append_avcc_parameter_sets,
+        append_length_prefixed_nalus, h264_annex_b_sample, h264_frame_has_idr,
+        h264_frame_is_decoder_sync, h264_sdp_fmtp_line, is_annex_b, is_h264_codec,
+        rtcp_packet_requests_keyframe, rtp_packet_pacing, WebRtcMetricsGuard, WebRtcSendTiming,
+        ANNEX_B_START_CODE,
     };
+    use crate::api::routes::StreamQualityPayload;
     use crate::metrics::counters::Metrics;
     use crate::transport::packet::FramePacket;
     use bytes::Bytes;
@@ -2379,6 +2403,44 @@ mod tests {
         ));
         assert!(rtcp_packet_requests_keyframe(&FullIntraRequest::default()));
         assert!(!rtcp_packet_requests_keyframe(&SenderReport::default()));
+    }
+
+    #[test]
+    fn android_full_size_quality_keeps_native_dimensions() {
+        for (profile, min_bitrate, bits_per_pixel) in
+            [("full", 12_000_000, 4), ("smooth", 4_000_000, 5)]
+        {
+            let payload = StreamQualityPayload {
+                profile: Some(profile.to_owned()),
+                video_codec: None,
+                max_edge: None,
+                fps: Some(60),
+                min_bitrate: None,
+                bits_per_pixel: None,
+            };
+
+            let quality = android_h264_quality_from_payload(Some(&payload)).unwrap();
+
+            assert_eq!(quality.max_edge, None);
+            assert_eq!(quality.min_bitrate, Some(min_bitrate));
+            assert_eq!(quality.bits_per_pixel, Some(bits_per_pixel));
+        }
+    }
+
+    #[test]
+    fn android_scaled_quality_applies_profile_edge() {
+        let payload = StreamQualityPayload {
+            profile: Some("balanced".to_owned()),
+            video_codec: None,
+            max_edge: None,
+            fps: Some(60),
+            min_bitrate: None,
+            bits_per_pixel: None,
+        };
+
+        let quality = android_h264_quality_from_payload(Some(&payload)).unwrap();
+
+        assert_eq!(quality.max_edge, Some(1280));
     }
 
     #[test]
@@ -2549,11 +2611,11 @@ mod tests {
         };
 
         assert_eq!(
-            timing.duration_for(&first, false),
+            timing.duration_for(&first, false, false),
             Duration::from_micros(16_667)
         );
         assert_eq!(
-            timing.duration_for(&second, false),
+            timing.duration_for(&second, false, false),
             Duration::from_micros(33_333)
         );
     }
@@ -2581,15 +2643,15 @@ mod tests {
         };
 
         assert_eq!(
-            timing.duration_for(&first, false),
+            timing.duration_for(&first, false, false),
             Duration::from_micros(16_667)
         );
         assert_eq!(
-            timing.duration_for(&backwards, false),
+            timing.duration_for(&backwards, false, false),
             Duration::from_micros(16_667)
         );
         assert_eq!(
-            timing.duration_for(&huge_gap, false),
+            timing.duration_for(&huge_gap, false, false),
             Duration::from_micros(100_000)
         );
     }
@@ -2631,12 +2693,46 @@ mod tests {
         };
 
         assert_eq!(
-            timing.duration_for(&first, true),
+            timing.duration_for(&first, true, false),
             super::realtime_sample_duration()
         );
         assert_eq!(
-            timing.duration_for(&second, true),
+            timing.duration_for(&second, true, false),
             super::realtime_sample_duration()
+        );
+    }
+
+    #[test]
+    fn realtime_android_send_timing_can_use_frame_timestamps() {
+        let mut timing = WebRtcSendTiming::new();
+        let first = FramePacket {
+            frame_sequence: 1,
+            timestamp_us: 10_000,
+            is_keyframe: true,
+            width: 100,
+            height: 100,
+            codec: Some("h264".to_owned()),
+            description: None,
+            data: Bytes::from_static(&[0, 0, 1, 0x65]),
+        };
+        let second = FramePacket {
+            frame_sequence: 2,
+            timestamp_us: 18_333,
+            is_keyframe: false,
+            width: 100,
+            height: 100,
+            codec: Some("h264".to_owned()),
+            description: None,
+            data: Bytes::from_static(&[0, 0, 1, 0x41]),
+        };
+
+        assert_eq!(
+            timing.duration_for(&first, true, true),
+            super::realtime_sample_duration()
+        );
+        assert_eq!(
+            timing.duration_for(&second, true, true),
+            Duration::from_micros(8_333)
         );
     }
 

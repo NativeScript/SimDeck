@@ -190,6 +190,8 @@ enum Command {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
+        #[arg(long, value_enum, default_value_t = AndroidGpuMode::Host)]
+        android_gpu: AndroidGpuMode,
         #[arg(long)]
         low_latency: bool,
         #[arg(long, value_enum)]
@@ -307,11 +309,6 @@ enum Command {
         stdout: bool,
         #[arg(long, default_value_t = 5.0, value_parser = parse_positive_seconds_arg)]
         seconds: f64,
-    },
-    Stream {
-        udid: Option<String>,
-        #[arg(long, default_value_t = 0)]
-        frames: u64,
     },
     #[command(name = "describe", visible_alias = "snapshot")]
     DescribeUi {
@@ -661,6 +658,8 @@ enum ServiceCommand {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
+        #[arg(long, value_enum, default_value_t = AndroidGpuMode::Host)]
+        android_gpu: AndroidGpuMode,
         #[arg(long)]
         low_latency: bool,
         #[arg(long, value_enum)]
@@ -679,6 +678,8 @@ enum ServiceCommand {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
+        #[arg(long, value_enum, default_value_t = AndroidGpuMode::Host)]
+        android_gpu: AndroidGpuMode,
         #[arg(long)]
         low_latency: bool,
         #[arg(long, value_enum)]
@@ -702,6 +703,8 @@ enum ServiceCommand {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
+        #[arg(long, value_enum, default_value_t = AndroidGpuMode::Host)]
+        android_gpu: AndroidGpuMode,
         #[arg(long)]
         low_latency: bool,
         #[arg(long, value_enum)]
@@ -720,6 +723,8 @@ enum ServiceCommand {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
+        #[arg(long, value_enum, default_value_t = AndroidGpuMode::Host)]
+        android_gpu: AndroidGpuMode,
         #[arg(long)]
         low_latency: bool,
         #[arg(long, value_enum)]
@@ -750,6 +755,8 @@ enum ServiceCommand {
         client_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = VideoCodecMode::Auto)]
         video_codec: VideoCodecMode,
+        #[arg(long, value_enum, default_value_t = AndroidGpuMode::Host)]
+        android_gpu: AndroidGpuMode,
         #[arg(long)]
         low_latency: bool,
         #[arg(long, value_enum)]
@@ -862,6 +869,18 @@ enum VideoCodecMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum AndroidGpuMode {
+    Auto,
+    Host,
+    Software,
+    Lavapipe,
+    Swiftshader,
+    Swangle,
+    #[value(name = "swiftshader_indirect", alias = "swiftshader-indirect")]
+    SwiftshaderIndirect,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum ServerKindArg {
     LaunchAgent,
     Workspace,
@@ -945,6 +964,8 @@ struct ServiceMetadata {
     log_path: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     video_codec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    android_gpu: Option<String>,
     #[serde(default)]
     low_latency: bool,
     #[serde(default)]
@@ -982,6 +1003,7 @@ struct ServiceLaunchOptions {
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
+    android_gpu: AndroidGpuMode,
     low_latency: bool,
     realtime_stream: bool,
     allow_port_probe: bool,
@@ -1010,11 +1032,38 @@ impl VideoCodecMode {
     }
 }
 
+impl AndroidGpuMode {
+    fn as_emulator_value(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Host => "host",
+            Self::Software => "software",
+            Self::Lavapipe => "lavapipe",
+            Self::Swiftshader => "swiftshader",
+            Self::Swangle => "swangle",
+            Self::SwiftshaderIndirect => "swiftshader_indirect",
+        }
+    }
+}
+
 fn parse_video_codec_mode(value: &str) -> Option<VideoCodecMode> {
     match value {
         "auto" => Some(VideoCodecMode::Auto),
         "hardware" => Some(VideoCodecMode::Hardware),
         "software" | "h264-software" => Some(VideoCodecMode::Software),
+        _ => None,
+    }
+}
+
+fn parse_android_gpu_mode(value: &str) -> Option<AndroidGpuMode> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "auto" => Some(AndroidGpuMode::Auto),
+        "host" => Some(AndroidGpuMode::Host),
+        "software" => Some(AndroidGpuMode::Software),
+        "lavapipe" => Some(AndroidGpuMode::Lavapipe),
+        "swiftshader" => Some(AndroidGpuMode::Swiftshader),
+        "swangle" => Some(AndroidGpuMode::Swangle),
+        "swiftshader_indirect" => Some(AndroidGpuMode::SwiftshaderIndirect),
         _ => None,
     }
 }
@@ -1085,7 +1134,7 @@ fn stream_quality_env_for_profile(profile: &str) -> anyhow::Result<StreamQuality
         }),
         "smooth" => Ok(StreamQualityEnvironment {
             profile: "smooth",
-            max_edge: 1170,
+            max_edge: 4096,
             fps: 60,
             min_bitrate: 4_000_000,
             bits_per_pixel: 5,
@@ -1192,6 +1241,7 @@ impl Default for ServiceLaunchOptions {
             advertise_host: None,
             client_root: None,
             video_codec: VideoCodecMode::Auto,
+            android_gpu: AndroidGpuMode::Host,
             low_latency: false,
             realtime_stream: false,
             allow_port_probe: false,
@@ -1262,6 +1312,7 @@ fn ensure_launch_agent_service(options: ServiceLaunchOptions) -> anyhow::Result<
         advertise_host: options.advertise_host.clone(),
         client_root: options.client_root.clone(),
         video_codec: options.video_codec,
+        android_gpu: options.android_gpu,
         low_latency: options.low_latency,
         stream_quality_profile: options.stream_quality_profile.clone(),
         local_stream_fps: options.local_stream_fps,
@@ -1304,6 +1355,8 @@ fn start_project_service(options: ServiceLaunchOptions) -> anyhow::Result<Servic
         pairing_code.clone(),
         "--video-codec".to_owned(),
         options.video_codec.as_env_value().to_owned(),
+        "--android-gpu".to_owned(),
+        options.android_gpu.as_emulator_value().to_owned(),
         "--server-kind".to_owned(),
         "standalone".to_owned(),
     ];
@@ -1437,6 +1490,7 @@ done
         started_at: now_secs(),
         log_path: Some(log_path),
         video_codec: Some(options.video_codec.as_env_value().to_owned()),
+        android_gpu: Some(options.android_gpu.as_emulator_value().to_owned()),
         low_latency: options.low_latency,
         realtime_stream: options.realtime_stream || options.stream_quality_profile.is_some(),
         stream_quality_profile: options.stream_quality_profile,
@@ -1931,6 +1985,7 @@ fn metadata_from_launch_agent(
         started_at: now_secs(),
         log_path: Some(result.stdout_log),
         video_codec: None,
+        android_gpu: None,
         low_latency: false,
         realtime_stream: true,
         stream_quality_profile: None,
@@ -2238,6 +2293,10 @@ fn service_matches_launch_options(
             .video_codec
             .as_deref()
             .is_some_and(|codec| codec == options.video_codec.as_env_value())
+        && metadata
+            .android_gpu
+            .as_deref()
+            .is_some_and(|gpu| gpu == options.android_gpu.as_emulator_value())
         && metadata.low_latency == options.low_latency
         && metadata.realtime_stream
             == (options.realtime_stream || options.stream_quality_profile.is_some())
@@ -2412,6 +2471,7 @@ struct DefaultServiceLaunchOptions {
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
+    android_gpu: AndroidGpuMode,
     low_latency: bool,
     stream_quality: Option<StreamQualityProfileArg>,
     local_stream_fps: Option<u32>,
@@ -2429,6 +2489,7 @@ impl Default for DefaultServiceLaunchOptions {
             advertise_host: None,
             client_root: None,
             video_codec: VideoCodecMode::Auto,
+            android_gpu: AndroidGpuMode::Host,
             low_latency: false,
             stream_quality: None,
             local_stream_fps: None,
@@ -2493,6 +2554,14 @@ fn no_command_action_from_args_slice(args: &[String]) -> Option<NoCommandAction>
             value if value.starts_with("--video-codec=") => {
                 options.video_codec =
                     parse_video_codec_mode(value.strip_prefix("--video-codec=")?)?;
+            }
+            "--android-gpu" => {
+                i += 1;
+                options.android_gpu = parse_android_gpu_mode(args.get(i)?)?;
+            }
+            value if value.starts_with("--android-gpu=") => {
+                options.android_gpu =
+                    parse_android_gpu_mode(value.strip_prefix("--android-gpu=")?)?;
             }
             "--stream-quality" => {
                 i += 1;
@@ -2601,6 +2670,7 @@ fn run_default_service(options: DefaultServiceLaunchOptions) -> anyhow::Result<(
         advertise_host: options.advertise_host,
         client_root: options.client_root,
         video_codec: options.video_codec,
+        android_gpu: options.android_gpu,
         low_latency: options.low_latency,
         realtime_stream: false,
         allow_port_probe: !options.autostart,
@@ -2649,6 +2719,7 @@ fn restart_detached_service(options: ServiceLaunchOptions) -> anyhow::Result<()>
             advertise_host: options.advertise_host,
             client_root: options.client_root,
             video_codec: options.video_codec,
+            android_gpu: options.android_gpu,
             low_latency: options.low_latency,
             stream_quality_profile: options.stream_quality_profile,
             local_stream_fps: options.local_stream_fps,
@@ -2681,6 +2752,7 @@ struct PairGlobalServiceOptions {
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
+    android_gpu: AndroidGpuMode,
     low_latency: bool,
     stream_quality: Option<StreamQualityProfileArg>,
     local_stream_fps: Option<u32>,
@@ -2694,6 +2766,7 @@ fn pair_global_service(options: PairGlobalServiceOptions) -> anyhow::Result<()> 
         advertise_host,
         client_root,
         video_codec,
+        android_gpu,
         low_latency,
         stream_quality,
         local_stream_fps,
@@ -2729,6 +2802,7 @@ fn pair_global_service(options: PairGlobalServiceOptions) -> anyhow::Result<()> 
         advertise_host,
         client_root,
         video_codec,
+        android_gpu,
         low_latency,
         stream_quality_profile: local_stream_quality_profile(low_latency, stream_quality),
         local_stream_fps,
@@ -2863,6 +2937,7 @@ fn expose_to_studio(options: StudioExposeOptions) -> anyhow::Result<()> {
         advertise_host: None,
         client_root: None,
         video_codec: options.video_codec,
+        android_gpu: AndroidGpuMode::Host,
         low_latency: options.low_latency,
         realtime_stream: true,
         allow_port_probe: false,
@@ -3545,6 +3620,7 @@ fn main() -> anyhow::Result<()> {
             advertise_host,
             client_root,
             video_codec,
+            android_gpu,
             low_latency,
             stream_quality,
             local_stream_fps,
@@ -3555,6 +3631,7 @@ fn main() -> anyhow::Result<()> {
             advertise_host,
             client_root,
             video_codec,
+            android_gpu,
             low_latency,
             stream_quality,
             local_stream_fps,
@@ -3613,6 +3690,7 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
+                android_gpu,
                 low_latency,
                 stream_quality,
                 local_stream_fps,
@@ -3624,6 +3702,7 @@ fn main() -> anyhow::Result<()> {
                         advertise_host,
                         client_root,
                         video_codec,
+                        android_gpu,
                         low_latency,
                         realtime_stream: false,
                         allow_port_probe: false,
@@ -3641,6 +3720,7 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
+                android_gpu,
                 low_latency,
                 stream_quality,
                 local_stream_fps,
@@ -3653,6 +3733,7 @@ fn main() -> anyhow::Result<()> {
                     advertise_host,
                     client_root,
                     video_codec,
+                    android_gpu,
                     low_latency,
                     stream_quality_profile: local_stream_quality_profile(
                         low_latency,
@@ -3669,6 +3750,7 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
+                android_gpu,
                 low_latency,
                 stream_quality,
                 local_stream_fps,
@@ -3681,6 +3763,7 @@ fn main() -> anyhow::Result<()> {
                     advertise_host,
                     client_root,
                     video_codec,
+                    android_gpu,
                     low_latency,
                     realtime_stream: false,
                     allow_port_probe: false,
@@ -3697,6 +3780,7 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
+                android_gpu,
                 low_latency,
                 stream_quality,
                 local_stream_fps,
@@ -3709,6 +3793,7 @@ fn main() -> anyhow::Result<()> {
                     advertise_host,
                     client_root,
                     video_codec,
+                    android_gpu,
                     low_latency,
                     stream_quality_profile: local_stream_quality_profile(
                         low_latency,
@@ -3730,6 +3815,7 @@ fn main() -> anyhow::Result<()> {
                 advertise_host,
                 client_root,
                 video_codec,
+                android_gpu,
                 low_latency,
                 stream_quality,
                 local_stream_fps,
@@ -3760,6 +3846,7 @@ fn main() -> anyhow::Result<()> {
                         started_at: now_secs(),
                         log_path: service_log_path().ok(),
                         video_codec: Some(video_codec.as_env_value().to_owned()),
+                        android_gpu: Some(android_gpu.as_emulator_value().to_owned()),
                         low_latency,
                         realtime_stream: crate::transport::webrtc::realtime_stream_enabled()
                             || low_latency
@@ -3777,6 +3864,7 @@ fn main() -> anyhow::Result<()> {
                     advertise_host,
                     client_root,
                     video_codec,
+                    android_gpu,
                     low_latency,
                     stream_quality_profile,
                     local_stream_fps,
@@ -4173,10 +4261,6 @@ fn main() -> anyhow::Result<()> {
                 )?;
             }
             Ok(())
-        }
-        Command::Stream { udid, frames } => {
-            let udid = resolve_device_udid(udid.as_deref())?;
-            run_stream_stdout(&bridge, udid, frames)
         }
         Command::DescribeUi {
             udid,
@@ -5011,6 +5095,7 @@ struct ServiceOptions {
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
+    android_gpu: AndroidGpuMode,
     low_latency: bool,
     stream_quality_profile: Option<String>,
     local_stream_fps: Option<u32>,
@@ -5025,6 +5110,7 @@ fn serve_with_appkit(
     advertise_host: Option<String>,
     client_root: Option<PathBuf>,
     video_codec: VideoCodecMode,
+    android_gpu: AndroidGpuMode,
     low_latency: bool,
     stream_quality_profile: Option<String>,
     local_stream_fps: Option<u32>,
@@ -5033,6 +5119,7 @@ fn serve_with_appkit(
     pairing_code: Option<String>,
 ) -> anyhow::Result<()> {
     std::env::set_var("SIMDECK_VIDEO_CODEC", video_codec.as_env_value());
+    std::env::set_var("SIMDECK_ANDROID_GPU", android_gpu.as_emulator_value());
     std::env::set_var("SIMDECK_LOW_LATENCY", if low_latency { "1" } else { "0" });
     if let Some(local_stream_fps) = local_stream_fps {
         std::env::set_var("SIMDECK_LOCAL_STREAM_FPS", local_stream_fps.to_string());
@@ -5488,39 +5575,6 @@ fn default_recording_path(udid: &str) -> PathBuf {
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
     PathBuf::from(format!("Simulator Recording - {udid} - {timestamp}.mp4"))
-}
-
-fn run_stream_stdout(bridge: &NativeBridge, udid: String, frames: u64) -> anyhow::Result<()> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .build()
-        .context("create stream runtime")?;
-    let _runtime_guard = runtime.enter();
-    let metrics = Arc::new(Metrics::default());
-    let session = simulators::session::SimulatorSession::new(bridge, udid, metrics)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-    session
-        .ensure_started()
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-    session.request_keyframe();
-
-    let mut receiver = session.subscribe();
-    let mut stdout = io::stdout().lock();
-    let mut written = 0u64;
-    runtime.block_on(async {
-        loop {
-            if frames > 0 && written >= frames {
-                break;
-            }
-            let frame = receiver.recv().await?;
-            let sample = crate::transport::webrtc::h264_annex_b_sample(&frame)
-                .map_err(|error| anyhow::anyhow!("encode Annex B frame: {error}"))?;
-            stdout.write_all(&sample)?;
-            stdout.flush()?;
-            written += 1;
-        }
-        anyhow::Ok(())
-    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6128,11 +6182,12 @@ mod tests {
         render_agent_accessibility_tree, render_qr_code, run_maestro_command,
         server_health_watchdog_should_restart, service_addresses, service_matches_launch_options,
         service_post_error_is_retryable, simdeck_open_link, simdeck_pair_url,
-        studio_service_restart_args, workspace_service_process_is_current, Cli, Command,
-        ElementSelector, NoCommandAction, PairingAddress, ServiceCommand, ServiceLaunchOptions,
-        ServiceMetadata, StreamQualityProfileArg, StudioExposeOptions, TapCommandTarget,
-        VideoCodecMode, WorkspaceServiceProcess, YamlValue, DEFAULT_LOCAL_STREAM_QUALITY_PROFILE,
-        SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD, SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
+        studio_service_restart_args, workspace_service_process_is_current, AndroidGpuMode, Cli,
+        Command, ElementSelector, NoCommandAction, PairingAddress, ServiceCommand,
+        ServiceLaunchOptions, ServiceMetadata, StreamQualityProfileArg, StudioExposeOptions,
+        TapCommandTarget, VideoCodecMode, WorkspaceServiceProcess, YamlValue,
+        DEFAULT_LOCAL_STREAM_QUALITY_PROFILE, SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD,
+        SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
     };
     use clap::Parser;
     use std::collections::HashMap;
@@ -6159,6 +6214,7 @@ mod tests {
             started_at: 1,
             log_path: None,
             video_codec: Some(VideoCodecMode::Auto.as_env_value().to_owned()),
+            android_gpu: Some(AndroidGpuMode::Host.as_emulator_value().to_owned()),
             low_latency: false,
             realtime_stream: true,
             stream_quality_profile: Some(DEFAULT_LOCAL_STREAM_QUALITY_PROFILE.to_owned()),
@@ -6178,6 +6234,7 @@ mod tests {
             advertise_host: advertise_host.map(str::to_owned),
             client_root: client_root.map(PathBuf::from),
             video_codec: VideoCodecMode::Auto,
+            android_gpu: AndroidGpuMode::Host,
             low_latency: false,
             realtime_stream: false,
             allow_port_probe: false,
@@ -6418,6 +6475,7 @@ mod tests {
             started_at: 1,
             log_path: None,
             video_codec: Some(VideoCodecMode::Auto.as_env_value().to_owned()),
+            android_gpu: Some(AndroidGpuMode::Host.as_emulator_value().to_owned()),
             low_latency: false,
             realtime_stream: true,
             stream_quality_profile: Some(DEFAULT_LOCAL_STREAM_QUALITY_PROFILE.to_owned()),

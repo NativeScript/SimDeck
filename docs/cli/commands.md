@@ -207,12 +207,6 @@ simdeck logs --seconds 30 --limit 200
 simdeck chrome-profile
 ```
 
-Diagnostic iOS H.264 stream:
-
-```sh
-simdeck stream --frames 120 > stream.h264
-```
-
 ## Studio and providers
 
 For hosted Studio workflows:

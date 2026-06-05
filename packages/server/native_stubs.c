@@ -583,6 +583,22 @@ bool xcw_native_h264_encoder_encode_rgba(void *handle, const uint8_t *rgba,
   return false;
 }
 
+bool xcw_native_h264_encoder_encode_bgra(void *handle, const uint8_t *bgra,
+                                         uintptr_t length, uint32_t width,
+                                         uint32_t height,
+                                         uint64_t timestamp_us,
+                                         char **error_message) {
+  (void)handle;
+  (void)bgra;
+  (void)length;
+  (void)width;
+  (void)height;
+  (void)timestamp_us;
+  xcw_set_error(error_message,
+                "H.264 encoding is only available in the macOS native bridge.");
+  return false;
+}
+
 void xcw_native_h264_encoder_request_keyframe(void *handle) { (void)handle; }
 
 void xcw_native_free_string(char *value) { free(value); }

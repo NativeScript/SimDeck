@@ -98,6 +98,9 @@ Build apps with project tooling.
 
 Android devices use IDs like `android:Pixel_8_API_36`. `simdeck list` discovers
 AVDs from the Android SDK.
+SimDeck-owned Android boots use the emulator shared-video surface plus
+`--android-gpu host` by default. Use `simdeck service restart --android-gpu auto`
+or `--android-gpu swiftshader_indirect` only when host GPU rendering is unstable.
 
 ## Fast agent inspection
 

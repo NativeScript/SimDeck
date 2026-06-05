@@ -7,13 +7,13 @@ import {
 } from "./streamWorkerClient";
 
 describe("streamWorkerClient", () => {
-  it("uses the common H264 WebSocket preference for Android emulator streams", () => {
+  it("ignores removed legacy stream transport preferences", () => {
     const target = buildStreamTarget("android:emulator-5554", {
       platform: "android-emulator",
-      transport: "h264",
+      transport: "h264" as never,
     });
 
-    expect(preferredStreamBackend(target)).toBe("h264-ws");
+    expect(preferredStreamBackend(target)).toBe("auto");
   });
 
   it("uses the common WebRTC preference for Android emulator streams", () => {

@@ -93,7 +93,7 @@ export function SimulatorMenu({
   const fpsOptions = remoteStream
     ? REMOTE_STREAM_FPS_OPTIONS
     : LOCAL_STREAM_FPS_OPTIONS;
-  const qualityOptions = H264_STREAM_QUALITY_OPTIONS;
+  const qualityOptions = STREAM_QUALITY_OPTIONS;
   const activeQualityOption = qualityOptions.some(
     (option) => option.value === streamConfig.quality,
   )
@@ -368,7 +368,6 @@ const STREAM_ENCODERS: Array<{ label: string; value: StreamEncoder }> = [
 const STREAM_TRANSPORTS: Array<{ label: string; value: StreamTransport }> = [
   { label: "Auto", value: "auto" },
   { label: "WebRTC", value: "webrtc" },
-  { label: "H264 WS", value: "h264" },
 ];
 
 const LOCAL_STREAM_FPS_OPTIONS: Array<{ label: string; value: StreamFps }> = [
@@ -383,41 +382,41 @@ const REMOTE_STREAM_FPS_OPTIONS: Array<{ label: string; value: StreamFps }> = [
   { label: "60", value: 60 },
 ];
 
-const H264_STREAM_QUALITY_OPTIONS: Array<{
+const STREAM_QUALITY_OPTIONS: Array<{
   label: string;
   value: StreamQualityPreset;
 }> = [
   { label: "Auto", value: "auto" },
-  { label: "Full", value: "full" },
+  { label: "Full res", value: "full" },
   { label: "1280", value: "balanced" },
+  { label: "Smooth", value: "smooth" },
   { label: "1080", value: "economy" },
   { label: "720", value: "low" },
   { label: "540", value: "tiny" },
 ];
 
-const H264_QUALITY_LABELS: Partial<Record<StreamQualityPreset, string>> = {
+const STREAM_QUALITY_LABELS: Partial<Record<StreamQualityPreset, string>> = {
   auto: "Auto",
   balanced: "1280px",
   economy: "1080px",
   full: "Full res",
   low: "720px",
   quality: "Full+",
-  smooth: "1170px",
+  smooth: "Smooth",
   tiny: "540px",
 };
 
 function streamQualityOptionLabel(quality: StreamQualityPreset): string {
-  return H264_QUALITY_LABELS[quality] ?? quality;
+  return STREAM_QUALITY_LABELS[quality] ?? quality;
 }
 
 function formatStreamConfigSummary(
   streamConfig: StreamConfig,
   transport: StreamTransport,
 ): string {
-  const transportLabel =
-    transport === "h264" ? "H264 WS" : transport.toUpperCase();
+  const transportLabel = transport.toUpperCase();
   const resolution =
-    H264_QUALITY_LABELS[streamConfig.quality] ??
+    STREAM_QUALITY_LABELS[streamConfig.quality] ??
     (typeof streamConfig.maxEdge === "number" && streamConfig.maxEdge > 0
       ? `${streamConfig.maxEdge}px`
       : "Full res");

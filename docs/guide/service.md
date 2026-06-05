@@ -63,15 +63,16 @@ LaunchAgent port or the current singleton service port before falling back to
 These options are accepted by `simdeck`, `service start`, `service restart`,
 `service on`, and `service reset`:
 
-| Flag                         | Default     | Use it when                                |
-| ---------------------------- | ----------- | ------------------------------------------ |
-| `--port <port>` / `-p`       | `4310`      | You want a specific service port           |
-| `--bind <ip>`                | `127.0.0.1` | You need LAN access with `0.0.0.0` or `::` |
-| `--advertise-host <host>`    | detected    | Remote browsers need a specific host or IP |
-| `--video-codec <mode>`       | `auto`      | You need to force encoder behavior         |
-| `--stream-quality <profile>` | `full`      | You want lower CPU or bandwidth use        |
-| `--local-stream-fps <fps>`   | `60`        | You want a different local stream target   |
-| `--client-root <path>`       | bundled UI  | You are serving a custom static client     |
+| Flag                         | Default     | Use it when                                       |
+| ---------------------------- | ----------- | ------------------------------------------------- |
+| `--port <port>` / `-p`       | `4310`      | You want a specific service port                  |
+| `--bind <ip>`                | `127.0.0.1` | You need LAN access with `0.0.0.0` or `::`        |
+| `--advertise-host <host>`    | detected    | Remote browsers need a specific host or IP        |
+| `--video-codec <mode>`       | `auto`      | You need to force encoder behavior                |
+| `--android-gpu <mode>`       | `host`      | You need to change Android emulator GPU rendering |
+| `--stream-quality <profile>` | `full`      | You want lower CPU or bandwidth use               |
+| `--local-stream-fps <fps>`   | `60`        | You want a different local stream target          |
+| `--client-root <path>`       | bundled UI  | You are serving a custom static client            |
 
 ## Restart CoreSimulator
 

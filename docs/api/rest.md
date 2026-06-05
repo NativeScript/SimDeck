@@ -165,15 +165,14 @@ Performance query parameters:
 
 ## Live video
 
-| Method | Path                                  | Purpose                                |
-| ------ | ------------------------------------- | -------------------------------------- |
-| `POST` | `/api/simulators/{udid}/webrtc/offer` | WebRTC offer/answer stream setup       |
-| `GET`  | `/api/simulators/{udid}/h264`         | H.264 WebSocket fallback               |
-| `GET`  | `/api/simulators/{udid}/input`        | Input WebSocket for fallback transport |
-| `GET`  | `/api/simulators/{udid}/control`      | Alias for input control WebSocket      |
-| `POST` | `/api/simulators/{udid}/refresh`      | Request a fresh frame or keyframe      |
+| Method | Path                                  | Purpose                               |
+| ------ | ------------------------------------- | ------------------------------------- |
+| `POST` | `/api/simulators/{udid}/webrtc/offer` | WebRTC offer/answer stream setup      |
+| `GET`  | `/api/simulators/{udid}/input`        | Input WebSocket fallback for controls |
+| `GET`  | `/api/simulators/{udid}/control`      | Alias for input control WebSocket     |
+| `POST` | `/api/simulators/{udid}/refresh`      | Request a fresh frame or keyframe     |
 
-For normal clients, copy the browser behavior instead of hand-coding a raw decoder. The UI supports WebRTC first and H.264 WebSocket fallback. Android emulator IDs use the same endpoints; their H.264 frames are produced from the emulator `-share-vid` display surface, not screenshot polling.
+For normal clients, copy the browser behavior instead of hand-coding a raw decoder. The UI uses the WebRTC offer endpoint for live video. Android emulator IDs use the same WebRTC endpoint; their H.264 frames are produced from the emulator `-share-vid` display surface, not screenshot polling.
 
 Minimal WebRTC request:
 

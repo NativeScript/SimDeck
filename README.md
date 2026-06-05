@@ -89,6 +89,9 @@ Normal service restarts preserve that token so paired clients stay connected.
 Use `simdeck service reset` only when you want to rotate the service token and
 restart the LaunchAgent.
 The service uses port 4310 unless you pass `-p` or `--port`.
+SimDeck-owned Android emulator boots use host GPU rendering by default; use
+`simdeck service restart --android-gpu auto` or
+`--android-gpu swiftshader_indirect` only as a machine-specific fallback.
 Use `simdeck service kill` when you want to stop every SimDeck service process,
 including services started from another checkout or installed binary.
 
@@ -130,7 +133,6 @@ simdeck pasteboard get
 simdeck screenshot --output screen.png
 simdeck screenshot --with-bezel --output screen-bezel.png
 simdeck record --seconds 5 --output screen-recording.mp4
-simdeck stream --frames 120 > stream.h264
 simdeck describe
 simdeck describe --format agent --max-depth 4
 simdeck describe --format agent --max-depth 4 --interactive

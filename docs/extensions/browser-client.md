@@ -38,7 +38,6 @@ Force a stream transport while debugging:
 
 ```text
 http://127.0.0.1:4310?stream=webrtc
-http://127.0.0.1:4310?stream=h264
 ```
 
 Use the default URL for normal operation.

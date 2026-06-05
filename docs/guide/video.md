@@ -1,6 +1,6 @@
 # Video and streaming
 
-SimDeck streams live device video to the browser. Local sessions default to high quality. Remote or constrained sessions can trade detail for lower CPU and latency.
+SimDeck streams live device video to the browser. Local sessions default to full-resolution 60 fps. Remote or constrained sessions can trade detail for lower CPU and latency.
 
 iOS simulator H.264 uses VideoToolbox for hardware encoding and x264 for software encoding.
 Android emulator H.264 uses the emulator `-share-vid` display surface. SimDeck reads BGRA frames from the `videmulator<console-port>` shared memory region and encodes them on the Mac, so normal Android live video stays on the native shared display path.
@@ -8,10 +8,12 @@ Android emulator H.264 uses the emulator `-share-vid` display surface. SimDeck r
 ## When encoding runs
 
 SimDeck starts encoding when a browser stream needs H.264 frames. For iOS, the
-server requests an initial keyframe to answer the WebRTC or H.264 WebSocket
-viewer, then keeps a shared refresh pump active while frame subscribers exist.
+server requests an initial keyframe to answer the WebRTC viewer, then keeps a
+shared refresh pump active while frame subscribers exist.
 For Android, SimDeck starts emulators with `-share-vid`, maps the shared display
 region, and feeds changed BGRA frames into the native host H.264 encoder.
+SimDeck-owned Android boots also default to `-gpu host`, matching the native
+emulator app's accelerated renderer while staying in headless shared-video mode.
 
 The browser reports whether the page and stream canvas are foreground. When all
 known viewers are hidden or the last frame subscriber disconnects, the native
@@ -38,7 +40,8 @@ Common profiles:
 
 | Profile       | Use it for                              |
 | ------------- | --------------------------------------- |
-| `full`        | Local browser on a fast Mac             |
+| `full`        | Default local full-resolution 60 fps    |
+| `smooth`      | Full-size 60 fps with lower bitrate     |
 | `balanced`    | Good local quality with less bandwidth  |
 | `economy`     | Remote browser or busy machine          |
 | `low`         | Slower Wi-Fi or shared hosts            |
@@ -46,6 +49,18 @@ Common profiles:
 | `ci-software` | Virtualized CI Macs                     |
 
 The browser also has stream controls for transport, resolution, FPS, and refresh.
+
+## Pick an Android GPU mode
+
+SimDeck-owned Android emulator boots use host GPU acceleration by default:
+
+```sh
+simdeck service restart --android-gpu host
+```
+
+Use `auto` to let the Android emulator choose the renderer. Use
+`swiftshader_indirect`, `swiftshader`, `software`, `lavapipe`, or `swangle` only
+when host rendering is unstable on a specific machine.
 
 ## Pick a codec
 
@@ -61,11 +76,11 @@ simdeck service restart --video-codec software
 | `hardware` | Dedicated local machines where VideoToolbox hardware H.264 is reliable.             |
 | `software` | x264 software H.264 for CI, screen recording conflicts, or hardware encoder stalls. |
 
-The codec setting controls iOS simulator host encoding. Android emulator streams
-use a dedicated host encoder for shared display frames; set
-`SIMDECK_ANDROID_VIDEO_CODEC=hardware` or `software` before starting the service
-when you need to override Android's encoder choice. Stream quality controls the
-encoded Android frame size.
+The codec setting controls simulator host encoding. Android emulator streams use
+the same service codec by default for shared display frames; set
+`SIMDECK_ANDROID_VIDEO_CODEC=auto`, `hardware`, or `software` before starting the
+service only when you need an Android-specific encoder override. Stream quality
+controls the encoded Android frame size.
 
 When multiple simulator streams run at the same time, `auto` keeps one active
 stream on the hardware encoder path and routes additional active auto streams to
@@ -78,15 +93,14 @@ For very constrained software sessions:
 simdeck service restart --video-codec software --low-latency
 ```
 
-## WebRTC and fallback
+## WebRTC
 
-The browser tries WebRTC first. If WebRTC cannot render a frame, the UI can fall back to H.264 over WebSocket when the browser supports WebCodecs.
+The browser uses WebRTC for live video. SimDeck no longer exposes a separate H.264 WebSocket video transport.
 
 Force a mode while debugging:
 
 ```text
 http://127.0.0.1:4310?stream=webrtc
-http://127.0.0.1:4310?stream=h264
 ```
 
 ## Remote browsers

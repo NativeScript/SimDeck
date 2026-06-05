@@ -333,6 +333,8 @@ fn service_options_match_arguments(
         && argument_value(arguments, "--client-root").as_deref() == Some(client_root.as_ref())
         && argument_value(arguments, "--video-codec").as_deref()
             == Some(options.video_codec.as_env_value())
+        && argument_value(arguments, "--android-gpu").as_deref()
+            == Some(options.android_gpu.as_emulator_value())
         && argument_value(arguments, "--server-kind").as_deref() == Some("launch-agent")
         && arguments
             .windows(2)
@@ -615,6 +617,8 @@ fn plist_contents(
         client_root.to_string_lossy().into_owned(),
         "--video-codec".to_string(),
         options.video_codec.as_env_value().to_string(),
+        "--android-gpu".to_string(),
+        options.android_gpu.as_emulator_value().to_string(),
         "--server-kind".to_string(),
         "launch-agent".to_string(),
     ];
@@ -728,6 +732,7 @@ mod tests {
             advertise_host: None,
             client_root: None,
             video_codec: crate::VideoCodecMode::Auto,
+            android_gpu: crate::AndroidGpuMode::Host,
             low_latency: false,
             stream_quality_profile: None,
             local_stream_fps: None,
@@ -749,6 +754,8 @@ mod tests {
             "/tmp/client".to_owned(),
             "--video-codec".to_owned(),
             options.video_codec.as_env_value().to_owned(),
+            "--android-gpu".to_owned(),
+            options.android_gpu.as_emulator_value().to_owned(),
             "--server-kind".to_owned(),
             "launch-agent".to_owned(),
         ];

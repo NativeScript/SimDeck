@@ -133,9 +133,6 @@ const REMOTE_STREAM_DEFAULTS: StreamConfig = {
   fps: 30,
   quality: "balanced",
 };
-const H264_WS_DEFAULT_FPS = 60;
-const H264_WS_LOCAL_DEFAULT_QUALITY: StreamQualityPreset = "full";
-const H264_WS_REMOTE_DEFAULT_QUALITY: StreamQualityPreset = "auto";
 const CONTROL_BACKLOG_DROP_BYTES = 4096;
 const STREAM_CONFIG_USER_CHANGE_GRACE_MS = 1000;
 const STREAM_ENCODER_VALUES = new Set<StreamEncoder>([
@@ -143,11 +140,7 @@ const STREAM_ENCODER_VALUES = new Set<StreamEncoder>([
   "hardware",
   "software",
 ]);
-const STREAM_TRANSPORT_VALUES = new Set<StreamTransport>([
-  "auto",
-  "h264",
-  "webrtc",
-]);
+const STREAM_TRANSPORT_VALUES = new Set<StreamTransport>(["auto", "webrtc"]);
 const MOBILE_VIEWPORT_MEDIA_QUERY = "(max-width: 600px)";
 const CHROME_RENDERER_ASSET_VERSION = "chrome-renderer-button-overlay-23";
 clearLegacyVolatileUiState();
@@ -280,9 +273,6 @@ function shouldUseRemoteStreamDefault(apiRoot: string): boolean {
 
 function readStreamTransportQueryParam(): StreamTransport {
   const value = new URLSearchParams(window.location.search).get("stream");
-  if (value === "h264-ws") {
-    return "h264";
-  }
   return value && STREAM_TRANSPORT_VALUES.has(value as StreamTransport)
     ? (value as StreamTransport)
     : "auto";
@@ -290,19 +280,9 @@ function readStreamTransportQueryParam(): StreamTransport {
 
 function defaultStreamConfigForTransport(
   remote: boolean,
-  transport: StreamTransport,
+  _transport: StreamTransport,
 ): StreamConfig {
   const base = remote ? REMOTE_STREAM_DEFAULTS : LOCAL_STREAM_DEFAULTS;
-  if (transport === "h264") {
-    return {
-      ...base,
-      fps: H264_WS_DEFAULT_FPS,
-      maxEdge: undefined,
-      quality: remote
-        ? H264_WS_REMOTE_DEFAULT_QUALITY
-        : H264_WS_LOCAL_DEFAULT_QUALITY,
-    };
-  }
   return base;
 }
 
@@ -752,38 +732,39 @@ export function AppShell({
     [],
   );
 
-  const syncStreamConfig = useCallback(async () => {
-    const requestId = ++streamConfigRequestIdRef.current;
-    try {
-      const response = await apiRequest<StreamQualityResponse>(
-        "/api/stream-quality",
-      );
-      if (requestId !== streamConfigRequestIdRef.current) {
-        return;
+  const syncStreamConfig = useCallback(
+    async (options?: { ignoreUserGrace?: boolean }) => {
+      const requestId = ++streamConfigRequestIdRef.current;
+      try {
+        const response = await apiRequest<StreamQualityResponse>(
+          "/api/stream-quality",
+        );
+        if (requestId !== streamConfigRequestIdRef.current) {
+          return;
+        }
+        if (
+          !options?.ignoreUserGrace &&
+          Date.now() - streamConfigUserChangeAtRef.current <
+            STREAM_CONFIG_USER_CHANGE_GRACE_MS
+        ) {
+          return;
+        }
+        setStreamConfig((current) =>
+          mergeStreamQualityResponse(current, response, {
+            preserveAutoQuality: false,
+          }),
+        );
+      } catch {
+        // Keep the existing local/default selection; the stream path will surface
+        // provider reachability errors separately.
+      } finally {
+        if (requestId === streamConfigRequestIdRef.current) {
+          setStreamConfigReady(true);
+        }
       }
-      if (
-        Date.now() - streamConfigUserChangeAtRef.current <
-        STREAM_CONFIG_USER_CHANGE_GRACE_MS
-      ) {
-        return;
-      }
-      if (streamTransport === "h264" && !streamConfigUserTouchedRef.current) {
-        return;
-      }
-      setStreamConfig((current) =>
-        mergeStreamQualityResponse(current, response, {
-          preserveAutoQuality: streamTransport === "h264",
-        }),
-      );
-    } catch {
-      // Keep the existing local/default selection; the stream path will surface
-      // provider reachability errors separately.
-    } finally {
-      if (requestId === streamConfigRequestIdRef.current) {
-        setStreamConfigReady(true);
-      }
-    }
-  }, [streamTransport]);
+    },
+    [streamTransport],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -828,8 +809,10 @@ export function AppShell({
     ) {
       return;
     }
+    setStreamConfigReady(false);
+    void syncStreamConfig({ ignoreUserGrace: true });
     void refreshRef.current();
-  }, [streamStatus.error, streamStatus.state]);
+  }, [streamStatus.error, streamStatus.state, syncStreamConfig]);
 
   const updateStreamEncoder = useCallback((encoder: StreamEncoder) => {
     streamConfigUserTouchedRef.current = true;
@@ -855,27 +838,10 @@ export function AppShell({
     setStreamConfig((current) => ({ ...current, maxEdge: undefined, quality }));
   }, []);
 
-  const updateStreamTransport = useCallback(
-    (transport: StreamTransport) => {
-      setStreamTransport(transport);
-      writeStreamTransportQueryParam(transport);
-      if (transport !== "h264" || streamConfigUserTouchedRef.current) {
-        return;
-      }
-      streamConfigUserChangeAtRef.current = Date.now();
-      setStreamConfigReady(true);
-      setStreamConfigApplyKey((current) => current + 1);
-      setStreamConfig((current) => ({
-        ...current,
-        fps: H264_WS_DEFAULT_FPS,
-        maxEdge: undefined,
-        quality: remoteStream
-          ? H264_WS_REMOTE_DEFAULT_QUALITY
-          : H264_WS_LOCAL_DEFAULT_QUALITY,
-      }));
-    },
-    [remoteStream],
-  );
+  const updateStreamTransport = useCallback((transport: StreamTransport) => {
+    setStreamTransport(transport);
+    writeStreamTransportQueryParam(transport);
+  }, []);
 
   useEffect(() => {
     if (
@@ -1930,7 +1896,7 @@ export function AppShell({
   const screenOnlyStyle =
     !viewportChromeProfile && chromeProfile && chromeProfile.screenWidth > 0
       ? isAndroidViewport
-        ? androidScreenRadiusStyle(chromeProfile, effectiveDeviceNaturalSize)
+        ? androidScreenRadiusStyle(chromeProfile)
         : ({
             borderRadius: `${Math.min(
               chromeProfile.cornerRadius *
@@ -3142,60 +3108,78 @@ export function AppShell({
 
 function androidScreenRadiusStyle(
   chromeProfile: ChromeProfile,
-  displaySize: Size | null,
 ): CSSProperties | null {
-  const screenWidth =
-    displaySize && displaySize.width > 0
-      ? displaySize.width
-      : chromeProfile.screenWidth;
-  if (screenWidth <= 0) {
+  const screenWidth = chromeProfile.screenWidth;
+  const screenHeight =
+    chromeProfile.screenHeight > 0 ? chromeProfile.screenHeight : screenWidth;
+  if (screenWidth <= 0 || screenHeight <= 0) {
     return null;
   }
 
-  const scale = DEVICE_SCREEN_WIDTH / screenWidth;
-  const maxRadius = DEVICE_SCREEN_WIDTH / 2;
   const radii = chromeProfile.cornerRadii;
-  const topLeft = scaledScreenRadius(
+  const topLeft = screenRadiusPercentPair(
     radii?.topLeft ?? chromeProfile.cornerRadius,
-    scale,
-    maxRadius,
+    screenWidth,
+    screenHeight,
   );
-  const topRight = scaledScreenRadius(
+  const topRight = screenRadiusPercentPair(
     radii?.topRight ?? chromeProfile.cornerRadius,
-    scale,
-    maxRadius,
+    screenWidth,
+    screenHeight,
   );
-  const bottomRight = scaledScreenRadius(
+  const bottomRight = screenRadiusPercentPair(
     radii?.bottomRight ?? chromeProfile.cornerRadius,
-    scale,
-    maxRadius,
+    screenWidth,
+    screenHeight,
   );
-  const bottomLeft = scaledScreenRadius(
+  const bottomLeft = screenRadiusPercentPair(
     radii?.bottomLeft ?? chromeProfile.cornerRadius,
-    scale,
-    maxRadius,
+    screenWidth,
+    screenHeight,
   );
 
-  if (topLeft <= 0 && topRight <= 0 && bottomRight <= 0 && bottomLeft <= 0) {
+  if (
+    topLeft.radius <= 0 &&
+    topRight.radius <= 0 &&
+    bottomRight.radius <= 0 &&
+    bottomLeft.radius <= 0
+  ) {
     return null;
   }
 
-  const borderRadius = `${topLeft}px ${topRight}px ${bottomRight}px ${bottomLeft}px`;
+  const borderRadius = [
+    `${topLeft.x} ${topRight.x} ${bottomRight.x} ${bottomLeft.x}`,
+    `${topLeft.y} ${topRight.y} ${bottomRight.y} ${bottomLeft.y}`,
+  ].join(" / ");
+
   return {
     borderRadius,
-    borderTopLeftRadius: `${topLeft}px`,
-    borderTopRightRadius: `${topRight}px`,
-    borderBottomRightRadius: `${bottomRight}px`,
-    borderBottomLeftRadius: `${bottomLeft}px`,
-    clipPath: `inset(0 round ${borderRadius})`,
+    overflow: "hidden",
   };
 }
 
-function scaledScreenRadius(radius: number, scale: number, maxRadius: number) {
+function screenRadiusPercentPair(
+  radius: number,
+  screenWidth: number,
+  screenHeight: number,
+) {
   if (!Number.isFinite(radius) || radius <= 0) {
-    return 0;
+    return {
+      radius: 0,
+      x: "0%",
+      y: "0%",
+    };
   }
-  return Math.min(radius * scale, maxRadius);
+  const clampedRadius = Math.min(radius, screenWidth / 2, screenHeight / 2);
+  return {
+    radius: clampedRadius,
+    x: formatCssPercent((clampedRadius / screenWidth) * 100),
+    y: formatCssPercent((clampedRadius / screenHeight) * 100),
+  };
+}
+
+function formatCssPercent(value: number) {
+  return `${Number(value.toFixed(6))}%`;
 }
 
 function androidDisplayKeyForSimulator(simulator: SimulatorMetadata): string {

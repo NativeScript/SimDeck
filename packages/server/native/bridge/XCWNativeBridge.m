@@ -195,7 +195,7 @@ static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
         char *previousRealtimeStreamCopy = previousRealtimeStream != NULL ? strdup(previousRealtimeStream) : NULL;
         const char *androidCodec = getenv("SIMDECK_ANDROID_VIDEO_CODEC");
         if (androidCodec == NULL || strlen(androidCodec) == 0) {
-            androidCodec = "software";
+            androidCodec = (previousCodec != NULL && strlen(previousCodec) > 0) ? previousCodec : "auto";
         }
         setenv("SIMDECK_VIDEO_CODEC", androidCodec, 1);
         setenv("SIMDECK_REALTIME_STREAM", "1", 1);

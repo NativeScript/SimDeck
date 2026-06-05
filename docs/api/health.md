@@ -21,6 +21,7 @@ Example:
   "serverKind": "launchAgent",
   "timestamp": 1714094761.234,
   "videoCodec": "auto",
+  "androidGpu": "host",
   "lowLatency": false,
   "realtimeStream": true,
   "localStreamFps": 60,
@@ -46,6 +47,7 @@ Important fields:
 | `httpPort`      | Port serving UI and API                                 |
 | `serverKind`    | `launchAgent` or `standalone`                           |
 | `videoCodec`    | Requested codec mode: `auto`, `hardware`, or `software` |
+| `androidGpu`    | Android emulator renderer mode for SimDeck-owned boots  |
 | `streamQuality` | Active stream profile and limits                        |
 | `webRtc`        | ICE settings the browser should use                     |
 
@@ -90,7 +92,7 @@ Content-Type: application/json
   "clientId": "browser-ABC",
   "kind": "viewport",
   "udid": "9D7E5BB7-...",
-  "codec": "h264",
+  "codec": "video/H264/103",
   "decodedFps": 59.7,
   "droppedFps": 0.0,
   "latestRenderMs": 6.2

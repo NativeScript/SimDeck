@@ -6,6 +6,7 @@ use std::ffi::CString;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::mem::MaybeUninit;
+use std::net::{SocketAddr, TcpStream};
 use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -16,15 +17,14 @@ use std::time::{Duration, Instant};
 
 const ANDROID_ID_PREFIX: &str = "android:";
 const DEFAULT_EMULATOR_CONSOLE_PORT_BASE: u16 = 5554;
-const ANDROID_H264_DEFAULT_MAX_EDGE: u32 = 1440;
-const ANDROID_SHARED_VIDEO_HEADER_BYTES: usize = 3072;
+const ANDROID_EMULATOR_DEFAULT_GPU_MODE: &str = "host";
+const ANDROID_EMULATOR_GPU_ENV: &str = "SIMDECK_ANDROID_GPU";
+const ANDROID_SHARED_VIDEO_HEADER_BYTES: usize = std::mem::size_of::<AndroidSharedVideoHeader>();
 const ANDROID_SHARED_VIDEO_PIXEL_BYTES: usize = 4;
 const ANDROID_SHARED_VIDEO_MAX_DIMENSION: u32 = 8192;
 const ANDROID_SHARED_VIDEO_MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
-const ANDROID_TOUCH_SWIPE_THRESHOLD: f64 = 0.025;
-const ANDROID_TOUCH_MIN_DURATION_MS: u128 = 80;
-const ANDROID_TOUCH_MAX_DURATION_MS: u128 = 1500;
 const ANDROID_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const ANDROID_CONSOLE_TIMEOUT: Duration = Duration::from_secs(2);
 const ANDROID_UIAUTOMATOR_DUMP_ATTEMPTS: usize = 10;
 const ANDROID_UIAUTOMATOR_DUMP_RETRY_DELAY: Duration = Duration::from_millis(250);
 const RUNNING_EMULATOR_CACHE_TTL: Duration = Duration::from_secs(2);
@@ -38,6 +38,7 @@ const MODIFIER_CAPS_LOCK: u32 = 1 << 4;
 
 type TimedMap<T> = Option<(Instant, HashMap<String, T>)>;
 type DisplayMetricsCache = HashMap<String, (Instant, AndroidDisplayMetrics)>;
+type ConsoleConnectionCache = HashMap<u16, TcpStream>;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AndroidDisplayMetrics {
@@ -114,6 +115,7 @@ pub struct AndroidSharedVideoFrameStream {
 
 unsafe impl Send for AndroidSharedVideoFrameStream {}
 
+#[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AndroidSharedVideoHeader {
     width: u32,
@@ -121,45 +123,6 @@ struct AndroidSharedVideoHeader {
     fps: u32,
     sequence: u32,
     timestamp_us: u64,
-}
-
-#[derive(Debug)]
-pub struct AndroidTouchGesture {
-    started_at: Instant,
-    start_x: f64,
-    start_y: f64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum AndroidTouchAction {
-    None,
-    Tap {
-        x: f64,
-        y: f64,
-    },
-    Swipe {
-        start_x: f64,
-        start_y: f64,
-        end_x: f64,
-        end_y: f64,
-        duration_ms: u64,
-    },
-}
-
-impl AndroidTouchAction {
-    pub fn perform(self, bridge: &AndroidBridge, id: &str) -> Result<(), AppError> {
-        match self {
-            AndroidTouchAction::None => Ok(()),
-            AndroidTouchAction::Tap { x, y } => bridge.send_tap_adb(id, x, y),
-            AndroidTouchAction::Swipe {
-                start_x,
-                start_y,
-                end_x,
-                end_y,
-                duration_ms,
-            } => bridge.send_swipe_adb(id, start_x, start_y, end_x, end_y, duration_ms),
-        }
-    }
 }
 
 pub fn is_android_id(id: &str) -> bool {
@@ -175,61 +138,6 @@ pub fn avd_from_id(id: &str) -> Result<String, AppError> {
 
 pub fn id_for_avd(avd_name: &str) -> String {
     format!("{ANDROID_ID_PREFIX}{avd_name}")
-}
-
-pub fn update_touch_gesture(
-    active_touch: &mut Option<AndroidTouchGesture>,
-    x: f64,
-    y: f64,
-    phase: &str,
-) -> Result<AndroidTouchAction, AppError> {
-    if !x.is_finite() || !y.is_finite() {
-        return Err(AppError::bad_request(
-            "`x` and `y` must be finite normalized numbers.",
-        ));
-    }
-    let x = x.clamp(0.0, 1.0);
-    let y = y.clamp(0.0, 1.0);
-
-    match phase {
-        "began" => {
-            *active_touch = Some(AndroidTouchGesture {
-                started_at: Instant::now(),
-                start_x: x,
-                start_y: y,
-            });
-            Ok(AndroidTouchAction::None)
-        }
-        "moved" => Ok(AndroidTouchAction::None),
-        "ended" => {
-            let touch = active_touch.take().unwrap_or(AndroidTouchGesture {
-                started_at: Instant::now(),
-                start_x: x,
-                start_y: y,
-            });
-            let distance = ((x - touch.start_x).powi(2) + (y - touch.start_y).powi(2)).sqrt();
-            if distance < ANDROID_TOUCH_SWIPE_THRESHOLD {
-                return Ok(AndroidTouchAction::Tap { x, y });
-            }
-            Ok(AndroidTouchAction::Swipe {
-                start_x: touch.start_x,
-                start_y: touch.start_y,
-                end_x: x,
-                end_y: y,
-                duration_ms: touch
-                    .started_at
-                    .elapsed()
-                    .as_millis()
-                    .clamp(ANDROID_TOUCH_MIN_DURATION_MS, ANDROID_TOUCH_MAX_DURATION_MS)
-                    as u64,
-            })
-        }
-        "cancelled" => {
-            *active_touch = None;
-            Ok(AndroidTouchAction::None)
-        }
-        _ => Ok(AndroidTouchAction::None),
-    }
 }
 
 impl AndroidBridge {
@@ -343,6 +251,7 @@ impl AndroidBridge {
             AppError::native("Android emulator console port overflowed while booting.")
         })?;
         let emulator_ports = format!("{console_port},{adb_port}");
+        let gpu_mode = android_emulator_gpu_mode()?;
         let is_windows = cfg!(target_os = "windows");
         let window_mode = if is_windows {
             "-qt-hide-window"
@@ -355,7 +264,7 @@ impl AndroidBridge {
             window_mode,
             "-no-audio",
             "-gpu",
-            "swiftshader_indirect",
+            gpu_mode.as_str(),
         ];
         if is_windows {
             args.extend(["-feature", "-Vulkan"]);
@@ -506,27 +415,15 @@ impl AndroidBridge {
     }
 
     pub fn send_touch(&self, id: &str, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
-        match phase {
-            "ended" => self.send_tap_adb(id, x, y),
-            _ => Ok(()),
-        }
-    }
-
-    fn send_tap_adb(&self, id: &str, x: f64, y: f64) -> Result<(), AppError> {
         let serial = self.serial_for_id(id)?;
         let (width, height) = self.screen_size_for_serial(&serial)?;
-        let px = (x.clamp(0.0, 1.0) * (width - 1.0)).round().max(0.0);
-        let py = (y.clamp(0.0, 1.0) * (height - 1.0)).round().max(0.0);
-        self.run_adb([
-            "-s",
+        let px = (x.clamp(0.0, 1.0) * (width - 1.0)).round().max(0.0) as u32;
+        let py = (y.clamp(0.0, 1.0) * (height - 1.0)).round().max(0.0) as u32;
+        let button_state = android_mouse_button_state_for_touch_phase(phase)?;
+        self.run_console_command_for_serial(
             &serial,
-            "shell",
-            "input",
-            "tap",
-            &px.to_string(),
-            &py.to_string(),
-        ])?;
-        Ok(())
+            &format!("event mouse {px} {py} 0 {button_state}"),
+        )
     }
 
     pub fn send_swipe(
@@ -1088,6 +985,15 @@ impl AndroidBridge {
             .remove(serial);
     }
 
+    fn run_console_command_for_serial(&self, serial: &str, command: &str) -> Result<(), AppError> {
+        let port = console_port_from_serial(serial).ok_or_else(|| {
+            AppError::native(format!(
+                "Android emulator serial `{serial}` does not expose a console port."
+            ))
+        })?;
+        run_android_console_command(port, command)
+    }
+
     fn run_adb_shell(&self, serial: &str, script: &str) -> Result<String, AppError> {
         self.run_adb(["-s", serial, "shell", script])
     }
@@ -1173,14 +1079,9 @@ impl AndroidSharedVideoFrameStream {
                 )));
             }
 
-            let mut bgra = vec![0u8; pixel_bytes];
-            unsafe {
-                ptr::copy_nonoverlapping(
-                    self.ptr.add(ANDROID_SHARED_VIDEO_HEADER_BYTES),
-                    bgra.as_mut_ptr(),
-                    pixel_bytes,
-                );
-            }
+            let pixel_ptr = unsafe { self.ptr.add(ANDROID_SHARED_VIDEO_HEADER_BYTES) };
+            let frame =
+                unsafe { android_shared_video_frame_from_memory(header, pixel_ptr, quality)? };
             let confirm = self.read_header()?;
             if header.width != confirm.width
                 || header.height != confirm.height
@@ -1189,9 +1090,7 @@ impl AndroidSharedVideoFrameStream {
                 continue;
             }
             self.last_sequence = Some(header.sequence);
-            return Ok(Some(android_shared_video_frame_from_pixels(
-                header, bgra, quality,
-            )?));
+            return Ok(Some(frame));
         }
         Ok(None)
     }
@@ -1221,9 +1120,12 @@ fn android_h264_stream_dimensions(
 ) -> (u32, u32) {
     let source_width = source_width.max(2);
     let source_height = source_height.max(2);
-    let max_edge = max_edge
-        .unwrap_or(ANDROID_H264_DEFAULT_MAX_EDGE)
-        .clamp(240, 4096);
+    let Some(max_edge) = max_edge.map(|value| value.clamp(240, 4096)) else {
+        return (
+            round_android_h264_dimension(source_width),
+            round_android_h264_dimension(source_height),
+        );
+    };
     let largest = source_width.max(source_height);
     if largest <= max_edge {
         return (
@@ -1240,7 +1142,7 @@ fn android_h264_stream_dimensions(
 
 fn round_android_h264_dimension(value: u32) -> u32 {
     let rounded = value.max(2);
-    if rounded % 2 == 0 {
+    if rounded.is_multiple_of(2) {
         rounded
     } else {
         rounded.saturating_sub(1).max(2)
@@ -1367,16 +1269,15 @@ fn android_shared_video_frame_from_slice(
         .ok_or_else(|| AppError::native("Android shared video frame size overflowed."))?;
     let pixels = bytes
         .get(ANDROID_SHARED_VIDEO_HEADER_BYTES..end)
-        .ok_or_else(|| AppError::native("Android shared video frame was truncated."))?
-        .to_vec();
-    Ok(Some(android_shared_video_frame_from_pixels(
-        header, pixels, quality,
-    )?))
+        .ok_or_else(|| AppError::native("Android shared video frame was truncated."))?;
+    Ok(Some(unsafe {
+        android_shared_video_frame_from_memory(header, pixels.as_ptr(), quality)?
+    }))
 }
 
 #[cfg(test)]
 fn read_android_shared_video_header(bytes: &[u8]) -> Result<AndroidSharedVideoHeader, AppError> {
-    if bytes.len() < 24 {
+    if bytes.len() < ANDROID_SHARED_VIDEO_HEADER_BYTES {
         return Err(AppError::native(
             "Android emulator shared video header was truncated.",
         ));
@@ -1413,6 +1314,37 @@ fn validate_android_shared_video_header(
     Ok(header)
 }
 
+fn android_emulator_gpu_mode() -> Result<String, AppError> {
+    android_emulator_gpu_mode_from_value(env::var(ANDROID_EMULATOR_GPU_ENV).ok().as_deref())
+}
+
+fn android_emulator_gpu_mode_from_value(value: Option<&str>) -> Result<String, AppError> {
+    let raw = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(ANDROID_EMULATOR_DEFAULT_GPU_MODE);
+    let mode = raw.to_ascii_lowercase().replace('-', "_");
+    if !android_emulator_gpu_mode_supported(&mode) {
+        return Err(AppError::native(format!(
+            "Unsupported Android emulator GPU mode `{raw}`. Use auto, host, software, lavapipe, swiftshader, swangle, or swiftshader_indirect."
+        )));
+    }
+    Ok(mode)
+}
+
+fn android_emulator_gpu_mode_supported(value: &str) -> bool {
+    matches!(
+        value,
+        "auto"
+            | "host"
+            | "software"
+            | "lavapipe"
+            | "swiftshader"
+            | "swangle"
+            | "swiftshader_indirect"
+    )
+}
+
 fn android_shared_video_pixel_bytes(width: u32, height: u32) -> Result<usize, AppError> {
     let bytes = usize::try_from(width)
         .ok()
@@ -1431,13 +1363,17 @@ fn android_shared_video_pixel_bytes(width: u32, height: u32) -> Result<usize, Ap
     Ok(bytes)
 }
 
-fn android_shared_video_frame_from_pixels(
+unsafe fn android_shared_video_frame_from_memory(
     header: AndroidSharedVideoHeader,
-    bgra: Vec<u8>,
+    source_bgra: *const u8,
     quality: AndroidH264StreamQuality,
 ) -> Result<AndroidSharedVideoFrame, AppError> {
-    let (width, height, bgra) =
-        scale_android_bgra_frame(header.width, header.height, bgra, quality.max_edge)?;
+    let (width, height, bgra) = copy_scaled_android_bgra_from_memory(
+        header.width,
+        header.height,
+        source_bgra,
+        quality.max_edge,
+    )?;
     Ok(AndroidSharedVideoFrame {
         timestamp_us: header.timestamp_us,
         width,
@@ -1446,25 +1382,26 @@ fn android_shared_video_frame_from_pixels(
     })
 }
 
-fn scale_android_bgra_frame(
+unsafe fn copy_scaled_android_bgra_from_memory(
     width: u32,
     height: u32,
-    bgra: Vec<u8>,
+    source_bgra: *const u8,
     max_edge: Option<u32>,
 ) -> Result<(u32, u32, Vec<u8>), AppError> {
-    let expected = android_shared_video_pixel_bytes(width, height)?;
-    if bgra.len() < expected {
+    if source_bgra.is_null() {
         return Err(AppError::native(
-            "Android shared video frame contained truncated BGRA pixels.",
+            "Android shared video frame pixels are unavailable.",
         ));
     }
+    let source_len = android_shared_video_pixel_bytes(width, height)?;
     let (target_width, target_height) = android_h264_stream_dimensions(width, height, max_edge);
+    let target_len = android_shared_video_pixel_bytes(target_width, target_height)?;
+    let mut output = vec![0u8; target_len];
     if target_width == width && target_height == height {
-        return Ok((width, height, bgra));
+        ptr::copy_nonoverlapping(source_bgra, output.as_mut_ptr(), source_len);
+        return Ok((width, height, output));
     }
 
-    let output_len = android_shared_video_pixel_bytes(target_width, target_height)?;
-    let mut output = vec![0u8; output_len];
     let source_width = width as usize;
     let source_height = height as usize;
     let target_width_usize = target_width as usize;
@@ -1475,8 +1412,11 @@ fn scale_android_bgra_frame(
             let source_x = x * source_width / target_width_usize;
             let src = ((source_y * source_width) + source_x) * ANDROID_SHARED_VIDEO_PIXEL_BYTES;
             let dst = ((y * target_width_usize) + x) * ANDROID_SHARED_VIDEO_PIXEL_BYTES;
-            output[dst..dst + ANDROID_SHARED_VIDEO_PIXEL_BYTES]
-                .copy_from_slice(&bgra[src..src + ANDROID_SHARED_VIDEO_PIXEL_BYTES]);
+            ptr::copy_nonoverlapping(
+                source_bgra.add(src),
+                output.as_mut_ptr().add(dst),
+                ANDROID_SHARED_VIDEO_PIXEL_BYTES,
+            );
         }
     }
     Ok((target_width, target_height, output))
@@ -1846,6 +1786,16 @@ fn console_port_from_serial(serial: &str) -> Option<u16> {
     serial.strip_prefix("emulator-")?.parse::<u16>().ok()
 }
 
+fn android_mouse_button_state_for_touch_phase(phase: &str) -> Result<u8, AppError> {
+    match phase.trim().to_ascii_lowercase().as_str() {
+        "began" | "down" | "moved" => Ok(1),
+        "ended" | "up" | "cancelled" => Ok(0),
+        _ => Err(AppError::bad_request(
+            "`phase` must be `began`, `moved`, `ended`, `cancelled`, `down`, or `up`.",
+        )),
+    }
+}
+
 fn is_android_component_name(value: &str) -> bool {
     value
         .split_once('/')
@@ -2006,6 +1956,119 @@ fn android_type(short_class: &str, class_name: &str) -> String {
 fn android_display_metrics_cache() -> &'static Mutex<DisplayMetricsCache> {
     static CACHE: OnceLock<Mutex<DisplayMetricsCache>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn android_console_connection_cache() -> &'static Mutex<ConsoleConnectionCache> {
+    static CACHE: OnceLock<Mutex<ConsoleConnectionCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn run_android_console_command(port: u16, command: &str) -> Result<(), AppError> {
+    let mut cache = android_console_connection_cache().lock().unwrap();
+    for attempt in 0..2 {
+        if let std::collections::hash_map::Entry::Vacant(entry) = cache.entry(port) {
+            entry.insert(connect_android_console(port)?);
+        }
+        let stream = cache
+            .get_mut(&port)
+            .ok_or_else(|| AppError::native("Android emulator console connection was missing."))?;
+        match write_android_console_command(stream, command) {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt == 0 => {
+                cache.remove(&port);
+                tracing::debug!("Android emulator console command retry on {port}: {error}");
+            }
+            Err(error) => {
+                cache.remove(&port);
+                return Err(error);
+            }
+        }
+    }
+    Err(AppError::native(
+        "Android emulator console command failed unexpectedly.",
+    ))
+}
+
+fn connect_android_console(port: u16) -> Result<TcpStream, AppError> {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream =
+        TcpStream::connect_timeout(&address, ANDROID_CONSOLE_TIMEOUT).map_err(|error| {
+            AppError::native(format!(
+                "Unable to connect to Android emulator console on port {port}: {error}"
+            ))
+        })?;
+    stream
+        .set_read_timeout(Some(ANDROID_CONSOLE_TIMEOUT))
+        .map_err(|error| {
+            AppError::native(format!("Unable to configure console timeout: {error}"))
+        })?;
+    stream
+        .set_write_timeout(Some(ANDROID_CONSOLE_TIMEOUT))
+        .map_err(|error| {
+            AppError::native(format!("Unable to configure console timeout: {error}"))
+        })?;
+    let greeting = read_android_console_response(&mut stream)?;
+    if greeting.contains("Authentication required") {
+        let token_path = home_dir().join(".emulator_console_auth_token");
+        let token = std::fs::read_to_string(&token_path).map_err(|error| {
+            AppError::native(format!(
+                "Unable to read Android emulator console auth token at {}: {error}",
+                token_path.display()
+            ))
+        })?;
+        write_android_console_command(&mut stream, &format!("auth {}", token.trim()))?;
+    }
+    Ok(stream)
+}
+
+fn write_android_console_command(stream: &mut TcpStream, command: &str) -> Result<(), AppError> {
+    stream
+        .write_all(command.as_bytes())
+        .and_then(|_| stream.write_all(b"\n"))
+        .map_err(|error| {
+            AppError::native(format!("Android emulator console write failed: {error}"))
+        })?;
+    let response = read_android_console_response(stream)?;
+    if android_console_response_ok(&response) {
+        Ok(())
+    } else {
+        Err(AppError::native(format!(
+            "Android emulator console rejected `{command}`: {}",
+            response.trim()
+        )))
+    }
+}
+
+fn read_android_console_response(stream: &mut TcpStream) -> Result<String, AppError> {
+    let mut response = String::new();
+    let mut buffer = [0u8; 1024];
+    loop {
+        let bytes_read = stream.read(&mut buffer).map_err(|error| {
+            AppError::native(format!("Android emulator console read failed: {error}"))
+        })?;
+        if bytes_read == 0 {
+            return Err(AppError::native(
+                "Android emulator console closed the connection.",
+            ));
+        }
+        response.push_str(&String::from_utf8_lossy(&buffer[..bytes_read]));
+        if android_console_response_complete(&response) {
+            return Ok(response);
+        }
+    }
+}
+
+fn android_console_response_complete(response: &str) -> bool {
+    response
+        .lines()
+        .any(|line| line.trim() == "OK" || line.trim_start().starts_with("KO"))
+}
+
+fn android_console_response_ok(response: &str) -> bool {
+    response.lines().any(|line| line.trim() == "OK")
+        && !response
+            .lines()
+            .any(|line| line.trim_start().starts_with("KO"))
 }
 
 fn parse_android_display_metrics(output: &str) -> Option<AndroidDisplayMetrics> {
@@ -2353,37 +2416,60 @@ mod tests {
     }
 
     #[test]
-    fn android_touch_gesture_resolves_tap_on_end() {
-        let mut active = None;
+    fn android_touch_phases_map_to_emulator_mouse_button_state() {
+        for phase in ["began", "down", "moved"] {
+            assert_eq!(
+                android_mouse_button_state_for_touch_phase(phase).unwrap(),
+                1
+            );
+        }
+        for phase in ["ended", "up", "cancelled"] {
+            assert_eq!(
+                android_mouse_button_state_for_touch_phase(phase).unwrap(),
+                0
+            );
+        }
+        assert!(android_mouse_button_state_for_touch_phase("hover").is_err());
+    }
 
+    #[test]
+    fn android_console_response_status_detection() {
+        assert!(android_console_response_complete(
+            "Android Console\r\nOK\r\n"
+        ));
+        assert!(android_console_response_ok("Android Console\r\nOK\r\n"));
+        assert!(android_console_response_complete("KO: bad command\r\n"));
+        assert!(!android_console_response_ok("KO: bad command\r\n"));
+        assert!(!android_console_response_complete("Android Console\r\n"));
+    }
+
+    #[test]
+    fn android_emulator_gpu_mode_defaults_to_host() {
+        assert_eq!(android_emulator_gpu_mode_from_value(None).unwrap(), "host");
         assert_eq!(
-            update_touch_gesture(&mut active, 0.4, 0.6, "began").unwrap(),
-            AndroidTouchAction::None
-        );
-        assert_eq!(
-            update_touch_gesture(&mut active, 0.41, 0.6, "ended").unwrap(),
-            AndroidTouchAction::Tap { x: 0.41, y: 0.6 }
+            android_emulator_gpu_mode_from_value(Some("   ")).unwrap(),
+            "host"
         );
     }
 
     #[test]
-    fn android_touch_gesture_resolves_swipe_on_end() {
-        let mut active = None;
-
-        assert_eq!(
-            update_touch_gesture(&mut active, 0.1, 0.2, "began").unwrap(),
-            AndroidTouchAction::None
-        );
-        assert_eq!(
-            update_touch_gesture(&mut active, 0.8, 0.2, "ended").unwrap(),
-            AndroidTouchAction::Swipe {
-                start_x: 0.1,
-                start_y: 0.2,
-                end_x: 0.8,
-                end_y: 0.2,
-                duration_ms: 80,
-            }
-        );
+    fn android_emulator_gpu_mode_accepts_supported_modes() {
+        for (input, expected) in [
+            ("auto", "auto"),
+            ("host", "host"),
+            ("software", "software"),
+            ("lavapipe", "lavapipe"),
+            ("swiftshader", "swiftshader"),
+            ("swangle", "swangle"),
+            ("swiftshader_indirect", "swiftshader_indirect"),
+            ("swiftshader-indirect", "swiftshader_indirect"),
+        ] {
+            assert_eq!(
+                android_emulator_gpu_mode_from_value(Some(input)).unwrap(),
+                expected
+            );
+        }
+        assert!(android_emulator_gpu_mode_from_value(Some("bad-gpu")).is_err());
     }
 
     #[test]
@@ -2545,6 +2631,10 @@ abcd1234\tdevice
     #[test]
     fn android_h264_stream_dimensions_scale_evenly() {
         assert_eq!(
+            android_h264_stream_dimensions(1440, 3120, None),
+            (1440, 3120)
+        );
+        assert_eq!(
             android_h264_stream_dimensions(1080, 2400, Some(720)),
             (324, 720)
         );
@@ -2552,6 +2642,11 @@ abcd1234\tdevice
             android_h264_stream_dimensions(2401, 1081, Some(4096)),
             (2400, 1080)
         );
+    }
+
+    #[test]
+    fn android_shared_video_header_matches_emulator_video_info_layout() {
+        assert_eq!(ANDROID_SHARED_VIDEO_HEADER_BYTES, 24);
     }
 
     #[test]
@@ -2632,6 +2727,44 @@ abcd1234\tdevice
         )
         .unwrap()
         .unwrap();
+
+        assert_eq!((frame.width, frame.height), (240, 240));
+        assert_eq!(frame.bgra.len(), 240 * 240 * 4);
+        assert_eq!(&frame.bgra[..8], &[0, 0, 0xaa, 0xff, 2, 0, 0xaa, 0xff]);
+        let second_row = 240 * 4;
+        assert_eq!(
+            &frame.bgra[second_row..second_row + 8],
+            &[0, 2, 0xaa, 0xff, 2, 2, 0xaa, 0xff]
+        );
+    }
+
+    #[test]
+    fn android_shared_video_frame_scales_directly_from_memory() {
+        let mut bytes = vec![0u8; ANDROID_SHARED_VIDEO_HEADER_BYTES + 480 * 480 * 4];
+        bytes[0..4].copy_from_slice(&480u32.to_le_bytes());
+        bytes[4..8].copy_from_slice(&480u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&60u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&1u32.to_le_bytes());
+        for y in 0..480usize {
+            for x in 0..480usize {
+                let offset = ANDROID_SHARED_VIDEO_HEADER_BYTES + ((y * 480 + x) * 4);
+                bytes[offset..offset + 4].copy_from_slice(&[x as u8, y as u8, 0xaa, 0xff]);
+            }
+        }
+        let header = read_android_shared_video_header(&bytes).unwrap();
+        let source = unsafe { bytes.as_ptr().add(ANDROID_SHARED_VIDEO_HEADER_BYTES) };
+        let frame = unsafe {
+            android_shared_video_frame_from_memory(
+                header,
+                source,
+                AndroidH264StreamQuality {
+                    max_edge: Some(240),
+                    min_bitrate: None,
+                    bits_per_pixel: None,
+                },
+            )
+            .unwrap()
+        };
 
         assert_eq!((frame.width, frame.height), (240, 240));
         assert_eq!(frame.bgra.len(), 240 * 240 * 4);

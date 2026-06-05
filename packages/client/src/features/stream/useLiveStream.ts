@@ -495,7 +495,6 @@ export function useLiveStream({
       if (
         sendStreamClientStats(payload) ||
         remote ||
-        streamTransport === "h264" ||
         streamTransport === "webrtc" ||
         streamTransport === "auto"
       ) {
@@ -532,7 +531,7 @@ export function useLiveStream({
     runtimeInfo,
     stats,
     status,
-    streamBackend: stats.codec === "h264-ws" ? "h264-ws" : "webrtc",
+    streamBackend: "webrtc",
     streamCanvasKey: `stream-${streamCanvasRevision}`,
   };
 }

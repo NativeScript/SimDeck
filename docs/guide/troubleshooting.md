@@ -137,14 +137,14 @@ curl http://127.0.0.1:4310/api/metrics
 
 If `frames_dropped_server` keeps climbing, the client or network cannot keep up. Move closer to the host, reduce quality, or switch to software encoding.
 
-For Android emulator streams, SimDeck uses the emulator `-share-vid` shared display surface. If Android video never starts, confirm `adb devices` shows the emulator as `device`, that it has fully booted, and that externally launched emulators were started with `-share-vid`. SimDeck-owned Android boots add the flag automatically.
+For Android emulator streams, SimDeck uses the emulator `-share-vid` shared display surface. If Android video never starts, confirm `adb devices` shows the emulator as `device`, that it has fully booted, and that externally launched emulators were started with `-share-vid`. SimDeck-owned Android boots add the flag automatically and default to `--android-gpu host`; try `simdeck service restart --android-gpu auto` or `--android-gpu swiftshader_indirect` only when host rendering is unstable.
 
 ### Browser cannot establish WebRTC
 
-Force the H.264 WebSocket fallback while testing:
+Use `?stream=webrtc` while testing to make transport selection explicit:
 
 ```text
-http://127.0.0.1:4310?stream=h264
+http://127.0.0.1:4310?stream=webrtc
 ```
 
 For routed remote sessions, configure TURN as described in [Video and streaming](/guide/video#remote-browsers).
