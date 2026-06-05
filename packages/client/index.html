@@ -24,5 +24,29 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      (() => {
+        const timeout = window.setTimeout(() => {
+          const root = document.getElementById("root");
+          if (!root || root.childElementCount > 0 || root.textContent.trim()) {
+            return;
+          }
+          const key = "simdeck-root-watchdog-reload-at";
+          const lastReloadAt = Number(sessionStorage.getItem(key) || "0");
+          if (Date.now() - lastReloadAt < 30000) {
+            return;
+          }
+          sessionStorage.setItem(key, String(Date.now()));
+          const url = new URL(window.location.href);
+          url.searchParams.set("_simdeckReload", String(Date.now()));
+          window.location.replace(url);
+        }, 4000);
+        window.addEventListener(
+          "beforeunload",
+          () => window.clearTimeout(timeout),
+          { once: true },
+        );
+      })();
+    </script>
   </body>
 </html>
