@@ -352,8 +352,8 @@ async function main() {
     "CLI boot after erase",
     () =>
       retrySimdeckJson(["boot", simulatorUDID], "CLI boot after erase", {
-        attempts: 3,
-        delayMs: 3_000,
+        attempts: process.env.CI === "true" ? 4 : 3,
+        delayMs: 5_000,
         timeoutMs: 180_000,
       }),
     { phase: phaseSimulatorLifecycle },
@@ -744,8 +744,8 @@ function startServer() {
   );
 }
 
-async function waitForHealth() {
-  const deadline = Date.now() + 30_000;
+async function waitForHealth(options = {}) {
+  const deadline = Date.now() + (options.timeoutMs ?? 30_000);
   while (Date.now() < deadline) {
     try {
       const health = await httpJson("GET", "/api/health");
@@ -766,6 +766,7 @@ function simdeckJson(args, options = {}) {
 async function retrySimdeckJson(args, label, options = {}) {
   const attempts = options.attempts ?? 6;
   const delayMs = options.delayMs ?? 2_000;
+  const healthTimeoutMs = options.healthTimeoutMs ?? 60_000;
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -774,6 +775,16 @@ async function retrySimdeckJson(args, label, options = {}) {
       lastError = error;
       if (attempt === attempts) {
         break;
+      }
+      if (isServiceConnectionError(error)) {
+        logStep(
+          `${label} lost service connection on attempt ${attempt}; waiting for health before retry`,
+        );
+        try {
+          await waitForHealth({ timeoutMs: healthTimeoutMs });
+        } catch (healthError) {
+          lastError = healthError;
+        }
       }
       await sleep(delayMs);
     }
@@ -786,6 +797,7 @@ async function retrySimdeckJson(args, label, options = {}) {
 async function retrySimdeckText(args, label, options = {}) {
   const attempts = options.attempts ?? 6;
   const delayMs = options.delayMs ?? 2_000;
+  const healthTimeoutMs = options.healthTimeoutMs ?? 60_000;
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -795,11 +807,31 @@ async function retrySimdeckText(args, label, options = {}) {
       if (attempt === attempts) {
         break;
       }
+      if (isServiceConnectionError(error)) {
+        logStep(
+          `${label} lost service connection on attempt ${attempt}; waiting for health before retry`,
+        );
+        try {
+          await waitForHealth({ timeoutMs: healthTimeoutMs });
+        } catch (healthError) {
+          lastError = healthError;
+        }
+      }
       await sleep(delayMs);
     }
   }
   throw new Error(
     `${label} failed after ${attempts} attempts: ${lastError?.message ?? lastError}`,
+  );
+}
+
+function isServiceConnectionError(error) {
+  const message = String(error?.message ?? error).toLowerCase();
+  return (
+    message.includes("connect to simdeck service") ||
+    message.includes("connection refused") ||
+    message.includes("connection reset") ||
+    message.includes("failed to connect")
   );
 }
 
