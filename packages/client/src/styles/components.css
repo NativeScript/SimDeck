@@ -464,6 +464,29 @@
   opacity: 0.55;
 }
 
+.menu-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.menu-toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.menu-toggle.disabled {
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.55;
+}
+
 .menu-debug-panel {
   padding: 6px 4px 4px;
 }
@@ -2514,6 +2537,13 @@ a.hierarchy-node-source:hover,
   width: auto;
   border-radius: 0;
   box-shadow: 0 0 0 1px var(--screen-bg);
+}
+
+.screen-only-shell .device-screen {
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.38),
+    0 2px 10px rgba(0, 0, 0, 0.24),
+    0 0 0 1px rgba(0, 0, 0, 0.28);
 }
 
 .device-screen.android-screen {

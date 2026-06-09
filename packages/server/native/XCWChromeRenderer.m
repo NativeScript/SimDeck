@@ -2,6 +2,7 @@
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
+#import <math.h>
 
 static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer";
 
@@ -37,6 +38,14 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
                      matchingDisplaySize:(CGSize)displaySize;
 + (CGFloat)framebufferMaskCornerRadiusForChromeInfo:(NSDictionary *)chromeInfo
                                    pointScreenWidth:(CGFloat)pointScreenWidth;
++ (nullable NSDictionary *)capabilitiesForChromeInfo:(NSDictionary *)chromeInfo;
++ (nullable NSDictionary *)screenDimensionsForChromeInfo:(NSDictionary *)chromeInfo;
++ (nullable NSDictionary *)primaryDisplayForChromeInfo:(NSDictionary *)chromeInfo;
++ (CGSize)displayPixelSizeForChromeInfo:(NSDictionary *)chromeInfo
+                                   error:(NSError * _Nullable __autoreleasing *)error;
++ (CGFloat)screenScaleForChromeInfo:(NSDictionary *)chromeInfo;
++ (BOOL)validateChromeProfile:(NSDictionary *)profile
+                        error:(NSError * _Nullable __autoreleasing *)error;
 @end
 
 @implementation XCWChromeRenderer
@@ -57,21 +66,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         return CGSizeZero;
     }
 
-    NSDictionary *plist = chromeInfo[@"plist"];
-    CGFloat width = [self numberValue:plist[@"mainScreenWidth"]];
-    CGFloat height = [self numberValue:plist[@"mainScreenHeight"]];
-    if (width <= 0.0 || height <= 0.0) {
-        if (error != NULL) {
-            *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
-                                         code:16
-                                     userInfo:@{
-                NSLocalizedDescriptionKey: [NSString stringWithFormat:@"The device profile for %@ did not specify a framebuffer size.", deviceName ?: @""],
-            }];
-        }
-        return CGSizeZero;
-    }
-
-    return CGSizeMake(width, height);
+    return [self displayPixelSizeForChromeInfo:chromeInfo error:error];
 }
 
 + (nullable NSData *)PNGDataForDeviceName:(NSString *)deviceName
@@ -441,10 +436,20 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     NSString *sensorName = [plist[@"sensorBarImage"] isKindOfClass:[NSString class]] ? plist[@"sensorBarImage"] : @"";
     BOOL hasModernPhoneSensor = [self shouldRenderPhoneChromeFromSlices:plist sensorName:sensorName];
     BOOL hasComposite = !hasModernPhoneSensor && [self compositeAssetPathForChromeInfo:chromeInfo].length > 0;
-    CGFloat screenScale = MAX([self numberValue:plist[@"mainScreenScale"]], 1.0);
+    CGFloat screenScale = [self screenScaleForChromeInfo:chromeInfo];
     CGSize profileScreenSize = [self screenSizeForChromeInfo:chromeInfo
                                                    chromeSize:compositeSize
                                                   screenScale:screenScale];
+    if (profileScreenSize.width <= 0.0 || profileScreenSize.height <= 0.0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                         code:16
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"The CoreSimulator device profile did not specify usable display dimensions.",
+            }];
+        }
+        return nil;
+    }
     CGFloat pointScreenWidth = profileScreenSize.width;
     CGFloat pointScreenHeight = profileScreenSize.height;
 
@@ -546,7 +551,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
                                                                               chromeSize:compositeSize
                                                                             chromeOffset:CGPointMake(chromeX, chromeY)];
 
-    return @{
+    NSDictionary *profile = @{
         @"totalWidth": @(CGRectGetWidth(fullFrame)),
         @"totalHeight": @(CGRectGetHeight(fullFrame)),
         @"chromeX": @(chromeX),
@@ -566,6 +571,10 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         @"hasScreenMask": @(hasScreenMask),
         @"buttons": buttons,
     };
+    if (![self validateChromeProfile:profile error:error]) {
+        return nil;
+    }
+    return profile;
 }
 
 + (nullable NSDictionary *)chromeInfoForDeviceName:(NSString *)deviceName
@@ -640,12 +649,26 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         return nil;
     }
 
-    return @{
+    NSMutableDictionary *chromeInfo = [@{
         @"plist": plist,
         @"json": json,
         @"chromePath": chromePath,
         @"profileResourcesPath": profilePath.stringByDeletingLastPathComponent,
-    };
+    } mutableCopy];
+
+    NSString *capabilitiesPath = [profilePath.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"capabilities.plist"];
+    NSData *capabilitiesData = [NSData dataWithContentsOfFile:capabilitiesPath];
+    if (capabilitiesData != nil) {
+        NSDictionary *capabilities = [NSPropertyListSerialization propertyListWithData:capabilitiesData
+                                                                               options:NSPropertyListImmutable
+                                                                                format:nil
+                                                                                 error:nil];
+        if ([capabilities isKindOfClass:[NSDictionary class]]) {
+            chromeInfo[@"capabilities"] = capabilities;
+        }
+    }
+
+    return chromeInfo;
 }
 
 + (CGSize)compositeSizeForChromeInfo:(NSDictionary *)chromeInfo
@@ -661,12 +684,22 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         NSDictionary *paths = [json[@"paths"] isKindOfClass:[NSDictionary class]] ? json[@"paths"] : @{};
         NSDictionary *bord = [paths[@"simpleOutsideBorder"] isKindOfClass:[NSDictionary class]] ? paths[@"simpleOutsideBorder"] : @{};
         NSDictionary *bordI = [bord[@"insets"] isKindOfClass:[NSDictionary class]] ? bord[@"insets"] : @{};
-        CGFloat screenScale = MAX([self numberValue:plist[@"mainScreenScale"]], 1.0);
+        CGFloat screenScale = [self screenScaleForChromeInfo:chromeInfo];
         CGSize screenSize = [self screenSizeForChromeInfo:chromeInfo
                                                chromeSize:CGSizeZero
                                               screenScale:screenScale];
         CGFloat screenWidth = screenSize.width;
         CGFloat screenHeight = screenSize.height;
+        if (screenWidth <= 0.0 || screenHeight <= 0.0) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                             code:11
+                                         userInfo:@{
+                    NSLocalizedDescriptionKey: @"The DeviceKit chrome metadata did not include usable display dimensions.",
+                }];
+            }
+            return CGSizeZero;
+        }
         CGFloat bezelLeft = [self numberValue:sizing[@"leftWidth"]] + [self numberValue:bordI[@"left"]];
         CGFloat bezelRight = [self numberValue:sizing[@"rightWidth"]] + [self numberValue:bordI[@"right"]];
         CGFloat bezelTop = [self numberValue:sizing[@"topHeight"]] + [self numberValue:bordI[@"top"]];
@@ -1230,12 +1263,175 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
     return nil;
 }
 
++ (nullable NSDictionary *)capabilitiesForChromeInfo:(NSDictionary *)chromeInfo {
+    NSDictionary *root = [chromeInfo[@"capabilities"] isKindOfClass:[NSDictionary class]]
+        ? chromeInfo[@"capabilities"]
+        : nil;
+    if (root == nil) {
+        return nil;
+    }
+    NSDictionary *capabilities = [root[@"capabilities"] isKindOfClass:[NSDictionary class]]
+        ? root[@"capabilities"]
+        : root;
+    return capabilities;
+}
+
++ (nullable NSDictionary *)screenDimensionsForChromeInfo:(NSDictionary *)chromeInfo {
+    NSDictionary *capabilities = [self capabilitiesForChromeInfo:chromeInfo];
+    NSDictionary *screenDimensions = [capabilities[@"ScreenDimensionsCapability"] isKindOfClass:[NSDictionary class]]
+        ? capabilities[@"ScreenDimensionsCapability"]
+        : nil;
+    return screenDimensions;
+}
+
++ (nullable NSDictionary *)primaryDisplayForChromeInfo:(NSDictionary *)chromeInfo {
+    NSDictionary *capabilities = [self capabilitiesForChromeInfo:chromeInfo];
+    NSArray *displays = [capabilities[@"displays"] isKindOfClass:[NSArray class]]
+        ? capabilities[@"displays"]
+        : @[];
+    NSString *profileChromeIdentifier = [chromeInfo[@"plist"][@"chromeIdentifier"] isKindOfClass:[NSString class]]
+        ? chromeInfo[@"plist"][@"chromeIdentifier"]
+        : @"";
+    NSDictionary *firstDisplay = nil;
+    NSDictionary *firstIntegratedDisplay = nil;
+    NSDictionary *firstPrimaryDisplay = nil;
+
+    for (id displayValue in displays) {
+        if (![displayValue isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        NSDictionary *display = displayValue;
+        if (firstDisplay == nil) {
+            firstDisplay = display;
+        }
+        NSString *displayType = [display[@"displayType"] isKindOfClass:[NSString class]] ? display[@"displayType"] : @"";
+        NSString *deviceName = [display[@"deviceName"] isKindOfClass:[NSString class]] ? display[@"deviceName"] : @"";
+        NSString *displayChromeIdentifier = [display[@"chromeIdentifier"] isKindOfClass:[NSString class]] ? display[@"chromeIdentifier"] : @"";
+        if (firstIntegratedDisplay == nil && [displayType isEqualToString:@"integrated"]) {
+            firstIntegratedDisplay = display;
+        }
+        if (firstPrimaryDisplay == nil && [deviceName isEqualToString:@"primary"]) {
+            firstPrimaryDisplay = display;
+        }
+        if (profileChromeIdentifier.length > 0 &&
+            [displayChromeIdentifier isEqualToString:profileChromeIdentifier]) {
+            return display;
+        }
+    }
+
+    return firstPrimaryDisplay ?: firstIntegratedDisplay ?: firstDisplay;
+}
+
++ (CGSize)displayPixelSizeForChromeInfo:(NSDictionary *)chromeInfo
+                                   error:(NSError * _Nullable __autoreleasing *)error {
+    NSDictionary *plist = chromeInfo[@"plist"];
+    CGFloat width = [self numberValue:plist[@"mainScreenWidth"]];
+    CGFloat height = [self numberValue:plist[@"mainScreenHeight"]];
+    if (width <= 0.0 || height <= 0.0) {
+        NSDictionary *screenDimensions = [self screenDimensionsForChromeInfo:chromeInfo];
+        width = [self numberValue:screenDimensions[@"main-screen-width"]];
+        height = [self numberValue:screenDimensions[@"main-screen-height"]];
+    }
+    if (width <= 0.0 || height <= 0.0) {
+        NSDictionary *display = [self primaryDisplayForChromeInfo:chromeInfo];
+        width = [self numberValue:display[@"width"]];
+        height = [self numberValue:display[@"height"]];
+    }
+    if (width <= 0.0 || height <= 0.0) {
+        CGSize maskSize = [self framebufferMaskSizeForChromeInfo:chromeInfo];
+        width = maskSize.width;
+        height = maskSize.height;
+    }
+    if (width <= 0.0 || height <= 0.0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                         code:16
+                                     userInfo:@{
+                NSLocalizedDescriptionKey: @"The CoreSimulator device profile did not specify a framebuffer size.",
+            }];
+        }
+        return CGSizeZero;
+    }
+    return CGSizeMake(width, height);
+}
+
++ (CGFloat)screenScaleForChromeInfo:(NSDictionary *)chromeInfo {
+    NSDictionary *plist = chromeInfo[@"plist"];
+    CGFloat scale = [self numberValue:plist[@"mainScreenScale"]];
+    if (scale <= 0.0) {
+        NSDictionary *screenDimensions = [self screenDimensionsForChromeInfo:chromeInfo];
+        scale = [self numberValue:screenDimensions[@"main-screen-scale"]];
+    }
+    if (scale <= 0.0) {
+        NSDictionary *display = [self primaryDisplayForChromeInfo:chromeInfo];
+        scale = [self numberValue:display[@"scale"]];
+    }
+    if (scale <= 0.0) {
+        NSDictionary *capabilities = [self capabilitiesForChromeInfo:chromeInfo];
+        NSDictionary *artworkTraits = [capabilities[@"ArtworkTraits"] isKindOfClass:[NSDictionary class]]
+            ? capabilities[@"ArtworkTraits"]
+            : nil;
+        scale = [self numberValue:artworkTraits[@"ArtworkDeviceScaleFactor"]];
+    }
+    return MAX(scale, 1.0);
+}
+
++ (BOOL)validateChromeProfile:(NSDictionary *)profile
+                        error:(NSError * _Nullable __autoreleasing *)error {
+    CGFloat totalWidth = [self numberValue:profile[@"totalWidth"]];
+    CGFloat totalHeight = [self numberValue:profile[@"totalHeight"]];
+    CGFloat screenX = [self numberValue:profile[@"screenX"]];
+    CGFloat screenY = [self numberValue:profile[@"screenY"]];
+    CGFloat screenWidth = [self numberValue:profile[@"screenWidth"]];
+    CGFloat screenHeight = [self numberValue:profile[@"screenHeight"]];
+    CGFloat contentWidth = [profile[@"contentWidth"] respondsToSelector:@selector(doubleValue)]
+        ? [self numberValue:profile[@"contentWidth"]]
+        : screenWidth;
+    CGFloat contentHeight = [profile[@"contentHeight"] respondsToSelector:@selector(doubleValue)]
+        ? [self numberValue:profile[@"contentHeight"]]
+        : screenHeight;
+    BOOL valid =
+        isfinite(totalWidth) &&
+        isfinite(totalHeight) &&
+        isfinite(screenX) &&
+        isfinite(screenY) &&
+        isfinite(screenWidth) &&
+        isfinite(screenHeight) &&
+        isfinite(contentWidth) &&
+        isfinite(contentHeight) &&
+        totalWidth > 0.0 &&
+        totalHeight > 0.0 &&
+        screenWidth >= 8.0 &&
+        screenHeight >= 8.0 &&
+        contentWidth >= 8.0 &&
+        contentHeight >= 8.0 &&
+        screenX >= -0.5 &&
+        screenY >= -0.5 &&
+        screenX + screenWidth <= totalWidth + 0.5 &&
+        screenY + screenHeight <= totalHeight + 0.5;
+    if (valid) {
+        return YES;
+    }
+    if (error != NULL) {
+        *error = [NSError errorWithDomain:XCWChromeRendererErrorDomain
+                                     code:19
+                                 userInfo:@{
+            NSLocalizedDescriptionKey: @"The DeviceKit chrome profile did not include usable screen geometry.",
+        }];
+    }
+    return NO;
+}
+
 + (CGSize)screenSizeForChromeInfo:(NSDictionary *)chromeInfo
                         chromeSize:(CGSize)chromeSize
                        screenScale:(CGFloat)screenScale {
     NSDictionary *plist = chromeInfo[@"plist"];
-    CGFloat rawWidth = [self numberValue:plist[@"mainScreenWidth"]];
-    CGFloat rawHeight = [self numberValue:plist[@"mainScreenHeight"]];
+    CGSize rawSize = [self displayPixelSizeForChromeInfo:chromeInfo error:nil];
+    CGFloat rawWidth = rawSize.width;
+    CGFloat rawHeight = rawSize.height;
+    if (rawWidth <= 0.0 || rawHeight <= 0.0) {
+        return CGSizeZero;
+    }
     CGFloat scale = MAX(screenScale, 1.0);
     if (![self isWatchProfile:plist]) {
         return CGSizeMake(rawWidth / scale, rawHeight / scale);
@@ -1271,7 +1467,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         return [self inputScaleForChromeInfo:chromeInfo chromeSize:chromeSize];
     }
 
-    CGFloat screenScale = MAX([self numberValue:plist[@"mainScreenScale"]], 1.0);
+    CGFloat screenScale = [self screenScaleForChromeInfo:chromeInfo];
     NSDictionary *json = chromeInfo[@"json"];
     NSDictionary *images = [json[@"images"] isKindOfClass:[NSDictionary class]] ? json[@"images"] : @{};
     NSDictionary *sizing = [images[@"sizing"] isKindOfClass:[NSDictionary class]] ? images[@"sizing"] : @{};
@@ -1283,8 +1479,9 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         [self numberValue:stand[@"height"]] -
         [self numberValue:sizing[@"topHeight"]] -
         [self numberValue:sizing[@"bottomHeight"]];
-    CGFloat screenWidth = [self numberValue:plist[@"mainScreenWidth"]];
-    CGFloat screenHeight = [self numberValue:plist[@"mainScreenHeight"]];
+    CGSize pixelSize = [self displayPixelSizeForChromeInfo:chromeInfo error:nil];
+    CGFloat screenWidth = pixelSize.width;
+    CGFloat screenHeight = pixelSize.height;
     if (nominalWidth <= 0.0 || nominalHeight <= 0.0 || screenWidth <= 0.0 || screenHeight <= 0.0) {
         return screenScale;
     }
@@ -1318,7 +1515,7 @@ static NSString * const XCWChromeRendererErrorDomain = @"SimDeck.ChromeRenderer"
         ? maskSize
         : [self screenSizeForChromeInfo:chromeInfo
                              chromeSize:chromeSize
-                            screenScale:MAX([self numberValue:plist[@"mainScreenScale"]], 1.0)];
+                            screenScale:[self screenScaleForChromeInfo:chromeInfo]];
     if (slotHeight <= 0.0 || displaySize.height <= 0.0) {
         return 0.0;
     }

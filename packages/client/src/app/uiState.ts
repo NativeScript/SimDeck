@@ -30,6 +30,7 @@ export const CHROME_DEVTOOLS_VISIBLE_STORAGE_KEY =
   "xcw-chrome-devtools-visible";
 export const ACCESSIBILITY_SOURCE_STORAGE_KEY = "xcw-hierarchy-source";
 export const TOUCH_OVERLAY_VISIBLE_STORAGE_KEY = "xcw-touch-overlay-visible";
+export const DEVICE_CHROME_VISIBLE_STORAGE_KEY = "xcw-device-chrome-visible";
 
 const ACCESSIBILITY_SOURCE_ORDER: AccessibilitySource[] = [
   "nativescript",

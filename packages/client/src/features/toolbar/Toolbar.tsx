@@ -25,6 +25,8 @@ import { SimulatorPickerMenu } from "../simulators/SimulatorPickerMenu";
 
 interface ToolbarProps {
   debugVisible: boolean;
+  deviceChromeAvailable: boolean;
+  deviceChromeVisible: boolean;
   devToolsVisible: boolean;
   error: string;
   filteredSimulators: SimulatorMetadata[];
@@ -53,6 +55,7 @@ interface ToolbarProps {
   onStreamTransportChange: (transport: StreamTransport) => void;
   onToggleAppearance: () => void;
   onToggleDebug: () => void;
+  onToggleDeviceChrome: () => void;
   onToggleDevTools: () => void;
   onToggleHierarchy: () => void;
   onToggleMenu: () => void;
@@ -86,6 +89,8 @@ export function Toolbar({
   closeSimulatorMenu,
   closeMenu,
   debugVisible,
+  deviceChromeAvailable,
+  deviceChromeVisible,
   devToolsVisible,
   error,
   filteredSimulators,
@@ -116,6 +121,7 @@ export function Toolbar({
   onStreamTransportChange,
   onToggleAppearance,
   onToggleDebug,
+  onToggleDeviceChrome,
   onToggleDevTools,
   onToggleHierarchy,
   onToggleMenu,
@@ -196,6 +202,7 @@ export function Toolbar({
           onStreamTransportChange={onStreamTransportChange}
           onToggleAppearance={onToggleAppearance}
           onToggleDebug={onToggleDebug}
+          onToggleDeviceChrome={onToggleDeviceChrome}
           onToggleMenu={onToggleMenu}
           onToggleRecording={onToggleRecording}
           onToggleSoftwareKeyboard={onToggleSoftwareKeyboard}
@@ -209,6 +216,8 @@ export function Toolbar({
           canInstallApp={canInstallApp}
           streamConfig={streamConfig}
           streamTransport={streamTransport}
+          deviceChromeAvailable={deviceChromeAvailable}
+          deviceChromeVisible={deviceChromeVisible}
           touchOverlayVisible={touchOverlayVisible}
         />
         <SimulatorPickerMenu

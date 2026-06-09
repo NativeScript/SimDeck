@@ -66,6 +66,7 @@ import { useLiveStream } from "../features/stream/useLiveStream";
 import { DebugPanel } from "../features/toolbar/DebugPanel";
 import { Toolbar } from "../features/toolbar/Toolbar";
 import { SimulatorViewport } from "../features/viewport/SimulatorViewport";
+import { isUsableChromeProfile } from "../features/viewport/chromeProfile";
 import type {
   Point,
   Size,
@@ -98,6 +99,7 @@ import {
   clearLegacyVolatileUiState,
   DEFAULT_VIEWPORT_STATE,
   DEBUG_VISIBLE_STORAGE_KEY,
+  DEVICE_CHROME_VISIBLE_STORAGE_KEY,
   DEVTOOLS_VISIBLE_STORAGE_KEY,
   HIERARCHY_VISIBLE_STORAGE_KEY,
   nextAccessibilitySourcePreference,
@@ -531,6 +533,12 @@ export function AppShell({
   const [touchOverlayVisible, setTouchOverlayVisible] = useState(() =>
     readStoredFlag(TOUCH_OVERLAY_VISIBLE_STORAGE_KEY, true),
   );
+  const [deviceChromeVisible, setDeviceChromeVisible] = useState(() =>
+    readStoredFlag(DEVICE_CHROME_VISIBLE_STORAGE_KEY, true),
+  );
+  const [failedChromeAssetUDIDs, setFailedChromeAssetUDIDs] = useState<
+    Set<string>
+  >(() => new Set());
   const [streamConfig, setStreamConfig] = useState<StreamConfig>(() =>
     defaultStreamConfigForTransport(
       remoteStream,
@@ -879,8 +887,17 @@ export function AppShell({
     simulators,
     streamError,
   ]);
-  const shouldRenderChrome =
+  const selectedChromeAssetsFailed = Boolean(
+    selectedSimulator && failedChromeAssetUDIDs.has(selectedSimulator.udid),
+  );
+  const selectedSupportsChrome =
     selectedSimulator != null && shouldRenderNativeChrome(selectedSimulator);
+  const deviceChromeToggleActive = Boolean(
+    selectedSupportsChrome &&
+    deviceChromeVisible &&
+    !selectedChromeAssetsFailed,
+  );
+  const shouldRenderChrome = deviceChromeToggleActive;
   const viewportChromeProfile = shouldRenderChrome ? chromeProfile : null;
   const isAndroidViewport = isAndroidSimulator(selectedSimulator);
   const selectedHasFixedOrientation =
@@ -1081,9 +1098,28 @@ export function AppShell({
     writeStoredFlag(TOUCH_OVERLAY_VISIBLE_STORAGE_KEY, touchOverlayVisible);
   }, [touchOverlayVisible]);
 
+  useEffect(() => {
+    writeStoredFlag(DEVICE_CHROME_VISIBLE_STORAGE_KEY, deviceChromeVisible);
+  }, [deviceChromeVisible]);
+
   const toggleDevTools = useCallback(() => {
     setDevToolsVisible((current) => !current);
   }, []);
+
+  const toggleDeviceChrome = useCallback(() => {
+    const udid = selectedSimulator?.udid;
+    if (!deviceChromeToggleActive && udid) {
+      setFailedChromeAssetUDIDs((current) => {
+        if (!current.has(udid)) {
+          return current;
+        }
+        const next = new Set(current);
+        next.delete(udid);
+        return next;
+      });
+    }
+    setDeviceChromeVisible(!deviceChromeToggleActive);
+  }, [deviceChromeToggleActive, selectedSimulator?.udid]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -1534,16 +1570,33 @@ export function AppShell({
 
     let cancelled = false;
     let remaining = chromeAssetUrls.length;
+    let failed = false;
 
     setChromeLoaded(false);
 
     function markComplete() {
-      if (cancelled) {
+      if (cancelled || failed) {
         return;
       }
       remaining -= 1;
       if (remaining <= 0) {
         setChromeLoaded(true);
+      }
+    }
+
+    function markFailed() {
+      if (cancelled || failed) {
+        return;
+      }
+      failed = true;
+      setChromeLoaded(true);
+      if (selectedSimulator?.udid) {
+        setFailedChromeAssetUDIDs((current) => {
+          if (current.has(selectedSimulator.udid)) {
+            return current;
+          }
+          return new Set(current).add(selectedSimulator.udid);
+        });
       }
     }
 
@@ -1559,10 +1612,16 @@ export function AppShell({
       };
       image.decoding = "async";
       image.onload = completeImage;
-      image.onerror = completeImage;
+      image.onerror = markFailed;
       image.src = url;
       if (image.complete) {
-        window.setTimeout(completeImage, 0);
+        window.setTimeout(() => {
+          if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+            completeImage();
+          } else {
+            markFailed();
+          }
+        }, 0);
       }
       return image;
     });
@@ -1574,19 +1633,25 @@ export function AppShell({
         image.onerror = null;
       });
     };
-  }, [chromeAssetUrls, chromeRequired]);
+  }, [chromeAssetUrls, chromeRequired, selectedSimulator?.udid]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadChromeProfile() {
-      if (!selectedSimulator) {
+      if (!selectedSimulator || !selectedSupportsChrome) {
         setChromeProfile(null);
         setChromeProfileReady(true);
         return;
       }
+      const udid = selectedSimulator.udid;
       try {
-        const profile = await fetchChromeProfile(selectedSimulator.udid);
+        const profile = await fetchChromeProfile(udid);
+        if (!isUsableChromeProfile(profile)) {
+          throw new Error(
+            "Device chrome profile did not include usable geometry.",
+          );
+        }
         if (!cancelled) {
           setChromeProfile(profile);
           setChromeProfileReady(true);
@@ -1595,6 +1660,12 @@ export function AppShell({
         if (!cancelled) {
           setChromeProfile(null);
           setChromeProfileReady(true);
+          setFailedChromeAssetUDIDs((current) => {
+            if (current.has(udid)) {
+              return current;
+            }
+            return new Set(current).add(udid);
+          });
         }
       }
     }
@@ -1608,6 +1679,7 @@ export function AppShell({
     selectedSimulator?.privateDisplay?.displayWidth,
     selectedSimulator?.privateDisplay?.rotationQuarterTurns,
     selectedSimulator?.udid,
+    selectedSupportsChrome,
   ]);
 
   useEffect(() => {
@@ -2917,6 +2989,7 @@ export function AppShell({
           }
         }}
         onToggleDebug={() => setDebugVisible((current) => !current)}
+        onToggleDeviceChrome={toggleDeviceChrome}
         onToggleDevTools={toggleDevTools}
         onToggleHierarchy={() => {
           setHierarchyVisible((current) => !current);
@@ -2956,6 +3029,8 @@ export function AppShell({
         )}
         streamConfig={streamConfig}
         streamTransport={streamTransport}
+        deviceChromeAvailable={selectedSupportsChrome}
+        deviceChromeVisible={deviceChromeToggleActive}
         simulatorMenuOpen={simulatorMenuOpen}
         simulatorMenuRef={simulatorMenuRef}
         showStopButton={Boolean(

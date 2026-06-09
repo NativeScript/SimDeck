@@ -14,6 +14,8 @@ import { simulatorHasFixedOrientation } from "./simulatorDisplay";
 interface SimulatorMenuProps {
   captureBusy: boolean;
   debugVisible: boolean;
+  deviceChromeAvailable: boolean;
+  deviceChromeVisible: boolean;
   canInstallApp: boolean;
   menuOpen: boolean;
   menuRef: RefObject<HTMLDivElement | null>;
@@ -36,6 +38,7 @@ interface SimulatorMenuProps {
   onStreamTransportChange: (transport: StreamTransport) => void;
   onToggleAppearance: () => void;
   onToggleDebug: () => void;
+  onToggleDeviceChrome: () => void;
   onToggleMenu: () => void;
   onToggleRecording: () => void;
   onToggleSoftwareKeyboard: () => void;
@@ -54,6 +57,8 @@ interface SimulatorMenuProps {
 export function SimulatorMenu({
   captureBusy,
   debugVisible,
+  deviceChromeAvailable,
+  deviceChromeVisible,
   canInstallApp,
   menuOpen,
   menuRef,
@@ -76,6 +81,7 @@ export function SimulatorMenu({
   onStreamTransportChange,
   onToggleAppearance,
   onToggleDebug,
+  onToggleDeviceChrome,
   onToggleMenu,
   onToggleRecording,
   onToggleSoftwareKeyboard,
@@ -199,6 +205,17 @@ export function SimulatorMenu({
                       ),
                     )}
                   </select>
+                </label>
+                <label
+                  className={`menu-toggle ${!deviceChromeAvailable ? "disabled" : ""}`}
+                >
+                  <input
+                    checked={deviceChromeVisible}
+                    disabled={!deviceChromeAvailable}
+                    onChange={onToggleDeviceChrome}
+                    type="checkbox"
+                  />
+                  <span>Bezel</span>
                 </label>
               </div>
               <div className="menu-divider" />
