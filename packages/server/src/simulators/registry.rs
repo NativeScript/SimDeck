@@ -5,6 +5,7 @@ use crate::simulators::session::SimulatorSession;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::task;
 
 type SessionFactory<T> =
@@ -130,6 +131,19 @@ impl<T: Clone + Send + 'static> SessionRegistry<T> {
 }
 
 impl SessionRegistry<SimulatorSession> {
+    pub fn remove_idle_sessions(&self, idle_timeout: Duration) -> Vec<String> {
+        let mut sessions = self.store.sessions.lock().unwrap();
+        let idle_udids = sessions
+            .iter()
+            .filter(|(_, session)| session.is_idle_for(idle_timeout))
+            .map(|(udid, _)| udid.clone())
+            .collect::<Vec<_>>();
+        for udid in &idle_udids {
+            sessions.remove(udid);
+        }
+        idle_udids
+    }
+
     pub fn reconfigure_video_encoders(&self) {
         for session in self.store.values() {
             session.reconfigure_video_encoder();

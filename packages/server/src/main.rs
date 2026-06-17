@@ -123,6 +123,9 @@ const SERVER_HEALTH_WATCHDOG_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const SERVER_HEALTH_WATCHDOG_STALE_HEARTBEAT: Duration = Duration::from_secs(60);
 const SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD: usize = 12;
 const SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD: usize = 3;
+const SIMULATOR_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const SIMULATOR_SESSION_IDLE_REAPER_INITIAL_DELAY: Duration = Duration::from_secs(60);
+const SIMULATOR_SESSION_IDLE_REAPER_INTERVAL: Duration = Duration::from_secs(30);
 const SERVICE_PORT: u16 = 4310;
 const ORPHAN_WORKSPACE_SERVICE_SHUTDOWN_GRACE: Duration = Duration::from_millis(250);
 const ORPHAN_WORKSPACE_SERVICE_KILL_GRACE: Duration = Duration::from_millis(250);
@@ -1011,6 +1014,13 @@ struct ServiceLaunchOptions {
     local_stream_fps: Option<u32>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectServiceCredentials {
+    access_token: String,
+    pairing_code: String,
+}
+
 struct StudioExposeOptions {
     simulator: Option<String>,
     studio_url: String,
@@ -1269,6 +1279,7 @@ fn ensure_singleton_service_with_status(
     options: ServiceLaunchOptions,
 ) -> anyhow::Result<(ServiceMetadata, bool)> {
     let active = service::active()?;
+    let mut preserved_credentials = None;
     if let Some(result) = active.as_ref() {
         let metadata = metadata_from_launch_agent(result.clone())?;
         if service_is_healthy(&metadata)
@@ -1284,6 +1295,7 @@ fn ensure_singleton_service_with_status(
         if healthy && same_binary && service_matches_launch_options(&metadata, &options) {
             return Ok((metadata, false));
         }
+        preserved_credentials = project_service_credentials_from_metadata(&metadata);
         let active_on_metadata_port = active
             .as_ref()
             .is_some_and(|result| result.port == metadata.port);
@@ -1297,7 +1309,10 @@ fn ensure_singleton_service_with_status(
             );
         }
     }
-    Ok((start_project_service(options)?, true))
+    Ok((
+        start_project_service_with_credentials(options, preserved_credentials)?,
+        true,
+    ))
 }
 
 fn ensure_launch_agent_service(options: ServiceLaunchOptions) -> anyhow::Result<ServiceMetadata> {
@@ -1324,7 +1339,10 @@ fn ensure_launch_agent_service(options: ServiceLaunchOptions) -> anyhow::Result<
     Ok(metadata)
 }
 
-fn start_project_service(options: ServiceLaunchOptions) -> anyhow::Result<ServiceMetadata> {
+fn start_project_service_with_credentials(
+    options: ServiceLaunchOptions,
+    preserved_credentials: Option<ProjectServiceCredentials>,
+) -> anyhow::Result<ServiceMetadata> {
     let project_root = project_root()?;
     let metadata_path = service_metadata_path()?;
     let log_path = service_log_path()?;
@@ -1337,8 +1355,10 @@ fn start_project_service(options: ServiceLaunchOptions) -> anyhow::Result<Servic
     } else {
         choose_service_port_for_bind(options.port, options.bind)?
     };
-    let access_token = auth::generate_access_token();
-    let pairing_code = auth::generate_pairing_code();
+    let ProjectServiceCredentials {
+        access_token,
+        pairing_code,
+    } = project_service_credentials_for_start(preserved_credentials)?;
     let executable = current_simdeck_executable_path()?;
     let mut args = vec![
         "service".to_owned(),
@@ -1502,6 +1522,113 @@ done
         return Err(error);
     }
     Ok(metadata)
+}
+
+fn project_service_credentials_from_metadata(
+    metadata: &ServiceMetadata,
+) -> Option<ProjectServiceCredentials> {
+    let access_token = metadata.access_token.trim();
+    if access_token.is_empty() {
+        return None;
+    }
+    let pairing_code = metadata
+        .pairing_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(auth::generate_pairing_code);
+    Some(ProjectServiceCredentials {
+        access_token: access_token.to_owned(),
+        pairing_code,
+    })
+}
+
+fn project_service_credentials_for_start(
+    preserved_credentials: Option<ProjectServiceCredentials>,
+) -> anyhow::Result<ProjectServiceCredentials> {
+    let credentials = project_service_credentials_for_start_at_path(
+        preserved_credentials,
+        &project_service_credentials_path(),
+    )?;
+    Ok(credentials)
+}
+
+fn project_service_credentials_for_start_at_path(
+    preserved_credentials: Option<ProjectServiceCredentials>,
+    path: &Path,
+) -> anyhow::Result<ProjectServiceCredentials> {
+    let credentials = match preserved_credentials {
+        Some(credentials) => credentials,
+        None => read_project_service_credentials_from_path(path)?
+            .unwrap_or_else(|| new_project_service_credentials(None)),
+    };
+    let credentials = normalize_project_service_credentials(credentials)
+        .unwrap_or_else(|| new_project_service_credentials(None));
+    write_project_service_credentials_to_path(path, &credentials)?;
+    Ok(credentials)
+}
+
+fn reset_project_service_credentials(
+    access_token: Option<String>,
+) -> anyhow::Result<ProjectServiceCredentials> {
+    let credentials = new_project_service_credentials(access_token);
+    write_project_service_credentials_to_path(&project_service_credentials_path(), &credentials)?;
+    Ok(credentials)
+}
+
+fn new_project_service_credentials(access_token: Option<String>) -> ProjectServiceCredentials {
+    ProjectServiceCredentials {
+        access_token: access_token
+            .map(|token| token.trim().to_owned())
+            .filter(|token| !token.is_empty())
+            .unwrap_or_else(auth::generate_access_token),
+        pairing_code: auth::generate_pairing_code(),
+    }
+}
+
+fn read_project_service_credentials_from_path(
+    path: &Path,
+) -> anyhow::Result<Option<ProjectServiceCredentials>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = fs::read_to_string(path)
+        .with_context(|| format!("read service credentials {}", path.display()))?;
+    let credentials = serde_json::from_str::<ProjectServiceCredentials>(&data)
+        .with_context(|| format!("parse service credentials {}", path.display()))?;
+    Ok(normalize_project_service_credentials(credentials))
+}
+
+fn normalize_project_service_credentials(
+    credentials: ProjectServiceCredentials,
+) -> Option<ProjectServiceCredentials> {
+    let access_token = credentials.access_token.trim();
+    let pairing_code = credentials.pairing_code.trim();
+    if access_token.is_empty() || pairing_code.is_empty() {
+        return None;
+    }
+    Some(ProjectServiceCredentials {
+        access_token: access_token.to_owned(),
+        pairing_code: pairing_code.to_owned(),
+    })
+}
+
+fn write_project_service_credentials_to_path(
+    path: &Path,
+    credentials: &ProjectServiceCredentials,
+) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!("create service credentials directory {}", parent.display())
+        })?;
+    }
+    fs::write(path, serde_json::to_vec_pretty(credentials)?)
+        .with_context(|| format!("write service credentials {}", path.display()))
+}
+
+fn project_service_credentials_path() -> PathBuf {
+    simdeck_user_state_dir().join("service-credentials.json")
 }
 
 fn stop_project_service() -> anyhow::Result<()> {
@@ -2706,11 +2833,6 @@ fn run_default_service(options: DefaultServiceLaunchOptions) -> anyhow::Result<(
     print_service_metadata_result(&metadata, selector.as_deref(), false, started)
 }
 
-fn start_detached_service(options: ServiceLaunchOptions) -> anyhow::Result<()> {
-    let (metadata, started) = ensure_project_service_with_status(options)?;
-    print_service_start_result(&metadata, started)
-}
-
 fn restart_detached_service(options: ServiceLaunchOptions) -> anyhow::Result<()> {
     if service::active()?.is_some() {
         return service::restart(ServiceOptions {
@@ -2727,10 +2849,15 @@ fn restart_detached_service(options: ServiceLaunchOptions) -> anyhow::Result<()>
             pairing_code: None,
         });
     }
-    if let Some(metadata) = read_service_metadata()? {
+    let preserved_credentials = if let Some(metadata) = read_service_metadata()? {
+        let credentials = project_service_credentials_from_metadata(&metadata);
         terminate_service_metadata(&metadata)?;
-    }
-    start_detached_service(options)
+        credentials
+    } else {
+        None
+    };
+    let metadata = start_project_service_with_credentials(options, preserved_credentials)?;
+    print_service_start_result(&metadata, true)
 }
 
 fn service_restart_port(explicit_port: Option<u16>) -> anyhow::Result<u16> {
@@ -3787,6 +3914,7 @@ fn main() -> anyhow::Result<()> {
                 access_token,
             } => {
                 cleanup_orphaned_workspace_services_for_root(None);
+                let credentials = reset_project_service_credentials(access_token)?;
                 service::reset(ServiceOptions {
                     port,
                     bind,
@@ -3800,8 +3928,8 @@ fn main() -> anyhow::Result<()> {
                         stream_quality,
                     ),
                     local_stream_fps,
-                    access_token,
-                    pairing_code: None,
+                    access_token: Some(credentials.access_token),
+                    pairing_code: Some(credentials.pairing_code),
                 })
             }
             ServiceCommand::Stop => stop_project_service(),
@@ -5270,6 +5398,22 @@ fn http_health_probe(address: SocketAddr, timeout: Duration) -> bool {
     read > 12 && response[..read].starts_with(b"HTTP/1.1 200")
 }
 
+fn start_simulator_session_idle_reaper(registry: SessionRegistry) {
+    tokio::spawn(async move {
+        tokio::time::sleep(SIMULATOR_SESSION_IDLE_REAPER_INITIAL_DELAY).await;
+        loop {
+            for udid in registry.remove_idle_sessions(SIMULATOR_SESSION_IDLE_TIMEOUT) {
+                info!(
+                    udid = %udid,
+                    idle_seconds = SIMULATOR_SESSION_IDLE_TIMEOUT.as_secs(),
+                    "Released idle simulator session"
+                );
+            }
+            tokio::time::sleep(SIMULATOR_SESSION_IDLE_REAPER_INTERVAL).await;
+        }
+    });
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -5921,6 +6065,7 @@ async fn serve(
         accessibility_cache: Default::default(),
         android: Default::default(),
     };
+    start_simulator_session_idle_reaper(state.registry.clone());
 
     let http_router = app_router(
         state.clone(),
@@ -6175,15 +6320,18 @@ mod tests {
     use super::{
         batch_line_to_json_step, http_url_for_host, interactive_accessibility_snapshot,
         is_tailscale_ip, maestro_commands_from_flow, maestro_selector,
-        no_command_action_from_args_slice, normalize_accessibility_point_for_display,
-        parse_maestro_flow_yaml, parse_maestro_point, parse_optional_udid_f64_args,
-        parse_optional_udid_text_args, parse_optional_udid_value_args, parse_tap_command_args,
-        parse_workspace_service_process_line, removed_service_process_name,
-        render_agent_accessibility_tree, render_qr_code, run_maestro_command,
-        server_health_watchdog_should_restart, service_addresses, service_matches_launch_options,
-        service_post_error_is_retryable, simdeck_open_link, simdeck_pair_url,
-        studio_service_restart_args, workspace_service_process_is_current, AndroidGpuMode, Cli,
-        Command, ElementSelector, NoCommandAction, PairingAddress, ServiceCommand,
+        new_project_service_credentials, no_command_action_from_args_slice,
+        normalize_accessibility_point_for_display, parse_maestro_flow_yaml, parse_maestro_point,
+        parse_optional_udid_f64_args, parse_optional_udid_text_args,
+        parse_optional_udid_value_args, parse_tap_command_args,
+        parse_workspace_service_process_line, project_service_credentials_for_start_at_path,
+        project_service_credentials_from_metadata, read_project_service_credentials_from_path,
+        removed_service_process_name, render_agent_accessibility_tree, render_qr_code,
+        run_maestro_command, server_health_watchdog_should_restart, service_addresses,
+        service_matches_launch_options, service_post_error_is_retryable, simdeck_open_link,
+        simdeck_pair_url, studio_service_restart_args, workspace_service_process_is_current,
+        write_project_service_credentials_to_path, AndroidGpuMode, Cli, Command, ElementSelector,
+        NoCommandAction, PairingAddress, ProjectServiceCredentials, ServiceCommand,
         ServiceLaunchOptions, ServiceMetadata, StreamQualityProfileArg, StudioExposeOptions,
         TapCommandTarget, VideoCodecMode, WorkspaceServiceProcess, YamlValue,
         DEFAULT_LOCAL_STREAM_QUALITY_PROFILE, SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD,
@@ -6191,8 +6339,10 @@ mod tests {
     };
     use clap::Parser;
     use std::collections::HashMap;
+    use std::fs;
     use std::net::{IpAddr, Ipv4Addr, TcpListener};
     use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn service_metadata_for_test(
         port: u16,
@@ -6241,6 +6391,17 @@ mod tests {
             stream_quality_profile: Some(DEFAULT_LOCAL_STREAM_QUALITY_PROFILE.to_owned()),
             local_stream_fps: None,
         }
+    }
+
+    fn temp_credentials_path_for_test(name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "simdeck-{name}-{}-{suffix}.json",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -6436,6 +6597,111 @@ mod tests {
             panic!("expected service restart command");
         };
         assert_eq!(port, Some(4315));
+    }
+
+    #[test]
+    fn project_service_credentials_preserve_metadata_values() {
+        let metadata = service_metadata_for_test(4310, "127.0.0.1", None, None);
+
+        let credentials = project_service_credentials_from_metadata(&metadata)
+            .expect("metadata credentials should be reusable");
+
+        assert_eq!(
+            credentials,
+            ProjectServiceCredentials {
+                access_token: "token".to_owned(),
+                pairing_code: "123456".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn project_service_credentials_generate_missing_pairing_code() {
+        let mut metadata = service_metadata_for_test(4310, "127.0.0.1", None, None);
+        metadata.pairing_code = None;
+
+        let credentials = project_service_credentials_from_metadata(&metadata)
+            .expect("metadata access token should be reusable");
+
+        assert_eq!(credentials.access_token, "token");
+        assert_eq!(credentials.pairing_code.len(), 6);
+        assert!(credentials
+            .pairing_code
+            .chars()
+            .all(|ch| ch.is_ascii_digit()));
+    }
+
+    #[test]
+    fn project_service_credentials_ignore_blank_access_token() {
+        let mut metadata = service_metadata_for_test(4310, "127.0.0.1", None, None);
+        metadata.access_token = "  ".to_owned();
+
+        assert_eq!(project_service_credentials_from_metadata(&metadata), None);
+    }
+
+    #[test]
+    fn project_service_credentials_reuse_persisted_values() {
+        let path = temp_credentials_path_for_test("persisted");
+        let stored = ProjectServiceCredentials {
+            access_token: "stored-token".to_owned(),
+            pairing_code: "222333".to_owned(),
+        };
+        write_project_service_credentials_to_path(&path, &stored).unwrap();
+
+        let credentials = project_service_credentials_for_start_at_path(None, &path).unwrap();
+
+        assert_eq!(credentials, stored);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn project_service_credentials_preserved_metadata_updates_persisted_values() {
+        let path = temp_credentials_path_for_test("metadata");
+        let preserved = ProjectServiceCredentials {
+            access_token: "metadata-token".to_owned(),
+            pairing_code: "444555".to_owned(),
+        };
+
+        let credentials =
+            project_service_credentials_for_start_at_path(Some(preserved.clone()), &path).unwrap();
+        let reloaded = read_project_service_credentials_from_path(&path)
+            .unwrap()
+            .expect("credentials should be persisted");
+
+        assert_eq!(credentials, preserved);
+        assert_eq!(reloaded, preserved);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn project_service_credentials_generate_and_persist_when_missing() {
+        let path = temp_credentials_path_for_test("generated");
+
+        let credentials = project_service_credentials_for_start_at_path(None, &path).unwrap();
+        let reloaded = read_project_service_credentials_from_path(&path)
+            .unwrap()
+            .expect("generated credentials should be persisted");
+
+        assert_eq!(credentials, reloaded);
+        assert_eq!(credentials.access_token.len(), 64);
+        assert_eq!(credentials.pairing_code.len(), 6);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn project_service_credentials_trim_explicit_reset_token() {
+        let credentials = new_project_service_credentials(Some(" explicit-token ".to_owned()));
+
+        assert_eq!(credentials.access_token, "explicit-token");
+        assert_eq!(credentials.pairing_code.len(), 6);
+    }
+
+    #[test]
+    fn project_service_credentials_generate_for_blank_explicit_reset_token() {
+        let credentials = new_project_service_credentials(Some("  ".to_owned()));
+
+        assert_eq!(credentials.access_token.len(), 64);
+        assert_eq!(credentials.pairing_code.len(), 6);
     }
 
     #[test]

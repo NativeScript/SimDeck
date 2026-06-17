@@ -50,6 +50,7 @@ struct SimulatorSessionInner {
     last_frame_ms: AtomicU64,
     last_refresh_us: AtomicU64,
     last_keyframe_ms: AtomicU64,
+    last_activity_ms: AtomicU64,
     active_frame_subscribers: AtomicU64,
     refresh_pump_running: AtomicBool,
 }
@@ -75,6 +76,7 @@ impl Drop for FrameSubscription {
             })
             .unwrap_or(0);
         if previous <= 1 {
+            *self.inner.state.lock().unwrap() = SessionState::Ready;
             self.inner.native.set_client_foreground(false);
             *self.inner.latest_keyframe.write().unwrap() = None;
             self.inner.last_keyframe_ms.store(0, Ordering::Relaxed);
@@ -110,6 +112,7 @@ impl SimulatorSession {
             .map(simulator_has_fixed_orientation)
             .unwrap_or(false);
         let (sender, _) = broadcast::channel(FRAME_BROADCAST_CAPACITY);
+        let now = now_ms();
         let inner = Arc::new(SimulatorSessionInner {
             udid,
             native,
@@ -128,6 +131,7 @@ impl SimulatorSession {
             last_frame_ms: AtomicU64::new(0),
             last_refresh_us: AtomicU64::new(0),
             last_keyframe_ms: AtomicU64::new(0),
+            last_activity_ms: AtomicU64::new(now),
             active_frame_subscribers: AtomicU64::new(0),
             refresh_pump_running: AtomicBool::new(false),
         });
@@ -146,6 +150,7 @@ impl SimulatorSession {
     }
 
     pub fn ensure_started(&self) -> Result<(), AppError> {
+        self.mark_activity();
         loop {
             let mut state = self.inner.state.lock().unwrap();
             match *state {
@@ -178,6 +183,7 @@ impl SimulatorSession {
     }
 
     pub fn subscribe(&self) -> FrameSubscription {
+        self.mark_activity();
         *self.inner.state.lock().unwrap() = SessionState::Streaming;
         let previous = self
             .inner
@@ -198,6 +204,7 @@ impl SimulatorSession {
     }
 
     pub async fn wait_for_keyframe(&self, timeout_duration: Duration) -> Option<SharedFrame> {
+        self.mark_activity();
         self.inner.native.set_client_foreground(true);
         let deadline = Instant::now() + timeout_duration;
         let baseline_sequence = self
@@ -233,10 +240,12 @@ impl SimulatorSession {
     }
 
     pub fn request_refresh(&self) {
+        self.mark_activity();
         self.inner.request_refresh();
     }
 
     pub fn request_keyframe(&self) {
+        self.mark_activity();
         let now = now_ms();
         let previous = self.inner.last_keyframe_ms.load(Ordering::Relaxed);
         if now.saturating_sub(previous) < MIN_KEYFRAME_INTERVAL_MS {
@@ -268,6 +277,7 @@ impl SimulatorSession {
     }
 
     pub fn reconfigure_video_encoder(&self) {
+        self.mark_activity();
         *self.inner.latest_keyframe.write().unwrap() = None;
         self.inner.last_keyframe_ms.store(0, Ordering::Relaxed);
         self.inner.last_refresh_us.store(0, Ordering::Relaxed);
@@ -275,6 +285,7 @@ impl SimulatorSession {
     }
 
     pub fn set_client_foreground(&self, foreground: bool) {
+        self.mark_activity();
         self.inner.native.set_client_foreground(foreground);
         if foreground {
             self.request_keyframe();
@@ -294,6 +305,7 @@ impl SimulatorSession {
     }
 
     pub fn send_touch(&self, x: f64, y: f64, phase: &str) -> Result<(), AppError> {
+        self.mark_activity();
         if self.is_tvos() {
             return Err(AppError::bad_request(
                 "tvOS simulators do not support direct screen touch. Use Enter and arrow keys instead.",
@@ -303,6 +315,7 @@ impl SimulatorSession {
     }
 
     pub fn send_edge_touch(&self, x: f64, y: f64, phase: &str, edge: u32) -> Result<(), AppError> {
+        self.mark_activity();
         if self.is_tvos() {
             return Err(AppError::bad_request(
                 "tvOS simulators do not support direct screen touch. Use Enter and arrow keys instead.",
@@ -319,6 +332,7 @@ impl SimulatorSession {
         y2: f64,
         phase: &str,
     ) -> Result<(), AppError> {
+        self.mark_activity();
         if self.is_tvos() {
             return Err(AppError::bad_request(
                 "tvOS simulators do not support direct screen touch. Use Enter and arrow keys instead.",
@@ -328,14 +342,17 @@ impl SimulatorSession {
     }
 
     pub fn send_key(&self, key_code: u16, modifiers: u32) -> Result<(), AppError> {
+        self.mark_activity();
         self.inner.native.send_key(key_code, modifiers)
     }
 
     pub fn press_home(&self) -> Result<(), AppError> {
+        self.mark_activity();
         self.inner.native.press_home()
     }
 
     pub fn press_button(&self, button: &str, duration_ms: u32) -> Result<(), AppError> {
+        self.mark_activity();
         self.inner.native.press_button(button, duration_ms)
     }
 
@@ -346,12 +363,14 @@ impl SimulatorSession {
         usage_page: Option<u32>,
         usage: Option<u32>,
     ) -> Result<(), AppError> {
+        self.mark_activity();
         self.inner
             .native
             .send_button(button, pressed, usage_page, usage)
     }
 
     pub fn rotate_crown(&self, delta: f64) -> Result<(), AppError> {
+        self.mark_activity();
         if !self.is_watchos() {
             return Err(digital_crown_error());
         }
@@ -359,10 +378,12 @@ impl SimulatorSession {
     }
 
     pub fn open_app_switcher(&self) -> Result<(), AppError> {
+        self.mark_activity();
         self.inner.native.open_app_switcher()
     }
 
     pub fn rotate_left(&self) -> Result<(), AppError> {
+        self.mark_activity();
         if self.has_fixed_orientation() {
             return Err(fixed_orientation_error());
         }
@@ -370,6 +391,7 @@ impl SimulatorSession {
     }
 
     pub fn rotate_right(&self) -> Result<(), AppError> {
+        self.mark_activity();
         if self.has_fixed_orientation() {
             return Err(fixed_orientation_error());
         }
@@ -387,6 +409,21 @@ impl SimulatorSession {
             "rotationQuarterTurns": self.inner.native.rotation_quarter_turns(),
             "encoder": self.inner.native.video_encoder_stats(),
         })
+    }
+
+    pub fn is_idle_for(&self, idle_timeout: Duration) -> bool {
+        if Arc::strong_count(&self.inner) > 1 {
+            return false;
+        }
+        if self.inner.active_frame_subscribers.load(Ordering::Relaxed) > 0 {
+            return false;
+        }
+        let idle_ms = idle_timeout.as_millis().try_into().unwrap_or(u64::MAX);
+        now_ms().saturating_sub(self.inner.last_activity_ms.load(Ordering::Relaxed)) >= idle_ms
+    }
+
+    fn mark_activity(&self) {
+        self.inner.mark_activity();
     }
 }
 
@@ -429,6 +466,10 @@ unsafe extern "C" fn native_frame_callback(
 }
 
 impl SimulatorSessionInner {
+    fn mark_activity(&self) {
+        self.last_activity_ms.store(now_ms(), Ordering::Relaxed);
+    }
+
     fn start_refresh_pump(self: &Arc<Self>) {
         if self
             .refresh_pump_running
