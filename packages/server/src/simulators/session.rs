@@ -380,16 +380,6 @@ impl SimulatorSession {
         self.inner.native.rotate_crown(delta)
     }
 
-    pub fn send_scroll(&self, delta_x: f64, delta_y: f64, x: f64, y: f64) -> Result<(), AppError> {
-        self.mark_activity();
-        if self.is_tvos() {
-            return Err(AppError::bad_request(
-                "tvOS simulators do not support direct scroll wheel input. Use Enter and arrow keys instead.",
-            ));
-        }
-        self.inner.native.send_scroll(delta_x, delta_y, x, y)
-    }
-
     pub fn open_app_switcher(&self) -> Result<(), AppError> {
         self.mark_activity();
         self.inner.native.open_app_switcher()

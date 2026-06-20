@@ -132,8 +132,10 @@ const SAFARI_SCREEN_GESTURE_INITIAL_SPREAD = 0.28;
 const SAFARI_SCREEN_GESTURE_MIN_SCALE = 0.25;
 const SAFARI_SCREEN_GESTURE_MAX_SCALE = 4;
 const REAL_MULTITOUCH_GESTURE_GRACE_MS = 120;
-const NATIVE_SCROLL_DELTA_SCALE = 4;
-const NATIVE_SCROLL_MAX_DELTA = 180;
+const WHEEL_TOUCH_SCROLL_DELTA_SCALE = 0.0012;
+const WHEEL_TOUCH_SCROLL_MAX_STEP = 0.18;
+const WHEEL_TOUCH_SCROLL_EDGE_INSET = 0.08;
+const WHEEL_TOUCH_SCROLL_IDLE_MS = 90;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const FLUTTER_INSPECTOR_MAX_DEPTH = 48;
@@ -174,6 +176,11 @@ interface StreamQualityResponse {
     videoCodec?: string;
   };
   videoCodec?: string;
+}
+
+interface WheelTouchScrollState {
+  udid: string;
+  current: Point;
 }
 
 function buildChromeUrl(
@@ -613,6 +620,8 @@ export function AppShell({
   const scrollAccumulatorRef = useRef<Point>({ x: 0, y: 0 });
   const scrollFrameRef = useRef<number>(0);
   const scrollPointRef = useRef<Point>({ x: 0.5, y: 0.5 });
+  const wheelTouchScrollRef = useRef<WheelTouchScrollState | null>(null);
+  const wheelTouchScrollEndTimeoutRef = useRef<number>(0);
   const effectiveZoomRef = useRef(initialViewportState.zoom ?? 1);
   const panRef = useRef<Point>(initialViewportState.pan);
   const applyZoomAtClientPointRef = useRef<
@@ -661,6 +670,11 @@ export function AppShell({
         window.cancelAnimationFrame(scrollFrameRef.current);
         scrollFrameRef.current = 0;
       }
+      if (wheelTouchScrollEndTimeoutRef.current !== 0) {
+        window.clearTimeout(wheelTouchScrollEndTimeoutRef.current);
+        wheelTouchScrollEndTimeoutRef.current = 0;
+      }
+      endWheelTouchScroll("cancelled");
     };
   }, []);
 
@@ -2613,7 +2627,7 @@ export function AppShell({
     );
     setAccessibilitySelectedId("");
     setAccessibilityHoveredId(null);
-    sendScrollWheel(deltaX, deltaY, screenPoint.x, screenPoint.y);
+    sendWheelTouchScroll(deltaX, deltaY, screenPoint.x, screenPoint.y);
     return true;
   }
 
@@ -3110,6 +3124,97 @@ export function AppShell({
     }
   }
 
+  function clampWheelTouchPoint(point: Point): Point {
+    return {
+      x: clampNumber(
+        point.x,
+        WHEEL_TOUCH_SCROLL_EDGE_INSET,
+        1 - WHEEL_TOUCH_SCROLL_EDGE_INSET,
+      ),
+      y: clampNumber(
+        point.y,
+        WHEEL_TOUCH_SCROLL_EDGE_INSET,
+        1 - WHEEL_TOUCH_SCROLL_EDGE_INSET,
+      ),
+    };
+  }
+
+  function wheelTouchStartPoint(anchor: Point, step: Point): Point {
+    const clampedAnchor = clampWheelTouchPoint(anchor);
+    const maxX = 1 - WHEEL_TOUCH_SCROLL_EDGE_INSET;
+    const maxY = 1 - WHEEL_TOUCH_SCROLL_EDGE_INSET;
+    let x = clampedAnchor.x;
+    let y = clampedAnchor.y;
+
+    if (step.x > 0) {
+      x = Math.min(x, maxX - Math.abs(step.x));
+    } else if (step.x < 0) {
+      x = Math.max(x, WHEEL_TOUCH_SCROLL_EDGE_INSET + Math.abs(step.x));
+    }
+
+    if (step.y > 0) {
+      y = Math.min(y, maxY - Math.abs(step.y));
+    } else if (step.y < 0) {
+      y = Math.max(y, WHEEL_TOUCH_SCROLL_EDGE_INSET + Math.abs(step.y));
+    }
+
+    return clampWheelTouchPoint({ x, y });
+  }
+
+  function wheelDeltaToTouchStep(deltaX: number, deltaY: number): Point {
+    return {
+      x: clampNumber(
+        -deltaX * WHEEL_TOUCH_SCROLL_DELTA_SCALE,
+        -WHEEL_TOUCH_SCROLL_MAX_STEP,
+        WHEEL_TOUCH_SCROLL_MAX_STEP,
+      ),
+      y: clampNumber(
+        -deltaY * WHEEL_TOUCH_SCROLL_DELTA_SCALE,
+        -WHEEL_TOUCH_SCROLL_MAX_STEP,
+        WHEEL_TOUCH_SCROLL_MAX_STEP,
+      ),
+    };
+  }
+
+  function endWheelTouchScroll(phase: "ended" | "cancelled" = "ended") {
+    if (wheelTouchScrollEndTimeoutRef.current !== 0) {
+      window.clearTimeout(wheelTouchScrollEndTimeoutRef.current);
+      wheelTouchScrollEndTimeoutRef.current = 0;
+    }
+
+    const active = wheelTouchScrollRef.current;
+    wheelTouchScrollRef.current = null;
+    if (!active) {
+      return;
+    }
+
+    sendControl(active.udid, {
+      type: "touch",
+      ...active.current,
+      phase,
+    });
+  }
+
+  function scheduleWheelTouchScrollEnd() {
+    if (wheelTouchScrollEndTimeoutRef.current !== 0) {
+      window.clearTimeout(wheelTouchScrollEndTimeoutRef.current);
+    }
+    wheelTouchScrollEndTimeoutRef.current = window.setTimeout(() => {
+      wheelTouchScrollEndTimeoutRef.current = 0;
+      endWheelTouchScroll("ended");
+    }, WHEEL_TOUCH_SCROLL_IDLE_MS);
+  }
+
+  function beginWheelTouchScroll(udid: string, anchor: Point, step: Point) {
+    const start = wheelTouchStartPoint(anchor, step);
+    wheelTouchScrollRef.current = { udid, current: start };
+    sendControl(udid, {
+      type: "touch",
+      ...start,
+      phase: "began",
+    });
+  }
+
   function flushScrollWheel() {
     scrollFrameRef.current = 0;
     const accumulated = scrollAccumulatorRef.current;
@@ -3120,13 +3225,13 @@ export function AppShell({
 
     const deltaX = clampNumber(
       accumulated.x,
-      -NATIVE_SCROLL_MAX_DELTA,
-      NATIVE_SCROLL_MAX_DELTA,
+      -WHEEL_TOUCH_SCROLL_MAX_STEP / WHEEL_TOUCH_SCROLL_DELTA_SCALE,
+      WHEEL_TOUCH_SCROLL_MAX_STEP / WHEEL_TOUCH_SCROLL_DELTA_SCALE,
     );
     const deltaY = clampNumber(
       accumulated.y,
-      -NATIVE_SCROLL_MAX_DELTA,
-      NATIVE_SCROLL_MAX_DELTA,
+      -WHEEL_TOUCH_SCROLL_MAX_STEP / WHEEL_TOUCH_SCROLL_DELTA_SCALE,
+      WHEEL_TOUCH_SCROLL_MAX_STEP / WHEEL_TOUCH_SCROLL_DELTA_SCALE,
     );
     const remainingX = accumulated.x - deltaX;
     const remainingY = accumulated.y - deltaY;
@@ -3135,7 +3240,7 @@ export function AppShell({
       scrollFrameRef.current = window.requestAnimationFrame(flushScrollWheel);
     }
 
-    sendScrollWheelNow(
+    sendWheelTouchScrollNow(
       deltaX,
       deltaY,
       scrollPointRef.current.x,
@@ -3143,7 +3248,7 @@ export function AppShell({
     );
   }
 
-  function sendScrollWheel(
+  function sendWheelTouchScroll(
     deltaX: number,
     deltaY: number,
     x: number,
@@ -3162,15 +3267,15 @@ export function AppShell({
       y: Number.isFinite(y) ? clampNumber(y, 0, 1) : 0.5,
     };
     scrollAccumulatorRef.current = {
-      x: scrollAccumulatorRef.current.x + deltaX * NATIVE_SCROLL_DELTA_SCALE,
-      y: scrollAccumulatorRef.current.y + deltaY * NATIVE_SCROLL_DELTA_SCALE,
+      x: scrollAccumulatorRef.current.x + deltaX,
+      y: scrollAccumulatorRef.current.y + deltaY,
     };
     if (scrollFrameRef.current === 0) {
       scrollFrameRef.current = window.requestAnimationFrame(flushScrollWheel);
     }
   }
 
-  function sendScrollWheelNow(
+  function sendWheelTouchScrollNow(
     deltaX: number,
     deltaY: number,
     x: number,
@@ -3186,17 +3291,61 @@ export function AppShell({
     ) {
       return;
     }
+
+    const udid = selectedSimulator.udid;
+    const anchor = {
+      x: clampNumber(x, 0, 1),
+      y: clampNumber(y, 0, 1),
+    };
+    const step = wheelDeltaToTouchStep(deltaX, deltaY);
+    if (step.x === 0 && step.y === 0) {
+      return;
+    }
+
+    if (wheelTouchScrollRef.current?.udid !== udid) {
+      endWheelTouchScroll("cancelled");
+    }
+
+    if (!wheelTouchScrollRef.current) {
+      beginWheelTouchScroll(udid, anchor, step);
+    }
+
+    let active = wheelTouchScrollRef.current;
+    if (!active) {
+      return;
+    }
+
+    let next = clampWheelTouchPoint({
+      x: active.current.x + step.x,
+      y: active.current.y + step.y,
+    });
     if (
-      !sendControl(selectedSimulator.udid, {
-        type: "scroll",
-        deltaX,
-        deltaY,
-        x: clampNumber(x, 0, 1),
-        y: clampNumber(y, 0, 1),
+      Math.hypot(next.x - active.current.x, next.y - active.current.y) < 0.001
+    ) {
+      endWheelTouchScroll("ended");
+      beginWheelTouchScroll(udid, anchor, step);
+      active = wheelTouchScrollRef.current;
+      if (!active) {
+        return;
+      }
+      next = clampWheelTouchPoint({
+        x: active.current.x + step.x,
+        y: active.current.y + step.y,
+      });
+    }
+
+    active.current = next;
+    if (
+      !sendControl(udid, {
+        type: "touch",
+        ...next,
+        phase: "moved",
       })
     ) {
       setLocalError("Simulator control stream disconnected.");
+      return;
     }
+    scheduleWheelTouchScrollEnd();
   }
 
   function prepareSimulatorInput() {

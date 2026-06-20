@@ -176,10 +176,11 @@ For normal clients, copy the browser behavior instead of hand-coding a raw decod
 
 The input/control WebSocket accepts JSON control messages with camelCase fields,
 including `touch`, `edgeTouch`, `multiTouch`, `key`, `button`, `crown`,
-`scroll`, `home`, `appSwitcher`, and rotation controls. Native iOS scroll wheel
-input uses `{ "type": "scroll", "deltaX": 0, "deltaY": 24, "x": 0.5, "y": 0.5 }`,
-where `x` and `y` are optional normalized screen coordinates from `0.0` to
-`1.0`. Touch-like messages use normalized screen coordinates too.
+`home`, `appSwitcher`, and rotation controls. Use short `touch` drag sequences
+for simulator scrolling. The legacy raw `scroll` control is parsed for
+compatibility but rejected because SimulatorKit scroll packets can destabilize
+iOS runtimes. Touch-like messages use normalized screen coordinates from `0.0`
+to `1.0`.
 
 Minimal WebRTC request:
 

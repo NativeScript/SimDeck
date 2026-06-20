@@ -561,10 +561,14 @@ pub(crate) enum ControlMessage {
         delta: f64,
     },
     Scroll {
-        delta_x: f64,
-        delta_y: f64,
-        x: Option<f64>,
-        y: Option<f64>,
+        #[serde(rename = "deltaX")]
+        _delta_x: f64,
+        #[serde(rename = "deltaY")]
+        _delta_y: f64,
+        #[serde(rename = "x")]
+        _x: Option<f64>,
+        #[serde(rename = "y")]
+        _y: Option<f64>,
     },
     DismissKeyboard,
     ToggleSoftwareKeyboard,
@@ -2805,7 +2809,7 @@ async fn run_android_control_message(
                     "Digital Crown rotation is only available for Apple Watch simulators.",
                 )),
                 ControlMessage::Scroll { .. } => Err(AppError::bad_request(
-                    "Native scroll wheel input is only available for iOS simulators.",
+                    "Native scroll wheel input is disabled because SimulatorKit scroll packets can destabilize iOS runtimes. Send touch drag input instead.",
                 )),
                 ControlMessage::ToggleAppearance => android.toggle_appearance(&udid),
                 ControlMessage::Touch { .. }
@@ -3071,17 +3075,9 @@ pub(crate) async fn run_control_message(
             }
         }
         ControlMessage::Crown { delta } => session.rotate_crown(delta),
-        ControlMessage::Scroll {
-            delta_x,
-            delta_y,
-            x,
-            y,
-        } => {
-            if !delta_x.is_finite() || !delta_y.is_finite() {
-                return Err(AppError::bad_request("Scroll deltas must be finite."));
-            }
-            session.send_scroll(delta_x, delta_y, x.unwrap_or(0.5), y.unwrap_or(0.5))
-        }
+        ControlMessage::Scroll { .. } => Err(AppError::bad_request(
+            "Native scroll wheel input is disabled because SimulatorKit scroll packets can destabilize iOS runtimes. Send touch drag input instead.",
+        )),
         ControlMessage::DismissKeyboard => session.send_key(41, 0),
         ControlMessage::ToggleSoftwareKeyboard => session.press_button("software-keyboard", 0),
         ControlMessage::Home => session.press_home(),

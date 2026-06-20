@@ -828,7 +828,7 @@ async fn run_android_webrtc_control_message(
             "Digital Crown rotation is only available for Apple Watch simulators.",
         )),
         ControlMessage::Scroll { .. } => Err(AppError::bad_request(
-            "Native scroll wheel input is only available for iOS simulators.",
+            "Native scroll wheel input is disabled because SimulatorKit scroll packets can destabilize iOS runtimes. Send touch drag input instead.",
         )),
         ControlMessage::ToggleAppearance => state.android.toggle_appearance(&udid),
         ControlMessage::Touch { .. }
