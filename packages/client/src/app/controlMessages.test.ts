@@ -42,6 +42,9 @@ describe("controlMessages", () => {
         phase: "ended",
       }),
     ).toBe(false);
+    expect(
+      isMoveControlMessage({ type: "scroll", deltaX: 0, deltaY: 42 }),
+    ).toBe(false);
     expect(isMoveControlMessage({ type: "home" })).toBe(false);
   });
 });

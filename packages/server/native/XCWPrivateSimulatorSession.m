@@ -2,11 +2,16 @@
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreVideo/CoreVideo.h>
+#import <QuartzCore/QuartzCore.h>
 
 #import "DFPrivateSimulatorDisplayBridge.h"
 #import "XCWH264Encoder.h"
 
 static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.PrivateSimulatorSession";
+
+static uint64_t XCWPrivateSimulatorNowUs(void) {
+    return (uint64_t)llround(CACurrentMediaTime() * 1000000.0);
+}
 
 @interface XCWPrivateSimulatorSession () <DFPrivateSimulatorDisplayBridgeDelegate>
 
@@ -32,6 +37,14 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
     NSUInteger _latestKeyFrameSequenceValue;
     BOOL _displayReadyValue;
     BOOL _didSignalReadiness;
+    NSUInteger _directFrameCount;
+    NSUInteger _manualRefreshFrameCount;
+    uint64_t _lastDirectFrameUs;
+    uint64_t _lastManualRefreshUs;
+    double _latestDirectFrameGapMs;
+    double _averageDirectFrameGapMs;
+    double _latestManualRefreshGapMs;
+    double _averageManualRefreshGapMs;
 }
 
 - (nullable instancetype)initWithUDID:(NSString *)udid
@@ -152,7 +165,9 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
     }
 
     CGSize displaySize = CGSizeMake((CGFloat)CVPixelBufferGetWidth(pixelBuffer), (CGFloat)CVPixelBufferGetHeight(pixelBuffer));
+    uint64_t nowUs = XCWPrivateSimulatorNowUs();
     dispatch_async(_stateQueue, ^{
+        [self recordManualRefreshLockedAtTimeUs:nowUs];
         self->_displaySizeValue = displaySize;
         self->_displayReadyValue = YES;
         self->_displayStatusValue = [NSString stringWithFormat:@"Private display ready (%.0fx%.0f)", displaySize.width, displaySize.height];
@@ -186,7 +201,15 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
 }
 
 - (NSDictionary *)videoEncoderStats {
-    return [_videoEncoder statsRepresentation];
+    NSMutableDictionary *stats = [[_videoEncoder statsRepresentation] mutableCopy];
+    if (stats == nil) {
+        stats = [NSMutableDictionary dictionary];
+    }
+    NSDictionary *displayStats = [self displayFrameStats];
+    if (displayStats != nil) {
+        stats[@"display"] = displayStats;
+    }
+    return stats;
 }
 
 - (id)addEncodedFrameListener:(XCWPrivateSimulatorEncodedFrameHandler)handler {
@@ -316,6 +339,14 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
                                                  error:error];
 }
 
+- (BOOL)sendScrollWithDeltaX:(double)deltaX
+                      deltaY:(double)deltaY
+                 normalizedX:(double)normalizedX
+                 normalizedY:(double)normalizedY
+                       error:(NSError * _Nullable __autoreleasing *)error {
+    return [_displayBridge sendScrollWithDeltaX:deltaX deltaY:deltaY normalizedX:normalizedX normalizedY:normalizedY error:error];
+}
+
 - (BOOL)touchPhaseFromString:(NSString *)phase
                     outPhase:(DFPrivateSimulatorTouchPhase *)outPhase
                        error:(NSError * _Nullable __autoreleasing *)error {
@@ -394,7 +425,9 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
 
 - (void)privateSimulatorDisplayBridge:(DFPrivateSimulatorDisplayBridge *)bridge didUpdateFrame:(CVPixelBufferRef)pixelBuffer {
     CGSize displaySize = CGSizeMake((CGFloat)CVPixelBufferGetWidth(pixelBuffer), (CGFloat)CVPixelBufferGetHeight(pixelBuffer));
+    uint64_t nowUs = XCWPrivateSimulatorNowUs();
     dispatch_async(_stateQueue, ^{
+        [self recordDirectFrameLockedAtTimeUs:nowUs];
         self->_displaySizeValue = displaySize;
         self->_displayReadyValue = YES;
         self->_displayStatusValue = [NSString stringWithFormat:@"Private display ready (%.0fx%.0f)", displaySize.width, displaySize.height];
@@ -423,7 +456,9 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
     CVPixelBufferRef pixelBuffer = [_displayBridge copyPixelBuffer];
     if (pixelBuffer != nil) {
         CGSize displaySize = CGSizeMake((CGFloat)CVPixelBufferGetWidth(pixelBuffer), (CGFloat)CVPixelBufferGetHeight(pixelBuffer));
+        uint64_t nowUs = XCWPrivateSimulatorNowUs();
         dispatch_async(_stateQueue, ^{
+            [self recordManualRefreshLockedAtTimeUs:nowUs];
             self->_displaySizeValue = displaySize;
             self->_displayReadyValue = YES;
             self->_displayStatusValue = [NSString stringWithFormat:@"Private display ready (%.0fx%.0f)", displaySize.width, displaySize.height];
@@ -432,6 +467,47 @@ static NSString * const XCWPrivateSimulatorSessionErrorDomain = @"SimDeck.Privat
         [_videoEncoder encodePixelBuffer:pixelBuffer];
         CVPixelBufferRelease(pixelBuffer);
     }
+}
+
+- (void)recordDirectFrameLockedAtTimeUs:(uint64_t)nowUs {
+    _directFrameCount += 1;
+    if (_lastDirectFrameUs != 0 && nowUs > _lastDirectFrameUs) {
+        _latestDirectFrameGapMs = ((double)(nowUs - _lastDirectFrameUs)) / 1000.0;
+        _averageDirectFrameGapMs = _averageDirectFrameGapMs <= 0.0
+            ? _latestDirectFrameGapMs
+            : (_averageDirectFrameGapMs * 0.9) + (_latestDirectFrameGapMs * 0.1);
+    }
+    _lastDirectFrameUs = nowUs;
+}
+
+- (void)recordManualRefreshLockedAtTimeUs:(uint64_t)nowUs {
+    _manualRefreshFrameCount += 1;
+    if (_lastManualRefreshUs != 0 && nowUs > _lastManualRefreshUs) {
+        _latestManualRefreshGapMs = ((double)(nowUs - _lastManualRefreshUs)) / 1000.0;
+        _averageManualRefreshGapMs = _averageManualRefreshGapMs <= 0.0
+            ? _latestManualRefreshGapMs
+            : (_averageManualRefreshGapMs * 0.9) + (_latestManualRefreshGapMs * 0.1);
+    }
+    _lastManualRefreshUs = nowUs;
+}
+
+- (NSDictionary *)displayFrameStats {
+    __block NSDictionary *stats = nil;
+    dispatch_sync(_stateQueue, ^{
+        stats = @{
+            @"directFrameCount": @(self->_directFrameCount),
+            @"manualRefreshFrameCount": @(self->_manualRefreshFrameCount),
+            @"latestDirectFrameGapMs": @(self->_latestDirectFrameGapMs),
+            @"averageDirectFrameGapMs": @(self->_averageDirectFrameGapMs),
+            @"latestManualRefreshGapMs": @(self->_latestManualRefreshGapMs),
+            @"averageManualRefreshGapMs": @(self->_averageManualRefreshGapMs),
+            @"displayReady": @(self->_displayReadyValue),
+            @"displayWidth": @(self->_displaySizeValue.width),
+            @"displayHeight": @(self->_displaySizeValue.height),
+            @"encodedFrameListeners": @(self->_encodedFrameListeners.count),
+        };
+    });
+    return stats;
 }
 
 - (void)signalReadinessIfNeededLocked {

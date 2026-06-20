@@ -9,6 +9,7 @@ import type {
   LaunchPayload,
   MultiTouchPayload,
   OpenUrlPayload,
+  ScrollPayload,
   SimulatorMetadata,
   SimulatorResponse,
   TouchPayload,
@@ -21,6 +22,7 @@ export type ControlMessage =
   | ({ type: "key" } & KeyPayload)
   | ({ type: "button" } & ButtonPayload)
   | ({ type: "crown" } & CrownPayload)
+  | ({ type: "scroll" } & ScrollPayload)
   | { type: "dismissKeyboard" }
   | { type: "toggleSoftwareKeyboard" }
   | { type: "home" }

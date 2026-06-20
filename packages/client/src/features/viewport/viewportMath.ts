@@ -86,6 +86,22 @@ export function mapDisplayedPointToNaturalOrientation(
   }
 }
 
+export function mapNaturalPointToDisplayedOrientation(
+  point: Point,
+  rotationQuarterTurns: number,
+): Point {
+  switch (normalizeQuarterTurns(rotationQuarterTurns)) {
+    case 1:
+      return { x: 1 - point.y, y: point.x };
+    case 2:
+      return { x: 1 - point.x, y: 1 - point.y };
+    case 3:
+      return { x: point.y, y: 1 - point.x };
+    default:
+      return point;
+  }
+}
+
 export function computeChromeScreenRect(
   chromeProfile: ChromeProfile | null,
   _deviceNaturalSize: Size | null,

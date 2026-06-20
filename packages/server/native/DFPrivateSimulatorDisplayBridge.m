@@ -92,6 +92,7 @@ typedef struct {
 #pragma pack(pop)
 
 static const uint32_t DFIndigoDigitizerTarget = 0x32;
+static const uint32_t DFIndigoPointerTarget = 0x2;
 static const uint32_t DFIndigoDigitalCrownTarget = 0x34;
 static const uint8_t DFIndigoEventTypeTouch = 0x02;
 static const uint32_t DFIndigoTouchEventKind = 0x0b;
@@ -1724,6 +1725,38 @@ static IndigoHIDMessage *DFCreateScrollHIDMessage(uint32_t target, double deltaX
     return message;
 }
 
+static IndigoHIDMessage *DFCreatePointerMoveHIDMessage(CGPoint normalizedPoint, NSSize displaySize, NSError **error) {
+    DFIndigoHIDMessageForMouseNSEventFn mouseMessage = (DFIndigoHIDMessageForMouseNSEventFn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForMouseNSEvent");
+    if (mouseMessage == NULL) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit did not expose IndigoHIDMessageForMouseNSEvent."
+            );
+        }
+        return NULL;
+    }
+
+    CGPoint pixelPoint = CGPointMake(
+        fmax(0.0, fmin(1.0, normalizedPoint.x)) * displaySize.width,
+        fmax(0.0, fmin(1.0, normalizedPoint.y)) * displaySize.height
+    );
+    IndigoHIDMessage *message = mouseMessage(&pixelPoint,
+                                             NULL,
+                                             DFIndigoPointerTarget,
+                                             NSEventTypeMouseMoved,
+                                             displaySize,
+                                             DFIndigoHIDEdgeNone);
+    if (message == NULL && error != NULL) {
+        *error = DFMakeError(
+            DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+            @"SimulatorKit could not construct a pointer move HID packet for scroll input."
+        );
+    }
+
+    return message;
+}
+
 static IndigoHIDMessage *DFCreateDigitalCrownHIDMessage(double delta, NSError **error) {
     DFIndigoHIDMessageForDigitalCrownEventFn crownMessage = (DFIndigoHIDMessageForDigitalCrownEventFn)dlsym(RTLD_DEFAULT, "IndigoHIDMessageForDigitalCrownEvent");
     if (crownMessage == NULL) {
@@ -2729,6 +2762,9 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     NSView *_headlessHostView;
     NSUUID *_screenAdapterCallbackUUID;
     NSUUID *_screenCallbackUUID;
+    NSUUID *_ioSurfaceCallbackUUID;
+    NSUUID *_damageRectanglesCallbackUUID;
+    NSUUID *_displayPropertiesCallbackUUID;
     CVPixelBufferRef _latestPixelBuffer;
     CVPixelBufferRef _pendingDelegatePixelBuffer;
     NSString *_displayStatusValue;
@@ -2737,6 +2773,8 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     CGPoint _lastTouchPoint;
     BOOL _hasLastTouchPoint;
     BOOL _hasLoggedFirstFrame;
+    NSUInteger _screenFrameCallbackCount;
+    NSUInteger _damageRectanglesCallbackCount;
     BOOL _isActivatingDisplay;
     BOOL _hasActivatedDisplay;
     BOOL _digitizerInputReady;
@@ -2798,6 +2836,66 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         }
         [delegate privateSimulatorDisplayBridge:strongSelf didChangeDisplayStatus:statusCopy isReady:isReady];
     });
+}
+
+- (void)notifyDirectFrameFromSource:(NSString *)source {
+    if (_latestPixelBuffer == nil) {
+        return;
+    }
+
+    _screenFrameCallbackCount += 1;
+    if (![_displayStatusValue hasPrefix:@"Receiving headless screen frames"]) {
+        DFLog(@"Receiving headless screen frames via %@", source ?: @"CoreSimulator callback");
+    }
+    if (!_hasLoggedFirstFrame) {
+        _hasLoggedFirstFrame = YES;
+        [self updateStatus:@"Receiving headless screen frames"];
+    }
+    [self notifyDelegateOfFrame:_latestPixelBuffer];
+}
+
+- (void)updateLatestPixelBufferWithSurface:(id)surface maskedSurface:(id)maskedSurface source:(NSString *)source {
+    (void)maskedSurface;
+    if (surface == nil) {
+        return;
+    }
+
+    CVPixelBufferRef pixelBuffer = DFCreatePixelBufferFromSurface((__bridge IOSurfaceRef)surface);
+    if (pixelBuffer == nil) {
+        [self updateStatus:[NSString stringWithFormat:@"%@ surfaced an unsupported IOSurface", source ?: @"CoreSimulator"]];
+        return;
+    }
+
+    if (_latestPixelBuffer != nil) {
+        CVPixelBufferRelease(_latestPixelBuffer);
+    }
+    _latestPixelBuffer = pixelBuffer;
+    size_t width = CVPixelBufferGetWidth(pixelBuffer);
+    size_t height = CVPixelBufferGetHeight(pixelBuffer);
+    _displayPixelSize = CGSizeMake((CGFloat)width, (CGFloat)height);
+    DFReconcileRotationWithDisplaySize(&_deviceRotationDegrees, _displayPixelSize);
+    [self notifyDelegateOfFrame:pixelBuffer];
+    DFRunOnMainAsync(^{
+        if (self->_headlessHostWindow != nil) {
+            NSSize windowSize = NSMakeSize((CGFloat)width, (CGFloat)height);
+            [self->_headlessHostWindow setContentSize:windowSize];
+            self->_headlessHostView.frame = NSMakeRect(0, 0, windowSize.width, windowSize.height);
+        }
+        DFConfigureDisplayGeometry(self->_displayView, self->_displayPixelSize);
+        if (self->_digitizerInputView != nil) {
+            [self->_digitizerInputView setFrame:NSMakeRect(0, 0, (CGFloat)width, (CGFloat)height)];
+        }
+    });
+    [self updateStatus:[NSString stringWithFormat:@"Private display ready (%zux%zu)", width, height]];
+}
+
+- (void)handleDisplayPropertiesChanged:(id)properties source:(NSString *)source {
+    DFLog(@"%@ properties updated: class=%@", source ?: @"Headless screen", properties != nil ? NSStringFromClass([properties class]) : @"(nil)");
+    if (properties != nil && [properties respondsToSelector:sel_registerName("uiOrientation")]) {
+        NSInteger uiOrientation = ((NSInteger(*)(id, SEL))objc_msgSend)(properties, sel_registerName("uiOrientation"));
+        DFLog(@"%@ uiOrientation=%ld", source ?: @"Headless screen", (long)uiOrientation);
+    }
+    [self updateStatus:@"Headless screen properties updated"];
 }
 
 - (void)notifyDelegateOfFrame:(CVPixelBufferRef)pixelBuffer {
@@ -3115,6 +3213,81 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         return nil;
     }
 
+    SEL registerIOSurfacesSelector = sel_registerName("registerCallbackWithUUID:ioSurfacesChangeCallback:");
+    if ([rawScreen respondsToSelector:registerIOSurfacesSelector]) {
+        _ioSurfaceCallbackUUID = [NSUUID UUID];
+        ((void(*)(id, SEL, id, id))objc_msgSend)(
+            rawScreen,
+            registerIOSurfacesSelector,
+            _ioSurfaceCallbackUUID,
+            ^(id surface, id maskedSurface) {
+                __strong typeof(weakSelf) strongSelf = weakSelf;
+                if (strongSelf == nil) {
+                    return;
+                }
+                dispatch_async(strongSelf->_callbackQueue, ^{
+                    [strongSelf updateLatestPixelBufferWithSurface:surface
+                                                     maskedSurface:maskedSurface
+                                                            source:@"SimDisplayIOSurfaceRenderable"];
+                });
+            }
+        );
+
+        id framebufferSurface = DFSendObjectIfResponds(rawScreen, "framebufferSurface");
+        id maskedFramebufferSurface = DFSendObjectIfResponds(rawScreen, "maskedFramebufferSurface");
+        if (framebufferSurface != nil) {
+            [self updateLatestPixelBufferWithSurface:framebufferSurface
+                                      maskedSurface:maskedFramebufferSurface
+                                             source:@"SimDisplayIOSurfaceRenderable"];
+        }
+        DFLog(@"Registered direct SimDisplayIOSurfaceRenderable callback for screen %u", _activeScreenID);
+    } else {
+        DFLog(@"Selected CoreSimulator screen does not expose SimDisplayIOSurfaceRenderable callbacks for %@", udid);
+    }
+
+    SEL registerDamageSelector = sel_registerName("registerCallbackWithUUID:damageRectanglesCallback:");
+    if ([rawScreen respondsToSelector:registerDamageSelector]) {
+        _damageRectanglesCallbackUUID = [NSUUID UUID];
+        ((void(*)(id, SEL, id, id))objc_msgSend)(
+            rawScreen,
+            registerDamageSelector,
+            _damageRectanglesCallbackUUID,
+            ^(__unused id damageRectangles) {
+                __strong typeof(weakSelf) strongSelf = weakSelf;
+                if (strongSelf == nil) {
+                    return;
+                }
+                dispatch_async(strongSelf->_callbackQueue, ^{
+                    strongSelf->_damageRectanglesCallbackCount += 1;
+                    [strongSelf notifyDirectFrameFromSource:@"SimDisplayRenderable damage callback"];
+                });
+            }
+        );
+        DFLog(@"Registered direct SimDisplayRenderable damage callback for screen %u", _activeScreenID);
+    } else {
+        DFLog(@"Selected CoreSimulator screen does not expose SimDisplayRenderable damage callbacks for %@", udid);
+    }
+
+    SEL registerDisplayPropertiesSelector = sel_registerName("registerCallbackWithUUID:displayPropertiesChanged:");
+    if ([rawScreen respondsToSelector:registerDisplayPropertiesSelector]) {
+        _displayPropertiesCallbackUUID = [NSUUID UUID];
+        ((void(*)(id, SEL, id, id))objc_msgSend)(
+            rawScreen,
+            registerDisplayPropertiesSelector,
+            _displayPropertiesCallbackUUID,
+            ^(id properties) {
+                __strong typeof(weakSelf) strongSelf = weakSelf;
+                if (strongSelf == nil) {
+                    return;
+                }
+                dispatch_async(strongSelf->_callbackQueue, ^{
+                    [strongSelf handleDisplayPropertiesChanged:properties source:@"SimDisplayRenderable"];
+                });
+            }
+        );
+        DFLog(@"Registered direct SimDisplayRenderable display-properties callback for screen %u", _activeScreenID);
+    }
+
     _screenCallbackUUID = [NSUUID UUID];
     ((void(*)(id, SEL, id, id, id, id, id))objc_msgSend)(
         rawScreen,
@@ -3126,58 +3299,23 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             if (strongSelf == nil || strongSelf->_latestPixelBuffer == nil) {
                 return;
             }
-            if (!strongSelf->_hasLoggedFirstFrame) {
-                strongSelf->_hasLoggedFirstFrame = YES;
-                [strongSelf updateStatus:@"Receiving headless screen frames"];
-            }
-            [strongSelf notifyDelegateOfFrame:strongSelf->_latestPixelBuffer];
+            [strongSelf notifyDirectFrameFromSource:@"screen callback"];
         },
         ^(id surface, id maskedSurface) {
-            (void)maskedSurface;
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (strongSelf == nil) {
                 return;
             }
-
-            CVPixelBufferRef pixelBuffer = DFCreatePixelBufferFromSurface((__bridge IOSurfaceRef)surface);
-            if (pixelBuffer == nil) {
-                [strongSelf updateStatus:@"Headless screen surfaced an unsupported IOSurface"];
-                return;
-            }
-
-            if (strongSelf->_latestPixelBuffer != nil) {
-                CVPixelBufferRelease(strongSelf->_latestPixelBuffer);
-            }
-            strongSelf->_latestPixelBuffer = pixelBuffer;
-            size_t width = CVPixelBufferGetWidth(pixelBuffer);
-            size_t height = CVPixelBufferGetHeight(pixelBuffer);
-            strongSelf->_displayPixelSize = CGSizeMake((CGFloat)width, (CGFloat)height);
-            DFReconcileRotationWithDisplaySize(&strongSelf->_deviceRotationDegrees, strongSelf->_displayPixelSize);
-            [strongSelf notifyDelegateOfFrame:pixelBuffer];
-            DFRunOnMainAsync(^{
-                if (strongSelf->_headlessHostWindow != nil) {
-                    NSSize windowSize = NSMakeSize((CGFloat)width, (CGFloat)height);
-                    [strongSelf->_headlessHostWindow setContentSize:windowSize];
-                    strongSelf->_headlessHostView.frame = NSMakeRect(0, 0, windowSize.width, windowSize.height);
-                }
-                DFConfigureDisplayGeometry(strongSelf->_displayView, strongSelf->_displayPixelSize);
-                if (strongSelf->_digitizerInputView != nil) {
-                    [strongSelf->_digitizerInputView setFrame:NSMakeRect(0, 0, (CGFloat)width, (CGFloat)height)];
-                }
-            });
-            [strongSelf updateStatus:[NSString stringWithFormat:@"Private display ready (%zux%zu)", width, height]];
+            [strongSelf updateLatestPixelBufferWithSurface:surface
+                                             maskedSurface:maskedSurface
+                                                    source:@"Headless screen"];
         },
         ^(id properties) {
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (strongSelf == nil) {
                 return;
             }
-            DFLog(@"Headless screen properties updated: class=%@", properties != nil ? NSStringFromClass([properties class]) : @"(nil)");
-            if (properties != nil && [properties respondsToSelector:sel_registerName("uiOrientation")]) {
-                NSInteger uiOrientation = ((NSInteger(*)(id, SEL))objc_msgSend)(properties, sel_registerName("uiOrientation"));
-                DFLog(@"Headless screen uiOrientation=%ld", (long)uiOrientation);
-            }
-            [strongSelf updateStatus:@"Headless screen properties updated"];
+            [strongSelf handleDisplayPropertiesChanged:properties source:@"Headless screen"];
         }
     );
 
@@ -3191,8 +3329,19 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         DFSpinRunLoop(0.05);
     }
     if (_latestPixelBuffer == nil) {
-        [self updateStatus:@"Direct CoreSimulator frames unavailable; attaching SimulatorKit fallback display"];
-        [self activateDisplayIfNeeded];
+        [self updateStatus:@"Direct CoreSimulator frames unavailable"];
+        DFLog(@"Direct CoreSimulator IOSurface unavailable for %@; skipping SimulatorKit display fallback to avoid visible host windows.", udid);
+    } else if (_screenFrameCallbackCount == 0) {
+        NSDate *directCallbackDeadline = [NSDate dateWithTimeIntervalSinceNow:1.0];
+        while (_screenFrameCallbackCount == 0 && [directCallbackDeadline timeIntervalSinceNow] > 0) {
+            DFSpinRunLoop(0.05);
+        }
+        if (_screenFrameCallbackCount == 0) {
+            DFLog(@"CoreSimulator exposed an IOSurface for %@ but did not deliver direct frame ticks within startup window; continuing without SimulatorKit display fallback. damageCallbacks=%@", udid, @(_damageRectanglesCallbackCount));
+            [self updateStatus:@"Private display ready; waiting for direct frame ticks"];
+        } else {
+            DFLog(@"Using direct CoreSimulator screen callbacks without activating SimulatorKit fallback display.");
+        }
     } else {
         DFLog(@"Using direct CoreSimulator screen callbacks without activating SimulatorKit fallback display.");
     }
@@ -3894,8 +4043,24 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
 
         NSDictionary<NSNumber *, id> *screens = DFReadAvailableAdapterScreens(self->_screenAdapterHost, self->_screenAdapter);
         id rawScreen = screens[@(self->_activeScreenID)];
+        if (rawScreen == nil) {
+            rawScreen = self->_rawScreen;
+        }
+        if (rawScreen != nil && self->_ioSurfaceCallbackUUID != nil && [rawScreen respondsToSelector:sel_registerName("unregisterIOSurfacesChangeCallbackWithUUID:")]) {
+            ((void(*)(id, SEL, id))objc_msgSend)(rawScreen, sel_registerName("unregisterIOSurfacesChangeCallbackWithUUID:"), self->_ioSurfaceCallbackUUID);
+            self->_ioSurfaceCallbackUUID = nil;
+        }
+        if (rawScreen != nil && self->_damageRectanglesCallbackUUID != nil && [rawScreen respondsToSelector:sel_registerName("unregisterDamageRectanglesCallbackWithUUID:")]) {
+            ((void(*)(id, SEL, id))objc_msgSend)(rawScreen, sel_registerName("unregisterDamageRectanglesCallbackWithUUID:"), self->_damageRectanglesCallbackUUID);
+            self->_damageRectanglesCallbackUUID = nil;
+        }
+        if (rawScreen != nil && self->_displayPropertiesCallbackUUID != nil && [rawScreen respondsToSelector:sel_registerName("unregisterDisplayPropertiesChangedCallbackWithUUID:")]) {
+            ((void(*)(id, SEL, id))objc_msgSend)(rawScreen, sel_registerName("unregisterDisplayPropertiesChangedCallbackWithUUID:"), self->_displayPropertiesCallbackUUID);
+            self->_displayPropertiesCallbackUUID = nil;
+        }
         if (rawScreen != nil && self->_screenCallbackUUID != nil && [rawScreen respondsToSelector:sel_registerName("unregisterScreenCallbacksWithUUID:")]) {
             ((void(*)(id, SEL, id))objc_msgSend)(rawScreen, sel_registerName("unregisterScreenCallbacksWithUUID:"), self->_screenCallbackUUID);
+            self->_screenCallbackUUID = nil;
         }
 
         if (self->_latestPixelBuffer != nil) {
@@ -4290,6 +4455,101 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             DFLog(@"Sending %@ Indigo HID multi-touch (%@) target=0x%x p1=(%.4f, %.4f) p2=(%.4f, %.4f) within %.0fx%.0f", phaseLabel, messageSource, target, x1, y1, x2, y2, displaySize.width, displaySize.height);
         }
         success = YES;
+    };
+
+    if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {
+        work();
+    } else {
+        dispatch_sync(_callbackQueue, work);
+    }
+
+    if (!success && error != NULL) {
+        *error = dispatchError;
+    }
+
+    return success;
+}
+
+- (BOOL)sendScrollWithDeltaX:(double)deltaX
+                      deltaY:(double)deltaY
+                 normalizedX:(double)normalizedX
+                 normalizedY:(double)normalizedY
+                       error:(NSError * _Nullable __autoreleasing *)error {
+    if (!isfinite(deltaX) || !isfinite(deltaY) || !isfinite(normalizedX) || !isfinite(normalizedY)) {
+        if (error != NULL) {
+            *error = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"Scroll deltas and coordinates must be finite."
+            );
+        }
+        return NO;
+    }
+
+    __block BOOL success = NO;
+    __block NSError *dispatchError = nil;
+
+    dispatch_block_t work = ^{
+        if (self->_inputFamily == DFSimulatorInputFamilyTV) {
+            dispatchError = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"tvOS simulators do not support direct scroll wheel input. Use Enter and arrow keys instead."
+            );
+            return;
+        }
+        if (self->_hidClient == nil) {
+            dispatchError = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit did not provide a headless HID client for scroll input."
+            );
+            return;
+        }
+
+        CGSize displaySize = self->_displayPixelSize;
+        if (displaySize.width < 1.0 || displaySize.height < 1.0) {
+            displaySize = CGSizeMake(1.0, 1.0);
+        }
+        CGPoint scrollPoint = CGPointMake(
+            fmax(0.0, fmin(1.0, normalizedX)),
+            fmax(0.0, fmin(1.0, normalizedY))
+        );
+
+        NSError *messageError = nil;
+        IndigoHIDMessage *pointerMove = DFCreatePointerMoveHIDMessage(scrollPoint, displaySize, &messageError);
+        if (pointerMove != NULL) {
+            if (!DFSendHIDMessage(self->_hidClient, pointerMove, YES, &messageError)) {
+                dispatchError = messageError;
+            } else if (DFVerboseTouchLoggingEnabled()) {
+                DFLog(@"Moved Indigo pointer target=0x%x to ratio (%.4f, %.4f) before scroll", DFIndigoPointerTarget, scrollPoint.x, scrollPoint.y);
+            }
+        }
+
+        uint32_t targets[] = { DFIndigoPointerTarget, DFIndigoDigitizerTarget };
+        for (NSUInteger targetIndex = 0; targetIndex < sizeof(targets) / sizeof(targets[0]); targetIndex++) {
+            messageError = nil;
+            IndigoHIDMessage *message = DFCreateScrollHIDMessage(targets[targetIndex], deltaX, deltaY, &messageError);
+            if (message == NULL || !DFSendHIDMessage(self->_hidClient, message, YES, &messageError)) {
+                dispatchError = messageError;
+                continue;
+            }
+
+            if (DFVerboseTouchLoggingEnabled()) {
+                DFLog(@"Sending Indigo HID scroll target=0x%x delta=(%.3f, %.3f) ratio=(%.4f, %.4f)",
+                      targets[targetIndex],
+                      deltaX,
+                      deltaY,
+                      scrollPoint.x,
+                      scrollPoint.y);
+            }
+            success = YES;
+            return;
+        }
+
+        if (dispatchError == nil) {
+            dispatchError = DFMakeError(
+                DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                @"SimulatorKit rejected the Indigo HID scroll packet."
+            );
+        }
     };
 
     if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {

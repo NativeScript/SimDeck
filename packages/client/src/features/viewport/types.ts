@@ -10,9 +10,17 @@ export interface Point {
   y: number;
 }
 
+export interface TouchPreviewPoint extends Point {
+  clientX?: number;
+  clientY?: number;
+  pageX?: number;
+  pageY?: number;
+}
+
 export interface TouchIndicator {
   id: number;
   phase: "began" | "moved" | "ended" | "cancelled";
+  space?: "screen" | "canvas";
   x: number;
   y: number;
 }

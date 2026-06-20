@@ -4,6 +4,7 @@ import {
   DEFAULT_VIEWPORT_STATE,
   nextAccessibilitySourcePreference,
   preferredRicherAccessibilitySource,
+  readStoredAccessibilitySkeletonMode,
   readStoredFlag,
   sanitizeAccessibilitySources,
   sanitizePersistedUiState,
@@ -239,5 +240,9 @@ describe("uiState", () => {
 
   it("uses the supplied stored-flag default outside the browser", () => {
     expect(readStoredFlag("missing-flag", true)).toBe(true);
+  });
+
+  it("defaults accessibility skeleton frames to auto outside the browser", () => {
+    expect(readStoredAccessibilitySkeletonMode()).toBe("auto");
   });
 });

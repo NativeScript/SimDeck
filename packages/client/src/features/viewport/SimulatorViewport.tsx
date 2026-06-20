@@ -17,6 +17,7 @@ interface SimulatorViewportProps {
   accessibilityPickerActive: boolean;
   accessibilityRoots: AccessibilityNode[];
   accessibilitySelectedId: string;
+  accessibilitySkeletonVisible: boolean;
   chromeProfile: ChromeProfile | null;
   chromeLoaded: boolean;
   chromeRequired: boolean;
@@ -46,6 +47,14 @@ interface SimulatorViewportProps {
     usage?: number,
   ) => void;
   chromeButtonUrl: (button: string, pressed?: boolean) => string;
+  onBottomBezelPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
+  onBottomBezelPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
+  onBottomBezelPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
+  onBottomBezelPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
+  onBottomBezelTouchCancel: (event: React.TouchEvent<HTMLElement>) => void;
+  onBottomBezelTouchEnd: (event: React.TouchEvent<HTMLElement>) => void;
+  onBottomBezelTouchMove: (event: React.TouchEvent<HTMLElement>) => void;
+  onBottomBezelTouchStart: (event: React.TouchEvent<HTMLElement>) => void;
   onPanPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
   onPanPointerUp: () => void;
   onPickerHover: (id: string | null) => void;
@@ -56,6 +65,10 @@ interface SimulatorViewportProps {
   onScreenPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
   onScreenPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
   onScreenPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
+  onScreenTouchCancel: (event: React.TouchEvent<HTMLElement>) => void;
+  onScreenTouchEnd: (event: React.TouchEvent<HTMLElement>) => void;
+  onScreenTouchMove: (event: React.TouchEvent<HTMLElement>) => void;
+  onScreenTouchStart: (event: React.TouchEvent<HTMLElement>) => void;
   onStartPanning: (event: React.PointerEvent<HTMLElement>) => void;
   onZoomActual: () => void;
   onZoomCenter: () => void;
@@ -88,6 +101,7 @@ export function SimulatorViewport({
   accessibilityPickerActive,
   accessibilityRoots,
   accessibilitySelectedId,
+  accessibilitySkeletonVisible,
   debugPanel,
   chromeProfile,
   chromeLoaded,
@@ -113,6 +127,14 @@ export function SimulatorViewport({
   onAppInstallDrop,
   onChromeButtonEvent,
   chromeButtonUrl,
+  onBottomBezelPointerCancel,
+  onBottomBezelPointerDown,
+  onBottomBezelPointerMove,
+  onBottomBezelPointerUp,
+  onBottomBezelTouchCancel,
+  onBottomBezelTouchEnd,
+  onBottomBezelTouchMove,
+  onBottomBezelTouchStart,
   onPanPointerMove,
   onPanPointerUp,
   onPickerHover,
@@ -123,6 +145,10 @@ export function SimulatorViewport({
   onScreenPointerDown,
   onScreenPointerMove,
   onScreenPointerUp,
+  onScreenTouchCancel,
+  onScreenTouchEnd,
+  onScreenTouchMove,
+  onScreenTouchStart,
   onStartPanning,
   onZoomActual,
   onZoomCenter,
@@ -202,6 +228,7 @@ export function SimulatorViewport({
                   accessibilityPickerActive={accessibilityPickerActive}
                   accessibilityRoots={accessibilityRoots}
                   accessibilitySelectedId={accessibilitySelectedId}
+                  accessibilitySkeletonVisible={accessibilitySkeletonVisible}
                   chromeProfile={chromeProfile}
                   chromeButtonsRenderedInChrome={chromeButtonsRenderedInChrome}
                   chromeScreenBackingStyle={chromeScreenBackingStyle}
@@ -213,6 +240,14 @@ export function SimulatorViewport({
                   isLoadingStream={showScreenLoading}
                   isStreamError={isStreamError}
                   onChromeButtonEvent={onChromeButtonEvent}
+                  onBottomBezelPointerCancel={onBottomBezelPointerCancel}
+                  onBottomBezelPointerDown={onBottomBezelPointerDown}
+                  onBottomBezelPointerMove={onBottomBezelPointerMove}
+                  onBottomBezelPointerUp={onBottomBezelPointerUp}
+                  onBottomBezelTouchCancel={onBottomBezelTouchCancel}
+                  onBottomBezelTouchEnd={onBottomBezelTouchEnd}
+                  onBottomBezelTouchMove={onBottomBezelTouchMove}
+                  onBottomBezelTouchStart={onBottomBezelTouchStart}
                   onPanPointerCancel={onPanPointerUp}
                   onPanPointerMove={onPanPointerMove}
                   onPanPointerUp={onPanPointerUp}
@@ -223,6 +258,10 @@ export function SimulatorViewport({
                   onScreenPointerDown={onScreenPointerDown}
                   onScreenPointerMove={onScreenPointerMove}
                   onScreenPointerUp={onScreenPointerUp}
+                  onScreenTouchCancel={onScreenTouchCancel}
+                  onScreenTouchEnd={onScreenTouchEnd}
+                  onScreenTouchMove={onScreenTouchMove}
+                  onScreenTouchStart={onScreenTouchStart}
                   onStartPanning={onStartPanning}
                   rotationQuarterTurns={rotationQuarterTurns}
                   screenAspect={screenAspect}
@@ -246,6 +285,9 @@ export function SimulatorViewport({
             <p>{isLoading ? "Loading simulators…" : "Select a simulator"}</p>
           </div>
         )}
+        {touchOverlayVisible ? (
+          <CanvasTouchInteractionOverlay indicators={touchIndicators} />
+        ) : null}
         {showDeviceLoading ? (
           <div
             aria-label="Loading simulator"
@@ -286,6 +328,33 @@ export function SimulatorViewport({
         ) : null}
       </div>
       {devtoolsPanel}
+    </div>
+  );
+}
+
+function CanvasTouchInteractionOverlay({
+  indicators,
+}: {
+  indicators: TouchIndicator[];
+}) {
+  const canvasIndicators = indicators.filter(
+    (indicator) => indicator.space === "canvas",
+  );
+  if (canvasIndicators.length === 0) {
+    return null;
+  }
+  return (
+    <div className="canvas-touch-interaction-overlay" aria-hidden="true">
+      {canvasIndicators.map((indicator) => (
+        <span
+          className={`touch-indicator touch-indicator-${indicator.phase}`}
+          key={indicator.id}
+          style={{
+            left: `${indicator.x}px`,
+            top: `${indicator.y}px`,
+          }}
+        />
+      ))}
     </div>
   );
 }

@@ -86,6 +86,27 @@ describe("resolveDevToolsTargetSelection", () => {
     });
   });
 
+  it("ignores malformed Safari target strings while building the auto target", () => {
+    const malformed = safariTarget("webkit:malformed", "https://bad.example/", {
+      appName: { name: "Safari" } as unknown as string,
+      bundleIdentifier: 42 as unknown as string,
+      frameUrl: 12 as unknown as string,
+      url: { href: "https://bad.example/" } as unknown as string,
+    });
+
+    expect(() =>
+      withSafariAutoTarget([malformed], "bad.example"),
+    ).not.toThrow();
+    expect(withSafariAutoTarget([malformed], "bad.example")[0]).toMatchObject({
+      appName: "Safari",
+      bundleIdentifier: "com.apple.mobilesafari",
+      frameUrl: "",
+      id: "webkit:safari:auto",
+      meta: "Latest Safari tab",
+      url: null,
+    });
+  });
+
   it("uses Safari auto when Safari is foreground and selection is automatic", () => {
     const inactive = safariTarget("webkit:old", "https://old.example/");
     const active = safariTarget("webkit:active", "https://active.example/", {
@@ -96,7 +117,7 @@ describe("resolveDevToolsTargetSelection", () => {
     expect(
       resolveDevToolsTargetSelection({
         currentForegroundKey: "com.apple.mobilesafari",
-        currentTargetId: inactive.id,
+        currentTargetId: "",
         foregroundApp: {
           appName: "MobileSafari",
           bundleIdentifier: "com.apple.mobilesafari",
@@ -107,8 +128,9 @@ describe("resolveDevToolsTargetSelection", () => {
         pendingForegroundKey: "",
         targets,
       }),
-    ).toMatchObject({
+    ).toEqual({
       automaticTargetId: "webkit:safari:auto",
+      shouldClearPendingForeground: false,
       targetId: "webkit:safari:auto",
     });
   });
@@ -207,6 +229,38 @@ describe("resolveDevToolsTargetSelection", () => {
     ).toMatchObject({
       automaticTargetId: metroTarget.id,
       targetId: metroTarget.id,
+    });
+  });
+
+  it("does not throw when foreground app metadata is not string-shaped", () => {
+    const runtimeTarget: DevToolsTarget = {
+      appName: { name: "Example" } as unknown as string,
+      bundleIdentifier: 123 as unknown as string,
+      frameUrl: "/chrome-devtools-ui/inspector.html",
+      id: "chrome:sdi-123",
+      meta: "com.example.app",
+      processIdentifier: 123,
+      source: "React Native",
+      title: { title: "Example" } as unknown as string,
+    };
+    const selectionInput = {
+      currentForegroundKey: "pid:123",
+      currentTargetId: "",
+      foregroundApp: {
+        appName: { name: "Example" } as unknown as string,
+        bundleIdentifier: 456 as unknown as string,
+        processIdentifier: 123,
+      },
+      manualOverride: false,
+      pendingForegroundApp: null,
+      pendingForegroundKey: "",
+      targets: [runtimeTarget],
+    };
+
+    expect(() => resolveDevToolsTargetSelection(selectionInput)).not.toThrow();
+    expect(resolveDevToolsTargetSelection(selectionInput)).toMatchObject({
+      automaticTargetId: runtimeTarget.id,
+      targetId: runtimeTarget.id,
     });
   });
 });

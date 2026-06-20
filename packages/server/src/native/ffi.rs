@@ -321,6 +321,14 @@ unsafe extern "C" {
         delta: f64,
         error_message: *mut *mut c_char,
     ) -> bool;
+    pub fn xcw_native_session_send_scroll(
+        handle: *mut c_void,
+        delta_x: f64,
+        delta_y: f64,
+        normalized_x: f64,
+        normalized_y: f64,
+        error_message: *mut *mut c_char,
+    ) -> bool;
     pub fn xcw_native_session_open_app_switcher(
         handle: *mut c_void,
         error_message: *mut *mut c_char,

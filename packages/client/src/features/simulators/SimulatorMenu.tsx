@@ -2,6 +2,7 @@ import { MixerHorizontalIcon as MenuIcon } from "@radix-ui/react-icons";
 import type { RefObject } from "react";
 
 import type { SimulatorMetadata } from "../../api/types";
+import type { AccessibilitySkeletonMode } from "../accessibility/skeletonMode";
 import type {
   StreamConfig,
   StreamEncoder,
@@ -12,6 +13,7 @@ import type {
 import { simulatorHasFixedOrientation } from "./simulatorDisplay";
 
 interface SimulatorMenuProps {
+  accessibilitySkeletonMode: AccessibilitySkeletonMode;
   captureBusy: boolean;
   debugVisible: boolean;
   deviceChromeAvailable: boolean;
@@ -31,6 +33,7 @@ interface SimulatorMenuProps {
   onOpenBundlePrompt: () => void;
   onOpenUrlPrompt: () => void;
   onRotateRight: () => void;
+  onAccessibilitySkeletonModeChange: (mode: AccessibilitySkeletonMode) => void;
   onShutdown: () => void;
   onStreamEncoderChange: (encoder: StreamEncoder) => void;
   onStreamFpsChange: (fps: StreamFps) => void;
@@ -55,6 +58,7 @@ interface SimulatorMenuProps {
 }
 
 export function SimulatorMenu({
+  accessibilitySkeletonMode,
   captureBusy,
   debugVisible,
   deviceChromeAvailable,
@@ -74,6 +78,7 @@ export function SimulatorMenu({
   onOpenBundlePrompt,
   onOpenUrlPrompt,
   onRotateRight,
+  onAccessibilitySkeletonModeChange,
   onShutdown,
   onStreamEncoderChange,
   onStreamFpsChange,
@@ -216,6 +221,22 @@ export function SimulatorMenu({
                     type="checkbox"
                   />
                   <span>Bezel</span>
+                </label>
+                <label className="menu-field">
+                  <span className="menu-field-label">AX Frames</span>
+                  <select
+                    className="menu-select"
+                    onChange={(event) =>
+                      onAccessibilitySkeletonModeChange(
+                        event.currentTarget.value as AccessibilitySkeletonMode,
+                      )
+                    }
+                    value={accessibilitySkeletonMode}
+                  >
+                    <option value="auto">Auto</option>
+                    <option value="always">Always</option>
+                    <option value="off">Off</option>
+                  </select>
                 </label>
               </div>
               <div className="menu-divider" />

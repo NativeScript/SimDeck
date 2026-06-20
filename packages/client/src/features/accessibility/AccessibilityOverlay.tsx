@@ -17,12 +17,14 @@ interface AccessibilityOverlayProps {
   hoveredId: string | null;
   roots: AccessibilityNode[];
   selectedId: string;
+  skeletonVisible?: boolean;
 }
 
 export function AccessibilityOverlay({
   hoveredId,
   roots,
   selectedId,
+  skeletonVisible = false,
 }: AccessibilityOverlayProps) {
   const rootFrame = accessibilityRootFrame(roots);
   const tree = buildAccessibilityTree(roots);
@@ -63,6 +65,16 @@ export function AccessibilityOverlay({
         ))}
       </div>
       <div className="accessibility-visual-overlay" aria-hidden="true">
+        {skeletonVisible
+          ? overlayItems.map((item) => (
+              <NodeRect
+                key={`skeleton-${item.id}`}
+                node={item.node}
+                rootFrame={rootFrame}
+                variant="skeleton"
+              />
+            ))
+          : null}
         {hovered ? (
           <NodeRect node={hovered} rootFrame={rootFrame} variant="hovered" />
         ) : null}
@@ -99,7 +111,7 @@ function NodeRect({
 }: {
   node: AccessibilityNode;
   rootFrame: { height: number; width: number; x: number; y: number };
-  variant: "hovered" | "selected";
+  variant: "hovered" | "selected" | "skeleton";
 }) {
   if (!validFrame(node.frame)) {
     return null;
@@ -109,7 +121,10 @@ function NodeRect({
   const top = ((node.frame.y - rootFrame.y) / rootFrame.height) * 100;
   const width = (node.frame.width / rootFrame.width) * 100;
   const height = (node.frame.height / rootFrame.height) * 100;
-  const label = primaryAccessibilityText(node) || accessibilityKind(node);
+  const label =
+    variant === "skeleton"
+      ? ""
+      : primaryAccessibilityText(node) || accessibilityKind(node);
 
   return (
     <div
@@ -121,7 +136,7 @@ function NodeRect({
         width: `${width}%`,
       }}
     >
-      <span>{label}</span>
+      {label ? <span>{label}</span> : null}
     </div>
   );
 }

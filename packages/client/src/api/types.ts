@@ -569,6 +569,13 @@ export interface CrownPayload {
   delta: number;
 }
 
+export interface ScrollPayload {
+  deltaX: number;
+  deltaY: number;
+  x?: number;
+  y?: number;
+}
+
 export interface LaunchPayload {
   bundleId: string;
 }

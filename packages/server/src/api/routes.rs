@@ -560,6 +560,12 @@ pub(crate) enum ControlMessage {
     Crown {
         delta: f64,
     },
+    Scroll {
+        delta_x: f64,
+        delta_y: f64,
+        x: Option<f64>,
+        y: Option<f64>,
+    },
     DismissKeyboard,
     ToggleSoftwareKeyboard,
     Home,
@@ -2798,6 +2804,9 @@ async fn run_android_control_message(
                 ControlMessage::Crown { .. } => Err(AppError::bad_request(
                     "Digital Crown rotation is only available for Apple Watch simulators.",
                 )),
+                ControlMessage::Scroll { .. } => Err(AppError::bad_request(
+                    "Native scroll wheel input is only available for iOS simulators.",
+                )),
                 ControlMessage::ToggleAppearance => android.toggle_appearance(&udid),
                 ControlMessage::Touch { .. }
                 | ControlMessage::EdgeTouch { .. }
@@ -3033,13 +3042,7 @@ pub(crate) async fn run_control_message(
                     "`x1`, `y1`, `x2`, and `y2` must be finite normalized numbers.",
                 ));
             }
-            session.send_multitouch(
-                x1.clamp(0.0, 1.0),
-                y1.clamp(0.0, 1.0),
-                x2.clamp(0.0, 1.0),
-                y2.clamp(0.0, 1.0),
-                &phase,
-            )
+            session.send_multitouch(x1, y1, x2, y2, &phase)
         }
         ControlMessage::Key {
             key_code,
@@ -3068,6 +3071,17 @@ pub(crate) async fn run_control_message(
             }
         }
         ControlMessage::Crown { delta } => session.rotate_crown(delta),
+        ControlMessage::Scroll {
+            delta_x,
+            delta_y,
+            x,
+            y,
+        } => {
+            if !delta_x.is_finite() || !delta_y.is_finite() {
+                return Err(AppError::bad_request("Scroll deltas must be finite."));
+            }
+            session.send_scroll(delta_x, delta_y, x.unwrap_or(0.5), y.unwrap_or(0.5))
+        }
         ControlMessage::DismissKeyboard => session.send_key(41, 0),
         ControlMessage::ToggleSoftwareKeyboard => session.press_button("software-keyboard", 0),
         ControlMessage::Home => session.press_home(),
@@ -3121,13 +3135,7 @@ pub(crate) async fn run_bridge_multitouch_control_message(
                     "`x1`, `y1`, `x2`, and `y2` must be finite normalized numbers.",
                 ));
             }
-            input.send_multitouch(
-                x1.clamp(0.0, 1.0),
-                y1.clamp(0.0, 1.0),
-                x2.clamp(0.0, 1.0),
-                y2.clamp(0.0, 1.0),
-                &phase,
-            )
+            input.send_multitouch(x1, y1, x2, y2, &phase)
         }
         _ => Err(AppError::bad_request(
             "Bridge input control only supports multi-touch messages.",

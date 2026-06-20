@@ -181,15 +181,15 @@ export function DevToolsPanel({
 
   const targets = discovery?.targets ?? [];
   const selectedTarget = useMemo(() => {
-    if (targets.length === 0) {
+    if (!selectedTargetId || targets.length === 0) {
       return null;
     }
-    return (
-      targets.find((target) => target.id === selectedTargetId) ?? targets[0]
-    );
+    return targets.find((target) => target.id === selectedTargetId) ?? null;
   }, [selectedTargetId, targets]);
+  const showTargetOverview =
+    overviewVisible || (!selectedTarget && targets.length > 0);
   const frameUrl =
-    visible && !overviewVisible ? (selectedTarget?.frameUrl ?? "") : "";
+    visible && !showTargetOverview ? (selectedTarget?.frameUrl ?? "") : "";
 
   useEffect(() => {
     panelWidthRef.current = panelWidth;
@@ -449,7 +449,9 @@ export function DevToolsPanel({
           pendingForegroundKeyRef.current = "";
           pendingForegroundAppRef.current = null;
         }
-        if (selection.automaticTargetId && !overviewPinnedRef.current) {
+        if (!selection.targetId && discoverableTargets.length > 0) {
+          setOverviewVisible(true);
+        } else if (selection.automaticTargetId && !overviewPinnedRef.current) {
           setOverviewVisible(false);
         }
         applySelectedTargetId(selection.targetId);
@@ -526,6 +528,7 @@ export function DevToolsPanel({
       !visible ||
       !selectedSimulator?.isBooted ||
       !selectedSimulator.udid ||
+      selectedTargetIdRef.current !== SAFARI_AUTO_TARGET_ID ||
       manualTargetSelectionRef.current ||
       loadingActiveWebKitUrlRef.current
     ) {
@@ -863,27 +866,26 @@ export function DevToolsPanel({
     ? NOT_CONNECTED_MESSAGE
     : chromeDevToolsBlocked
       ? "Chrome DevTools don't work in Safari"
-      : error ||
-        (!selectedSimulator
-          ? "No simulator selected."
-          : isDiscoveringTargets && targets.length === 0
-            ? "Connecting..."
-            : safariAutoWaiting
-              ? "Finding current Safari tab..."
-              : targets.length === 0
-                ? selectedSimulator.isBooted
-                  ? "No DevTools targets. Open Safari, enable inspectable WKWebViews, start Metro, or launch a Chrome remote debugging target."
-                  : "No DevTools targets. Boot the simulator for Safari/WebKit, or start Metro or Chrome remote debugging."
-                : "");
+      : targets.length > 0 && !selectedTarget
+        ? "Select a DevTools target."
+        : error ||
+          (!selectedSimulator
+            ? "No simulator selected."
+            : isDiscoveringTargets && targets.length === 0
+              ? "Connecting..."
+              : safariAutoWaiting
+                ? "Finding current Safari tab..."
+                : targets.length === 0
+                  ? selectedSimulator.isBooted
+                    ? "No DevTools targets. Open Safari, enable inspectable WKWebViews, start Metro, or launch a Chrome remote debugging target."
+                    : "No DevTools targets. Boot the simulator for Safari/WebKit, or start Metro or Chrome remote debugging."
+                  : "");
   const emptyOverviewMessage = effectivelyDisconnected
     ? NOT_CONNECTED_MESSAGE
     : isDiscoveringTargets
       ? "Connecting..."
       : "No targets";
   const frameStatusMessage = webKitFrameStatusMessage(frameHealth);
-  const displayWarnings = selectedSimulator?.isBooted
-    ? (discovery?.warnings ?? []).filter(shouldDisplayDevToolsWarning)
-    : [];
   const panelStyle = {
     "--webkit-panel-width": `${panelWidth}px`,
   } as CSSProperties;
@@ -916,7 +918,7 @@ export function DevToolsPanel({
       <div className="webkit-targetbar">
         <button
           aria-label="DevTools Home"
-          className={`tbtn icon-btn ${overviewVisible ? "active" : ""}`}
+          className={`tbtn icon-btn ${showTargetOverview ? "active" : ""}`}
           onClick={showOverview}
           title="DevTools Home"
           type="button"
@@ -937,11 +939,14 @@ export function DevToolsPanel({
               {isDiscoveringTargets ? "Connecting..." : "No targets"}
             </option>
           ) : (
-            targets.map((target) => (
-              <option key={target.id} value={target.id}>
-                {targetLabel(target)}
-              </option>
-            ))
+            <>
+              {selectedTarget ? null : <option value="">Select target</option>}
+              {targets.map((target) => (
+                <option key={target.id} value={target.id}>
+                  {targetLabel(target)}
+                </option>
+              ))}
+            </>
           )}
         </select>
         <button
@@ -974,7 +979,7 @@ export function DevToolsPanel({
         </button>
       </div>
 
-      {selectedTarget && !overviewVisible ? (
+      {selectedTarget && !showTargetOverview ? (
         <div className="webkit-target-meta">
           <span>{selectedTarget.source}</span>
           {selectedTarget.meta ? <span>{selectedTarget.meta}</span> : null}
@@ -986,7 +991,7 @@ export function DevToolsPanel({
           <div className={`webkit-status ${error ? "error" : ""}`}>
             {statusMessage}
           </div>
-        ) : overviewVisible ? (
+        ) : showTargetOverview ? (
           <DevToolsOverview
             emptyMessage={emptyOverviewMessage}
             targets={targets}
@@ -1020,14 +1025,6 @@ export function DevToolsPanel({
           </div>
         )}
       </div>
-
-      {displayWarnings.length ? (
-        <div className="webkit-warnings">
-          {displayWarnings.map((warning) => (
-            <div key={warning}>{warning}</div>
-          ))}
-        </div>
-      ) : null}
     </aside>
   );
 }
@@ -1076,33 +1073,42 @@ function DevToolsOverview({
 }
 
 function mapChromeTarget(target: ChromeDevToolsTarget): DevToolsTarget {
+  const appName = nullableString(target.appName);
+  const bundleIdentifier = nullableString(target.bundleIdentifier);
+  const id = trimmedString(target.id) || String(target.processIdentifier);
+  const url = trimmedString(target.url);
   const source = sourceLabel(target.source);
   return {
-    appName: target.appName ?? null,
-    bundleIdentifier: target.bundleIdentifier ?? null,
+    appName,
+    bundleIdentifier,
     frameUrl: buildChromeDevToolsFrameUrl(target),
-    id: `chrome:${target.id}`,
-    meta: target.bundleIdentifier ?? target.url,
-    processIdentifier: target.processIdentifier,
+    id: `chrome:${id}`,
+    meta: bundleIdentifier ?? url,
+    processIdentifier: finiteNumber(target.processIdentifier),
     source,
     title: chromeTargetLabel(target),
   };
 }
 
 function mapWebKitTarget(target: WebKitTarget): DevToolsTarget {
+  const appId = trimmedString(target.appId);
+  const appName = nullableString(target.appName);
+  const pageId = finiteNumber(target.pageId);
+  const id = trimmedString(target.id) || appId || String(pageId ?? "unknown");
+  const url = nullableString(target.url);
   return {
-    appId: target.appId,
-    appActive: target.appActive ?? false,
-    appName: target.appName ?? null,
+    appId,
+    appActive: target.appActive === true,
+    appName,
     frameUrl: buildWebKitInspectorFrameUrl(target),
-    id: `webkit:${target.id}`,
-    meta: target.url ?? "",
-    pageActive: target.pageActive ?? false,
-    pageId: target.pageId,
+    id: `webkit:${id}`,
+    meta: url ?? "",
+    pageActive: target.pageActive === true,
+    pageId: pageId ?? undefined,
     processIdentifier: webKitTargetProcessIdentifier(target),
     source: webKitTargetKindLabel(target),
     title: webKitTargetLabel(target),
-    url: target.url ?? null,
+    url,
   };
 }
 
@@ -1128,21 +1134,22 @@ export function withSafariAutoTarget(
     .sort((left, right) => (right.pageId ?? 0) - (left.pageId ?? 0))[0];
   const fallbackTarget = activeTarget ?? newestTarget ?? safariTargets[0];
   const autoTarget: DevToolsTarget = {
-    appId: fallbackTarget?.appId ?? "com.apple.mobilesafari",
+    appId: nullableString(fallbackTarget?.appId) ?? "com.apple.mobilesafari",
     appActive: safariTargets.some((target) => target.appActive),
-    appName: fallbackTarget?.appName ?? "Safari",
+    appName: nullableString(fallbackTarget?.appName) ?? "Safari",
     bundleIdentifier:
-      fallbackTarget?.bundleIdentifier ?? "com.apple.mobilesafari",
-    frameUrl: fallbackTarget?.frameUrl ?? "",
+      nullableString(fallbackTarget?.bundleIdentifier) ??
+      "com.apple.mobilesafari",
+    frameUrl: trimmedString(fallbackTarget?.frameUrl),
     id: SAFARI_AUTO_TARGET_ID,
-    meta: fallbackTarget?.url ?? "Latest Safari tab",
+    meta: nullableString(fallbackTarget?.url) ?? "Latest Safari tab",
     pageActive: Boolean(activeTarget),
-    pageId: fallbackTarget?.pageId,
-    processIdentifier: fallbackTarget?.processIdentifier ?? null,
+    pageId: finiteNumber(fallbackTarget?.pageId) ?? undefined,
+    processIdentifier: finiteNumber(fallbackTarget?.processIdentifier),
     safariAuto: true,
     source: "Safari",
     title: "Auto",
-    url: fallbackTarget?.url ?? null,
+    url: nullableString(fallbackTarget?.url),
   };
   return [autoTarget, ...concreteTargets];
 }
@@ -1157,6 +1164,7 @@ export function resolveDevToolsTargetSelection({
   targets,
 }: DevToolsTargetSelectionInput): DevToolsTargetSelection {
   const currentTarget = targets.find((target) => target.id === currentTargetId);
+  const automaticCandidates = targets.filter(canAutoOpenDevToolsTarget);
   if (manualOverride) {
     return {
       automaticTargetId: "",
@@ -1186,13 +1194,13 @@ export function resolveDevToolsTargetSelection({
   const compatibleTarget =
     pendingForegroundApp && pendingForegroundMatches
       ? highlyCompatibleTargetForForeground(
-          targets,
+          automaticCandidates,
           pendingForegroundApp,
           currentTargetId,
         )
       : foregroundApp
         ? highlyCompatibleTargetForForeground(
-            targets,
+            automaticCandidates,
             foregroundApp,
             currentTargetId,
           )
@@ -1202,8 +1210,16 @@ export function resolveDevToolsTargetSelection({
   return {
     automaticTargetId: automaticTarget?.id ?? "",
     shouldClearPendingForeground: Boolean(compatibleTarget),
-    targetId: automaticTarget?.id || currentTarget?.id || targets[0]?.id || "",
+    targetId:
+      automaticTarget?.id ||
+      currentTarget?.id ||
+      automaticCandidates[0]?.id ||
+      "",
   };
+}
+
+function canAutoOpenDevToolsTarget(target: DevToolsTarget): boolean {
+  return !isWebKitTarget(target);
 }
 
 function highlyCompatibleTargetForForeground(
@@ -1238,7 +1254,7 @@ function bestWebKitTargetForUrlHint(
   targets: DevToolsTarget[],
   urlHint: string,
 ): DevToolsTarget | null {
-  const hint = urlHint.trim();
+  const hint = trimmedString(urlHint);
   if (!hint) {
     return null;
   }
@@ -1257,7 +1273,7 @@ function safariActiveUrlMatchScore(
   urlHint: string,
   target: DevToolsTarget,
 ): number {
-  const targetUrl = target.url?.trim() ?? "";
+  const targetUrl = trimmedString(target.url);
   if (!targetUrl) {
     return 0;
   }
@@ -1289,9 +1305,12 @@ function foregroundCompatibilityScore(
   foregroundApp: NonNullable<ChromeDevToolsTargetDiscovery["foregroundApp"]>,
 ): number {
   let score = 0;
-  const foregroundBundle = foregroundApp.bundleIdentifier?.trim() ?? "";
-  const foregroundAppName = foregroundApp.appName?.trim() ?? "";
+  const foregroundBundle = trimmedString(foregroundApp.bundleIdentifier);
+  const foregroundAppName = trimmedString(foregroundApp.appName);
   const foregroundPid = foregroundApp.processIdentifier;
+  const targetAppName = trimmedString(target.appName);
+  const targetBundle = trimmedString(target.bundleIdentifier);
+  const targetTitle = trimmedString(target.title);
   const webKitMatchesForeground =
     isWebKitTarget(target) &&
     webKitTargetMatchesForegroundApp(target, foregroundApp);
@@ -1304,15 +1323,15 @@ function foregroundCompatibilityScore(
     score = Math.max(score, isWebKitTarget(target) ? 100 : 92);
   }
 
-  if (foregroundBundle && target.bundleIdentifier === foregroundBundle) {
+  if (foregroundBundle && targetBundle === foregroundBundle) {
     score = Math.max(score, target.source === "React Native Metro" ? 98 : 90);
   }
 
   if (
     foregroundAppName &&
-    (target.appName === foregroundAppName ||
-      target.title === foregroundAppName ||
-      target.title.startsWith(`${foregroundAppName}:`))
+    (targetAppName === foregroundAppName ||
+      targetTitle === foregroundAppName ||
+      targetTitle.startsWith(`${foregroundAppName}:`))
   ) {
     score = Math.max(score, target.source === "React Native Metro" ? 94 : 86);
   }
@@ -1342,8 +1361,8 @@ function foregroundCompatibilityScore(
   if (
     foregroundAppName &&
     isWebKitTarget(target) &&
-    (target.appName === foregroundAppName ||
-      target.title.startsWith(`${foregroundAppName}:`))
+    (targetAppName === foregroundAppName ||
+      targetTitle.startsWith(`${foregroundAppName}:`))
   ) {
     score = Math.max(score, 88);
   }
@@ -1368,11 +1387,13 @@ function webKitTargetMatchesForegroundApp(
     return true;
   }
 
-  const foregroundAppName = foregroundApp.appName?.trim();
+  const foregroundAppName = trimmedString(foregroundApp.appName);
+  const targetAppName = trimmedString(target.appName);
+  const targetTitle = trimmedString(target.title);
   return Boolean(
     foregroundAppName &&
-    (target.appName === foregroundAppName ||
-      target.title.startsWith(`${foregroundAppName}:`)),
+    (targetAppName === foregroundAppName ||
+      targetTitle.startsWith(`${foregroundAppName}:`)),
   );
 }
 
@@ -1383,8 +1404,8 @@ function foregroundAppKey(
     return "";
   }
   return (
-    foregroundApp.bundleIdentifier?.trim() ||
-    foregroundApp.appName?.trim() ||
+    trimmedString(foregroundApp.bundleIdentifier) ||
+    trimmedString(foregroundApp.appName) ||
     `pid:${foregroundApp.processIdentifier}`
   );
 }
@@ -1400,10 +1421,12 @@ function isSafariForegroundApp(
 function isSafariForeground(
   foregroundApp: NonNullable<ChromeDevToolsTargetDiscovery["foregroundApp"]>,
 ): boolean {
+  const bundleIdentifier = trimmedString(foregroundApp.bundleIdentifier);
+  const appName = trimmedString(foregroundApp.appName);
   return (
-    foregroundApp.bundleIdentifier === "com.apple.mobilesafari" ||
-    foregroundApp.appName === "Safari" ||
-    foregroundApp.appName === "MobileSafari"
+    bundleIdentifier === "com.apple.mobilesafari" ||
+    appName === "Safari" ||
+    appName === "MobileSafari"
   );
 }
 
@@ -1510,9 +1533,8 @@ function sanitizeActiveUrlHint(value: unknown): string {
     : "";
 }
 
-function normalizedUrlKey(value: string): string {
-  let key = value
-    .trim()
+function normalizedUrlKey(value: unknown): string {
+  let key = trimmedString(value)
     .replace(/^"|"$/g, "")
     .replace(/\/+$/g, "")
     .toLowerCase();
@@ -1528,7 +1550,7 @@ function normalizedUrlKey(value: string): string {
   return key.replace(/\/+$/g, "");
 }
 
-function normalizedUrlHost(value: string): string {
+function normalizedUrlHost(value: unknown): string {
   return (
     normalizedUrlKey(value)
       .split(/[/?#]/, 1)[0]
@@ -1765,11 +1787,12 @@ function buildWebKitInspectorFrameUrl(target: WebKitTarget): string {
   return url.toString();
 }
 
-function frontendUrl(value: string): URL {
-  if (value.startsWith("http://") || value.startsWith("https://")) {
-    return new URL(value);
+function frontendUrl(value: unknown): URL {
+  const url = trimmedString(value);
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return new URL(url);
   }
-  return new URL(apiUrl(value), window.location.href);
+  return new URL(apiUrl(url), window.location.href);
 }
 
 function normalizeWebSocketUrl(
@@ -1807,15 +1830,17 @@ function devToolsSocketParam(socketUrl: URL): string {
 }
 
 function targetLabel(target: DevToolsTarget): string {
-  if (target.title.startsWith(`${target.source}:`)) {
-    return target.title;
+  const source = trimmedString(target.source) || "DevTools";
+  const title = trimmedString(target.title) || "Untitled";
+  if (title.startsWith(`${source}:`)) {
+    return title;
   }
-  return `${target.source}: ${target.title}`;
+  return `${source}: ${title}`;
 }
 
 function chromeTargetLabel(target: ChromeDevToolsTarget): string {
-  const title = target.title?.trim();
-  const appName = target.appName?.trim();
+  const title = trimmedString(target.title);
+  const appName = trimmedString(target.appName);
   if (title && appName && !title.includes(appName)) {
     return `${appName}: ${title}`;
   }
@@ -1823,17 +1848,17 @@ function chromeTargetLabel(target: ChromeDevToolsTarget): string {
 }
 
 function webKitTargetLabel(target: WebKitTarget): string {
-  const title = target.title?.trim();
-  const url = target.url?.trim();
-  const appName = target.appName?.trim();
+  const title = trimmedString(target.title);
+  const url = trimmedString(target.url);
+  const appName = trimmedString(target.appName);
   if (title && appName) {
     return `${appName}: ${title}`;
   }
   return title || url || appName || `Page ${target.pageId}`;
 }
 
-function sourceLabel(source: string): string {
-  switch (source) {
+function sourceLabel(source: unknown): string {
+  switch (trimmedString(source)) {
     case "react-native":
       return "React Native";
     case "react-native-metro":
@@ -1852,18 +1877,32 @@ function sourceLabel(source: string): string {
 }
 
 function webKitTargetKindLabel(target: WebKitTarget): string {
-  if (target.kind === "safari-page" || target.appName === "Safari") {
+  const appName = trimmedString(target.appName);
+  if (target.kind === "safari-page" || appName === "Safari") {
     return "Safari";
   }
   if (target.kind === "web-content-proxy") {
     return "WebKit proxy";
   }
-  return target.appName ?? "WebKit";
+  return appName || "WebKit";
 }
 
 function webKitTargetProcessIdentifier(target: WebKitTarget): number | null {
-  const match = target.appId.match(/^PID:(\d+)$/);
+  const match = trimmedString(target.appId).match(/^PID:(\d+)$/);
   return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function trimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function nullableString(value: unknown): string | null {
+  const text = trimmedString(value);
+  return text || null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function errorMessage(error: unknown): string {
@@ -1910,23 +1949,6 @@ function isProviderDisconnectedMessage(message: string): boolean {
     lower.includes("load failed") ||
     lower.includes("networkerror") ||
     lower.includes("network error")
-  );
-}
-
-function shouldDisplayDevToolsWarning(message: string): boolean {
-  const normalized = message.trim();
-  if (!normalized || normalized === NOT_CONNECTED_MESSAGE) {
-    return false;
-  }
-
-  const lower = normalized.toLowerCase();
-  return !(
-    lower.includes("timed out loading chrome devtools targets") ||
-    lower.includes("timed out loading webkit targets") ||
-    lower.includes("unable to read webkit packet header") ||
-    lower.includes("unable to write webkit packet") ||
-    lower.includes("retried webkit target discovery") ||
-    lower.includes("webinspectord was settling")
   );
 }
 

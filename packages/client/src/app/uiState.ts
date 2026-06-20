@@ -2,6 +2,10 @@ import type {
   AccessibilitySource,
   AccessibilitySourcePreference,
 } from "../api/types";
+import {
+  isAccessibilitySkeletonMode,
+  type AccessibilitySkeletonMode,
+} from "../features/accessibility/skeletonMode";
 import type { Point, ViewMode } from "../features/viewport/types";
 
 export interface PersistedViewportState {
@@ -29,6 +33,8 @@ export const WEBKIT_INSPECTOR_VISIBLE_STORAGE_KEY =
 export const CHROME_DEVTOOLS_VISIBLE_STORAGE_KEY =
   "xcw-chrome-devtools-visible";
 export const ACCESSIBILITY_SOURCE_STORAGE_KEY = "xcw-hierarchy-source";
+export const ACCESSIBILITY_SKELETON_MODE_STORAGE_KEY =
+  "xcw-accessibility-skeleton-mode";
 export const TOUCH_OVERLAY_VISIBLE_STORAGE_KEY = "xcw-touch-overlay-visible";
 export const DEVICE_CHROME_VISIBLE_STORAGE_KEY = "xcw-device-chrome-visible";
 
@@ -109,6 +115,27 @@ export function readStoredAccessibilitySource(): AccessibilitySourcePreference {
 
   const source = window.localStorage.getItem(ACCESSIBILITY_SOURCE_STORAGE_KEY);
   return source === "auto" || isAccessibilitySource(source) ? source : "auto";
+}
+
+export function readStoredAccessibilitySkeletonMode(): AccessibilitySkeletonMode {
+  if (typeof window === "undefined") {
+    return "auto";
+  }
+
+  const mode = window.localStorage.getItem(
+    ACCESSIBILITY_SKELETON_MODE_STORAGE_KEY,
+  );
+  return isAccessibilitySkeletonMode(mode) ? mode : "auto";
+}
+
+export function writeStoredAccessibilitySkeletonMode(
+  mode: AccessibilitySkeletonMode,
+): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(ACCESSIBILITY_SKELETON_MODE_STORAGE_KEY, mode);
 }
 
 export function sanitizeAccessibilitySources(

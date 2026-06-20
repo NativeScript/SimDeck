@@ -541,6 +541,17 @@ bool xcw_native_session_rotate_crown(void *handle, double delta,
   return xcw_unsupported(error_message);
 }
 
+bool xcw_native_session_send_scroll(void *handle, double delta_x,
+                                    double delta_y, double normalized_x,
+                                    double normalized_y, char **error_message) {
+  (void)handle;
+  (void)delta_x;
+  (void)delta_y;
+  (void)normalized_x;
+  (void)normalized_y;
+  return xcw_unsupported(error_message);
+}
+
 bool xcw_native_session_open_app_switcher(void *handle, char **error_message) {
   (void)handle;
   return xcw_unsupported(error_message);

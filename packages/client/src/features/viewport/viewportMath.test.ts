@@ -9,6 +9,7 @@ import {
   computeChromeScreenRect,
   computeFitScale,
   mapDisplayedPointToNaturalOrientation,
+  mapNaturalPointToDisplayedOrientation,
   shellSize,
 } from "./viewportMath";
 
@@ -186,6 +187,22 @@ describe("viewportMath", () => {
       x: 0.25,
       y: 0.2,
     });
+  });
+
+  it("maps natural stream points back to displayed overlay coordinates", () => {
+    const displayed = { x: 0.2, y: 0.75 };
+    const natural = mapDisplayedPointToNaturalOrientation(displayed, 1);
+    const remapped = mapNaturalPointToDisplayedOrientation(natural, 1);
+
+    expect(remapped.x).toBeCloseTo(displayed.x);
+    expect(remapped.y).toBeCloseTo(displayed.y);
+
+    const remappedCounterClockwise = mapNaturalPointToDisplayedOrientation(
+      mapDisplayedPointToNaturalOrientation(displayed, 3),
+      3,
+    );
+    expect(remappedCounterClockwise.x).toBeCloseTo(displayed.x);
+    expect(remappedCounterClockwise.y).toBeCloseTo(displayed.y);
   });
 
   it("builds a quarter-turn transform around the shell origin", () => {

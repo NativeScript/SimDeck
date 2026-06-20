@@ -15,6 +15,7 @@ interface DeviceChromeProps {
   accessibilityPickerActive: boolean;
   accessibilityRoots: AccessibilityNode[];
   accessibilitySelectedId: string;
+  accessibilitySkeletonVisible: boolean;
   chromeProfile: ChromeProfile | null;
   chromeButtonsRenderedInChrome: boolean;
   chromeScreenBackingStyle: CSSProperties | null;
@@ -31,6 +32,14 @@ interface DeviceChromeProps {
     usagePage?: number,
     usage?: number,
   ) => void;
+  onBottomBezelPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
+  onBottomBezelPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
+  onBottomBezelPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
+  onBottomBezelPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
+  onBottomBezelTouchCancel: (event: React.TouchEvent<HTMLElement>) => void;
+  onBottomBezelTouchEnd: (event: React.TouchEvent<HTMLElement>) => void;
+  onBottomBezelTouchMove: (event: React.TouchEvent<HTMLElement>) => void;
+  onBottomBezelTouchStart: (event: React.TouchEvent<HTMLElement>) => void;
   onPanPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
   onPanPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
   onPanPointerUp: () => void;
@@ -41,6 +50,10 @@ interface DeviceChromeProps {
   onScreenPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
   onScreenPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
   onScreenPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
+  onScreenTouchCancel: (event: React.TouchEvent<HTMLElement>) => void;
+  onScreenTouchEnd: (event: React.TouchEvent<HTMLElement>) => void;
+  onScreenTouchMove: (event: React.TouchEvent<HTMLElement>) => void;
+  onScreenTouchStart: (event: React.TouchEvent<HTMLElement>) => void;
   onStartPanning: (event: React.PointerEvent<HTMLElement>) => void;
   rotationQuarterTurns: number;
   screenAspect: string;
@@ -62,6 +75,7 @@ export function DeviceChrome({
   accessibilityPickerActive,
   accessibilityRoots,
   accessibilitySelectedId,
+  accessibilitySkeletonVisible,
   chromeProfile,
   chromeButtonsRenderedInChrome,
   chromeScreenBackingStyle,
@@ -73,6 +87,14 @@ export function DeviceChrome({
   isLoadingStream,
   isStreamError,
   onChromeButtonEvent,
+  onBottomBezelPointerCancel,
+  onBottomBezelPointerDown,
+  onBottomBezelPointerMove,
+  onBottomBezelPointerUp,
+  onBottomBezelTouchCancel,
+  onBottomBezelTouchEnd,
+  onBottomBezelTouchMove,
+  onBottomBezelTouchStart,
   onPanPointerCancel,
   onPanPointerMove,
   onPanPointerUp,
@@ -83,6 +105,10 @@ export function DeviceChrome({
   onScreenPointerDown,
   onScreenPointerMove,
   onScreenPointerUp,
+  onScreenTouchCancel,
+  onScreenTouchEnd,
+  onScreenTouchMove,
+  onScreenTouchStart,
   onStartPanning,
   rotationQuarterTurns,
   screenAspect,
@@ -136,11 +162,24 @@ export function DeviceChrome({
           onEvent={onChromeButtonEvent}
           renderImages={!chromeButtonsRenderedInChrome}
         />
+        <BottomEdgeCatcher
+          chromeScreenStyle={chromeScreenStyle}
+          onPointerCancel={onBottomBezelPointerCancel}
+          onPointerDown={onBottomBezelPointerDown}
+          onPointerMove={onBottomBezelPointerMove}
+          onPointerUp={onBottomBezelPointerUp}
+          onSimulatorInteraction={onSimulatorInteraction}
+          onTouchCancel={onBottomBezelTouchCancel}
+          onTouchEnd={onBottomBezelTouchEnd}
+          onTouchMove={onBottomBezelTouchMove}
+          onTouchStart={onBottomBezelTouchStart}
+        />
         <ScreenLayer
           accessibilityHoveredId={accessibilityHoveredId}
           accessibilityPickerActive={accessibilityPickerActive}
           accessibilityRoots={accessibilityRoots}
           accessibilitySelectedId={accessibilitySelectedId}
+          accessibilitySkeletonVisible={accessibilitySkeletonVisible}
           chromeScreenStyle={chromeScreenStyle}
           hasFrame={hasFrame}
           isBooted={isBooted}
@@ -150,6 +189,10 @@ export function DeviceChrome({
           onScreenPointerDown={onScreenPointerDown}
           onScreenPointerMove={onScreenPointerMove}
           onScreenPointerUp={onScreenPointerUp}
+          onScreenTouchCancel={onScreenTouchCancel}
+          onScreenTouchEnd={onScreenTouchEnd}
+          onScreenTouchMove={onScreenTouchMove}
+          onScreenTouchStart={onScreenTouchStart}
           onPickerHover={onPickerHover}
           onPickerSelect={onPickerSelect}
           onSimulatorInteraction={onSimulatorInteraction}
@@ -182,6 +225,7 @@ export function DeviceChrome({
         accessibilityPickerActive={accessibilityPickerActive}
         accessibilityRoots={accessibilityRoots}
         accessibilitySelectedId={accessibilitySelectedId}
+        accessibilitySkeletonVisible={accessibilitySkeletonVisible}
         chromeScreenStyle={{
           aspectRatio: screenAspect,
           ...(chromeScreenStyle ?? {}),
@@ -194,6 +238,10 @@ export function DeviceChrome({
         onScreenPointerDown={onScreenPointerDown}
         onScreenPointerMove={onScreenPointerMove}
         onScreenPointerUp={onScreenPointerUp}
+        onScreenTouchCancel={onScreenTouchCancel}
+        onScreenTouchEnd={onScreenTouchEnd}
+        onScreenTouchMove={onScreenTouchMove}
+        onScreenTouchStart={onScreenTouchStart}
         onPickerHover={onPickerHover}
         onPickerSelect={onPickerSelect}
         onSimulatorInteraction={onSimulatorInteraction}
@@ -210,6 +258,81 @@ export function DeviceChrome({
         useChromeProfile={false}
       />
     </div>
+  );
+}
+
+function screenEdgeCatcherStyle(
+  chromeScreenStyle: CSSProperties | null,
+): CSSProperties | null {
+  const left =
+    typeof chromeScreenStyle?.left === "string" ? chromeScreenStyle.left : null;
+  const top =
+    typeof chromeScreenStyle?.top === "string" ? chromeScreenStyle.top : null;
+  const width =
+    typeof chromeScreenStyle?.width === "string"
+      ? chromeScreenStyle.width
+      : null;
+  const height =
+    typeof chromeScreenStyle?.height === "string"
+      ? chromeScreenStyle.height
+      : null;
+  if (!left || !top || !width || !height) {
+    return null;
+  }
+  return {
+    left,
+    top: `calc(${top} + ${height} - 2px)`,
+    width,
+  };
+}
+
+function BottomEdgeCatcher({
+  chromeScreenStyle,
+  onPointerCancel,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onSimulatorInteraction,
+  onTouchCancel,
+  onTouchEnd,
+  onTouchMove,
+  onTouchStart,
+}: {
+  chromeScreenStyle: CSSProperties | null;
+  onPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
+  onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
+  onPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
+  onPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
+  onSimulatorInteraction: () => void;
+  onTouchCancel: (event: React.TouchEvent<HTMLElement>) => void;
+  onTouchEnd: (event: React.TouchEvent<HTMLElement>) => void;
+  onTouchMove: (event: React.TouchEvent<HTMLElement>) => void;
+  onTouchStart: (event: React.TouchEvent<HTMLElement>) => void;
+}) {
+  const style = screenEdgeCatcherStyle(chromeScreenStyle);
+  if (!style) {
+    return null;
+  }
+  return (
+    <div
+      aria-hidden="true"
+      className="device-bottom-edge-catcher"
+      onPointerCancel={onPointerCancel}
+      onPointerDown={(event) => {
+        onSimulatorInteraction();
+        onPointerDown(event);
+      }}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onTouchCancel={onTouchCancel}
+      onTouchEnd={onTouchEnd}
+      onTouchMove={onTouchMove}
+      onTouchStart={(event) => {
+        onSimulatorInteraction();
+        onTouchStart(event);
+      }}
+      style={style}
+    />
   );
 }
 
@@ -468,6 +591,7 @@ interface ScreenLayerProps {
   accessibilityPickerActive: boolean;
   accessibilityRoots: AccessibilityNode[];
   accessibilitySelectedId: string;
+  accessibilitySkeletonVisible: boolean;
   chromeScreenStyle: CSSProperties | null;
   hasFrame: boolean;
   isBooted: boolean;
@@ -477,6 +601,10 @@ interface ScreenLayerProps {
   onScreenPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
   onScreenPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
   onScreenPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
+  onScreenTouchCancel: (event: React.TouchEvent<HTMLElement>) => void;
+  onScreenTouchEnd: (event: React.TouchEvent<HTMLElement>) => void;
+  onScreenTouchMove: (event: React.TouchEvent<HTMLElement>) => void;
+  onScreenTouchStart: (event: React.TouchEvent<HTMLElement>) => void;
   onPickerHover: (id: string | null) => void;
   onPickerSelect: (id: string) => void;
   onSimulatorInteraction: () => void;
@@ -498,6 +626,7 @@ function ScreenLayer({
   accessibilityPickerActive,
   accessibilityRoots,
   accessibilitySelectedId,
+  accessibilitySkeletonVisible,
   chromeScreenStyle,
   hasFrame,
   isBooted,
@@ -507,6 +636,10 @@ function ScreenLayer({
   onScreenPointerDown,
   onScreenPointerMove,
   onScreenPointerUp,
+  onScreenTouchCancel,
+  onScreenTouchEnd,
+  onScreenTouchMove,
+  onScreenTouchStart,
   onPickerHover,
   onPickerSelect,
   onSimulatorInteraction,
@@ -538,6 +671,13 @@ function ScreenLayer({
       }}
       onPointerMove={onScreenPointerMove}
       onPointerUp={onScreenPointerUp}
+      onTouchCancel={onScreenTouchCancel}
+      onTouchEnd={onScreenTouchEnd}
+      onTouchMove={onScreenTouchMove}
+      onTouchStart={(event) => {
+        onSimulatorInteraction();
+        onScreenTouchStart(event);
+      }}
       style={chromeScreenStyle ?? undefined}
     >
       <canvas
@@ -559,9 +699,14 @@ function ScreenLayer({
         hoveredId={accessibilityHoveredId}
         roots={accessibilityRoots}
         selectedId={accessibilitySelectedId}
+        skeletonVisible={accessibilitySkeletonVisible}
       />
       {touchOverlayVisible ? (
-        <TouchInteractionOverlay indicators={touchIndicators} />
+        <TouchInteractionOverlay
+          indicators={touchIndicators.filter(
+            (indicator) => (indicator.space ?? "screen") === "screen",
+          )}
+        />
       ) : null}
       {accessibilityPickerActive ? (
         <div

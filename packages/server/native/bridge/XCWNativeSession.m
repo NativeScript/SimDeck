@@ -180,6 +180,14 @@ static xcw_native_shared_bytes XCWSharedBytesFromData(NSData *data) {
     return [self.session rotateDigitalCrownByDelta:delta error:error];
 }
 
+- (BOOL)sendScrollWithDeltaX:(double)deltaX
+                      deltaY:(double)deltaY
+                 normalizedX:(double)normalizedX
+                 normalizedY:(double)normalizedY
+                       error:(NSError * _Nullable __autoreleasing *)error {
+    return [self.session sendScrollWithDeltaX:deltaX deltaY:deltaY normalizedX:normalizedX normalizedY:normalizedY error:error];
+}
+
 - (BOOL)openAppSwitcher:(NSError * _Nullable __autoreleasing *)error {
     return [self.session openAppSwitcher:error];
 }

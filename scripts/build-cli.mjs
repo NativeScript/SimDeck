@@ -18,6 +18,7 @@ const outputBin = path.join(
   buildDir,
   `simdeck-bin${targetExe(target) ?? hostExe}`,
 );
+const hostPlatformBin = target ? null : hostPlatformBinaryPath();
 
 fs.mkdirSync(buildDir, { recursive: true });
 
@@ -49,9 +50,21 @@ if (process.platform !== "win32") {
   fs.chmodSync(tmpOutputBin, 0o755);
 }
 fs.renameSync(tmpOutputBin, outputBin);
+if (hostPlatformBin && hostPlatformBin !== outputBin) {
+  const tmpHostPlatformBin = `${hostPlatformBin}.tmp.${process.pid}`;
+  fs.copyFileSync(outputBin, tmpHostPlatformBin);
+  if (process.platform !== "win32") {
+    fs.chmodSync(tmpHostPlatformBin, 0o755);
+  }
+  fs.renameSync(tmpHostPlatformBin, hostPlatformBin);
+}
 
 console.log(`Built ${outputBin}`);
 run("file", [outputBin], { optional: true });
+if (hostPlatformBin && hostPlatformBin !== outputBin) {
+  console.log(`Built ${hostPlatformBin}`);
+  run("file", [hostPlatformBin], { optional: true });
+}
 
 if (process.platform !== "win32") {
   const output = path.join(buildDir, "simdeck");
@@ -87,6 +100,18 @@ function targetExe(value) {
     return null;
   }
   return value.includes("windows") ? ".exe" : "";
+}
+
+function hostPlatformBinaryPath() {
+  const binaryByHost = {
+    "darwin-arm64": "simdeck-bin-darwin-arm64",
+    "darwin-x64": "simdeck-bin-darwin-x64",
+    "linux-arm64": "simdeck-bin-linux-arm64",
+    "linux-x64": "simdeck-bin-linux-x64",
+    "win32-x64": "simdeck-bin-win32-x64.exe",
+  };
+  const binary = binaryByHost[`${process.platform}-${process.arch}`];
+  return binary ? path.join(buildDir, binary) : null;
 }
 
 function run(command, args, options = {}) {

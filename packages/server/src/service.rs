@@ -101,6 +101,7 @@ pub fn installed_port() -> anyhow::Result<Option<u16>> {
     if !launch_agent_supported() {
         return Ok(None);
     }
+    ensure_not_root()?;
     Ok(installed_argument_value("--port")?.and_then(|value| value.parse::<u16>().ok()))
 }
 
@@ -108,6 +109,7 @@ pub fn active() -> anyhow::Result<Option<ServiceInstallResult>> {
     if !launch_agent_supported() {
         return Ok(None);
     }
+    ensure_not_root()?;
     let domain = launchctl_domain()?;
     if launchagent_pid(&domain, SERVICE_LABEL).is_none() {
         return Ok(None);
@@ -164,8 +166,14 @@ fn install(mut options: ServiceOptions) -> anyhow::Result<ServiceInstallResult> 
         &options,
     );
 
+    if plist_path.exists() {
+        fs::remove_file(&plist_path)
+            .with_context(|| format!("replace {}", plist_path.display()))?;
+    }
     fs::write(&plist_path, plist).with_context(|| format!("write {}", plist_path.display()))?;
 
+    let service_target = format!("{domain}/{SERVICE_LABEL}");
+    run_launchctl(["enable", service_target.as_str()])?;
     run_launchctl(["bootstrap", &domain, plist_path.to_string_lossy().as_ref()])?;
 
     let advertise_host = options.advertise_host.clone();
@@ -233,11 +241,19 @@ fn launch_agent_supported() -> bool {
 }
 
 fn ensure_launch_agent_supported() -> anyhow::Result<()> {
-    if launch_agent_supported() {
-        Ok(())
-    } else {
+    if !launch_agent_supported() {
         bail!("SimDeck persistent LaunchAgent services are only available on macOS.")
     }
+    ensure_not_root()
+}
+
+fn ensure_not_root() -> anyhow::Result<()> {
+    if current_uid()? == 0 {
+        bail!(
+            "SimDeck LaunchAgent commands must be run as your logged-in user, not with sudo. Re-run without sudo so launchctl can target your gui session."
+        );
+    }
+    Ok(())
 }
 
 fn plist_path() -> anyhow::Result<PathBuf> {
@@ -460,6 +476,10 @@ fn home_dir() -> anyhow::Result<PathBuf> {
 }
 
 fn launchctl_domain() -> anyhow::Result<String> {
+    Ok(format!("gui/{}", current_uid()?))
+}
+
+fn current_uid() -> anyhow::Result<u32> {
     let output = Command::new("id")
         .arg("-u")
         .output()
@@ -470,11 +490,9 @@ fn launchctl_domain() -> anyhow::Result<String> {
     let uid = String::from_utf8(output.stdout)
         .context("parse uid as utf-8")?
         .trim()
-        .to_string();
-    if uid.is_empty() {
-        bail!("`id -u` returned an empty uid");
-    }
-    Ok(format!("gui/{uid}"))
+        .parse::<u32>()
+        .context("parse uid as integer")?;
+    Ok(uid)
 }
 
 fn unload_existing_services(domain: &str) -> anyhow::Result<Vec<u32>> {

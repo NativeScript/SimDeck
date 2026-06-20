@@ -1360,6 +1360,17 @@ bool xcw_native_session_rotate_crown(void *handle, double delta, char **error_me
     }
 }
 
+bool xcw_native_session_send_scroll(void *handle, double delta_x, double delta_y, double normalized_x, double normalized_y, char **error_message) {
+    @autoreleasepool {
+        NSError *error = nil;
+        BOOL ok = [XCWNativeSessionFromHandle(handle) sendScrollWithDeltaX:delta_x deltaY:delta_y normalizedX:normalized_x normalizedY:normalized_y error:&error];
+        if (!ok) {
+            XCWSetErrorMessage(error_message, error);
+        }
+        return ok;
+    }
+}
+
 bool xcw_native_session_open_app_switcher(void *handle, char **error_message) {
     @autoreleasepool {
         NSError *error = nil;

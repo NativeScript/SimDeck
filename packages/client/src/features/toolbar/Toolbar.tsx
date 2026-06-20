@@ -12,6 +12,7 @@ import {
 import { useEffect, useState, type RefObject } from "react";
 
 import type { SimulatorMetadata } from "../../api/types";
+import type { AccessibilitySkeletonMode } from "../accessibility/skeletonMode";
 import type {
   StreamConfig,
   StreamEncoder,
@@ -24,6 +25,7 @@ import { SimulatorMenu } from "../simulators/SimulatorMenu";
 import { SimulatorPickerMenu } from "../simulators/SimulatorPickerMenu";
 
 interface ToolbarProps {
+  accessibilitySkeletonMode: AccessibilitySkeletonMode;
   debugVisible: boolean;
   deviceChromeAvailable: boolean;
   deviceChromeVisible: boolean;
@@ -48,6 +50,7 @@ interface ToolbarProps {
   onOpenUrlPrompt: () => void;
   onRotateLeft: () => void;
   onRotateRight: () => void;
+  onAccessibilitySkeletonModeChange: (mode: AccessibilitySkeletonMode) => void;
   onShutdown: () => void;
   onStreamEncoderChange: (encoder: StreamEncoder) => void;
   onStreamFpsChange: (fps: StreamFps) => void;
@@ -85,6 +88,7 @@ interface ToolbarProps {
 }
 
 export function Toolbar({
+  accessibilitySkeletonMode,
   captureBusy,
   closeSimulatorMenu,
   closeMenu,
@@ -114,6 +118,7 @@ export function Toolbar({
   onOpenUrlPrompt,
   onRotateLeft,
   onRotateRight,
+  onAccessibilitySkeletonModeChange,
   onShutdown,
   onStreamEncoderChange,
   onStreamFpsChange,
@@ -195,6 +200,7 @@ export function Toolbar({
           onOpenBundlePrompt={onOpenBundlePrompt}
           onOpenUrlPrompt={onOpenUrlPrompt}
           onRotateRight={onRotateRight}
+          onAccessibilitySkeletonModeChange={onAccessibilitySkeletonModeChange}
           onShutdown={onShutdown}
           onStreamEncoderChange={onStreamEncoderChange}
           onStreamFpsChange={onStreamFpsChange}
@@ -216,6 +222,7 @@ export function Toolbar({
           canInstallApp={canInstallApp}
           streamConfig={streamConfig}
           streamTransport={streamTransport}
+          accessibilitySkeletonMode={accessibilitySkeletonMode}
           deviceChromeAvailable={deviceChromeAvailable}
           deviceChromeVisible={deviceChromeVisible}
           touchOverlayVisible={touchOverlayVisible}

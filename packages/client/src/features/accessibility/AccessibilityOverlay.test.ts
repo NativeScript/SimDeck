@@ -103,4 +103,30 @@ describe("AccessibilityOverlay", () => {
     expect(markup).not.toContain("; disabled");
     expect(markup).not.toContain(" title=");
   });
+
+  it("draws label-free skeleton frames when requested", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AccessibilityOverlay, {
+        hoveredId: null,
+        roots: [
+          {
+            frame: { height: 844, width: 390, x: 0, y: 0 },
+            role: "application",
+            children: [
+              {
+                AXLabel: "Continue",
+                frame: { height: 48, width: 180, x: 105, y: 720 },
+                type: "Button",
+              },
+            ],
+          },
+        ],
+        selectedId: "",
+        skeletonVisible: true,
+      }),
+    );
+
+    expect(markup).toContain("accessibility-rect skeleton");
+    expect(markup).not.toContain("<span>Continue</span>");
+  });
 });

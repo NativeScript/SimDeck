@@ -70,6 +70,12 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
                                 phase:(DFPrivateSimulatorTouchPhase)phase
                                 error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendMultiTouch(normalizedX1:normalizedY1:normalizedX2:normalizedY2:phase:));
 
+- (BOOL)sendScrollWithDeltaX:(double)deltaX
+                      deltaY:(double)deltaY
+                 normalizedX:(double)normalizedX
+                 normalizedY:(double)normalizedY
+                       error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendScroll(deltaX:deltaY:normalizedX:normalizedY:));
+
 - (BOOL)sendKeyCode:(uint16_t)keyCode
           modifiers:(NSUInteger)modifiers
               error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(sendKey(keyCode:modifiers:));

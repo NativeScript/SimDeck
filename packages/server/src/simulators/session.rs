@@ -170,6 +170,9 @@ impl SimulatorSession {
             self.inner.start_condvar.notify_all();
             return Err(error);
         }
+        if self.inner.active_frame_subscribers.load(Ordering::Relaxed) == 0 {
+            self.inner.native.set_client_foreground(false);
+        }
         *self.inner.state.lock().unwrap() = SessionState::Ready;
         self.inner.start_condvar.notify_all();
         Ok(())
@@ -375,6 +378,16 @@ impl SimulatorSession {
             return Err(digital_crown_error());
         }
         self.inner.native.rotate_crown(delta)
+    }
+
+    pub fn send_scroll(&self, delta_x: f64, delta_y: f64, x: f64, y: f64) -> Result<(), AppError> {
+        self.mark_activity();
+        if self.is_tvos() {
+            return Err(AppError::bad_request(
+                "tvOS simulators do not support direct scroll wheel input. Use Enter and arrow keys instead.",
+            ));
+        }
+        self.inner.native.send_scroll(delta_x, delta_y, x, y)
     }
 
     pub fn open_app_switcher(&self) -> Result<(), AppError> {

@@ -174,6 +174,13 @@ Performance query parameters:
 
 For normal clients, copy the browser behavior instead of hand-coding a raw decoder. The UI uses the WebRTC offer endpoint for live video. Android emulator IDs use the same WebRTC endpoint; their H.264 frames are produced from the emulator `-share-vid` display surface, not screenshot polling.
 
+The input/control WebSocket accepts JSON control messages with camelCase fields,
+including `touch`, `edgeTouch`, `multiTouch`, `key`, `button`, `crown`,
+`scroll`, `home`, `appSwitcher`, and rotation controls. Native iOS scroll wheel
+input uses `{ "type": "scroll", "deltaX": 0, "deltaY": 24, "x": 0.5, "y": 0.5 }`,
+where `x` and `y` are optional normalized screen coordinates from `0.0` to
+`1.0`. Touch-like messages use normalized screen coordinates too.
+
 Minimal WebRTC request:
 
 ```json

@@ -54,6 +54,12 @@ typedef void (^XCWPrivateSimulatorEncodedFrameHandler)(NSData *sampleData,
                                  phase:(NSString *)phase
                                  error:(NSError * _Nullable * _Nullable)error;
 
+- (BOOL)sendScrollWithDeltaX:(double)deltaX
+                      deltaY:(double)deltaY
+                 normalizedX:(double)normalizedX
+                 normalizedY:(double)normalizedY
+                       error:(NSError * _Nullable * _Nullable)error;
+
 - (BOOL)sendKeyCode:(uint16_t)keyCode
           modifiers:(NSUInteger)modifiers
               error:(NSError * _Nullable * _Nullable)error;

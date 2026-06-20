@@ -1238,6 +1238,35 @@ impl NativeSession {
         }
     }
 
+    pub fn send_scroll(
+        &self,
+        delta_x: f64,
+        delta_y: f64,
+        normalized_x: f64,
+        normalized_y: f64,
+    ) -> Result<(), AppError> {
+        if !delta_x.is_finite() || !delta_y.is_finite() {
+            return Err(AppError::bad_request("Scroll deltas must be finite."));
+        }
+        if !normalized_x.is_finite() || !normalized_y.is_finite() {
+            return Err(AppError::bad_request("Scroll coordinates must be finite."));
+        }
+        unsafe {
+            let mut error = ptr::null_mut();
+            bool_result(
+                ffi::xcw_native_session_send_scroll(
+                    self.handle,
+                    delta_x,
+                    delta_y,
+                    normalized_x,
+                    normalized_y,
+                    &mut error,
+                ),
+                error,
+            )
+        }
+    }
+
     pub fn open_app_switcher(&self) -> Result<(), AppError> {
         unsafe {
             let mut error = ptr::null_mut();

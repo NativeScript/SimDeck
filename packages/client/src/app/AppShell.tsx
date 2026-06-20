@@ -44,6 +44,7 @@ import type {
 } from "../api/types";
 import { AccessibilityInspector } from "../features/accessibility/AccessibilityInspector";
 import { DevToolsPanel } from "../features/devtools/DevToolsPanel";
+import { normalizedClientCoordinates } from "../features/input/gestureMath";
 import { isEditableTarget } from "../features/input/keycodes";
 import { useKeyboardInput } from "../features/input/useKeyboardInput";
 import { usePointerInput } from "../features/input/usePointerInput";
@@ -71,6 +72,7 @@ import type {
   Point,
   Size,
   TouchIndicator,
+  TouchPreviewPoint,
   ViewMode,
 } from "../features/viewport/types";
 import { useViewportLayout } from "../features/viewport/useViewportLayout";
@@ -84,6 +86,7 @@ import {
   computeChromeBackingRect,
   computeChromeScreenBorderRadius,
   computeChromeScreenRect,
+  mapDisplayedPointToNaturalOrientation,
   normalizeQuarterTurns,
   screenAspectRatio,
   shellSize,
@@ -104,6 +107,7 @@ import {
   HIERARCHY_VISIBLE_STORAGE_KEY,
   nextAccessibilitySourcePreference,
   readPersistedUiState,
+  readStoredAccessibilitySkeletonMode,
   readStoredAccessibilitySource,
   readStoredFlag,
   sanitizeAccessibilitySources,
@@ -111,18 +115,32 @@ import {
   TOUCH_OVERLAY_VISIBLE_STORAGE_KEY,
   viewportStateForUDID,
   writePersistedUiState,
+  writeStoredAccessibilitySkeletonMode,
   writeStoredFlag,
 } from "./uiState";
 import { isMoveControlMessage } from "./controlMessages";
 
 const ACCESSIBILITY_REFRESH_MS = 1500;
+const ACCESSIBILITY_SKELETON_REFRESH_MS = 500;
 const REACT_NATIVE_ACCESSIBILITY_REFRESH_MS = 500;
 const FLUTTER_ACCESSIBILITY_REFRESH_MS = 1000;
 const ACCESSIBILITY_BACKGROUND_REFRESH_MS = 3000;
 const ANDROID_METADATA_REFRESH_MS = 1000;
+const BROWSER_EDGE_GESTURE_WIDTH = 32;
+const BROWSER_EDGE_GESTURE_MIN_DELTA = 8;
+const SAFARI_SCREEN_GESTURE_INITIAL_SPREAD = 0.28;
+const SAFARI_SCREEN_GESTURE_MIN_SCALE = 0.25;
+const SAFARI_SCREEN_GESTURE_MAX_SCALE = 4;
+const REAL_MULTITOUCH_GESTURE_GRACE_MS = 120;
+const NATIVE_SCROLL_DELTA_SCALE = 4;
+const NATIVE_SCROLL_MAX_DELTA = 180;
 const DEFAULT_ACCESSIBILITY_MAX_DEPTH = 10;
 const LOGICAL_INSPECTOR_MAX_DEPTH = 80;
 const FLUTTER_INSPECTOR_MAX_DEPTH = 48;
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
 const AUTH_REQUIRED_MESSAGE = "SimDeck API access token is required.";
 const NOT_CONNECTED_MESSAGE = "Not connected";
 const LOCAL_STREAM_DEFAULTS: StreamConfig = {
@@ -407,6 +425,20 @@ type AppInstallState = {
   phase: "dragging" | "installing" | "installed";
 };
 
+type SafariScreenGesturePair = {
+  first: Point;
+  second: Point;
+  firstPreview: TouchPreviewPoint;
+  secondPreview: TouchPreviewPoint;
+};
+
+type SafariScreenGestureState = {
+  blockedByPointerInput: boolean;
+  lastPair: SafariScreenGesturePair | null;
+  screenElement: HTMLElement;
+  startRotationDegrees: number;
+};
+
 type CaptureStatus = {
   busy: boolean;
   label: string;
@@ -529,6 +561,9 @@ export function AppShell({
     useState<AccessibilitySource[]>([]);
   const [accessibilityPreferredSource, setAccessibilityPreferredSource] =
     useState<AccessibilitySourcePreference>(readStoredAccessibilitySource);
+  const [accessibilitySkeletonMode, setAccessibilitySkeletonMode] = useState(
+    readStoredAccessibilitySkeletonMode,
+  );
   const [zoomAnimating, setZoomAnimating] = useState(false);
   const [touchOverlayVisible, setTouchOverlayVisible] = useState(() =>
     readStoredFlag(TOUCH_OVERLAY_VISIBLE_STORAGE_KEY, true),
@@ -572,6 +607,12 @@ export function AppShell({
   const zoomAnimationTimeoutRef = useRef<number>(0);
   const touchIndicatorTimeoutRef = useRef<number>(0);
   const gestureStartZoomRef = useRef(1);
+  const screenGestureRef = useRef<SafariScreenGestureState | null>(null);
+  const recentPointerInputMultiTouchAtRef = useRef(0);
+  const cancelPointerGestureForScreenGestureRef = useRef<() => void>(() => {});
+  const scrollAccumulatorRef = useRef<Point>({ x: 0, y: 0 });
+  const scrollFrameRef = useRef<number>(0);
+  const scrollPointRef = useRef<Point>({ x: 0.5, y: 0.5 });
   const effectiveZoomRef = useRef(initialViewportState.zoom ?? 1);
   const panRef = useRef<Point>(initialViewportState.pan);
   const applyZoomAtClientPointRef = useRef<
@@ -612,6 +653,15 @@ export function AppShell({
 
   const handleZoomDockRef = useCallback((node: HTMLDivElement | null) => {
     setZoomDockElement(node);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (scrollFrameRef.current !== 0) {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+        scrollFrameRef.current = 0;
+      }
+    };
   }, []);
 
   const searchNeedle = search.trim().toLowerCase();
@@ -1102,6 +1152,10 @@ export function AppShell({
     writeStoredFlag(DEVICE_CHROME_VISIBLE_STORAGE_KEY, deviceChromeVisible);
   }, [deviceChromeVisible]);
 
+  useEffect(() => {
+    writeStoredAccessibilitySkeletonMode(accessibilitySkeletonMode);
+  }, [accessibilitySkeletonMode]);
+
   const toggleDevTools = useCallback(() => {
     setDevToolsVisible((current) => !current);
   }, []);
@@ -1442,16 +1496,23 @@ export function AppShell({
     [accessibilityPreferredSource, updateAccessibilityRoots],
   );
 
+  const accessibilitySkeletonVisible =
+    accessibilitySource === "native-ax" &&
+    (accessibilitySkeletonMode === "always" ||
+      (accessibilitySkeletonMode === "auto" && hierarchyVisible));
+
   useEffect(() => {
-    const refreshMs = hierarchyVisible
-      ? accessibilityPreferredSource === "react-native" ||
-        accessibilitySource === "react-native"
-        ? REACT_NATIVE_ACCESSIBILITY_REFRESH_MS
-        : accessibilityPreferredSource === "flutter" ||
-            accessibilitySource === "flutter"
-          ? FLUTTER_ACCESSIBILITY_REFRESH_MS
-          : ACCESSIBILITY_REFRESH_MS
-      : ACCESSIBILITY_BACKGROUND_REFRESH_MS;
+    const refreshMs = accessibilitySkeletonVisible
+      ? ACCESSIBILITY_SKELETON_REFRESH_MS
+      : hierarchyVisible
+        ? accessibilityPreferredSource === "react-native" ||
+          accessibilitySource === "react-native"
+          ? REACT_NATIVE_ACCESSIBILITY_REFRESH_MS
+          : accessibilityPreferredSource === "flutter" ||
+              accessibilitySource === "flutter"
+            ? FLUTTER_ACCESSIBILITY_REFRESH_MS
+            : ACCESSIBILITY_REFRESH_MS
+        : ACCESSIBILITY_BACKGROUND_REFRESH_MS;
     let disposed = false;
     let timeout: number | null = null;
     const refreshLoop = async () => {
@@ -1475,6 +1536,7 @@ export function AppShell({
   }, [
     accessibilityPreferredSource,
     accessibilitySource,
+    accessibilitySkeletonVisible,
     hierarchyVisible,
     loadAccessibilityTree,
   ]);
@@ -1793,6 +1855,101 @@ export function AppShell({
   }, []);
 
   useEffect(() => {
+    let edgeTouch: {
+      identifier: number;
+      startX: number;
+      startY: number;
+    } | null = null;
+
+    function touchByIdentifier(touches: TouchList, identifier: number) {
+      for (let index = 0; index < touches.length; index += 1) {
+        const touch = touches.item(index);
+        if (touch?.identifier === identifier) {
+          return touch;
+        }
+      }
+      return null;
+    }
+
+    function handleDocumentTouchStart(event: TouchEvent) {
+      if (event.touches.length !== 1) {
+        edgeTouch = null;
+        return;
+      }
+      const touch = event.touches.item(0);
+      if (!touch) {
+        edgeTouch = null;
+        return;
+      }
+      const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+      const fromHorizontalEdge =
+        touch.clientX <= BROWSER_EDGE_GESTURE_WIDTH ||
+        touch.clientX >= viewportWidth - BROWSER_EDGE_GESTURE_WIDTH;
+      edgeTouch = fromHorizontalEdge
+        ? {
+            identifier: touch.identifier,
+            startX: touch.clientX,
+            startY: touch.clientY,
+          }
+        : null;
+    }
+
+    function handleDocumentTouchMove(event: TouchEvent) {
+      if (!edgeTouch) {
+        return;
+      }
+      const touch = touchByIdentifier(event.touches, edgeTouch.identifier);
+      if (!touch) {
+        edgeTouch = null;
+        return;
+      }
+      const deltaX = touch.clientX - edgeTouch.startX;
+      const deltaY = touch.clientY - edgeTouch.startY;
+      if (
+        Math.abs(deltaX) >= BROWSER_EDGE_GESTURE_MIN_DELTA &&
+        Math.abs(deltaX) > Math.abs(deltaY)
+      ) {
+        event.preventDefault();
+      }
+    }
+
+    function clearDocumentEdgeTouch() {
+      edgeTouch = null;
+    }
+
+    document.addEventListener("touchstart", handleDocumentTouchStart, {
+      capture: true,
+      passive: false,
+    });
+    document.addEventListener("touchmove", handleDocumentTouchMove, {
+      capture: true,
+      passive: false,
+    });
+    document.addEventListener("touchend", clearDocumentEdgeTouch, {
+      capture: true,
+      passive: true,
+    });
+    document.addEventListener("touchcancel", clearDocumentEdgeTouch, {
+      capture: true,
+      passive: true,
+    });
+    return () => {
+      document.removeEventListener("touchstart", handleDocumentTouchStart, {
+        capture: true,
+      });
+      document.removeEventListener("touchmove", handleDocumentTouchMove, {
+        capture: true,
+      });
+      document.removeEventListener("touchend", clearDocumentEdgeTouch, {
+        capture: true,
+      });
+      document.removeEventListener("touchcancel", clearDocumentEdgeTouch, {
+        capture: true,
+      });
+    };
+  }, []);
+
+  useEffect(() => {
     if (!touchOverlayVisible) {
       setTouchIndicators([]);
     }
@@ -1847,6 +2004,7 @@ export function AppShell({
       if (!selectedSimulator) {
         return;
       }
+      recentPointerInputMultiTouchAtRef.current = performance.now();
       if (phase === "began" && accessibilitySelectedId) {
         setAccessibilitySelectedId("");
         setAccessibilityHoveredId(null);
@@ -1867,6 +2025,8 @@ export function AppShell({
     rotationQuarterTurns: viewportRotationQuarterTurns,
     setPan,
   });
+  cancelPointerGestureForScreenGestureRef.current =
+    pointerInput.cancelActiveGestureForExternalMultiTouch;
 
   const pairingRequired =
     !remoteStream &&
@@ -2421,6 +2581,42 @@ export function AppShell({
     applyZoomAtClientPointRef.current = applyZoomAtClientPoint;
   });
 
+  function screenElementForWheel(event: React.WheelEvent<HTMLElement>) {
+    const target = event.target;
+    return target instanceof Element
+      ? (target.closest(".device-screen") as HTMLElement | null)
+      : null;
+  }
+
+  function handleNativeScreenWheel(
+    event: React.WheelEvent<HTMLElement>,
+    deltaX: number,
+    deltaY: number,
+  ): boolean {
+    const screenElement = screenElementForWheel(event);
+    if (!screenElement || !selectedSimulator?.isBooted) {
+      return false;
+    }
+    if (deltaX === 0 && deltaY === 0) {
+      return true;
+    }
+
+    const displayedPoint = normalizedClientCoordinates(
+      screenElement,
+      event.clientX,
+      event.clientY,
+      { clamp: true },
+    );
+    const screenPoint = mapDisplayedPointToNaturalOrientation(
+      displayedPoint ?? { x: 0.5, y: 0.5 },
+      viewportRotationQuarterTurns,
+    );
+    setAccessibilitySelectedId("");
+    setAccessibilityHoveredId(null);
+    sendScrollWheel(deltaX, deltaY, screenPoint.x, screenPoint.y);
+    return true;
+  }
+
   function handleViewportWheel(event: React.WheelEvent<HTMLElement>) {
     if (!selectedSimulator) {
       return;
@@ -2448,6 +2644,10 @@ export function AppShell({
       return;
     }
 
+    if (handleNativeScreenWheel(event, deltaX, deltaY)) {
+      return;
+    }
+
     setPan(
       (currentPan) =>
         nextViewportWheelPanState({
@@ -2467,22 +2667,53 @@ export function AppShell({
     );
   }
 
-  function showTouchIndicator(phase: TouchPhase, coords: Point) {
+  function showTouchIndicator(phase: TouchPhase, coords: TouchPreviewPoint) {
     showTouchIndicators(phase, [coords]);
   }
 
-  function showTouchIndicators(phase: TouchPhase, coords: Point[]) {
+  function showTouchIndicators(phase: TouchPhase, coords: TouchPreviewPoint[]) {
     if (!touchOverlayVisible) {
       return;
     }
 
+    const canvasElement = outerCanvasRef.current ?? outerCanvasElement;
+    const canvasRect = canvasElement?.getBoundingClientRect() ?? null;
     setTouchIndicators(
-      coords.map((coord, index) => ({
-        id: index + 1,
-        phase,
-        x: coord.x,
-        y: coord.y,
-      })),
+      coords.map((coord, index) => {
+        if (
+          canvasRect &&
+          Number.isFinite(coord.pageX) &&
+          Number.isFinite(coord.pageY)
+        ) {
+          return {
+            id: index + 1,
+            phase,
+            space: "canvas",
+            x: (coord.pageX ?? 0) - (canvasRect.left + window.scrollX),
+            y: (coord.pageY ?? 0) - (canvasRect.top + window.scrollY),
+          };
+        }
+        if (
+          canvasRect &&
+          Number.isFinite(coord.clientX) &&
+          Number.isFinite(coord.clientY)
+        ) {
+          return {
+            id: index + 1,
+            phase,
+            space: "canvas",
+            x: (coord.clientX ?? 0) - canvasRect.left,
+            y: (coord.clientY ?? 0) - canvasRect.top,
+          };
+        }
+        return {
+          id: index + 1,
+          phase,
+          space: "screen",
+          x: coord.x,
+          y: coord.y,
+        };
+      }),
     );
     if (touchIndicatorTimeoutRef.current) {
       clearTimeout(touchIndicatorTimeoutRef.current);
@@ -2505,15 +2736,240 @@ export function AppShell({
     type WebKitGestureEvent = Event & {
       clientX?: number;
       clientY?: number;
+      rotation?: number;
       scale?: number;
     };
 
+    function finiteGestureNumber(value: number | undefined, fallback: number) {
+      return typeof value === "number" && Number.isFinite(value)
+        ? value
+        : fallback;
+    }
+
+    function currentBrowserTimestamp() {
+      return performance.now();
+    }
+
+    function clampSafariGestureScale(value: number | undefined) {
+      return Math.min(
+        Math.max(
+          finiteGestureNumber(value, 1),
+          SAFARI_SCREEN_GESTURE_MIN_SCALE,
+        ),
+        SAFARI_SCREEN_GESTURE_MAX_SCALE,
+      );
+    }
+
+    function screenElementForGesture(event: Event): HTMLElement | null {
+      const target = event.target;
+      return target instanceof Element
+        ? (target.closest(".device-screen") as HTMLElement | null)
+        : null;
+    }
+
+    function screenGestureAnchor(
+      screenElement: HTMLElement,
+      event: Event,
+    ): Point & { clientX: number; clientY: number } {
+      const gestureEvent = event as WebKitGestureEvent;
+      const screenRect = screenElement.getBoundingClientRect();
+      let clientX = finiteGestureNumber(
+        gestureEvent.clientX,
+        screenRect.left + screenRect.width / 2,
+      );
+      let clientY = finiteGestureNumber(
+        gestureEvent.clientY,
+        screenRect.top + screenRect.height / 2,
+      );
+      let displayed = normalizedClientCoordinates(
+        screenElement,
+        clientX,
+        clientY,
+        {
+          clamp: false,
+        },
+      );
+      if (
+        !displayed ||
+        displayed.x < -0.25 ||
+        displayed.x > 1.25 ||
+        displayed.y < -0.25 ||
+        displayed.y > 1.25
+      ) {
+        clientX = screenRect.left + screenRect.width / 2;
+        clientY = screenRect.top + screenRect.height / 2;
+        displayed = normalizedClientCoordinates(
+          screenElement,
+          clientX,
+          clientY,
+          {
+            clamp: false,
+          },
+        ) ?? { x: 0.5, y: 0.5 };
+      }
+      return {
+        ...displayed,
+        clientX,
+        clientY,
+      };
+    }
+
+    function previewPointFromClient(
+      screenElement: HTMLElement,
+      clientX: number,
+      clientY: number,
+    ): TouchPreviewPoint | null {
+      const displayed = normalizedClientCoordinates(
+        screenElement,
+        clientX,
+        clientY,
+        {
+          clamp: false,
+        },
+      );
+      return displayed
+        ? {
+            ...displayed,
+            clientX,
+            clientY,
+            pageX: clientX + window.scrollX,
+            pageY: clientY + window.scrollY,
+          }
+        : null;
+    }
+
+    function screenGesturePairFromEvent(
+      screenElement: HTMLElement,
+      event: Event,
+      startRotationDegrees: number,
+    ): SafariScreenGesturePair | null {
+      const gestureEvent = event as WebKitGestureEvent;
+      const screenRect = screenElement.getBoundingClientRect();
+      const anchor = screenGestureAnchor(screenElement, event);
+      const minScreenPixels = Math.max(
+        1,
+        Math.min(screenRect.width, screenRect.height),
+      );
+      const scale = clampSafariGestureScale(gestureEvent.scale);
+      const rotationDegrees =
+        finiteGestureNumber(gestureEvent.rotation, startRotationDegrees) -
+        startRotationDegrees;
+      const radians = (rotationDegrees * Math.PI) / 180;
+      const halfSpreadPixels =
+        (minScreenPixels * SAFARI_SCREEN_GESTURE_INITIAL_SPREAD * scale) / 2;
+      const offsetX = Math.cos(radians) * halfSpreadPixels;
+      const offsetY = Math.sin(radians) * halfSpreadPixels;
+      const firstPreview = previewPointFromClient(
+        screenElement,
+        anchor.clientX + offsetX,
+        anchor.clientY + offsetY,
+      );
+      const secondPreview = previewPointFromClient(
+        screenElement,
+        anchor.clientX - offsetX,
+        anchor.clientY - offsetY,
+      );
+      if (!firstPreview || !secondPreview) {
+        return null;
+      }
+      return {
+        first: mapDisplayedPointToNaturalOrientation(
+          firstPreview,
+          viewportRotationQuarterTurns,
+        ),
+        second: mapDisplayedPointToNaturalOrientation(
+          secondPreview,
+          viewportRotationQuarterTurns,
+        ),
+        firstPreview,
+        secondPreview,
+      };
+    }
+
+    function sendScreenGestureMultiTouch(
+      phase: TouchPhase,
+      state: SafariScreenGestureState,
+      event: Event,
+    ) {
+      if (!selectedSimulator?.isBooted) {
+        return false;
+      }
+      const pair =
+        screenGesturePairFromEvent(
+          state.screenElement,
+          event,
+          state.startRotationDegrees,
+        ) ?? state.lastPair;
+      if (!pair) {
+        return false;
+      }
+      state.lastPair = pair;
+      if (phase === "began" && accessibilitySelectedId) {
+        setAccessibilitySelectedId("");
+        setAccessibilityHoveredId(null);
+      }
+      showTouchIndicators(phase, [pair.firstPreview, pair.secondPreview]);
+      sendControl(selectedSimulator.udid, {
+        type: "multiTouch",
+        x1: pair.first.x,
+        y1: pair.first.y,
+        x2: pair.second.x,
+        y2: pair.second.y,
+        phase,
+      });
+      return true;
+    }
+
     function handleGestureStart(event: Event) {
+      const screenElement = screenElementForGesture(event);
+      if (screenElement) {
+        event.preventDefault();
+        event.stopPropagation();
+        const gestureEvent = event as WebKitGestureEvent;
+        const blockedByPointerInput =
+          currentBrowserTimestamp() -
+            recentPointerInputMultiTouchAtRef.current <
+          REAL_MULTITOUCH_GESTURE_GRACE_MS;
+        const startRotationDegrees = finiteGestureNumber(
+          gestureEvent.rotation,
+          0,
+        );
+        const pair = screenGesturePairFromEvent(
+          screenElement,
+          event,
+          startRotationDegrees,
+        );
+        const state: SafariScreenGestureState = {
+          blockedByPointerInput,
+          lastPair: pair,
+          screenElement,
+          startRotationDegrees,
+        };
+        screenGestureRef.current = state;
+        if (blockedByPointerInput || !pair || !selectedSimulator?.isBooted) {
+          return;
+        }
+        cancelPointerGestureForScreenGestureRef.current();
+        sendScreenGestureMultiTouch("began", state, event);
+        return;
+      }
+
+      screenGestureRef.current = null;
       event.preventDefault();
       gestureStartZoomRef.current = effectiveZoomRef.current;
     }
 
     function handleGestureChange(event: Event) {
+      const screenGesture = screenGestureRef.current;
+      if (screenGesture) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!screenGesture.blockedByPointerInput) {
+          sendScreenGestureMultiTouch("moved", screenGesture, event);
+        }
+        return;
+      }
+
       event.preventDefault();
       const gestureEvent = event as WebKitGestureEvent;
       const bounds = canvasElement.getBoundingClientRect();
@@ -2524,17 +2980,41 @@ export function AppShell({
       );
     }
 
+    function handleGestureEnd(event: Event) {
+      const screenGesture = screenGestureRef.current;
+      if (screenGesture) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!screenGesture.blockedByPointerInput) {
+          sendScreenGestureMultiTouch("ended", screenGesture, event);
+        }
+        screenGestureRef.current = null;
+        return;
+      }
+
+      event.preventDefault();
+    }
+
     canvasElement.addEventListener("gesturestart", handleGestureStart, {
       passive: false,
     });
     canvasElement.addEventListener("gesturechange", handleGestureChange, {
       passive: false,
     });
+    canvasElement.addEventListener("gestureend", handleGestureEnd, {
+      passive: false,
+    });
     return () => {
       canvasElement.removeEventListener("gesturestart", handleGestureStart);
       canvasElement.removeEventListener("gesturechange", handleGestureChange);
+      canvasElement.removeEventListener("gestureend", handleGestureEnd);
     };
-  }, [outerCanvasElement]);
+  }, [
+    accessibilitySelectedId,
+    outerCanvasElement,
+    selectedSimulator,
+    viewportRotationQuarterTurns,
+  ]);
 
   function promptForURL() {
     if (!selectedSimulator) {
@@ -2624,6 +3104,95 @@ export function AppShell({
       !sendControl(selectedSimulator.udid, {
         type: "crown",
         delta,
+      })
+    ) {
+      setLocalError("Simulator control stream disconnected.");
+    }
+  }
+
+  function flushScrollWheel() {
+    scrollFrameRef.current = 0;
+    const accumulated = scrollAccumulatorRef.current;
+    scrollAccumulatorRef.current = { x: 0, y: 0 };
+    if (accumulated.x === 0 && accumulated.y === 0) {
+      return;
+    }
+
+    const deltaX = clampNumber(
+      accumulated.x,
+      -NATIVE_SCROLL_MAX_DELTA,
+      NATIVE_SCROLL_MAX_DELTA,
+    );
+    const deltaY = clampNumber(
+      accumulated.y,
+      -NATIVE_SCROLL_MAX_DELTA,
+      NATIVE_SCROLL_MAX_DELTA,
+    );
+    const remainingX = accumulated.x - deltaX;
+    const remainingY = accumulated.y - deltaY;
+    if (remainingX !== 0 || remainingY !== 0) {
+      scrollAccumulatorRef.current = { x: remainingX, y: remainingY };
+      scrollFrameRef.current = window.requestAnimationFrame(flushScrollWheel);
+    }
+
+    sendScrollWheelNow(
+      deltaX,
+      deltaY,
+      scrollPointRef.current.x,
+      scrollPointRef.current.y,
+    );
+  }
+
+  function sendScrollWheel(
+    deltaX: number,
+    deltaY: number,
+    x: number,
+    y: number,
+  ) {
+    if (
+      !Number.isFinite(deltaX) ||
+      !Number.isFinite(deltaY) ||
+      (deltaX === 0 && deltaY === 0)
+    ) {
+      return;
+    }
+
+    scrollPointRef.current = {
+      x: Number.isFinite(x) ? clampNumber(x, 0, 1) : 0.5,
+      y: Number.isFinite(y) ? clampNumber(y, 0, 1) : 0.5,
+    };
+    scrollAccumulatorRef.current = {
+      x: scrollAccumulatorRef.current.x + deltaX * NATIVE_SCROLL_DELTA_SCALE,
+      y: scrollAccumulatorRef.current.y + deltaY * NATIVE_SCROLL_DELTA_SCALE,
+    };
+    if (scrollFrameRef.current === 0) {
+      scrollFrameRef.current = window.requestAnimationFrame(flushScrollWheel);
+    }
+  }
+
+  function sendScrollWheelNow(
+    deltaX: number,
+    deltaY: number,
+    x: number,
+    y: number,
+  ) {
+    if (
+      !selectedSimulator ||
+      !Number.isFinite(deltaX) ||
+      !Number.isFinite(deltaY) ||
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      (deltaX === 0 && deltaY === 0)
+    ) {
+      return;
+    }
+    if (
+      !sendControl(selectedSimulator.udid, {
+        type: "scroll",
+        deltaX,
+        deltaY,
+        x: clampNumber(x, 0, 1),
+        y: clampNumber(y, 0, 1),
       })
     ) {
       setLocalError("Simulator control stream disconnected.");
@@ -2890,6 +3459,7 @@ export function AppShell({
         type="file"
       />
       <Toolbar
+        accessibilitySkeletonMode={accessibilitySkeletonMode}
         captureBusy={Boolean(captureStatus?.busy)}
         canInstallApp={canInstallApp}
         closeMenu={() => setMenuOpen(false)}
@@ -3012,6 +3582,7 @@ export function AppShell({
         onToggleTouchOverlay={() =>
           setTouchOverlayVisible((current) => !current)
         }
+        onAccessibilitySkeletonModeChange={setAccessibilitySkeletonMode}
         recordingActive={screenRecording?.phase === "recording"}
         recordingStopping={screenRecording?.phase === "stopping"}
         remoteStream={remoteStream}
@@ -3083,6 +3654,7 @@ export function AppShell({
         accessibilityPickerActive={accessibilityPickerActive}
         accessibilityRoots={accessibilityRoots}
         accessibilitySelectedId={accessibilitySelectedId}
+        accessibilitySkeletonVisible={accessibilitySkeletonVisible}
         chromeLoaded={chromeLoaded}
         chromeProfile={viewportChromeProfile}
         chromeRequired={chromeRequired}
@@ -3120,6 +3692,14 @@ export function AppShell({
         onAppInstallDragOver={handleAppInstallDragOver}
         onAppInstallDrop={handleAppInstallDrop}
         onChromeButtonEvent={sendHardwareButtonEvent}
+        onBottomBezelPointerCancel={pointerInput.handleBottomBezelPointerCancel}
+        onBottomBezelPointerDown={pointerInput.handleBottomBezelPointerDown}
+        onBottomBezelPointerMove={pointerInput.handleBottomBezelPointerMove}
+        onBottomBezelPointerUp={pointerInput.handleBottomBezelPointerUp}
+        onBottomBezelTouchCancel={pointerInput.handleBottomBezelTouchCancel}
+        onBottomBezelTouchEnd={pointerInput.handleBottomBezelTouchEnd}
+        onBottomBezelTouchMove={pointerInput.handleBottomBezelTouchMove}
+        onBottomBezelTouchStart={pointerInput.handleBottomBezelTouchStart}
         onPanPointerMove={pointerInput.handlePanPointerMove}
         onPanPointerUp={pointerInput.handlePanPointerUp}
         onPickerHover={setAccessibilityHoveredId}
@@ -3133,6 +3713,10 @@ export function AppShell({
         onScreenPointerDown={pointerInput.handleScreenPointerDown}
         onScreenPointerMove={pointerInput.handleScreenPointerMove}
         onScreenPointerUp={pointerInput.handleScreenPointerUp}
+        onScreenTouchCancel={pointerInput.handleScreenTouchCancel}
+        onScreenTouchEnd={pointerInput.handleScreenTouchEnd}
+        onScreenTouchMove={pointerInput.handleScreenTouchMove}
+        onScreenTouchStart={pointerInput.handleScreenTouchStart}
         onStartPanning={pointerInput.startPanning}
         onViewportWheel={handleViewportWheel}
         onZoomActual={() =>

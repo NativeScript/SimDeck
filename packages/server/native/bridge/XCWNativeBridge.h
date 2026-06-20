@@ -99,6 +99,7 @@ bool xcw_native_session_press_home(void * _Nonnull handle, char * _Nullable * _N
 bool xcw_native_session_press_button(void * _Nonnull handle, const char * _Nonnull button_name, uint32_t duration_ms, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_send_button(void * _Nonnull handle, const char * _Nonnull button_name, bool pressed, bool has_usage, uint32_t usage_page, uint32_t usage, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_rotate_crown(void * _Nonnull handle, double delta, char * _Nullable * _Nullable error_message);
+bool xcw_native_session_send_scroll(void * _Nonnull handle, double delta_x, double delta_y, double normalized_x, double normalized_y, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_open_app_switcher(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_rotate_right(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 bool xcw_native_session_rotate_left(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
