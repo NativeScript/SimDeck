@@ -1,8 +1,9 @@
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::ffi::CStr;
+use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -17,6 +18,80 @@ pub struct Config {
     pub client_root: PathBuf,
     pub video_codec: String,
     pub low_latency: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserConfig {
+    #[serde(default)]
+    pub service: UserServiceConfig,
+    #[serde(default)]
+    pub android: UserAndroidConfig,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserServiceConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserAndroidConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emulator_args: Vec<String>,
+    #[serde(default = "default_android_disable_audio")]
+    pub disable_audio: bool,
+}
+
+impl Default for UserAndroidConfig {
+    fn default() -> Self {
+        Self {
+            emulator_args: Vec::new(),
+            disable_audio: default_android_disable_audio(),
+        }
+    }
+}
+
+impl UserConfig {
+    pub fn load() -> anyhow::Result<Self> {
+        let path = user_config_path();
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let data = fs::read_to_string(&path)
+            .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
+        let config = serde_json::from_str::<Self>(&data)
+            .map_err(|error| anyhow::anyhow!("parse {}: {error}", path.display()))?;
+        config.validate(&path)?;
+        Ok(config)
+    }
+
+    fn validate(&self, path: &Path) -> anyhow::Result<()> {
+        if let Some(port) = self.service.port {
+            if port < 1024 {
+                anyhow::bail!("{} service.port must be 1024 or higher.", path.display());
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn user_config_path() -> PathBuf {
+    simdeck_user_state_dir().join("config.json")
+}
+
+pub fn simdeck_user_state_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|home| home.join(".simdeck"))
+        .unwrap_or_else(|| std::env::temp_dir().join("simdeck"))
+}
+
+fn default_android_disable_audio() -> bool {
+    true
 }
 
 impl Config {
@@ -167,7 +242,9 @@ fn parse_io_platform_uuid(output: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{host_identity_from_source, parse_io_platform_uuid, Config, ServerKind};
+    use super::{
+        host_identity_from_source, parse_io_platform_uuid, Config, ServerKind, UserConfig,
+    };
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::path::PathBuf;
 
@@ -251,5 +328,24 @@ mod tests {
             parse_io_platform_uuid(output).as_deref(),
             Some("01234567-89AB-CDEF-0123-456789ABCDEF")
         );
+    }
+
+    #[test]
+    fn user_config_reads_service_and_android_defaults() {
+        let config: UserConfig = serde_json::from_str(
+            r#"{
+              "service": { "port": 4311 },
+              "android": {
+                "emulatorArgs": ["-no-snapshot"],
+                "disableAudio": false
+              }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.service.port, Some(4311));
+        assert_eq!(config.android.emulator_args, vec!["-no-snapshot"]);
+        assert!(!config.android.disable_audio);
+        assert!(UserConfig::default().android.disable_audio);
     }
 }

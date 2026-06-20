@@ -211,6 +211,11 @@ export interface SimulatorResponse {
   simulator: SimulatorMetadata;
 }
 
+export interface BootPayload {
+  androidEmulatorArgs?: string[];
+  androidDisableAudio?: boolean;
+}
+
 export interface InstallUploadResponse {
   action: "install";
   fileName: string;

@@ -81,7 +81,7 @@ use anyhow::Context;
 use api::routes::{router, AppState};
 use axum::Router;
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
-use config::{Config, ServerKind};
+use config::{Config, ServerKind, UserConfig};
 use inspector::{InspectorHub, InspectorRegistryAdvertisement};
 use logs::LogRegistry;
 use metrics::counters::Metrics;
@@ -182,7 +182,7 @@ enum Command {
     Pair {
         #[arg(
             long,
-            help = "Defaults to the existing service port, or 4310 when the service is not installed"
+            help = "Defaults to the existing service port, configured service.port, or 4310"
         )]
         port: Option<u16>,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::UNSPECIFIED))]
@@ -235,6 +235,12 @@ enum Command {
     },
     Boot {
         udid: Option<String>,
+        #[arg(
+            long = "android-emulator-arg",
+            value_name = "ARG",
+            allow_hyphen_values = true
+        )]
+        android_emulator_args: Vec<String>,
     },
     Shutdown {
         udid: Option<String>,
@@ -651,8 +657,8 @@ enum MaestroCommand {
 #[derive(Subcommand)]
 enum ServiceCommand {
     Start {
-        #[arg(long, default_value_t = SERVICE_PORT)]
-        port: u16,
+        #[arg(long)]
+        port: Option<u16>,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
         #[arg(long)]
@@ -671,8 +677,8 @@ enum ServiceCommand {
         local_stream_fps: Option<u32>,
     },
     On {
-        #[arg(long, default_value_t = SERVICE_PORT)]
-        port: u16,
+        #[arg(long)]
+        port: Option<u16>,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
         #[arg(long)]
@@ -695,7 +701,7 @@ enum ServiceCommand {
     Restart {
         #[arg(
             long,
-            help = "Defaults to the existing service port, or 4310 when no service state exists"
+            help = "Defaults to the existing service port, configured service.port, or 4310"
         )]
         port: Option<u16>,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
@@ -716,8 +722,8 @@ enum ServiceCommand {
         local_stream_fps: Option<u32>,
     },
     Reset {
-        #[arg(long, default_value_t = SERVICE_PORT)]
-        port: u16,
+        #[arg(long)]
+        port: Option<u16>,
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         bind: IpAddr,
         #[arg(long)]
@@ -2783,6 +2789,14 @@ fn removed_service_process_name() -> String {
     ['d', 'a', 'e', 'm', 'o', 'n'].into_iter().collect()
 }
 
+fn android_boot_request_body(android_emulator_args: &[String]) -> Value {
+    if android_emulator_args.is_empty() {
+        Value::Null
+    } else {
+        serde_json::json!({ "androidEmulatorArgs": android_emulator_args })
+    }
+}
+
 fn run_no_command_action(action: NoCommandAction) -> anyhow::Result<()> {
     match action {
         NoCommandAction::Service(options) => run_default_service(options),
@@ -2790,9 +2804,15 @@ fn run_no_command_action(action: NoCommandAction) -> anyhow::Result<()> {
 }
 
 fn run_default_service(options: DefaultServiceLaunchOptions) -> anyhow::Result<()> {
+    let user_config = UserConfig::load()?;
     let selector = options.selector;
+    let port = if options.port_explicit {
+        options.port
+    } else {
+        user_config.service.port.unwrap_or(options.port)
+    };
     let launch_options = ServiceLaunchOptions {
-        port: options.port,
+        port,
         bind: options.bind,
         advertise_host: options.advertise_host,
         client_root: options.client_root,
@@ -2870,7 +2890,13 @@ fn service_restart_port(explicit_port: Option<u16>) -> anyhow::Result<u16> {
     if let Some(metadata) = read_service_metadata().ok().flatten() {
         return Ok(metadata.port);
     }
-    Ok(SERVICE_PORT)
+    Ok(UserConfig::load()?.service.port.unwrap_or(SERVICE_PORT))
+}
+
+fn configured_service_port(explicit_port: Option<u16>) -> anyhow::Result<u16> {
+    Ok(explicit_port
+        .or(UserConfig::load()?.service.port)
+        .unwrap_or(SERVICE_PORT))
 }
 
 struct PairGlobalServiceOptions {
@@ -2905,7 +2931,9 @@ fn pair_global_service(options: PairGlobalServiceOptions) -> anyhow::Result<()> 
     }
     let requested_port = match port {
         Some(port) => port,
-        None => service::installed_port()?.unwrap_or(SERVICE_PORT),
+        None => service::installed_port()?
+            .or(UserConfig::load()?.service.port)
+            .unwrap_or(SERVICE_PORT),
     };
     print_pair_progress(format!("requesting port {requested_port}"));
 
@@ -3822,6 +3850,7 @@ fn main() -> anyhow::Result<()> {
                 stream_quality,
                 local_stream_fps,
             } => {
+                let port = configured_service_port(port)?;
                 let (metadata, started) =
                     ensure_project_service_with_status(ServiceLaunchOptions {
                         port,
@@ -3853,6 +3882,7 @@ fn main() -> anyhow::Result<()> {
                 local_stream_fps,
                 access_token,
             } => {
+                let port = configured_service_port(port)?;
                 cleanup_orphaned_workspace_services_for_root(None);
                 service::enable(ServiceOptions {
                     port,
@@ -3913,6 +3943,7 @@ fn main() -> anyhow::Result<()> {
                 local_stream_fps,
                 access_token,
             } => {
+                let port = configured_service_port(port)?;
                 cleanup_orphaned_workspace_services_for_root(None);
                 let credentials = reset_project_service_credentials(access_token)?;
                 service::reset(ServiceOptions {
@@ -4031,15 +4062,22 @@ fn main() -> anyhow::Result<()> {
             }))?;
             Ok(())
         }
-        Command::Boot { udid } => {
+        Command::Boot {
+            udid,
+            android_emulator_args,
+        } => {
             let udid = resolve_device_udid(udid.as_deref())?;
             let service_url = command_service_url(explicit_server_url.as_deref())?;
-            service_post_ok(&service_url, &udid, "boot", &Value::Null)?;
+            let request_body = android_boot_request_body(&android_emulator_args);
+            service_post_ok(&service_url, &udid, "boot", &request_body)?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(
-                    &serde_json::json!({ "ok": true, "udid": udid, "action": "boot" })
-                )?
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "udid": udid,
+                    "action": "boot",
+                    "androidEmulatorArgs": android_emulator_args,
+                }))?
             );
             Ok(())
         }
@@ -6318,9 +6356,9 @@ fn default_client_root() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        batch_line_to_json_step, http_url_for_host, interactive_accessibility_snapshot,
-        is_tailscale_ip, maestro_commands_from_flow, maestro_selector,
-        new_project_service_credentials, no_command_action_from_args_slice,
+        android_boot_request_body, batch_line_to_json_step, http_url_for_host,
+        interactive_accessibility_snapshot, is_tailscale_ip, maestro_commands_from_flow,
+        maestro_selector, new_project_service_credentials, no_command_action_from_args_slice,
         normalize_accessibility_point_for_display, parse_maestro_flow_yaml, parse_maestro_point,
         parse_optional_udid_f64_args, parse_optional_udid_text_args,
         parse_optional_udid_value_args, parse_tap_command_args,
@@ -6574,7 +6612,7 @@ mod tests {
         else {
             panic!("expected service reset command");
         };
-        assert_eq!(port, 4315);
+        assert_eq!(port, Some(4315));
         assert_eq!(access_token.as_deref(), Some("explicit-token"));
     }
 
@@ -7242,10 +7280,15 @@ mod tests {
     #[test]
     fn device_commands_accept_omitted_udid() {
         let parsed = Cli::try_parse_from(["simdeck", "boot"]).unwrap();
-        let Command::Boot { udid } = parsed.command else {
+        let Command::Boot {
+            udid,
+            android_emulator_args,
+        } = parsed.command
+        else {
             panic!("expected boot command");
         };
         assert_eq!(udid, None);
+        assert!(android_emulator_args.is_empty());
 
         let parsed = Cli::try_parse_from(["simdeck", "home"]).unwrap();
         let Command::Home { udid } = parsed.command else {
@@ -7259,6 +7302,36 @@ mod tests {
         };
         assert_eq!(udid, None);
         assert!(stdout);
+    }
+
+    #[test]
+    fn boot_command_accepts_android_emulator_startup_args() {
+        let parsed = Cli::try_parse_from([
+            "simdeck",
+            "boot",
+            "android:Pixel_8_API_36",
+            "--android-emulator-arg=-no-snapshot",
+            "--android-emulator-arg=-gpu",
+            "--android-emulator-arg=host",
+        ])
+        .unwrap();
+
+        let Command::Boot {
+            udid,
+            android_emulator_args,
+        } = parsed.command
+        else {
+            panic!("expected boot command");
+        };
+
+        assert_eq!(udid.as_deref(), Some("android:Pixel_8_API_36"));
+        assert_eq!(android_emulator_args, vec!["-no-snapshot", "-gpu", "host"]);
+        assert_eq!(
+            android_boot_request_body(&android_emulator_args),
+            serde_json::json!({
+                "androidEmulatorArgs": ["-no-snapshot", "-gpu", "host"]
+            })
+        );
     }
 
     #[test]

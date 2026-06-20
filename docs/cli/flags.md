@@ -24,7 +24,7 @@ project default from `simdeck use <udid>`, then auto-inference from the service.
 Used by `simdeck`, `service start`, `service restart`, `service on`, and `service reset`.
 When `service restart` is run without `--port`, it preserves the installed
 LaunchAgent port or the current singleton service port before falling back to
-`4310`.
+the configured `~/.simdeck/config.json` service port and then `4310`.
 
 | Flag                         | Default        | Notes                                                                                                                  |
 | ---------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -40,6 +40,27 @@ LaunchAgent port or the current singleton service port before falling back to
 | `--open`                     | off            | Open the browser after starting the service                                                                            |
 | `--autostart` / `-a`         | off            | Register the service as a macOS LaunchAgent                                                                            |
 
+## Global config
+
+SimDeck reads optional user defaults from `~/.simdeck/config.json`:
+
+```json
+{
+  "service": {
+    "port": 4311
+  },
+  "android": {
+    "emulatorArgs": ["-no-snapshot"],
+    "disableAudio": true
+  }
+}
+```
+
+`service.port` applies when a service command omits `--port`. Command-line
+flags still win. `android.emulatorArgs` are prepended to Android boot request
+arguments, and `android.disableAudio` controls whether SimDeck adds
+`-no-audio` to managed Android emulator boots.
+
 ## `describe`
 
 Alias: `snapshot`.
@@ -53,6 +74,16 @@ Alias: `snapshot`.
 | `-i`, `--interactive` | Keep only actionable elements plus ancestors                                                                                                 |
 | `--point <x>,<y>`     | Describe the element at a screen point                                                                                                       |
 | `--direct`            | Skip service and use native accessibility directly                                                                                           |
+
+## Device lifecycle
+
+| Command | Useful flags                                                                                                            |
+| ------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `boot`  | `--android-emulator-arg=<arg>` for Android emulator startup flags; repeat once per argument, for example `-no-snapshot` |
+
+SimDeck reserves Android emulator target and stream flags such as `-avd`,
+`-ports`, and `-share-vid` so browser streaming remains attached to the
+selected emulator.
 
 ## Input
 

@@ -71,6 +71,7 @@ simdeck list
 simdeck list --format json
 simdeck use <UDID>
 simdeck boot <UDID>
+simdeck boot android:<AVD_NAME> --android-emulator-arg=-no-snapshot
 simdeck shutdown
 simdeck erase
 simdeck core-simulator restart
@@ -101,6 +102,9 @@ AVDs from the Android SDK.
 SimDeck-owned Android boots use the emulator shared-video surface plus
 `--android-gpu host` by default. Use `simdeck service restart --android-gpu auto`
 or `--android-gpu swiftshader_indirect` only when host GPU rendering is unstable.
+Optional user defaults live in `~/.simdeck/config.json`. Supported keys include
+`service.port`, `android.emulatorArgs`, and `android.disableAudio`; explicit
+CLI/API boot arguments still win for one-off runs.
 
 ## Fast agent inspection
 
