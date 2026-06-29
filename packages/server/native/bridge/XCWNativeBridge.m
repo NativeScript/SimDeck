@@ -156,6 +156,9 @@ static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
 
 - (instancetype)initWithFrameCallback:(xcw_native_frame_callback)callback
                              userData:(void *)userData;
+- (instancetype)initWithFrameCallback:(xcw_native_frame_callback)callback
+                             userData:(void *)userData
+                           videoCodec:(NSString *)videoCodec;
 - (BOOL)encodeRGBA:(const uint8_t *)rgba
             length:(size_t)length
              width:(uint32_t)width
@@ -167,6 +170,7 @@ static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
             height:(uint32_t)height
              error:(NSError * _Nullable __autoreleasing *)error;
 - (void)requestKeyFrame;
+- (NSDictionary *)statsRepresentation;
 - (void)invalidate;
 
 @end
@@ -180,6 +184,12 @@ static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
 
 - (instancetype)initWithFrameCallback:(xcw_native_frame_callback)callback
                              userData:(void *)userData {
+    return [self initWithFrameCallback:callback userData:userData videoCodec:nil];
+}
+
+- (instancetype)initWithFrameCallback:(xcw_native_frame_callback)callback
+                             userData:(void *)userData
+                           videoCodec:(NSString *)videoCodec {
     self = [super init];
     if (self == nil) {
         return nil;
@@ -193,7 +203,8 @@ static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
         char *previousCodecCopy = previousCodec != NULL ? strdup(previousCodec) : NULL;
         const char *previousRealtimeStream = getenv("SIMDECK_REALTIME_STREAM");
         char *previousRealtimeStreamCopy = previousRealtimeStream != NULL ? strdup(previousRealtimeStream) : NULL;
-        const char *androidCodec = getenv("SIMDECK_ANDROID_VIDEO_CODEC");
+        NSString *explicitCodec = [videoCodec stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        const char *androidCodec = explicitCodec.length > 0 ? explicitCodec.UTF8String : getenv("SIMDECK_ANDROID_VIDEO_CODEC");
         if (androidCodec == NULL || strlen(androidCodec) == 0) {
             androidCodec = (previousCodec != NULL && strlen(previousCodec) > 0) ? previousCodec : "auto";
         }
@@ -391,6 +402,10 @@ static XCWNativeSession *XCWNativeSessionFromHandle(void *handle) {
 
 - (void)requestKeyFrame {
     [_encoder requestKeyFrame];
+}
+
+- (NSDictionary *)statsRepresentation {
+    return [_encoder statsRepresentation] ?: @{};
 }
 
 - (void)invalidate {
@@ -1411,9 +1426,14 @@ void xcw_native_session_set_frame_callback(void *handle, xcw_native_frame_callba
 }
 
 void *xcw_native_h264_encoder_create(xcw_native_frame_callback callback, void *user_data, char **error_message) {
+    return xcw_native_h264_encoder_create_with_video_codec(callback, user_data, NULL, error_message);
+}
+
+void *xcw_native_h264_encoder_create_with_video_codec(xcw_native_frame_callback callback, void *user_data, const char *video_codec, char **error_message) {
     @autoreleasepool {
         XCWNativeH264Encoder *encoder = [[XCWNativeH264Encoder alloc] initWithFrameCallback:callback
-                                                                                  userData:user_data];
+                                                                                  userData:user_data
+                                                                                videoCodec:XCWStringFromCString(video_codec)];
         if (encoder == nil) {
             if (error_message != NULL) {
                 *error_message = XCWCopyCString(@"Unable to create the native H.264 encoder.");
@@ -1481,6 +1501,13 @@ bool xcw_native_h264_encoder_encode_bgra(void *handle,
 void xcw_native_h264_encoder_request_keyframe(void *handle) {
     @autoreleasepool {
         [XCWNativeH264EncoderFromHandle(handle) requestKeyFrame];
+    }
+}
+
+char *xcw_native_h264_encoder_stats(void *handle, char **error_message) {
+    @autoreleasepool {
+        NSDictionary *stats = [XCWNativeH264EncoderFromHandle(handle) statsRepresentation];
+        return XCWJSONStringFromObject(stats ?: @{}, error_message);
     }
 }
 

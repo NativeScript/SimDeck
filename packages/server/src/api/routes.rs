@@ -1025,7 +1025,7 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn normalize_video_codec(codec: &str) -> Option<&'static str> {
+pub(crate) fn normalize_video_codec(codec: &str) -> Option<&'static str> {
     match codec.trim().to_ascii_lowercase().as_str() {
         "auto" => Some("auto"),
         "hardware" => Some("hardware"),
@@ -1053,6 +1053,10 @@ async fn metrics(State(state): State<AppState>) -> Json<Value> {
         object.insert(
             "encoders".to_owned(),
             json_value!(state.registry.encoder_snapshots()),
+        );
+        object.insert(
+            "androidEncoders".to_owned(),
+            json_value!(crate::transport::webrtc::android_encoder_snapshots()),
         );
     }
     json(snapshot)

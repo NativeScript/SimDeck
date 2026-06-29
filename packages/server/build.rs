@@ -3,6 +3,15 @@ use std::process::Command;
 
 fn main() {
     let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let android_proto = root.join("proto/android_emulation_control.proto");
+    let protoc = protoc_bin_vendored::protoc_bin_path().expect("unable to find vendored protoc");
+    std::env::set_var("PROTOC", protoc);
+    println!("cargo:rerun-if-changed={}", android_proto.display());
+    tonic_build::configure()
+        .build_server(false)
+        .compile_protos(&[android_proto], &[root.join("proto")])
+        .expect("unable to compile Android emulator gRPC proto");
+
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "macos" {
         let stub = root.join("native_stubs.c");

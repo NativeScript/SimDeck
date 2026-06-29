@@ -1,9 +1,9 @@
 # Video and streaming
 
-SimDeck streams live device video to the browser. Local sessions default to full-resolution 60 fps. Remote or constrained sessions can trade detail for lower CPU and latency.
+SimDeck streams live device video to the browser. Local iOS sessions default to full-resolution 60 fps. Android emulator browser sessions default to software H.264 with the `balanced` profile capped at 960px on the long edge because the host reads and encodes emulator RGBA frames from the emulator gRPC screenshot stream. Remote or constrained sessions can trade detail for lower CPU and latency.
 
 iOS simulator H.264 uses VideoToolbox for hardware encoding and x264 for software encoding.
-Android emulator H.264 uses the emulator `-share-vid` display surface. SimDeck reads BGRA frames from the `videmulator<console-port>` shared memory region and encodes them on the Mac, so normal Android live video stays on the native shared display path.
+Android emulator H.264 uses the emulator gRPC `streamScreenshot` API when SimDeck owns the boot. SimDeck receives raw RGBA frames, pads odd dimensions for H.264, and encodes them on the Mac. If the gRPC endpoint is unavailable, SimDeck falls back to the emulator `-share-vid` display surface and reads BGRA frames from the `videmulator<console-port>` shared memory region.
 
 ## When encoding runs
 
@@ -13,7 +13,10 @@ shared refresh pump active while frame subscribers exist.
 For Android, SimDeck starts emulators with `-share-vid`, maps the shared display
 region, and feeds changed BGRA frames into the native host H.264 encoder.
 SimDeck-owned Android boots also default to `-gpu host`, matching the native
-emulator app's accelerated renderer while staying in headless shared-video mode.
+emulator app's accelerated renderer while staying hidden. On macOS, managed
+boots use `-qt-hide-window` instead of `-no-window` so the Qt render loop stays
+active without showing the emulator window. Managed Android boots also reserve a
+per-AVD `-grpc` port for event-driven screenshot streaming.
 
 The browser reports whether the page and stream canvas are foreground. When all
 known viewers are hidden or the last frame subscriber disconnects, the native
@@ -38,17 +41,17 @@ simdeck service restart --stream-quality ci-software
 
 Common profiles:
 
-| Profile       | Use it for                              |
-| ------------- | --------------------------------------- |
-| `full`        | Default local full-resolution 60 fps    |
-| `smooth`      | Full-size 60 fps with lower bitrate     |
-| `balanced`    | Good local quality with less bandwidth  |
-| `economy`     | Remote browser or busy machine          |
-| `low`         | Slower Wi-Fi or shared hosts            |
-| `tiny`        | Pull request previews and low bandwidth |
-| `ci-software` | Virtualized CI Macs                     |
+| Profile       | Use it for                                            |
+| ------------- | ----------------------------------------------------- |
+| `full`        | Default local full-resolution 60 fps                  |
+| `smooth`      | 60 fps with lower bitrate; Android caps this at 960px |
+| `balanced`    | Good local quality with less bandwidth                |
+| `economy`     | Remote browser or busy machine                        |
+| `low`         | Slower Wi-Fi or shared hosts                          |
+| `tiny`        | Pull request previews and low bandwidth               |
+| `ci-software` | Virtualized CI Macs                                   |
 
-The browser also has stream controls for transport, resolution, FPS, and refresh.
+The browser also has stream controls for transport, resolution, FPS, encoder mode, and refresh. Choosing `Full res` for an Android emulator keeps the native shared-video dimensions, which can be expensive on tall phone profiles. Set `SIMDECK_ANDROID_VIDEO_CODEC=hardware` or choose Hardware in the browser when you explicitly want VideoToolbox for Android.
 
 ## Pick an Android GPU mode
 
