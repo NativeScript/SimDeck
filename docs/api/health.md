@@ -61,18 +61,19 @@ GET /api/metrics
 
 Useful fields:
 
-| Field                              | What to look for                             |
-| ---------------------------------- | -------------------------------------------- |
-| `latest_first_frame_ms`            | First-frame startup time                     |
-| `frames_dropped_server`            | Server dropping stale frames to stay current |
-| `keyframe_requests`                | Stream refresh or recovery activity          |
-| `stream_pipeline_resets`           | Encoder resets after all viewers disconnect  |
-| `latest_accessibility_snapshot_ms` | Most recent native accessibility duration    |
-| `max_accessibility_snapshot_ms`    | Slowest native accessibility duration        |
-| `accessibility_snapshot_timeouts`  | Native accessibility calls that timed out    |
-| `active_streams`                   | Open browser streams                         |
-| `encoders[].encoder.overloadState` | `nominal`, `strained`, or `overloaded`       |
-| `client_streams`                   | Recent browser decoder and render reports    |
+| Field                              | What to look for                                           |
+| ---------------------------------- | ---------------------------------------------------------- |
+| `latest_first_frame_ms`            | First-frame startup time                                   |
+| `frames_dropped_server`            | Server dropping stale frames to stay current               |
+| `keyframe_requests`                | Stream refresh or recovery activity                        |
+| `stream_pipeline_resets`           | Encoder resets after all viewers disconnect                |
+| `latest_accessibility_snapshot_ms` | Most recent native accessibility duration                  |
+| `max_accessibility_snapshot_ms`    | Slowest native accessibility duration                      |
+| `accessibility_snapshot_timeouts`  | Native accessibility calls that timed out                  |
+| `active_streams`                   | Open browser streams                                       |
+| `encoders[].encoder.overloadState` | `nominal`, `strained`, or `overloaded`                     |
+| `androidEncoders[]`                | Android video source kind, `videoCodec`, and encoder stats |
+| `client_streams`                   | Recent browser decoder and render reports                  |
 
 If `overloadState` is `overloaded` or dropped frames keep increasing, lower stream quality or restart with software encoding:
 

@@ -90,7 +90,11 @@ Use `simdeck service reset` only when you want to rotate the service token and
 restart the LaunchAgent.
 The service uses port 4310 unless you pass `-p` or `--port`, or set a default
 in `~/.simdeck/config.json`.
-SimDeck-owned Android emulator boots use host GPU rendering by default; use
+SimDeck-owned Android emulator boots use host GPU rendering by default; on macOS
+they start the emulator with `-qt-hide-window` so the Qt renderer stays active
+without showing the native emulator window. Managed boots also open the emulator
+gRPC endpoint for event-driven Android video capture, with shared-video polling
+kept as a fallback. Use
 `simdeck service restart --android-gpu auto` or
 `--android-gpu swiftshader_indirect` only as a machine-specific fallback.
 Managed Android boots also add `-no-audio` by default. Set

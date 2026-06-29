@@ -1,4 +1,7 @@
 use crate::android;
+use crate::android_emulation_control::{
+    emulator_controller_client::EmulatorControllerClient, image_format, ImageFormat,
+};
 use crate::api::routes::{
     apply_stream_client_foreground_from_stats, apply_stream_quality_payload,
     bridge_input_session_for_control, run_bridge_multitouch_control_message, run_control_message,
@@ -11,14 +14,17 @@ use crate::native::ffi;
 use crate::transport::packet::{FramePacket, SharedFrame};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
-use std::ffi::{c_void, CStr};
+use std::ffi::{c_void, CStr, CString};
+use std::net::{SocketAddr, TcpStream};
 use std::ptr;
 use std::slice;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::thread;
 use std::time::Duration;
+use tokio::runtime::Builder as TokioRuntimeBuilder;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task;
 use tokio::time::{self, Instant};
@@ -65,9 +71,19 @@ const WEBRTC_RTP_OUTBOUND_MTU: usize = 1200;
 const WEBRTC_PEER_DISCONNECTED_TIMEOUT: Duration = Duration::from_secs(12);
 const ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY: usize = 1;
 const ANDROID_WEBRTC_DEFAULT_POLL_FPS: u64 = 120;
+const ANDROID_WEBRTC_DEFAULT_MAX_EDGE: u32 = 960;
+const ANDROID_WEBRTC_DEFAULT_FPS: u32 = 60;
+const ANDROID_WEBRTC_DEFAULT_MIN_BITRATE: u32 = 6_000_000;
+const ANDROID_WEBRTC_DEFAULT_BITS_PER_PIXEL: u32 = 5;
+const ANDROID_WEBRTC_DEFAULT_VIDEO_CODEC: &str = "software";
 const ANDROID_SHARED_VIDEO_RETRY_DELAY: Duration = Duration::from_millis(200);
+const ANDROID_GRPC_FALLBACK_RETRY_INTERVAL: Duration = Duration::from_secs(2);
+const ANDROID_GRPC_FALLBACK_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 static WEBRTC_MEDIA_STREAMS: OnceLock<Mutex<HashMap<String, Vec<WebRtcMediaStreamToken>>>> =
     OnceLock::new();
+static ANDROID_WEBRTC_SOURCES: OnceLock<Mutex<Vec<Weak<AndroidWebRtcSourceInner>>>> =
+    OnceLock::new();
+static NEXT_ANDROID_WEBRTC_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
 const MAX_WEBRTC_MEDIA_STREAMS_PER_UDID: usize = 16;
 
 #[derive(Clone)]
@@ -104,27 +120,69 @@ pub struct WebRtcVideoMetadata {
     pub height: u32,
 }
 
-fn android_h264_quality_from_payload(
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AndroidH264StreamConfig {
+    quality: android::AndroidH264StreamQuality,
+    video_codec: String,
+}
+
+fn android_h264_config_from_payload(
     payload: Option<&StreamQualityPayload>,
-) -> Result<android::AndroidH264StreamQuality, AppError> {
+) -> Result<AndroidH264StreamConfig, AppError> {
+    let video_codec = android_video_codec_from_payload(payload)?;
     let Some(payload) = payload else {
-        return Ok(android::AndroidH264StreamQuality::default());
+        return Ok(AndroidH264StreamConfig {
+            quality: default_android_h264_quality(),
+            video_codec,
+        });
     };
     let limits = stream_quality_limits_for_payload(payload)?;
-    let unscaled_profile = payload
+    let profile = payload
         .profile
         .as_deref()
         .map(str::trim)
-        .is_some_and(|profile| matches!(profile, "full" | "quality" | "smooth"));
-    Ok(android::AndroidH264StreamQuality {
-        max_edge: if unscaled_profile {
-            None
-        } else {
-            Some(limits.max_edge)
+        .filter(|profile| !profile.is_empty());
+    let max_edge = match profile {
+        Some("full" | "quality") => None,
+        Some("balanced" | "smooth") => Some(ANDROID_WEBRTC_DEFAULT_MAX_EDGE),
+        _ => Some(limits.max_edge),
+    };
+    Ok(AndroidH264StreamConfig {
+        quality: android::AndroidH264StreamQuality {
+            max_edge,
+            fps: Some(limits.fps),
+            min_bitrate: Some(limits.min_bitrate),
+            bits_per_pixel: Some(limits.bits_per_pixel),
         },
-        min_bitrate: Some(limits.min_bitrate),
-        bits_per_pixel: Some(limits.bits_per_pixel),
+        video_codec,
     })
+}
+
+fn android_video_codec_from_payload(
+    payload: Option<&StreamQualityPayload>,
+) -> Result<String, AppError> {
+    if let Some(video_codec) = payload
+        .and_then(|payload| payload.video_codec.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return crate::api::routes::normalize_video_codec(video_codec)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| AppError::bad_request(format!("Unknown video codec `{video_codec}`.")));
+    }
+    Ok(std::env::var("SIMDECK_ANDROID_VIDEO_CODEC")
+        .ok()
+        .and_then(|value| crate::api::routes::normalize_video_codec(&value).map(ToOwned::to_owned))
+        .unwrap_or_else(|| ANDROID_WEBRTC_DEFAULT_VIDEO_CODEC.to_owned()))
+}
+
+fn default_android_h264_quality() -> android::AndroidH264StreamQuality {
+    android::AndroidH264StreamQuality {
+        max_edge: Some(ANDROID_WEBRTC_DEFAULT_MAX_EDGE),
+        fps: Some(ANDROID_WEBRTC_DEFAULT_FPS),
+        min_bitrate: Some(ANDROID_WEBRTC_DEFAULT_MIN_BITRATE),
+        bits_per_pixel: Some(ANDROID_WEBRTC_DEFAULT_BITS_PER_PIXEL),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -161,12 +219,13 @@ pub async fn create_answer(
     }
 
     let source = if is_android {
+        let stream_config = android_h264_config_from_payload(payload.stream_config.as_ref())?;
         WebRtcVideoSource::Android(
             AndroidWebRtcSource::start(
                 state.android.clone(),
                 state.metrics.clone(),
                 udid.clone(),
-                android_h264_quality_from_payload(payload.stream_config.as_ref())?,
+                stream_config,
             )
             .await?,
         )
@@ -334,7 +393,7 @@ pub async fn create_answer(
     let first_frame_height = first_frame.height;
     let client_id = payload.client_id.clone();
     let (cancellation_token, cancellation) =
-        register_webrtc_media_stream(&udid, payload.client_id.as_deref(), true);
+        register_webrtc_media_stream(&udid, payload.client_id.as_deref(), true, false);
     tokio::spawn(
         WebRtcMediaStream {
             state,
@@ -678,8 +737,8 @@ fn attach_android_data_channel(
                         let _ = stream_control_tx.send(command);
                     }
                     WebRtcDataChannelMessage::StreamQuality { config } => {
-                        match android_h264_quality_from_payload(Some(&config)) {
-                            Ok(quality) => source.reconfigure_h264(quality),
+                        match android_h264_config_from_payload(Some(&config)) {
+                            Ok(config) => source.reconfigure_h264(config.quality),
                             Err(error) => {
                                 warn!(
                                     "Android WebRTC stream quality update failed for {udid}: {error}"
@@ -1139,6 +1198,7 @@ fn register_webrtc_media_stream(
     udid: &str,
     client_id: Option<&str>,
     evict_anonymous: bool,
+    replace_existing_for_udid: bool,
 ) -> (broadcast::Sender<()>, broadcast::Receiver<()>) {
     let (tx, rx) = broadcast::channel(1);
     let streams = WEBRTC_MEDIA_STREAMS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -1148,7 +1208,11 @@ fn register_webrtc_media_stream(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    if let Some(client_id) = &client_id {
+    if replace_existing_for_udid {
+        for stream in active_streams.drain(..) {
+            let _ = stream.cancellation.send(());
+        }
+    } else if let Some(client_id) = &client_id {
         active_streams.retain(|stream| {
             let is_same_client = stream.client_id.as_ref() == Some(client_id);
             let is_anonymous = evict_anonymous && stream.client_id.is_none();
@@ -1186,7 +1250,7 @@ fn active_webrtc_media_stream_count(udid: &str) -> usize {
 fn register_webrtc_media_stream_for_test(
     udid: &str,
 ) -> (broadcast::Sender<()>, broadcast::Receiver<()>) {
-    register_webrtc_media_stream(udid, None, false)
+    register_webrtc_media_stream(udid, None, false, false)
 }
 
 #[cfg(test)]
@@ -1194,7 +1258,7 @@ fn register_webrtc_media_stream_for_client_test(
     udid: &str,
     client_id: &str,
 ) -> (broadcast::Sender<()>, broadcast::Receiver<()>) {
-    register_webrtc_media_stream(udid, Some(client_id), false)
+    register_webrtc_media_stream(udid, Some(client_id), false, false)
 }
 
 #[cfg(test)]
@@ -1202,7 +1266,15 @@ fn register_webrtc_media_stream_evicting_anonymous_for_test(
     udid: &str,
     client_id: &str,
 ) -> (broadcast::Sender<()>, broadcast::Receiver<()>) {
-    register_webrtc_media_stream(udid, Some(client_id), true)
+    register_webrtc_media_stream(udid, Some(client_id), true, false)
+}
+
+#[cfg(test)]
+fn register_webrtc_media_stream_replacing_udid_for_test(
+    udid: &str,
+    client_id: Option<&str>,
+) -> (broadcast::Sender<()>, broadcast::Receiver<()>) {
+    register_webrtc_media_stream(udid, client_id, true, true)
 }
 
 #[cfg(test)]
@@ -1303,15 +1375,42 @@ pub(crate) struct AndroidWebRtcSource {
 }
 
 struct AndroidWebRtcSourceInner {
+    source_id: u64,
     udid: String,
+    video_codec: String,
     shutdown_tx: broadcast::Sender<()>,
     sender: broadcast::Sender<SharedFrame>,
     latest_keyframe: RwLock<Option<SharedFrame>>,
     frame_sequence: AtomicU64,
     quality: Mutex<android::AndroidH264StreamQuality>,
+    source_kind: RwLock<&'static str>,
     encoder_handle: AtomicUsize,
     callback_user_data: AtomicUsize,
+    shared_frames_read: AtomicU64,
+    encode_submissions: AtomicU64,
+    encode_failures: AtomicU64,
+    latest_shared_frame_copy_us: AtomicU64,
+    latest_encode_submit_us: AtomicU64,
+    latest_source_frame_gap_us: AtomicU64,
+    latest_source_timestamp_us: AtomicU64,
+    source_sequence: AtomicU64,
+    source_fps: AtomicU64,
+    source_width: AtomicU64,
+    source_height: AtomicU64,
+    output_width: AtomicU64,
+    output_height: AtomicU64,
     metrics: Arc<crate::metrics::counters::Metrics>,
+}
+
+struct AndroidSourceFrameRecord {
+    sequence: u64,
+    timestamp_us: u64,
+    source_fps: u64,
+    source_width: u64,
+    source_height: u64,
+    output_width: u64,
+    output_height: u64,
+    copy_duration: Duration,
 }
 
 unsafe impl Send for AndroidWebRtcSourceInner {}
@@ -1322,24 +1421,48 @@ impl AndroidWebRtcSource {
         bridge: android::AndroidBridge,
         metrics: Arc<crate::metrics::counters::Metrics>,
         udid: String,
-        quality: android::AndroidH264StreamQuality,
+        config: AndroidH264StreamConfig,
     ) -> Result<Self, AppError> {
+        let sources = ANDROID_WEBRTC_SOURCES.get_or_init(|| Mutex::new(Vec::new()));
+        let mut sources = sources.lock().unwrap();
+        if let Some(inner) = reusable_android_webrtc_source(&mut sources, &udid, &config) {
+            return Ok(Self { inner });
+        }
+
         let (sender, _) = broadcast::channel(ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY);
         let (shutdown_tx, _) = broadcast::channel(1);
         let inner = Arc::new(AndroidWebRtcSourceInner {
+            source_id: NEXT_ANDROID_WEBRTC_SOURCE_ID.fetch_add(1, Ordering::Relaxed),
             udid: udid.clone(),
+            video_codec: config.video_codec,
             shutdown_tx,
             sender,
             latest_keyframe: RwLock::new(None),
             frame_sequence: AtomicU64::new(0),
-            quality: Mutex::new(quality),
+            quality: Mutex::new(config.quality),
+            source_kind: RwLock::new("shared-video"),
             encoder_handle: AtomicUsize::new(0),
             callback_user_data: AtomicUsize::new(0),
+            shared_frames_read: AtomicU64::new(0),
+            encode_submissions: AtomicU64::new(0),
+            encode_failures: AtomicU64::new(0),
+            latest_shared_frame_copy_us: AtomicU64::new(0),
+            latest_encode_submit_us: AtomicU64::new(0),
+            latest_source_frame_gap_us: AtomicU64::new(0),
+            latest_source_timestamp_us: AtomicU64::new(0),
+            source_sequence: AtomicU64::new(0),
+            source_fps: AtomicU64::new(0),
+            source_width: AtomicU64::new(0),
+            source_height: AtomicU64::new(0),
+            output_width: AtomicU64::new(0),
+            output_height: AtomicU64::new(0),
             metrics,
         });
 
         let source = Self { inner };
         source.inner.create_native_encoder()?;
+        sources.push(Arc::downgrade(&source.inner));
+        drop(sources);
         spawn_android_shared_video_encoder(bridge, &source.inner);
         Ok(source)
     }
@@ -1393,6 +1516,52 @@ impl AndroidWebRtcSource {
     }
 }
 
+fn reusable_android_webrtc_source(
+    sources: &mut Vec<Weak<AndroidWebRtcSourceInner>>,
+    udid: &str,
+    config: &AndroidH264StreamConfig,
+) -> Option<Arc<AndroidWebRtcSourceInner>> {
+    let mut reusable = None;
+    sources.retain(|source| {
+        let Some(existing) = source.upgrade() else {
+            return false;
+        };
+
+        if existing.udid != udid {
+            return true;
+        }
+
+        if reusable.is_none() && existing.video_codec == config.video_codec {
+            existing.reconfigure_h264(config.quality);
+            reusable = Some(existing);
+            return true;
+        }
+
+        if existing.source_id != reusable.as_ref().map_or(0, |source| source.source_id) {
+            let _ = existing.shutdown_tx.send(());
+        }
+        false
+    });
+    reusable
+}
+
+pub(crate) fn android_encoder_snapshots() -> Vec<Value> {
+    let mut sources = ANDROID_WEBRTC_SOURCES
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap();
+    let mut snapshots = Vec::new();
+    sources.retain(|source| {
+        if let Some(inner) = source.upgrade() {
+            snapshots.push(inner.stats_snapshot());
+            true
+        } else {
+            false
+        }
+    });
+    snapshots
+}
+
 fn spawn_android_shared_video_encoder(
     bridge: android::AndroidBridge,
     inner: &Arc<AndroidWebRtcSourceInner>,
@@ -1403,6 +1572,28 @@ fn spawn_android_shared_video_encoder(
     thread::spawn(move || loop {
         if android_shutdown_requested(&mut shutdown_rx) || weak_inner.upgrade().is_none() {
             break;
+        }
+        if let Some(grpc_port) = android_grpc_port_for_udid(&bridge, &udid) {
+            match TokioRuntimeBuilder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| {
+                    AppError::native(format!("Unable to start Android gRPC runtime: {error}"))
+                })
+                .and_then(|runtime| {
+                    runtime.block_on(run_android_grpc_screenshot_encoder(
+                        grpc_port,
+                        weak_inner.clone(),
+                        &mut shutdown_rx,
+                    ))
+                }) {
+                Ok(()) => return,
+                Err(error) => {
+                    warn!(
+                        "Android gRPC screenshot stream failed for {udid} on port {grpc_port}: {error}; falling back to shared video"
+                    );
+                }
+            }
         }
         let mut stream = match bridge.shared_video_frame_stream(&udid) {
             Ok(stream) => stream,
@@ -1415,6 +1606,10 @@ fn spawn_android_shared_video_encoder(
         info!("Android shared-video stream attached for {udid}");
         let poll_interval = android_webrtc_poll_interval();
         let mut next_poll_at = Instant::now();
+        let mut next_frame_at = Instant::now();
+        let mut next_grpc_probe_at = Instant::now()
+            .checked_add(ANDROID_GRPC_FALLBACK_RETRY_INTERVAL)
+            .unwrap_or_else(Instant::now);
         loop {
             if android_shutdown_requested(&mut shutdown_rx) {
                 return;
@@ -1422,9 +1617,33 @@ fn spawn_android_shared_video_encoder(
             let Some(inner) = weak_inner.upgrade() else {
                 return;
             };
+            let now = Instant::now();
+            if now >= next_grpc_probe_at {
+                next_grpc_probe_at = now
+                    .checked_add(ANDROID_GRPC_FALLBACK_RETRY_INTERVAL)
+                    .unwrap_or(now);
+                if let Some(grpc_port) = android_grpc_port_for_udid(&bridge, &udid) {
+                    if android_grpc_endpoint_accepts_connections(grpc_port) {
+                        info!(
+                            "Android gRPC endpoint became available for {udid} on port {grpc_port}; leaving shared-video fallback"
+                        );
+                        break;
+                    }
+                }
+            }
             let quality = inner.h264_quality();
+            let source_read_interval = android_source_read_interval(quality);
+            if let Some(interval) = source_read_interval {
+                if Instant::now() < next_frame_at {
+                    sleep_until_next_android_poll(&mut next_poll_at, poll_interval);
+                    continue;
+                }
+                schedule_next_android_frame(&mut next_frame_at, interval);
+            }
+            let read_started = Instant::now();
             match stream.next_frame(quality) {
                 Ok(Some(frame)) => {
+                    inner.record_shared_video_frame(&frame, read_started.elapsed());
                     if let Err(error) = inner.encode_android_shared_video_frame(&frame) {
                         warn!("Android shared-video encode failed for {udid}: {error}");
                         thread::sleep(ANDROID_SHARED_VIDEO_RETRY_DELAY);
@@ -1439,6 +1658,176 @@ fn spawn_android_shared_video_encoder(
             sleep_until_next_android_poll(&mut next_poll_at, poll_interval);
         }
     });
+}
+
+fn android_grpc_port_for_udid(bridge: &android::AndroidBridge, udid: &str) -> Option<u16> {
+    let avd_name = udid.strip_prefix("android:")?;
+    bridge.grpc_port_for_avd(avd_name).ok()
+}
+
+fn android_grpc_endpoint_accepts_connections(grpc_port: u16) -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], grpc_port));
+    TcpStream::connect_timeout(&address, ANDROID_GRPC_FALLBACK_PROBE_TIMEOUT).is_ok()
+}
+
+async fn run_android_grpc_screenshot_encoder(
+    grpc_port: u16,
+    weak_inner: Weak<AndroidWebRtcSourceInner>,
+    shutdown_rx: &mut broadcast::Receiver<()>,
+) -> Result<(), AppError> {
+    let Some(inner) = weak_inner.upgrade() else {
+        return Ok(());
+    };
+    inner.set_source_kind("grpc-screenshot");
+    let quality = inner.h264_quality();
+    let requested_edge = quality.max_edge;
+    let request = ImageFormat {
+        format: image_format::ImgFormat::Rgba8888 as i32,
+        width: requested_edge.unwrap_or(0),
+        height: requested_edge.unwrap_or(0),
+        ..Default::default()
+    };
+    let endpoint = format!("http://127.0.0.1:{grpc_port}");
+    let mut client = time::timeout(
+        Duration::from_secs(2),
+        EmulatorControllerClient::connect(endpoint),
+    )
+    .await
+    .map_err(|_| AppError::native("Android emulator gRPC connect timed out."))?
+    .map_err(|error| AppError::native(format!("Android emulator gRPC connect failed: {error}")))?;
+    let mut stream = client
+        .stream_screenshot(request)
+        .await
+        .map_err(|error| AppError::native(format!("Android emulator gRPC stream failed: {error}")))?
+        .into_inner();
+
+    loop {
+        if android_shutdown_requested(shutdown_rx) || weak_inner.strong_count() == 0 {
+            return Ok(());
+        }
+        let Some(image) = stream.message().await.map_err(|error| {
+            AppError::native(format!("Android emulator gRPC frame failed: {error}"))
+        })?
+        else {
+            return Err(AppError::native(
+                "Android emulator gRPC screenshot stream ended.",
+            ));
+        };
+        let Some(inner) = weak_inner.upgrade() else {
+            return Ok(());
+        };
+        if inner.h264_quality().max_edge != requested_edge {
+            return Err(AppError::native(
+                "Android stream quality changed; reconnecting gRPC screenshot stream.",
+            ));
+        }
+        let read_started = Instant::now();
+        let (width, height) = android_grpc_image_dimensions(&image)?;
+        if width == 0 || height == 0 || image.image.is_empty() {
+            continue;
+        }
+        let (rgba, output_width, output_height) =
+            android_grpc_top_down_even_rgba(&image.image, width, height)?;
+        inner.record_android_source_frame(AndroidSourceFrameRecord {
+            sequence: u64::from(image.seq),
+            timestamp_us: image.timestamp_us,
+            source_fps: u64::from(android_h264_target_fps(inner.h264_quality())),
+            source_width: u64::from(width),
+            source_height: u64::from(height),
+            output_width: u64::from(output_width),
+            output_height: u64::from(output_height),
+            copy_duration: read_started.elapsed(),
+        });
+        if let Err(error) =
+            inner.encode_android_rgba_frame(&rgba, output_width, output_height, image.timestamp_us)
+        {
+            warn!(
+                "Android gRPC screenshot encode failed for {}: {error}",
+                inner.udid
+            );
+            time::sleep(ANDROID_SHARED_VIDEO_RETRY_DELAY).await;
+        }
+    }
+}
+
+fn android_grpc_image_dimensions(
+    image: &crate::android_emulation_control::Image,
+) -> Result<(u32, u32), AppError> {
+    let (width, height) = image
+        .format
+        .as_ref()
+        .map(|format| (format.width, format.height))
+        .unwrap_or((image.width, image.height));
+    if width == 0 || height == 0 {
+        return Ok((0, 0));
+    }
+    let pixels = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| AppError::native("Android gRPC screenshot frame size overflowed."))?;
+    if pixels > 256 * 1024 * 1024 {
+        return Err(AppError::native(
+            "Android gRPC screenshot frame size was outside supported bounds.",
+        ));
+    }
+    Ok((width, height))
+}
+
+fn android_grpc_top_down_even_rgba(
+    source_rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<(Vec<u8>, u32, u32), AppError> {
+    let row_bytes = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .ok_or_else(|| AppError::native("Android gRPC screenshot row size overflowed."))?;
+    let expected_len = row_bytes
+        .checked_mul(usize::try_from(height).unwrap_or(usize::MAX))
+        .ok_or_else(|| AppError::native("Android gRPC screenshot frame size overflowed."))?;
+    if source_rgba.len() != expected_len {
+        return Err(AppError::native(format!(
+            "Android gRPC screenshot frame size mismatch: got {}, expected {expected_len}.",
+            source_rgba.len()
+        )));
+    }
+    let output_width = if width.is_multiple_of(2) {
+        width
+    } else {
+        width + 1
+    };
+    let output_height = if height.is_multiple_of(2) {
+        height
+    } else {
+        height + 1
+    };
+    let output_row_bytes = usize::try_from(output_width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .ok_or_else(|| AppError::native("Android gRPC screenshot output row size overflowed."))?;
+    let output_len = output_row_bytes
+        .checked_mul(usize::try_from(output_height).unwrap_or(usize::MAX))
+        .ok_or_else(|| AppError::native("Android gRPC screenshot output frame size overflowed."))?;
+    let mut top_down = vec![0u8; output_len];
+    let height = usize::try_from(height)
+        .map_err(|_| AppError::native("Android gRPC screenshot height overflowed."))?;
+    for y in 0..height {
+        let source = y * row_bytes;
+        let target = y * output_row_bytes;
+        top_down[target..target + row_bytes]
+            .copy_from_slice(&source_rgba[source..source + row_bytes]);
+        if output_width != width {
+            let last_pixel = target + row_bytes - 4;
+            let padded_pixel = target + row_bytes;
+            top_down.copy_within(last_pixel..last_pixel + 4, padded_pixel);
+        }
+    }
+    if output_height != u32::try_from(height).unwrap_or(u32::MAX) {
+        let last_row = (height - 1) * output_row_bytes;
+        let padded_row = height * output_row_bytes;
+        top_down.copy_within(last_row..last_row + output_row_bytes, padded_row);
+    }
+    Ok((top_down, output_width, output_height))
 }
 
 fn android_shutdown_requested(receiver: &mut broadcast::Receiver<()>) -> bool {
@@ -1470,11 +1859,14 @@ impl AndroidWebRtcSourceInner {
     fn create_native_encoder(self: &Arc<Self>) -> Result<(), AppError> {
         let weak = Arc::downgrade(self);
         let user_data = Weak::into_raw(weak) as *mut c_void;
+        let video_codec = CString::new(self.video_codec.as_str())
+            .map_err(|_| AppError::bad_request("Android video codec contains a NUL byte."))?;
         let mut error = ptr::null_mut();
         let handle = unsafe {
-            ffi::xcw_native_h264_encoder_create(
+            ffi::xcw_native_h264_encoder_create_with_video_codec(
                 Some(android_h264_encoder_frame_callback),
                 user_data,
+                video_codec.as_ptr(),
                 &mut error,
             )
         };
@@ -1495,6 +1887,52 @@ impl AndroidWebRtcSourceInner {
 
     fn h264_quality(&self) -> android::AndroidH264StreamQuality {
         *self.quality.lock().unwrap()
+    }
+
+    fn record_shared_video_frame(
+        &self,
+        frame: &android::AndroidSharedVideoFrame,
+        copy_duration: Duration,
+    ) {
+        self.set_source_kind("shared-video");
+        self.record_android_source_frame(AndroidSourceFrameRecord {
+            sequence: u64::from(frame.source_sequence),
+            timestamp_us: frame.timestamp_us,
+            source_fps: u64::from(frame.source_fps),
+            source_width: u64::from(frame.source_width),
+            source_height: u64::from(frame.source_height),
+            output_width: u64::from(frame.width),
+            output_height: u64::from(frame.height),
+            copy_duration,
+        });
+    }
+
+    fn set_source_kind(&self, source_kind: &'static str) {
+        *self.source_kind.write().unwrap() = source_kind;
+    }
+
+    fn record_android_source_frame(&self, record: AndroidSourceFrameRecord) {
+        self.shared_frames_read.fetch_add(1, Ordering::Relaxed);
+        self.latest_shared_frame_copy_us
+            .store(duration_us(record.copy_duration), Ordering::Relaxed);
+        let previous_timestamp = self
+            .latest_source_timestamp_us
+            .swap(record.timestamp_us, Ordering::Relaxed);
+        if previous_timestamp != 0 && record.timestamp_us > previous_timestamp {
+            self.latest_source_frame_gap_us
+                .store(record.timestamp_us - previous_timestamp, Ordering::Relaxed);
+        }
+        self.source_sequence
+            .store(record.sequence, Ordering::Relaxed);
+        self.source_fps.store(record.source_fps, Ordering::Relaxed);
+        self.source_width
+            .store(record.source_width, Ordering::Relaxed);
+        self.source_height
+            .store(record.source_height, Ordering::Relaxed);
+        self.output_width
+            .store(record.output_width, Ordering::Relaxed);
+        self.output_height
+            .store(record.output_height, Ordering::Relaxed);
     }
 
     fn reconfigure_h264(&self, quality: android::AndroidH264StreamQuality) {
@@ -1519,6 +1957,57 @@ impl AndroidWebRtcSourceInner {
         }
     }
 
+    fn stats_snapshot(&self) -> Value {
+        let quality = self.h264_quality();
+        json!({
+            "sourceId": self.source_id,
+            "udid": self.udid.as_str(),
+            "quality": {
+                "maxEdge": quality.max_edge,
+                "fps": quality.fps,
+                "minBitrate": quality.min_bitrate,
+                "bitsPerPixel": quality.bits_per_pixel,
+                "videoCodec": self.video_codec.as_str(),
+            },
+            "sharedVideo": {
+                "sourceKind": *self.source_kind.read().unwrap(),
+                "framesRead": self.shared_frames_read.load(Ordering::Relaxed),
+                "sourceSequence": self.source_sequence.load(Ordering::Relaxed),
+                "sourceFps": self.source_fps.load(Ordering::Relaxed),
+                "sourceWidth": self.source_width.load(Ordering::Relaxed),
+                "sourceHeight": self.source_height.load(Ordering::Relaxed),
+                "outputWidth": self.output_width.load(Ordering::Relaxed),
+                "outputHeight": self.output_height.load(Ordering::Relaxed),
+                "latestSourceTimestampUs": self.latest_source_timestamp_us.load(Ordering::Relaxed),
+                "latestSourceFrameGapMs": micros_to_millis_value(self.latest_source_frame_gap_us.load(Ordering::Relaxed)),
+                "latestFrameCopyMs": micros_to_millis_value(self.latest_shared_frame_copy_us.load(Ordering::Relaxed)),
+            },
+            "encoder": {
+                "submissions": self.encode_submissions.load(Ordering::Relaxed),
+                "failures": self.encode_failures.load(Ordering::Relaxed),
+                "latestSubmitMs": micros_to_millis_value(self.latest_encode_submit_us.load(Ordering::Relaxed)),
+                "native": self.native_encoder_stats(),
+            },
+        })
+    }
+
+    fn native_encoder_stats(&self) -> Value {
+        let handle = self.encoder_handle.load(Ordering::Acquire);
+        if handle == 0 {
+            return json!({});
+        }
+        unsafe {
+            let mut error = ptr::null_mut();
+            let raw = ffi::xcw_native_h264_encoder_stats(handle as *mut c_void, &mut error);
+            if !error.is_null() {
+                ffi::xcw_native_free_string(error);
+            }
+            take_native_string(raw)
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .unwrap_or_else(|| json!({}))
+        }
+    }
+
     fn encode_android_shared_video_frame(
         &self,
         frame: &android::AndroidSharedVideoFrame,
@@ -1530,6 +2019,8 @@ impl AndroidWebRtcSourceInner {
             ));
         }
         let mut error = ptr::null_mut();
+        let submit_started = Instant::now();
+        self.encode_submissions.fetch_add(1, Ordering::Relaxed);
         let ok = unsafe {
             ffi::xcw_native_h264_encoder_encode_bgra(
                 handle as *mut c_void,
@@ -1541,7 +2032,46 @@ impl AndroidWebRtcSourceInner {
                 &mut error,
             )
         };
+        self.latest_encode_submit_us
+            .store(duration_us(submit_started.elapsed()), Ordering::Relaxed);
         if !ok {
+            self.encode_failures.fetch_add(1, Ordering::Relaxed);
+            return Err(unsafe { take_native_error(error, "Android native H.264 encode failed.") });
+        }
+        Ok(())
+    }
+
+    fn encode_android_rgba_frame(
+        &self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        timestamp_us: u64,
+    ) -> Result<(), AppError> {
+        let handle = self.encoder_handle.load(Ordering::Acquire);
+        if handle == 0 {
+            return Err(AppError::native(
+                "Android native H.264 encoder is not available.",
+            ));
+        }
+        let mut error = ptr::null_mut();
+        let submit_started = Instant::now();
+        self.encode_submissions.fetch_add(1, Ordering::Relaxed);
+        let ok = unsafe {
+            ffi::xcw_native_h264_encoder_encode_rgba(
+                handle as *mut c_void,
+                rgba.as_ptr(),
+                rgba.len(),
+                width,
+                height,
+                timestamp_us,
+                &mut error,
+            )
+        };
+        self.latest_encode_submit_us
+            .store(duration_us(submit_started.elapsed()), Ordering::Relaxed);
+        if !ok {
+            self.encode_failures.fetch_add(1, Ordering::Relaxed);
             return Err(unsafe { take_native_error(error, "Android native H.264 encode failed.") });
         }
         Ok(())
@@ -1610,6 +2140,15 @@ unsafe fn native_c_string(value: *const i8) -> Option<String> {
     CStr::from_ptr(value).to_str().ok().map(ToOwned::to_owned)
 }
 
+unsafe fn take_native_string(value: *mut i8) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    let string = CStr::from_ptr(value).to_str().ok().map(ToOwned::to_owned);
+    ffi::xcw_native_free_string(value);
+    string
+}
+
 unsafe fn take_native_error(error: *mut i8, fallback: &str) -> AppError {
     if error.is_null() {
         return AppError::native(fallback);
@@ -1622,6 +2161,14 @@ unsafe fn take_native_error(error: *mut i8, fallback: &str) -> AppError {
     AppError::native(message)
 }
 
+fn duration_us(duration: Duration) -> u64 {
+    duration.as_micros().min(u128::from(u64::MAX)) as u64
+}
+
+fn micros_to_millis_value(micros: u64) -> Option<f64> {
+    (micros > 0).then_some(micros as f64 / 1000.0)
+}
+
 fn android_webrtc_poll_interval() -> Duration {
     let fps = std::env::var("SIMDECK_ANDROID_SHARED_VIDEO_POLL_FPS")
         .ok()
@@ -1629,6 +2176,34 @@ fn android_webrtc_poll_interval() -> Duration {
         .unwrap_or(ANDROID_WEBRTC_DEFAULT_POLL_FPS)
         .clamp(60, u64::from(WEBRTC_MAX_LOCAL_STREAM_FPS));
     Duration::from_micros(1_000_000 / fps)
+}
+
+fn android_h264_target_fps(quality: android::AndroidH264StreamQuality) -> u32 {
+    quality
+        .fps
+        .unwrap_or(ANDROID_WEBRTC_DEFAULT_FPS)
+        .clamp(10, WEBRTC_MAX_LOCAL_STREAM_FPS)
+}
+
+fn android_source_read_interval(quality: android::AndroidH264StreamQuality) -> Option<Duration> {
+    let fps = android_h264_target_fps(quality);
+    if fps >= ANDROID_WEBRTC_DEFAULT_FPS {
+        return None;
+    }
+    Some(android_h264_frame_interval(quality))
+}
+
+fn android_h264_frame_interval(quality: android::AndroidH264StreamQuality) -> Duration {
+    let fps = android_h264_target_fps(quality);
+    Duration::from_micros(1_000_000 / u64::from(fps))
+}
+
+fn schedule_next_android_frame(next_frame_at: &mut Instant, interval: Duration) {
+    let target = next_frame_at
+        .checked_add(interval)
+        .unwrap_or_else(Instant::now);
+    let now = Instant::now();
+    *next_frame_at = if target > now { target } else { now };
 }
 
 fn sleep_until_next_android_poll(next_poll_at: &mut Instant, interval: Duration) {
@@ -1652,7 +2227,7 @@ enum WebRtcVideoSource {
 
 impl WebRtcVideoSource {
     fn uses_frame_timestamps_for_realtime(&self) -> bool {
-        matches!(self, Self::Android(_))
+        false
     }
 
     fn subscribe(&self) -> WebRtcFrameReceiver {
@@ -2347,18 +2922,17 @@ impl Drop for WebRtcMetricsGuard {
 #[cfg(test)]
 mod tests {
     use super::{
-        android_h264_quality_from_payload, append_avcc_parameter_sets,
-        append_length_prefixed_nalus, h264_annex_b_sample, h264_frame_has_idr,
-        h264_frame_is_decoder_sync, h264_sdp_fmtp_line, is_annex_b, is_h264_codec,
-        rtcp_packet_requests_keyframe, rtp_packet_pacing, WebRtcMetricsGuard, WebRtcSendTiming,
-        ANNEX_B_START_CODE,
+        android_h264_config_from_payload, append_avcc_parameter_sets, append_length_prefixed_nalus,
+        h264_annex_b_sample, h264_frame_has_idr, h264_frame_is_decoder_sync, h264_sdp_fmtp_line,
+        is_annex_b, is_h264_codec, rtcp_packet_requests_keyframe, rtp_packet_pacing,
+        WebRtcMetricsGuard, WebRtcSendTiming, ANNEX_B_START_CODE,
     };
     use crate::api::routes::StreamQualityPayload;
     use crate::metrics::counters::Metrics;
     use crate::transport::packet::FramePacket;
     use bytes::Bytes;
-    use std::sync::atomic::Ordering;
-    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, RwLock};
     use std::time::Duration;
     use webrtc::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
     use webrtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
@@ -2411,7 +2985,7 @@ mod tests {
     #[test]
     fn android_full_size_quality_keeps_native_dimensions() {
         for (profile, min_bitrate, bits_per_pixel) in
-            [("full", 12_000_000, 4), ("smooth", 4_000_000, 5)]
+            [("full", 12_000_000, 4), ("quality", 60_000_000, 10)]
         {
             let payload = StreamQualityPayload {
                 profile: Some(profile.to_owned()),
@@ -2422,16 +2996,52 @@ mod tests {
                 bits_per_pixel: None,
             };
 
-            let quality = android_h264_quality_from_payload(Some(&payload)).unwrap();
+            let config = android_h264_config_from_payload(Some(&payload)).unwrap();
+            let quality = config.quality;
 
             assert_eq!(quality.max_edge, None);
+            assert_eq!(quality.fps, Some(60));
             assert_eq!(quality.min_bitrate, Some(min_bitrate));
             assert_eq!(quality.bits_per_pixel, Some(bits_per_pixel));
+            assert_eq!(config.video_codec, "software");
         }
     }
 
     #[test]
-    fn android_scaled_quality_applies_profile_edge() {
+    fn android_default_config_is_scaled_for_software_local_streaming() {
+        let config = android_h264_config_from_payload(None).unwrap();
+        let quality = config.quality;
+
+        assert_eq!(quality.max_edge, Some(960));
+        assert_eq!(quality.fps, Some(60));
+        assert_eq!(quality.min_bitrate, Some(6_000_000));
+        assert_eq!(quality.bits_per_pixel, Some(5));
+        assert_eq!(config.video_codec, "software");
+    }
+
+    #[test]
+    fn android_smooth_quality_scales_to_android_default_edge() {
+        let payload = StreamQualityPayload {
+            profile: Some("smooth".to_owned()),
+            video_codec: None,
+            max_edge: None,
+            fps: Some(60),
+            min_bitrate: None,
+            bits_per_pixel: None,
+        };
+
+        let config = android_h264_config_from_payload(Some(&payload)).unwrap();
+        let quality = config.quality;
+
+        assert_eq!(quality.max_edge, Some(960));
+        assert_eq!(quality.fps, Some(60));
+        assert_eq!(quality.min_bitrate, Some(4_000_000));
+        assert_eq!(quality.bits_per_pixel, Some(5));
+        assert_eq!(config.video_codec, "software");
+    }
+
+    #[test]
+    fn android_balanced_quality_scales_to_android_default_edge() {
         let payload = StreamQualityPayload {
             profile: Some("balanced".to_owned()),
             video_codec: None,
@@ -2441,9 +3051,152 @@ mod tests {
             bits_per_pixel: None,
         };
 
-        let quality = android_h264_quality_from_payload(Some(&payload)).unwrap();
+        let config = android_h264_config_from_payload(Some(&payload)).unwrap();
+        let quality = config.quality;
 
-        assert_eq!(quality.max_edge, Some(1280));
+        assert_eq!(quality.max_edge, Some(960));
+        assert_eq!(quality.fps, Some(60));
+    }
+
+    #[test]
+    fn android_stream_config_honors_requested_video_codec() {
+        let payload = StreamQualityPayload {
+            profile: Some("balanced".to_owned()),
+            video_codec: Some("hardware".to_owned()),
+            max_edge: None,
+            fps: Some(60),
+            min_bitrate: None,
+            bits_per_pixel: None,
+        };
+
+        let config = android_h264_config_from_payload(Some(&payload)).unwrap();
+
+        assert_eq!(config.video_codec, "hardware");
+        assert_eq!(config.quality.max_edge, Some(960));
+    }
+
+    #[test]
+    fn android_default_source_reads_are_not_pre_throttled() {
+        let quality = crate::android::AndroidH264StreamQuality {
+            fps: Some(60),
+            ..Default::default()
+        };
+
+        assert_eq!(super::android_source_read_interval(quality), None);
+    }
+
+    #[test]
+    fn android_low_fps_source_reads_are_pre_throttled() {
+        let quality = crate::android::AndroidH264StreamQuality {
+            fps: Some(30),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            super::android_source_read_interval(quality),
+            Some(Duration::from_micros(33_333))
+        );
+    }
+
+    #[test]
+    fn android_grpc_rgba_padding_preserves_top_down_rows() {
+        let pixels = [
+            [1, 0, 0, 255],
+            [2, 0, 0, 255],
+            [3, 0, 0, 255],
+            [4, 0, 0, 255],
+            [5, 0, 0, 255],
+            [6, 0, 0, 255],
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+        let (rgba, width, height) = super::android_grpc_top_down_even_rgba(&pixels, 3, 2).unwrap();
+
+        assert_eq!((width, height), (4, 2));
+        let red_values = rgba
+            .chunks_exact(4)
+            .map(|pixel| pixel[0])
+            .collect::<Vec<_>>();
+        assert_eq!(red_values, vec![1, 2, 3, 3, 4, 5, 6, 6]);
+    }
+
+    fn android_source_inner_for_test(
+        udid: &str,
+        source_id: u64,
+        video_codec: &str,
+    ) -> Arc<super::AndroidWebRtcSourceInner> {
+        let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
+        let (sender, _) =
+            tokio::sync::broadcast::channel(super::ANDROID_WEBRTC_FRAME_BROADCAST_CAPACITY);
+        Arc::new(super::AndroidWebRtcSourceInner {
+            source_id,
+            udid: udid.to_owned(),
+            video_codec: video_codec.to_owned(),
+            shutdown_tx,
+            sender,
+            latest_keyframe: RwLock::new(None),
+            frame_sequence: AtomicU64::new(0),
+            quality: Mutex::new(crate::android::AndroidH264StreamQuality::default()),
+            source_kind: RwLock::new("shared-video"),
+            encoder_handle: AtomicUsize::new(0),
+            callback_user_data: AtomicUsize::new(0),
+            shared_frames_read: AtomicU64::new(0),
+            encode_submissions: AtomicU64::new(0),
+            encode_failures: AtomicU64::new(0),
+            latest_shared_frame_copy_us: AtomicU64::new(0),
+            latest_encode_submit_us: AtomicU64::new(0),
+            latest_source_frame_gap_us: AtomicU64::new(0),
+            latest_source_timestamp_us: AtomicU64::new(0),
+            source_sequence: AtomicU64::new(0),
+            source_fps: AtomicU64::new(0),
+            source_width: AtomicU64::new(0),
+            source_height: AtomicU64::new(0),
+            output_width: AtomicU64::new(0),
+            output_height: AtomicU64::new(0),
+            metrics: Arc::new(Metrics::default()),
+        })
+    }
+
+    #[test]
+    fn android_source_registry_reuses_same_udid_and_codec() {
+        let udid = format!("test-android-source-{}", std::process::id());
+        let config = super::AndroidH264StreamConfig {
+            quality: crate::android::AndroidH264StreamQuality {
+                fps: Some(30),
+                ..Default::default()
+            },
+            video_codec: "software".to_owned(),
+        };
+        let first = android_source_inner_for_test(&udid, 1, "software");
+        let mut first_shutdown = first.shutdown_tx.subscribe();
+        let mut sources = vec![Arc::downgrade(&first)];
+
+        let reused = super::reusable_android_webrtc_source(&mut sources, &udid, &config).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &reused));
+        assert!(first_shutdown.try_recv().is_err());
+        assert_eq!(sources.len(), 1);
+        assert_eq!(first.h264_quality().fps, Some(30));
+    }
+
+    #[test]
+    fn android_source_registry_replaces_same_udid_when_codec_changes() {
+        let udid = format!("test-android-source-codec-{}", std::process::id());
+        let config = super::AndroidH264StreamConfig {
+            quality: crate::android::AndroidH264StreamQuality::default(),
+            video_codec: "hardware".to_owned(),
+        };
+        let first = android_source_inner_for_test(&udid, 1, "software");
+        let mut first_shutdown = first.shutdown_tx.subscribe();
+        let mut sources = vec![Arc::downgrade(&first)];
+
+        let reused = super::reusable_android_webrtc_source(&mut sources, &udid, &config);
+
+        assert!(reused.is_none());
+        assert!(first_shutdown.try_recv().is_ok());
+        assert!(sources.is_empty());
     }
 
     #[test]
@@ -2535,6 +3288,26 @@ mod tests {
         assert_eq!(super::active_webrtc_media_stream_count(&udid), 1);
 
         super::clear_webrtc_media_stream_for_test(&udid, &identified_token);
+        assert!(!super::has_media_stream(&udid));
+    }
+
+    #[test]
+    fn registering_replacement_stream_cancels_all_existing_udid_streams() {
+        let udid = format!("test-replace-{}", std::process::id());
+        super::reset_webrtc_media_streams_for_test(&udid);
+        let (_anonymous_token, mut anonymous_rx) =
+            super::register_webrtc_media_stream_for_test(&udid);
+        let (_first_client_token, mut first_client_rx) =
+            super::register_webrtc_media_stream_for_client_test(&udid, "page-1");
+        let (replacement_token, mut replacement_rx) =
+            super::register_webrtc_media_stream_replacing_udid_for_test(&udid, Some("page-2"));
+
+        assert!(anonymous_rx.try_recv().is_ok());
+        assert!(first_client_rx.try_recv().is_ok());
+        assert!(replacement_rx.try_recv().is_err());
+        assert_eq!(super::active_webrtc_media_stream_count(&udid), 1);
+
+        super::clear_webrtc_media_stream_for_test(&udid, &replacement_token);
         assert!(!super::has_media_stream(&udid));
     }
 
@@ -2706,7 +3479,7 @@ mod tests {
     }
 
     #[test]
-    fn realtime_android_send_timing_can_use_frame_timestamps() {
+    fn realtime_android_send_timing_ignores_source_timestamp_jitter() {
         let mut timing = WebRtcSendTiming::new();
         let first = FramePacket {
             frame_sequence: 1,
@@ -2720,7 +3493,7 @@ mod tests {
         };
         let second = FramePacket {
             frame_sequence: 2,
-            timestamp_us: 18_333,
+            timestamp_us: 118_333,
             is_keyframe: false,
             width: 100,
             height: 100,
@@ -2730,12 +3503,12 @@ mod tests {
         };
 
         assert_eq!(
-            timing.duration_for(&first, true, true),
+            timing.duration_for(&first, true, false),
             super::realtime_sample_duration()
         );
         assert_eq!(
-            timing.duration_for(&second, true, true),
-            Duration::from_micros(8_333)
+            timing.duration_for(&second, true, false),
+            super::realtime_sample_duration()
         );
     }
 

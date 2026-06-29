@@ -99,9 +99,14 @@ Build apps with project tooling.
 
 Android devices use IDs like `android:Pixel_8_API_36`. `simdeck list` discovers
 AVDs from the Android SDK.
-SimDeck-owned Android boots use the emulator shared-video surface plus
-`--android-gpu host` by default. Use `simdeck service restart --android-gpu auto`
-or `--android-gpu swiftshader_indirect` only when host GPU rendering is unstable.
+SimDeck-owned Android boots use emulator gRPC screenshot streaming for live
+video, keep the emulator shared-video surface as fallback, and use
+`--android-gpu host` by default. Android browser streams default to software
+H.264 at 60 fps with a 960px long-edge cap so emulator gRPC frame production
+stays smooth. On macOS, managed boots use `-qt-hide-window` so the Qt render
+loop stays active without showing the native emulator window.
+Use `simdeck service restart --android-gpu auto` or
+`--android-gpu swiftshader_indirect` only when host GPU rendering is unstable.
 Optional user defaults live in `~/.simdeck/config.json`. Supported keys include
 `service.port`, `android.emulatorArgs`, and `android.disableAudio`; explicit
 CLI/API boot arguments still win for one-off runs.

@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package android.emulation.control;
+
+service EmulatorController {
+  rpc streamScreenshot(ImageFormat) returns (stream Image);
+}
+
+message ImageFormat {
+  enum ImgFormat {
+    PNG = 0;
+    RGBA8888 = 1;
+    RGB888 = 2;
+  }
+
+  ImgFormat format = 1;
+  Rotation rotation = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  uint32 display = 5;
+  ImageTransport transport = 6;
+  FoldedDisplay foldedDisplay = 7;
+  DisplayModeValue displayMode = 8;
+}
+
+message Image {
+  ImageFormat format = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  bytes image = 4;
+  uint32 seq = 5;
+  uint64 timestampUs = 6;
+}
+
+message ImageTransport {
+  enum TransportChannel {
+    TRANSPORT_CHANNEL_UNSPECIFIED = 0;
+    MMAP = 1;
+  }
+
+  TransportChannel channel = 1;
+  string handle = 2;
+}
+
+message FoldedDisplay {
+  uint32 width = 1;
+  uint32 height = 2;
+  uint32 xOffset = 3;
+  uint32 yOffset = 4;
+}
+
+message Rotation {
+  enum SkinRotation {
+    PORTRAIT = 0;
+    LANDSCAPE = 1;
+    REVERSE_PORTRAIT = 2;
+    REVERSE_LANDSCAPE = 3;
+  }
+
+  SkinRotation rotation = 1;
+  double xAxis = 2;
+  double yAxis = 3;
+  double zAxis = 4;
+}
+
+enum DisplayModeValue {
+  UNKNOWN_DISPLAY_MODE = 0;
+  PHONE = 1;
+  FOLDABLE = 2;
+  TABLET = 3;
+  DESKTOP = 4;
+}

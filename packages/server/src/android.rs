@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 const ANDROID_ID_PREFIX: &str = "android:";
 const DEFAULT_EMULATOR_CONSOLE_PORT_BASE: u16 = 5554;
+const DEFAULT_EMULATOR_GRPC_PORT_BASE: u16 = 8554;
 const ANDROID_EMULATOR_DEFAULT_GPU_MODE: &str = "host";
 const ANDROID_EMULATOR_GPU_ENV: &str = "SIMDECK_ANDROID_GPU";
 const ANDROID_SHARED_VIDEO_HEADER_BYTES: usize = std::mem::size_of::<AndroidSharedVideoHeader>();
@@ -87,6 +88,7 @@ pub struct AndroidDevice {
     pub serial: Option<String>,
     pub is_booted: bool,
     pub console_port: u16,
+    pub grpc_port: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +101,7 @@ pub struct AndroidEmulatorSpec {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AndroidH264StreamQuality {
     pub max_edge: Option<u32>,
+    pub fps: Option<u32>,
     pub min_bitrate: Option<u32>,
     pub bits_per_pixel: Option<u32>,
 }
@@ -121,6 +124,10 @@ impl Default for AndroidBootOptions {
 #[derive(Debug)]
 pub struct AndroidSharedVideoFrame {
     pub timestamp_us: u64,
+    pub source_sequence: u32,
+    pub source_fps: u32,
+    pub source_width: u32,
+    pub source_height: u32,
     pub width: u32,
     pub height: u32,
     pub bgra: Vec<u8>,
@@ -187,6 +194,7 @@ impl AndroidBridge {
                     serial: running.get(&avd_name).cloned(),
                     is_booted: running.contains_key(&avd_name),
                     console_port,
+                    grpc_port: grpc_port_for_console_port(console_port)?,
                     avd_name,
                 })
             })
@@ -818,6 +826,7 @@ impl AndroidBridge {
                 "avdName": device.avd_name,
                 "serial": device.serial,
                 "consolePort": device.console_port,
+                "grpcPort": device.grpc_port,
             },
             "privateDisplay": private_display,
         })
@@ -931,6 +940,10 @@ impl AndroidBridge {
             .ok_or_else(|| AppError::not_found(format!("Unknown Android AVD `{avd_name}`.")))?;
         *cache.lock().unwrap() = Some((Instant::now(), ports));
         Ok(port)
+    }
+
+    pub fn grpc_port_for_avd(&self, avd_name: &str) -> Result<u16, AppError> {
+        grpc_port_for_console_port(self.console_port_for_avd(avd_name)?)
     }
 
     fn screen_size_for_serial(&self, serial: &str) -> Result<(f64, f64), AppError> {
@@ -1060,6 +1073,7 @@ fn android_emulator_launch_args(
     let adb_port = console_port.checked_add(1).ok_or_else(|| {
         AppError::native("Android emulator console port overflowed while booting.")
     })?;
+    let grpc_port = grpc_port_for_console_port(console_port)?;
     let emulator_ports = format!("{console_port},{adb_port}");
     let gpu_mode = android_emulator_gpu_mode()?;
     let user_args = sanitized_android_emulator_args(&options.emulator_args)?;
@@ -1069,7 +1083,7 @@ fn android_emulator_launch_args(
         .collect::<HashSet<_>>();
 
     let mut args = vec!["-avd".to_owned(), avd_name.to_owned()];
-    let window_mode = if os == "windows" {
+    let window_mode = if os == "windows" || os == "macos" || os == "darwin" {
         "-qt-hide-window"
     } else {
         "-no-window"
@@ -1087,6 +1101,9 @@ fn android_emulator_launch_args(
     }
     if os == "windows" && !user_option_keys.contains("-feature") {
         args.extend(["-feature".to_owned(), "-Vulkan".to_owned()]);
+    }
+    if !user_option_keys.contains("-grpc") {
+        args.extend(["-grpc".to_owned(), grpc_port.to_string()]);
     }
     args.extend(user_args);
     args.extend(["-ports".to_owned(), emulator_ports, "-share-vid".to_owned()]);
@@ -1470,6 +1487,10 @@ unsafe fn android_shared_video_frame_from_memory(
     )?;
     Ok(AndroidSharedVideoFrame {
         timestamp_us: header.timestamp_us,
+        source_sequence: header.sequence,
+        source_fps: header.fps,
+        source_width: header.width,
+        source_height: header.height,
         width,
         height,
         bgra,
@@ -1874,6 +1895,23 @@ fn console_port_for_avd_index(index: usize) -> Result<u16, AppError> {
         .ok_or_else(|| {
             AppError::native("Android emulator console port overflowed while deriving ports.")
         })
+}
+
+fn grpc_port_for_console_port(console_port: u16) -> Result<u16, AppError> {
+    if console_port < DEFAULT_EMULATOR_CONSOLE_PORT_BASE {
+        return Err(AppError::native(
+            "Android emulator console port was below the SimDeck base port.",
+        ));
+    }
+    let offset = console_port - DEFAULT_EMULATOR_CONSOLE_PORT_BASE;
+    if !offset.is_multiple_of(2) {
+        return Err(AppError::native(
+            "Android emulator console port was not an even SimDeck port.",
+        ));
+    }
+    DEFAULT_EMULATOR_GRPC_PORT_BASE
+        .checked_add(offset / 2)
+        .ok_or_else(|| AppError::native("Android emulator gRPC port overflowed."))
 }
 
 fn console_port_from_serial(serial: &str) -> Option<u16> {
@@ -2501,12 +2539,53 @@ mod tests {
                 "-no-audio",
                 "-gpu",
                 "host",
+                "-grpc",
+                "10054",
                 "-no-snapshot",
                 "-ports",
                 "8554,8555",
                 "-share-vid",
             ]
         );
+    }
+
+    #[test]
+    fn android_emulator_launch_args_use_hidden_qt_window_on_macos() {
+        let args = android_emulator_launch_args(
+            "Pixel_8_API_36",
+            8554,
+            &AndroidBootOptions::default(),
+            "macos",
+        )
+        .unwrap();
+
+        assert!(args.contains(&"-qt-hide-window".to_owned()));
+        assert!(!args.contains(&"-no-window".to_owned()));
+    }
+
+    #[test]
+    fn android_emulator_launch_args_lets_user_replace_default_grpc_port() {
+        let args = android_emulator_launch_args(
+            "Pixel_8_API_36",
+            8554,
+            &AndroidBootOptions {
+                emulator_args: vec!["-grpc".to_owned(), "9654".to_owned()],
+                ..Default::default()
+            },
+            "macos",
+        )
+        .unwrap();
+
+        assert_eq!(args.iter().filter(|arg| *arg == "-grpc").count(), 1);
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-grpc" && pair[1] == "9654"));
+    }
+
+    #[test]
+    fn android_grpc_ports_use_separate_avd_index_range() {
+        assert_eq!(grpc_port_for_console_port(5554).unwrap(), 8554);
+        assert_eq!(grpc_port_for_console_port(5556).unwrap(), 8555);
     }
 
     #[test]
@@ -2857,6 +2936,7 @@ abcd1234\tdevice
             None,
             AndroidH264StreamQuality {
                 max_edge: Some(16),
+                fps: None,
                 min_bitrate: None,
                 bits_per_pixel: None,
             },
@@ -2908,6 +2988,7 @@ abcd1234\tdevice
             None,
             AndroidH264StreamQuality {
                 max_edge: Some(240),
+                fps: None,
                 min_bitrate: None,
                 bits_per_pixel: None,
             },
@@ -2946,6 +3027,7 @@ abcd1234\tdevice
                 source,
                 AndroidH264StreamQuality {
                     max_edge: Some(240),
+                    fps: None,
                     min_bitrate: None,
                     bits_per_pixel: None,
                 },

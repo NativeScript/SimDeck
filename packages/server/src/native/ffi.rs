@@ -334,12 +334,22 @@ unsafe extern "C" {
         error_message: *mut *mut c_char,
     ) -> bool;
 
-    pub fn xcw_native_h264_encoder_create(
+    pub fn xcw_native_h264_encoder_create_with_video_codec(
         callback: Option<xcw_native_frame_callback>,
         user_data: *mut c_void,
+        video_codec: *const c_char,
         error_message: *mut *mut c_char,
     ) -> *mut c_void;
     pub fn xcw_native_h264_encoder_destroy(handle: *mut c_void);
+    pub fn xcw_native_h264_encoder_encode_rgba(
+        handle: *mut c_void,
+        rgba: *const u8,
+        length: usize,
+        width: u32,
+        height: u32,
+        timestamp_us: u64,
+        error_message: *mut *mut c_char,
+    ) -> bool;
     pub fn xcw_native_h264_encoder_encode_bgra(
         handle: *mut c_void,
         bgra: *const u8,
@@ -350,6 +360,10 @@ unsafe extern "C" {
         error_message: *mut *mut c_char,
     ) -> bool;
     pub fn xcw_native_h264_encoder_request_keyframe(handle: *mut c_void);
+    pub fn xcw_native_h264_encoder_stats(
+        handle: *mut c_void,
+        error_message: *mut *mut c_char,
+    ) -> *mut c_char;
 
     pub fn xcw_native_free_string(value: *mut c_char);
     pub fn xcw_native_free_bytes(bytes: xcw_native_owned_bytes);

@@ -567,13 +567,21 @@ bool xcw_native_session_rotate_left(void *handle, char **error_message) {
   return xcw_unsupported(error_message);
 }
 
-void *xcw_native_h264_encoder_create(xcw_native_frame_callback callback,
-                                     void *user_data, char **error_message) {
+void *xcw_native_h264_encoder_create_with_video_codec(
+    xcw_native_frame_callback callback, void *user_data, const char *video_codec,
+    char **error_message) {
   (void)callback;
   (void)user_data;
+  (void)video_codec;
   xcw_set_error(error_message,
                 "H.264 encoding is only available in the macOS native bridge.");
   return NULL;
+}
+
+void *xcw_native_h264_encoder_create(xcw_native_frame_callback callback,
+                                     void *user_data, char **error_message) {
+  return xcw_native_h264_encoder_create_with_video_codec(callback, user_data,
+                                                         NULL, error_message);
 }
 
 void xcw_native_h264_encoder_destroy(void *handle) { (void)handle; }
@@ -611,6 +619,13 @@ bool xcw_native_h264_encoder_encode_bgra(void *handle, const uint8_t *bgra,
 }
 
 void xcw_native_h264_encoder_request_keyframe(void *handle) { (void)handle; }
+
+char *xcw_native_h264_encoder_stats(void *handle, char **error_message) {
+  (void)handle;
+  xcw_set_error(error_message,
+                "H.264 encoding is only available in the macOS native bridge.");
+  return NULL;
+}
 
 void xcw_native_free_string(char *value) { free(value); }
 

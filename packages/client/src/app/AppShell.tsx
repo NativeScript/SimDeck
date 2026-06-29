@@ -150,6 +150,11 @@ const LOCAL_STREAM_DEFAULTS: StreamConfig = {
   fps: 60,
   quality: "full",
 };
+const ANDROID_LOCAL_STREAM_DEFAULTS: StreamConfig = {
+  encoder: "software",
+  fps: 60,
+  quality: "balanced",
+};
 const REMOTE_STREAM_DEFAULTS: StreamConfig = {
   encoder: "software",
   fps: 30,
@@ -311,6 +316,34 @@ function defaultStreamConfigForTransport(
 ): StreamConfig {
   const base = remote ? REMOTE_STREAM_DEFAULTS : LOCAL_STREAM_DEFAULTS;
   return base;
+}
+
+function streamConfigForSelectedSimulator(
+  config: StreamConfig,
+  simulator: SimulatorMetadata | null,
+  remote: boolean,
+  userTouched: boolean,
+): StreamConfig {
+  if (remote || userTouched || !isAndroidSimulator(simulator)) {
+    return config;
+  }
+  const quality =
+    config.quality === "full" || config.quality === "quality"
+      ? ANDROID_LOCAL_STREAM_DEFAULTS.quality
+      : config.quality;
+  const encoder =
+    config.encoder === "auto"
+      ? ANDROID_LOCAL_STREAM_DEFAULTS.encoder
+      : config.encoder;
+  if (quality === config.quality && encoder === config.encoder) {
+    return config;
+  }
+  return {
+    ...config,
+    encoder,
+    maxEdge: undefined,
+    quality,
+  };
 }
 
 function shouldForceInitialFitMode(): boolean {
@@ -854,6 +887,37 @@ export function AppShell({
     };
   }, [remoteStream, syncStreamConfig]);
 
+  const effectiveStreamConfig = useMemo(
+    () =>
+      streamConfigForSelectedSimulator(
+        streamConfig,
+        selectedSimulator,
+        remoteStream,
+        streamConfigUserTouchedRef.current,
+      ),
+    [remoteStream, selectedSimulator, streamConfig],
+  );
+
+  useEffect(() => {
+    if (streamConfigUserTouchedRef.current) {
+      return;
+    }
+    setStreamConfig((current) => {
+      const next = streamConfigForSelectedSimulator(
+        current,
+        selectedSimulator,
+        remoteStream,
+        false,
+      );
+      return streamConfigsEqual(current, next) ? current : next;
+    });
+  }, [
+    remoteStream,
+    selectedSimulator?.platform,
+    selectedSimulator?.udid,
+    streamConfig.quality,
+  ]);
+
   const {
     deviceNaturalSize,
     error: streamError,
@@ -869,7 +933,7 @@ export function AppShell({
     paused: !streamConfigReady,
     remote: remoteStream,
     simulator: selectedSimulator,
-    streamConfig,
+    streamConfig: effectiveStreamConfig,
     streamConfigApplyKey,
     streamTransport,
   });
@@ -886,29 +950,42 @@ export function AppShell({
     void refreshRef.current();
   }, [streamStatus.error, streamStatus.state, syncStreamConfig]);
 
-  const updateStreamEncoder = useCallback((encoder: StreamEncoder) => {
-    streamConfigUserTouchedRef.current = true;
-    streamConfigUserChangeAtRef.current = Date.now();
-    setStreamConfigReady(true);
-    setStreamConfigApplyKey((current) => current + 1);
-    setStreamConfig((current) => ({ ...current, encoder }));
-  }, []);
+  const updateStreamEncoder = useCallback(
+    (encoder: StreamEncoder) => {
+      streamConfigUserTouchedRef.current = true;
+      streamConfigUserChangeAtRef.current = Date.now();
+      setStreamConfigReady(true);
+      setStreamConfigApplyKey((current) => current + 1);
+      setStreamConfig({ ...effectiveStreamConfig, encoder });
+    },
+    [effectiveStreamConfig],
+  );
 
-  const updateStreamFps = useCallback((fps: StreamFps) => {
-    streamConfigUserTouchedRef.current = true;
-    streamConfigUserChangeAtRef.current = Date.now();
-    setStreamConfigReady(true);
-    setStreamConfigApplyKey((current) => current + 1);
-    setStreamConfig((current) => ({ ...current, fps }));
-  }, []);
+  const updateStreamFps = useCallback(
+    (fps: StreamFps) => {
+      streamConfigUserTouchedRef.current = true;
+      streamConfigUserChangeAtRef.current = Date.now();
+      setStreamConfigReady(true);
+      setStreamConfigApplyKey((current) => current + 1);
+      setStreamConfig({ ...effectiveStreamConfig, fps });
+    },
+    [effectiveStreamConfig],
+  );
 
-  const updateStreamQuality = useCallback((quality: StreamQualityPreset) => {
-    streamConfigUserTouchedRef.current = true;
-    streamConfigUserChangeAtRef.current = Date.now();
-    setStreamConfigReady(true);
-    setStreamConfigApplyKey((current) => current + 1);
-    setStreamConfig((current) => ({ ...current, maxEdge: undefined, quality }));
-  }, []);
+  const updateStreamQuality = useCallback(
+    (quality: StreamQualityPreset) => {
+      streamConfigUserTouchedRef.current = true;
+      streamConfigUserChangeAtRef.current = Date.now();
+      setStreamConfigReady(true);
+      setStreamConfigApplyKey((current) => current + 1);
+      setStreamConfig({
+        ...effectiveStreamConfig,
+        maxEdge: undefined,
+        quality,
+      });
+    },
+    [effectiveStreamConfig],
+  );
 
   const updateStreamTransport = useCallback((transport: StreamTransport) => {
     setStreamTransport(transport);
@@ -3747,7 +3824,7 @@ export function AppShell({
           !selectedSimulator.isBooted &&
           !selectedSimulatorTransitionKind,
         )}
-        streamConfig={streamConfig}
+        streamConfig={effectiveStreamConfig}
         streamTransport={streamTransport}
         deviceChromeAvailable={selectedSupportsChrome}
         deviceChromeVisible={deviceChromeToggleActive}

@@ -19,6 +19,11 @@ mod static_files;
 mod transport;
 #[cfg(target_os = "macos")]
 mod webkit;
+
+pub(crate) mod android_emulation_control {
+    tonic::include_proto!("android.emulation.control");
+}
+
 #[cfg(not(target_os = "macos"))]
 mod webkit {
     use crate::error::AppError;

@@ -106,10 +106,12 @@ bool xcw_native_session_rotate_left(void * _Nonnull handle, char * _Nullable * _
 void xcw_native_session_set_frame_callback(void * _Nonnull handle, xcw_native_frame_callback _Nullable callback, void * _Nullable user_data);
 
 void * _Nullable xcw_native_h264_encoder_create(xcw_native_frame_callback _Nullable callback, void * _Nullable user_data, char * _Nullable * _Nullable error_message);
+void * _Nullable xcw_native_h264_encoder_create_with_video_codec(xcw_native_frame_callback _Nullable callback, void * _Nullable user_data, const char * _Nullable video_codec, char * _Nullable * _Nullable error_message);
 void xcw_native_h264_encoder_destroy(void * _Nullable handle);
 bool xcw_native_h264_encoder_encode_rgba(void * _Nonnull handle, const uint8_t * _Nonnull rgba, size_t length, uint32_t width, uint32_t height, uint64_t timestamp_us, char * _Nullable * _Nullable error_message);
 bool xcw_native_h264_encoder_encode_bgra(void * _Nonnull handle, const uint8_t * _Nonnull bgra, size_t length, uint32_t width, uint32_t height, uint64_t timestamp_us, char * _Nullable * _Nullable error_message);
 void xcw_native_h264_encoder_request_keyframe(void * _Nonnull handle);
+char * _Nullable xcw_native_h264_encoder_stats(void * _Nonnull handle, char * _Nullable * _Nullable error_message);
 
 void xcw_native_free_string(char * _Nullable value);
 void xcw_native_free_bytes(xcw_native_owned_bytes bytes);
