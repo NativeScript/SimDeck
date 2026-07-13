@@ -414,6 +414,12 @@ impl SimulatorSession {
         })
     }
 
+    /// Current display rotation in quarter turns (0..=3). Odd values mean the
+    /// interface is landscape relative to the device's native orientation.
+    pub fn rotation_quarter_turns(&self) -> i32 {
+        self.inner.native.rotation_quarter_turns()
+    }
+
     pub fn is_idle_for(&self, idle_timeout: Duration) -> bool {
         if Arc::strong_count(&self.inner) > 1 {
             return false;

@@ -7,7 +7,7 @@ import type {
 } from "../../api/types";
 import { AccessibilityOverlay } from "../accessibility/AccessibilityOverlay";
 import { findAccessibilityItemAtPoint } from "../accessibility/accessibilityTree";
-import { normalizedPointerCoordinatesForOrientation } from "../input/gestureMath";
+import { normalizedPointerCoordinates } from "../input/gestureMath";
 import type { TouchIndicator } from "./types";
 
 interface DeviceChromeProps {
@@ -698,6 +698,7 @@ function ScreenLayer({
       <AccessibilityOverlay
         hoveredId={accessibilityHoveredId}
         roots={accessibilityRoots}
+        rotationQuarterTurns={rotationQuarterTurns}
         selectedId={accessibilitySelectedId}
         skeletonVisible={accessibilitySkeletonVisible}
       />
@@ -719,22 +720,12 @@ function ScreenLayer({
           onPointerMove={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            onPickerHover(
-              hitTestAccessibilityId(
-                event,
-                accessibilityRoots,
-                rotationQuarterTurns,
-              ),
-            );
+            onPickerHover(hitTestAccessibilityId(event, accessibilityRoots));
           }}
           onPointerUp={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            const id = hitTestAccessibilityId(
-              event,
-              accessibilityRoots,
-              rotationQuarterTurns,
-            );
+            const id = hitTestAccessibilityId(event, accessibilityRoots);
             if (id) {
               onPickerSelect(id);
             }
@@ -788,15 +779,16 @@ function TouchInteractionOverlay({
   );
 }
 
+// Native-ax frames are in DISPLAY (interface) space, so the picker compares the
+// pointer directly in displayed coordinates — no display→natural remap. (The
+// overlay does the inverse remap for rendering because it lives inside the
+// CSS-rotated shell; the pointer here is already measured against the displayed,
+// post-rotation bounding box.)
 function hitTestAccessibilityId(
   event: React.PointerEvent<HTMLElement>,
   roots: AccessibilityNode[],
-  rotationQuarterTurns: number,
 ): string | null {
-  const point = normalizedPointerCoordinatesForOrientation(
-    event,
-    rotationQuarterTurns,
-  );
+  const point = normalizedPointerCoordinates(event);
   if (!point) {
     return null;
   }

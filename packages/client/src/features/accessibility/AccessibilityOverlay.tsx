@@ -1,6 +1,7 @@
 import { createElement, type AriaRole, type CSSProperties } from "react";
 
 import type { AccessibilityNode } from "../../api/types";
+import { mapDisplayedPointToNaturalOrientation } from "../viewport/viewportMath";
 import {
   accessibilityKind,
   accessibilityIdentifier,
@@ -16,6 +17,7 @@ import {
 interface AccessibilityOverlayProps {
   hoveredId: string | null;
   roots: AccessibilityNode[];
+  rotationQuarterTurns?: number;
   selectedId: string;
   skeletonVisible?: boolean;
 }
@@ -23,6 +25,7 @@ interface AccessibilityOverlayProps {
 export function AccessibilityOverlay({
   hoveredId,
   roots,
+  rotationQuarterTurns = 0,
   selectedId,
   skeletonVisible = false,
 }: AccessibilityOverlayProps) {
@@ -61,6 +64,7 @@ export function AccessibilityOverlay({
             key={item.id}
             node={item.node}
             rootFrame={rootFrame}
+            rotationQuarterTurns={rotationQuarterTurns}
           />
         ))}
       </div>
@@ -71,15 +75,26 @@ export function AccessibilityOverlay({
                 key={`skeleton-${item.id}`}
                 node={item.node}
                 rootFrame={rootFrame}
+                rotationQuarterTurns={rotationQuarterTurns}
                 variant="skeleton"
               />
             ))
           : null}
         {hovered ? (
-          <NodeRect node={hovered} rootFrame={rootFrame} variant="hovered" />
+          <NodeRect
+            node={hovered}
+            rootFrame={rootFrame}
+            rotationQuarterTurns={rotationQuarterTurns}
+            variant="hovered"
+          />
         ) : null}
         {selected ? (
-          <NodeRect node={selected} rootFrame={rootFrame} variant="selected" />
+          <NodeRect
+            node={selected}
+            rootFrame={rootFrame}
+            rotationQuarterTurns={rotationQuarterTurns}
+            variant="selected"
+          />
         ) : null}
       </div>
     </div>
@@ -107,20 +122,18 @@ function framedNode(
 function NodeRect({
   node,
   rootFrame,
+  rotationQuarterTurns,
   variant,
 }: {
   node: AccessibilityNode;
   rootFrame: { height: number; width: number; x: number; y: number };
+  rotationQuarterTurns: number;
   variant: "hovered" | "selected" | "skeleton";
 }) {
   if (!validFrame(node.frame)) {
     return null;
   }
 
-  const left = ((node.frame.x - rootFrame.x) / rootFrame.width) * 100;
-  const top = ((node.frame.y - rootFrame.y) / rootFrame.height) * 100;
-  const width = (node.frame.width / rootFrame.width) * 100;
-  const height = (node.frame.height / rootFrame.height) * 100;
   const label =
     variant === "skeleton"
       ? ""
@@ -129,12 +142,7 @@ function NodeRect({
   return (
     <div
       className={`accessibility-rect ${variant}`}
-      style={{
-        height: `${height}%`,
-        left: `${left}%`,
-        top: `${top}%`,
-        width: `${width}%`,
-      }}
+      style={frameStyle(node.frame, rootFrame, rotationQuarterTurns)}
     >
       {label ? <span>{label}</span> : null}
     </div>
@@ -146,11 +154,13 @@ function AccessibilityDomNode({
   id,
   node,
   rootFrame,
+  rotationQuarterTurns,
 }: {
   depth: number;
   id: string;
   node: AccessibilityNode;
   rootFrame: { height: number; width: number; x: number; y: number };
+  rotationQuarterTurns: number;
 }) {
   if (!validFrame(node.frame)) {
     return null;
@@ -200,19 +210,40 @@ function AccessibilityDomNode({
     "data-simdeck-inspector-id": node.inspectorId || undefined,
     "data-simdeck-uikit-id": node.uikitId || undefined,
     role,
-    style: frameStyle(node.frame, rootFrame),
+    style: frameStyle(node.frame, rootFrame, rotationQuarterTurns),
   });
 }
 
+// Native-ax frames arrive in DISPLAY (interface) space. The overlay lives
+// inside the shell container that CSS-rotates by `rotationQuarterTurns`, so the
+// frame is converted back into the device's natural (pre-rotation) space here;
+// the shared shell rotation then carries the overlay and the video to the
+// displayed orientation together. `rotationQuarterTurns === 0` is the identity,
+// so portrait devices keep their existing behavior.
 function frameStyle(
   frame: { height: number; width: number; x: number; y: number },
   rootFrame: { height: number; width: number; x: number; y: number },
+  rotationQuarterTurns: number,
 ): CSSProperties {
+  const start = mapDisplayedPointToNaturalOrientation(
+    {
+      x: (frame.x - rootFrame.x) / rootFrame.width,
+      y: (frame.y - rootFrame.y) / rootFrame.height,
+    },
+    rotationQuarterTurns,
+  );
+  const end = mapDisplayedPointToNaturalOrientation(
+    {
+      x: (frame.x + frame.width - rootFrame.x) / rootFrame.width,
+      y: (frame.y + frame.height - rootFrame.y) / rootFrame.height,
+    },
+    rotationQuarterTurns,
+  );
   return {
-    height: `${(frame.height / rootFrame.height) * 100}%`,
-    left: `${((frame.x - rootFrame.x) / rootFrame.width) * 100}%`,
-    top: `${((frame.y - rootFrame.y) / rootFrame.height) * 100}%`,
-    width: `${(frame.width / rootFrame.width) * 100}%`,
+    height: `${Math.abs(end.y - start.y) * 100}%`,
+    left: `${Math.min(start.x, end.x) * 100}%`,
+    top: `${Math.min(start.y, end.y) * 100}%`,
+    width: `${Math.abs(end.x - start.x) * 100}%`,
   };
 }
 

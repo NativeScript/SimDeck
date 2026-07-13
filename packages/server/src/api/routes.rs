@@ -5708,6 +5708,7 @@ async fn accessibility_snapshot_with_options(
 ) -> Result<Value, AppError> {
     let bridge = state.registry.bridge().clone();
     let metrics = state.metrics.clone();
+    let rotation_udid = udid.clone();
     let started = Instant::now();
     let task = task::spawn_blocking(move || {
         bridge.accessibility_snapshot_with_options(&udid, point, max_depth, interactive_only)
@@ -5728,7 +5729,19 @@ async fn accessibility_snapshot_with_options(
         result.is_ok(),
         duration_ms >= NATIVE_AX_SNAPSHOT_TIMEOUT.as_millis() as u64,
     );
-    result
+    // The private AX API reports device-native (portrait) frames for rotated
+    // apps; rotate them into display space so annotations and selector taps
+    // match the landscape video. No-op unless the display is landscape.
+    result.map(|mut snapshot| {
+        if let Some(quarter_turns) = state
+            .registry
+            .get(&rotation_udid)
+            .map(|session| session.rotation_quarter_turns())
+        {
+            crate::accessibility::normalize_native_ax_orientation(&mut snapshot, quarter_turns);
+        }
+        snapshot
+    })
 }
 
 #[cfg(test)]
