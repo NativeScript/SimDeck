@@ -487,8 +487,12 @@ function accessibilityStateSummary(
   return state.join(", ");
 }
 
-function cleanAccessibilityText(
-  value: string | null | undefined,
-): string | null {
-  return value?.trim() || null;
+function cleanAccessibilityText(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value.trim() || null;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return null;
 }

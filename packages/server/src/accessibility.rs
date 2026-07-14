@@ -64,10 +64,13 @@ impl AccessibilitySource {
 /// Not every app is affected: apps that lay their views out natively in the
 /// current orientation (e.g. Settings) already report display-space frames.
 /// We therefore rotate a root's subtree only when the subtree itself proves it
-/// is in portrait space — no descendant frame is wider than the portrait width
-/// (which, in landscape, equals the display height). The top-level application
-/// element reports its own frame in display space regardless, so it (and any
-/// oversized outlier) is left untouched.
+/// is in portrait space: a descendant extends below the landscape display
+/// height, which is only valid on the native portrait canvas. Conversely, a
+/// descendant that extends past the portrait width proves the subtree is
+/// already in display space. Ambiguous small left-side subtrees are left alone
+/// rather than guessing. The top-level application element reports its own
+/// frame in display space regardless, so it (and any oversized outlier) is left
+/// untouched.
 ///
 /// Only landscape orientations (odd quarter turns) are handled. Portrait (0)
 /// needs no change, and upside-down portrait (2) is left as-is.
@@ -86,10 +89,12 @@ pub fn normalize_native_ax_orientation(snapshot: &mut Value, quarter_turns: i32)
         return;
     };
     for root in roots.iter_mut() {
-        if subtree_is_display_space(root, display_height) {
-            continue;
+        match subtree_orientation(root, display_height) {
+            SubtreeOrientation::PortraitNative => {
+                rotate_descendant_frames(root, quarter_turns, display_width, display_height);
+            }
+            SubtreeOrientation::DisplaySpace | SubtreeOrientation::Ambiguous => {}
         }
-        rotate_descendant_frames(root, quarter_turns, display_width, display_height);
     }
 }
 
@@ -118,22 +123,48 @@ fn display_size_from_roots(roots: &[Value]) -> Option<(f64, f64)> {
     Some((width.max(height), width.min(height)))
 }
 
-/// True when a root's subtree is already in display space, detected by any
-/// descendant frame being wider than the portrait width (== display height in
-/// landscape). Portrait content can never exceed the portrait width.
-fn subtree_is_display_space(root: &Value, display_height: f64) -> bool {
-    fn any_wider_than(node: &Value, threshold: f64) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SubtreeOrientation {
+    PortraitNative,
+    DisplaySpace,
+    Ambiguous,
+}
+
+/// Classify the coordinate space of a root's descendants.
+///
+/// In landscape, the natural portrait canvas is `display_height` points wide
+/// and `display_width` points tall. A descendant whose right edge exceeds
+/// `display_height` must already be in display space. A descendant whose bottom
+/// edge exceeds `display_height` proves portrait-native coordinates, because
+/// that point would be outside the visible landscape display.
+fn subtree_orientation(root: &Value, display_height: f64) -> SubtreeOrientation {
+    fn visit(node: &Value, threshold: f64) -> SubtreeOrientation {
         let Some(children) = node.get("children").and_then(Value::as_array) else {
-            return false;
+            return SubtreeOrientation::Ambiguous;
         };
-        children.iter().any(|child| {
-            frame_rect(child).is_some_and(|(x, _, width, _)| x + width > threshold)
-                || any_wider_than(child, threshold)
-        })
+        let mut orientation = SubtreeOrientation::Ambiguous;
+        for child in children {
+            if let Some((x, y, width, height)) = frame_rect(child) {
+                if x + width > threshold {
+                    return SubtreeOrientation::DisplaySpace;
+                }
+                if y + height > threshold {
+                    orientation = SubtreeOrientation::PortraitNative;
+                }
+            }
+            match visit(child, threshold) {
+                SubtreeOrientation::DisplaySpace => return SubtreeOrientation::DisplaySpace,
+                SubtreeOrientation::PortraitNative => {
+                    orientation = SubtreeOrientation::PortraitNative;
+                }
+                SubtreeOrientation::Ambiguous => {}
+            }
+        }
+        orientation
     }
     // +1pt slack so an element spanning exactly the portrait width is not a
     // false positive.
-    any_wider_than(root, display_height + 1.0)
+    visit(root, display_height + 1.0)
 }
 
 fn rotate_descendant_frames(root: &mut Value, quarter_turns: i32, display_w: f64, display_h: f64) {
@@ -492,6 +523,24 @@ mod orientation_tests {
         normalize_native_ax_orientation(&mut snapshot, 3);
         // The "About" button (x+width = 1194 > portrait width) proves the whole
         // subtree is already display-space, so nothing is rotated.
+        assert_eq!(snapshot, before);
+    }
+
+    #[test]
+    fn leaves_ambiguous_left_side_subtree_untouched() {
+        let mut snapshot = json!({
+            "source": "native-ax",
+            "roots": [{
+                "role": "Application",
+                "frame": { "x": 0, "y": 0, "width": 1210, "height": 834 },
+                "children": [
+                    { "role": "Button", "AXLabel": "Narrow",
+                      "frame": { "x": 24, "y": 96, "width": 240, "height": 56 } }
+                ]
+            }]
+        });
+        let before = snapshot.clone();
+        normalize_native_ax_orientation(&mut snapshot, 3);
         assert_eq!(snapshot, before);
     }
 

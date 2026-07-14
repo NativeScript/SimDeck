@@ -6,6 +6,7 @@ import {
   AccessibilityOverlay,
   accessibilityDomTagName,
 } from "./AccessibilityOverlay";
+import type { AccessibilityNode } from "../../api/types";
 
 describe("accessibilityDomTagName", () => {
   it("uses source and component names for annotator-friendly custom tags", () => {
@@ -102,6 +103,33 @@ describe("AccessibilityOverlay", () => {
     expect(markup).not.toContain(">disabled<");
     expect(markup).not.toContain("; disabled");
     expect(markup).not.toContain(" title=");
+  });
+
+  it("tolerates non-string accessibility metadata", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AccessibilityOverlay, {
+        hoveredId: null,
+        roots: [
+          {
+            frame: { height: 844, width: 390, x: 0, y: 0 },
+            role: "application",
+            children: [
+              {
+                AXValue: 42,
+                frame: { height: 48, width: 180, x: 105, y: 720 },
+                placeholder: { text: "Email" },
+                sourceFile: null,
+                type: "TextField",
+              } as unknown as AccessibilityNode,
+            ],
+          },
+        ],
+        selectedId: "",
+      }),
+    );
+
+    expect(markup).toContain('data-simdeck-accessibility-value="42"');
+    expect(markup).toContain('data-simdeck-accessibility-label="42"');
   });
 
   it("draws label-free skeleton frames when requested", () => {
