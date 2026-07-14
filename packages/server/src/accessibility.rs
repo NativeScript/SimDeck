@@ -109,7 +109,7 @@ fn display_size_from_roots(roots: &[Value]) -> Option<(f64, f64)> {
     let mut best: Option<(f64, f64)> = None;
     for root in roots {
         if let Some((_, _, width, height)) = frame_rect(root) {
-            if width > 0.0 && height > 0.0 && best.map_or(true, |(bw, bh)| width * height > bw * bh)
+            if width > 0.0 && height > 0.0 && best.is_none_or(|(bw, bh)| width * height > bw * bh)
             {
                 best = Some((width, height));
             }
