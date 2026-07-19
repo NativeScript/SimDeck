@@ -138,13 +138,13 @@ Launch apps and open URLs through `/api/simulators/{udid}/action` with
 
 ## Camera
 
-| Method   | Path                                   | Purpose                                       |
-| -------- | -------------------------------------- | --------------------------------------------- |
-| `GET`    | `/api/simulators/{udid}/camera`        | Get daemon camera feed status                 |
-| `POST`   | `/api/simulators/{udid}/camera`        | Start the feed for the foreground app         |
-| `POST`   | `/api/simulators/{udid}/camera/source` | Switch the running daemon source              |
-| `GET`    | `/api/simulators/{udid}/camera/stream` | Stream browser H.264 packets over a WebSocket |
-| `DELETE` | `/api/simulators/{udid}/camera`        | Stop the daemon camera feed                   |
+| Method   | Path                                   | Purpose                                 |
+| -------- | -------------------------------------- | --------------------------------------- |
+| `GET`    | `/api/simulators/{udid}/camera`        | Get daemon camera feed status           |
+| `POST`   | `/api/simulators/{udid}/camera`        | Start the feed for the foreground app   |
+| `POST`   | `/api/simulators/{udid}/camera/source` | Switch the running daemon source        |
+| `POST`   | `/api/simulators/{udid}/camera/webrtc` | Negotiate a browser WebRTC camera track |
+| `DELETE` | `/api/simulators/{udid}/camera`        | Stop the daemon camera feed             |
 
 Start request:
 
@@ -161,7 +161,8 @@ Start request:
 Source `kind` is `placeholder`, `image`, `video`, or `camera`. Image and video
 sources require `arg`; local files must be absolute paths. Video sources also
 accept `http://`, `https://`, and `file://` URLs. Browser camera frames use the
-`camera` source and the camera WebSocket. `mirror` is `auto`, `on`, or `off`.
+`camera` source and an H.264 WebRTC media track. `mirror` is `auto`, `on`, or
+`off`.
 
 ## Performance
 

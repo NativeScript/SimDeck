@@ -10,9 +10,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+pub mod webrtc;
+
 const INJECTOR_NAME: &str = "libSimDeckCameraInjector.dylib";
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CameraSourceKind {
     Placeholder,
@@ -442,6 +444,7 @@ fn enrich_status(udid: &str, status: &mut Value) {
         "appLogPath".to_owned(),
         Value::String(camera_app_log_file(udid).display().to_string()),
     );
+    webrtc::enrich_status(udid, object);
 }
 
 fn record_injected_bundle(udid: &str, bundle_id: &str) -> Result<(), AppError> {

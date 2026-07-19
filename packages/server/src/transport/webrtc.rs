@@ -1178,7 +1178,7 @@ fn offer_h264_profile_level_ids(sdp: &str) -> Vec<String> {
         .collect()
 }
 
-fn h264_rtcp_feedback() -> Vec<RTCPFeedback> {
+pub(crate) fn h264_rtcp_feedback() -> Vec<RTCPFeedback> {
     vec![
         RTCPFeedback {
             typ: "goog-remb".to_owned(),
@@ -1364,7 +1364,7 @@ pub fn ice_transport_policy_label() -> String {
     }
 }
 
-fn ice_servers() -> Vec<RTCIceServer> {
+pub(crate) fn ice_servers() -> Vec<RTCIceServer> {
     client_ice_servers()
         .into_iter()
         .map(|server| RTCIceServer {
@@ -1375,7 +1375,7 @@ fn ice_servers() -> Vec<RTCIceServer> {
         .collect()
 }
 
-fn ice_transport_policy() -> RTCIceTransportPolicy {
+pub(crate) fn ice_transport_policy() -> RTCIceTransportPolicy {
     match ice_transport_policy_label().as_str() {
         "relay" => RTCIceTransportPolicy::Relay,
         _ => RTCIceTransportPolicy::All,

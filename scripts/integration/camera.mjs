@@ -345,7 +345,7 @@ async function runBrowserBenchmark() {
       true,
     );
     return {
-      transport: "websocket-webcodecs",
+      transport: "webrtc-h264",
       source: { width: 1280, height: 720, framesPerSecond: 30 },
       started,
       stopped,

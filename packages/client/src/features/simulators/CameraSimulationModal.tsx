@@ -9,7 +9,6 @@ import {
 
 import {
   fetchCameraStatus,
-  cameraSocketUrl,
   startCameraSimulation,
   stopCameraSimulation,
   switchCameraSimulationSource,
@@ -449,8 +448,8 @@ export function CameraSimulationModal({
   async function startCurrentCameraFeed(stream: MediaStream) {
     cameraFeedRef.current?.stop();
     cameraFeedRef.current = await startCameraFeed({
-      socketUrl: cameraSocketUrl(udid),
       stream,
+      udid,
       onError: setError,
       onStats: setCameraStats,
     });

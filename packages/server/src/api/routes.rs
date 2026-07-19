@@ -2,7 +2,7 @@ use crate::accessibility::{interactive_accessibility_snapshot, AccessibilitySour
 use crate::android::{self, AndroidBootOptions, AndroidBridge, AndroidEmulatorSpec};
 use crate::api::json::json;
 use crate::auth;
-use crate::camera::{self, CameraStartRequest, CameraSwitchRequest};
+use crate::camera::{self, CameraSourceKind, CameraStartRequest, CameraSwitchRequest};
 use crate::config::Config;
 use crate::config::UserConfig;
 use crate::deep_links;
@@ -927,8 +927,8 @@ pub fn router(state: AppState) -> Router {
             post(switch_camera_source),
         )
         .route(
-            "/api/simulators/{udid}/camera/stream",
-            get(camera_stream_socket),
+            "/api/simulators/{udid}/camera/webrtc",
+            post(camera_webrtc_offer),
         )
         .route("/api/simulators/{udid}/action", post(simulator_action))
         .route("/api/simulators/{udid}/control", get(control_socket))
@@ -3353,6 +3353,7 @@ async fn start_camera(
             "Open a user-installed app before starting the camera.",
         ));
     }
+    camera::webrtc::stop(&udid).await;
     let status = task::spawn_blocking(move || {
         camera::start_camera(camera::CameraStartOptions {
             udid,
@@ -3379,6 +3380,9 @@ async fn switch_camera_source(
             "Camera control is only supported for iOS simulators.",
         ));
     }
+    if payload.source.kind != CameraSourceKind::Camera {
+        camera::webrtc::stop(&udid).await;
+    }
     let status =
         task::spawn_blocking(move || camera::switch_camera(&udid, payload.source, payload.mirror))
             .await
@@ -3392,64 +3396,23 @@ async fn stop_camera(Path(udid): Path<String>) -> Result<Json<Value>, AppError> 
             "Camera control is only supported for iOS simulators.",
         ));
     }
+    camera::webrtc::stop(&udid).await;
     let status = task::spawn_blocking(move || camera::stop_camera(&udid))
         .await
         .map_err(|error| AppError::internal(format!("Camera task failed. {error}")))??;
     Ok(json(status))
 }
 
-async fn camera_stream_socket(Path(udid): Path<String>, websocket: WebSocketUpgrade) -> Response {
+async fn camera_webrtc_offer(
+    Path(udid): Path<String>,
+    Json(payload): Json<camera::webrtc::CameraWebRtcOffer>,
+) -> Result<Json<camera::webrtc::CameraWebRtcAnswer>, AppError> {
     if android::is_android_id(&udid) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json_value!({
-                "ok": false,
-                "error": "Camera control is only supported for iOS simulators.",
-            })),
-        )
-            .into_response();
+        return Err(AppError::bad_request(
+            "Camera control is only supported for iOS simulators.",
+        ));
     }
-    websocket
-        .max_message_size(2 * 1024 * 1024)
-        .on_upgrade(move |socket| handle_camera_stream_socket(udid, socket))
-        .into_response()
-}
-
-async fn handle_camera_stream_socket(udid: String, mut socket: WebSocket) {
-    if socket
-        .send(Message::Text(
-            json_value!({ "ready": true, "codec": "h264" })
-                .to_string()
-                .into(),
-        ))
-        .await
-        .is_err()
-    {
-        return;
-    }
-    while let Some(message) = socket.next().await {
-        let packet = match message {
-            Ok(Message::Binary(packet)) => packet,
-            Ok(Message::Close(_)) | Err(_) => break,
-            Ok(Message::Ping(_)) | Ok(Message::Pong(_)) | Ok(Message::Text(_)) => continue,
-        };
-        let packet_udid = udid.clone();
-        let result =
-            task::spawn_blocking(move || camera::publish_camera_packet(&packet_udid, &packet))
-                .await
-                .map_err(|error| AppError::internal(format!("Camera task failed. {error}")))
-                .and_then(|result| result);
-        if let Err(error) = result {
-            let _ = socket
-                .send(Message::Text(
-                    json_value!({ "error": error.to_string() })
-                        .to_string()
-                        .into(),
-                ))
-                .await;
-            break;
-        }
-    }
+    Ok(Json(camera::webrtc::create_answer(udid, payload).await?))
 }
 
 async fn simulator_action(

@@ -1,5 +1,4 @@
-import { accessTokenFromLocation, apiRequest } from "./client";
-import { apiUrl } from "./config";
+import { apiRequest } from "./client";
 import type {
   AccessibilitySourcePreference,
   AccessibilityTreeResponse,
@@ -230,17 +229,14 @@ export async function stopCameraSimulation(
   );
 }
 
-export function cameraSocketUrl(udid: string): string {
-  const url = new URL(
-    apiUrl(`/api/simulators/${encodeURIComponent(udid)}/camera/stream`),
-    window.location.href,
+export async function createCameraWebRtcAnswer(
+  udid: string,
+  offer: { clientId: string; sdp: string; type: "offer" },
+): Promise<RTCSessionDescriptionInit> {
+  return apiRequest<RTCSessionDescriptionInit>(
+    `/api/simulators/${encodeURIComponent(udid)}/camera/webrtc`,
+    { body: JSON.stringify(offer), method: "POST" },
   );
-  const token = accessTokenFromLocation();
-  if (token) {
-    url.searchParams.set("simdeckToken", token);
-  }
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
 }
 
 export async function fetchWebKitTargets(
