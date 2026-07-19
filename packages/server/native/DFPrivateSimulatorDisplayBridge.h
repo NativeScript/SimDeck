@@ -40,7 +40,12 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
 - (nullable instancetype)initWithUDID:(NSString *)udid error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(init(udid:));
 - (nullable instancetype)initWithUDID:(NSString *)udid
                          attachDisplay:(BOOL)attachDisplay
-                                 error:(NSError * _Nullable * _Nullable)error NS_DESIGNATED_INITIALIZER;
+                                 error:(NSError * _Nullable * _Nullable)error;
+- (nullable instancetype)initWithUDID:(NSString *)udid
+            preferredScreenDeviceName:(nullable NSString *)preferredScreenDeviceName
+                         attachDisplay:(BOOL)attachDisplay
+                                 error:(NSError * _Nullable * _Nullable)error NS_DESIGNATED_INITIALIZER
+    NS_SWIFT_NAME(init(udid:preferredScreenDeviceName:attachDisplay:));
 
 @property (nonatomic, weak, nullable) id<DFPrivateSimulatorDisplayBridgeDelegate> delegate;
 @property (nonatomic, readonly, getter=isDisplayReady) BOOL displayReady;
@@ -48,6 +53,7 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
 @property (nonatomic, readonly) CGSize displaySize;
 @property (nonatomic, readonly) NSInteger rotationQuarterTurns;
 
+- (void)seedRotationQuarterTurns:(NSInteger)quarterTurns NS_SWIFT_NAME(seedRotation(quarterTurns:));
 - (void)updateInputDisplaySize:(CGSize)displaySize;
 
 - (nullable CVPixelBufferRef)copyPixelBuffer CF_RETURNS_RETAINED;
@@ -98,6 +104,8 @@ NS_SWIFT_NAME(PrivateSimulatorDisplayBridge)
 
 - (BOOL)rotateRight:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(rotateRight());
 - (BOOL)rotateLeft:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(rotateLeft());
+- (BOOL)rotateByDegrees:(double)deltaDegrees
+                  error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(rotate(byDegrees:));
 
 - (void)disconnect;
 

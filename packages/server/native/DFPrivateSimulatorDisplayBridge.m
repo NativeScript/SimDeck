@@ -149,12 +149,21 @@ static NSString *DFActiveDeveloperDirectory(void) {
     return @"/Applications/Xcode.app/Contents/Developer";
 }
 
-static NSString *DFSimulatorKitExecutablePath(void) {
+static NSArray<NSString *> *DFSimulatorKitExecutablePaths(void) {
+    NSMutableArray<NSString *> *paths = [NSMutableArray array];
     NSString *developerDir = DFActiveDeveloperDirectory();
     if (developerDir.length > 0) {
-        return [developerDir stringByAppendingPathComponent:@"Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
+        [paths addObject:[developerDir stringByAppendingPathComponent:@"Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"]];
+
+        NSString *contentsDir = [developerDir stringByDeletingLastPathComponent];
+        if ([[contentsDir lastPathComponent] isEqualToString:@"Contents"]) {
+            [paths addObject:[contentsDir stringByAppendingPathComponent:@"SharedFrameworks/SimulatorKit.framework/SimulatorKit"]];
+        }
     }
-    return @"/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit";
+    [paths addObject:@"/Applications/Xcode-beta.app/Contents/SharedFrameworks/SimulatorKit.framework/SimulatorKit"];
+    [paths addObject:@"/Applications/Xcode.app/Contents/SharedFrameworks/SimulatorKit.framework/SimulatorKit"];
+    [paths addObject:@"/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
+    return paths;
 }
 
 typedef struct {
@@ -901,6 +910,65 @@ static NSDictionary<NSNumber *, id> * DFReadAvailableAdapterScreens(id adapterHo
     return screens;
 }
 
+static id DFScreenPropertiesForRawScreen(id rawScreen) {
+    return DFSendObjectIfResponds(rawScreen, "screenProperties");
+}
+
+static NSString *DFScreenStringProperty(id rawScreen, const char *selectorName) {
+    id properties = DFScreenPropertiesForRawScreen(rawScreen);
+    id value = DFSendObjectIfResponds(properties, selectorName);
+    if ([value isKindOfClass:[NSString class]]) {
+        return value;
+    }
+    return value != nil ? [value description] : nil;
+}
+
+static NSString *DFScreenSummary(id rawScreen) {
+    NSString *name = DFScreenStringProperty(rawScreen, "name") ?: @"?";
+    NSString *deviceName = DFScreenStringProperty(rawScreen, "deviceName") ?: @"?";
+    return [NSString stringWithFormat:@"%@/%@", name, deviceName];
+}
+
+static BOOL DFScreenMatchesPreferredDeviceName(id rawScreen, NSString *preferredDeviceName) {
+    NSString *preferred = DFTrimmedString(preferredDeviceName).lowercaseString;
+    if (preferred.length == 0) {
+        return NO;
+    }
+
+    for (NSString *candidate in @[
+        DFScreenStringProperty(rawScreen, "deviceName") ?: @"",
+        DFScreenStringProperty(rawScreen, "name") ?: @""
+    ]) {
+        NSString *normalized = DFTrimmedString(candidate).lowercaseString;
+        if (normalized.length > 0 && [normalized isEqualToString:preferred]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static NSNumber *DFSelectScreenID(NSDictionary<NSNumber *, id> *screens, NSString *preferredDeviceName) {
+    NSArray<NSNumber *> *sortedScreenIDs = [[screens allKeys] sortedArrayUsingSelector:@selector(compare:)];
+    NSString *preferred = DFTrimmedString(preferredDeviceName).lowercaseString;
+    if (preferred.length > 0) {
+        for (NSNumber *candidate in sortedScreenIDs) {
+            if (DFScreenMatchesPreferredDeviceName(screens[candidate], preferred)) {
+                return candidate;
+            }
+        }
+        if ([preferred isEqualToString:@"resizable"] && screens[@4] != nil) {
+            return @4;
+        }
+    }
+
+    for (NSNumber *candidate in sortedScreenIDs) {
+        if (candidate.unsignedIntValue > 0) {
+            return candidate;
+        }
+    }
+    return sortedScreenIDs.firstObject;
+}
+
 static uint32_t __attribute__((unused)) DFCallSwiftSelfGetterU32(id selfObject, const char *symbolName) {
     if (selfObject == nil) {
         return 0;
@@ -1096,6 +1164,7 @@ static BOOL __attribute__((unused)) DFCallSwiftThrowingMethodWithSelfAndObjectAn
     }
 
     uintptr_t thrownBits = 0;
+    uintptr_t indirectSecondArgument = secondArgument;
 #if defined(__aarch64__)
     __asm__ volatile(
         "mov x20, %1\n"
@@ -1105,7 +1174,7 @@ static BOOL __attribute__((unused)) DFCallSwiftThrowingMethodWithSelfAndObjectAn
         "blr %4\n"
         "mov %0, x21\n"
         : "=r" (thrownBits)
-        : "r" (selfObject), "r" (firstArgument), "r" (secondArgument), "r" (function)
+        : "r" (selfObject), "r" (firstArgument), "r" (&indirectSecondArgument), "r" (function)
         : "x0", "x1", "x20", "x21", "x30", "memory"
     );
 #elif defined(__x86_64__)
@@ -1117,7 +1186,7 @@ static BOOL __attribute__((unused)) DFCallSwiftThrowingMethodWithSelfAndObjectAn
         "callq *%4\n"
         "movq %%r12, %0\n"
         : "=r" (thrownBits)
-        : "r" (selfObject), "r" (firstArgument), "r" (secondArgument), "r" (function)
+        : "r" (selfObject), "r" (firstArgument), "r" (&indirectSecondArgument), "r" (function)
         : "rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "memory"
     );
 #else
@@ -1127,6 +1196,58 @@ static BOOL __attribute__((unused)) DFCallSwiftThrowingMethodWithSelfAndObjectAn
 
     if (thrownBits >= 0x1000) {
         DFLog(@"SimulatorKit connect(screen:inputs:) returned x21 = 0x%llx", (unsigned long long)thrownBits);
+    }
+
+    if (error != NULL) {
+        *error = nil;
+    }
+
+    return YES;
+}
+
+static BOOL DFCallSwiftThrowingMethodWithSelfAndObjectAndUWordByPattern(id selfObject, id firstArgument, uintptr_t secondArgument, const char *prefix, const char *suffix, const char *role, NSError **error) {
+    if (selfObject == nil || firstArgument == nil) {
+        return NO;
+    }
+
+    void *function = DFResolveSwiftSymbol(prefix, suffix, role);
+    if (function == NULL) {
+        return NO;
+    }
+
+    uintptr_t thrownBits = 0;
+    uintptr_t indirectSecondArgument = secondArgument;
+#if defined(__aarch64__)
+    __asm__ volatile(
+        "mov x20, %1\n"
+        "mov x0, %2\n"
+        "mov x1, %3\n"
+        "mov x21, xzr\n"
+        "blr %4\n"
+        "mov %0, x21\n"
+        : "=r" (thrownBits)
+        : "r" (selfObject), "r" (firstArgument), "r" (&indirectSecondArgument), "r" (function)
+        : "x0", "x1", "x20", "x21", "x30", "memory"
+    );
+#elif defined(__x86_64__)
+    __asm__ volatile(
+        "movq %1, %%r13\n"
+        "movq %2, %%rdi\n"
+        "movq %3, %%rsi\n"
+        "xorq %%r12, %%r12\n"
+        "callq *%4\n"
+        "movq %%r12, %0\n"
+        : "=r" (thrownBits)
+        : "r" (selfObject), "r" (firstArgument), "r" (&indirectSecondArgument), "r" (function)
+        : "rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "memory"
+    );
+#else
+    (void)thrownBits;
+    return NO;
+#endif
+
+    if (thrownBits >= 0x1000) {
+        DFLog(@"SimulatorKit %s returned x21 = 0x%llx", role ?: "throwing method", (unsigned long long)thrownBits);
     }
 
     if (error != NULL) {
@@ -1889,6 +2010,31 @@ static NSInteger DFRotationQuarterTurnsForDegrees(double degrees) {
         turns += 4;
     }
     return turns;
+}
+
+static BOOL DFDegreesForUIOrientation(NSInteger uiOrientation, double *degreesOut) {
+    if (degreesOut == NULL) {
+        return NO;
+    }
+
+    // Matches UIInterfaceOrientation raw values. Landscape interface values are
+    // mirrored from UIDeviceOrientation, so 3 maps to 270° and 4 maps to 90°.
+    switch (uiOrientation) {
+    case 1: // portrait
+        *degreesOut = 0.0;
+        return YES;
+    case 2: // portraitUpsideDown
+        *degreesOut = 180.0;
+        return YES;
+    case 3: // landscapeRight
+        *degreesOut = 270.0;
+        return YES;
+    case 4: // landscapeLeft
+        *degreesOut = 90.0;
+        return YES;
+    default:
+        return NO;
+    }
 }
 
 static void DFReconcileRotationWithDisplaySize(double *rotationDegrees, CGSize displaySize) {
@@ -2768,6 +2914,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     CVPixelBufferRef _latestPixelBuffer;
     CVPixelBufferRef _pendingDelegatePixelBuffer;
     NSString *_displayStatusValue;
+    NSString *_preferredScreenDeviceName;
     uint32_t _activeScreenID;
     CGSize _displayPixelSize;
     CGPoint _lastTouchPoint;
@@ -2780,6 +2927,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     BOOL _digitizerInputReady;
     BOOL _delegateFrameScheduled;
     double _deviceRotationDegrees;
+    BOOL _hasExplicitRotationState;
     DFSimulatorInputFamily _inputFamily;
 }
 
@@ -2796,11 +2944,27 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             return;
         }
 
-        NSString *simulatorKitPath = DFSimulatorKitExecutablePath();
-        if (!dlopen(simulatorKitPath.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL)) {
+        NSMutableArray<NSString *> *attemptedSimulatorKitPaths = [NSMutableArray array];
+        BOOL didLoadSimulatorKit = NO;
+        for (NSString *simulatorKitPath in DFSimulatorKitExecutablePaths()) {
+            if (simulatorKitPath.length == 0) {
+                continue;
+            }
+            [attemptedSimulatorKitPaths addObject:simulatorKitPath];
+            if (![[NSFileManager defaultManager] fileExistsAtPath:simulatorKitPath]) {
+                continue;
+            }
+            if (dlopen(simulatorKitPath.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL)) {
+                DFLog(@"Loaded SimulatorKit from %@", simulatorKitPath);
+                didLoadSimulatorKit = YES;
+                break;
+            }
+        }
+
+        if (!didLoadSimulatorKit) {
             loadError = DFMakeError(
                 DFPrivateSimulatorErrorCodeFrameworkLoadFailed,
-                [NSString stringWithFormat:@"Unable to load SimulatorKit from %@.", simulatorKitPath]
+                [NSString stringWithFormat:@"Unable to load SimulatorKit from any candidate path: %@.", attemptedSimulatorKitPaths]
             );
         }
     });
@@ -2873,7 +3037,9 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     size_t width = CVPixelBufferGetWidth(pixelBuffer);
     size_t height = CVPixelBufferGetHeight(pixelBuffer);
     _displayPixelSize = CGSizeMake((CGFloat)width, (CGFloat)height);
-    DFReconcileRotationWithDisplaySize(&_deviceRotationDegrees, _displayPixelSize);
+    if (!_hasExplicitRotationState) {
+        DFReconcileRotationWithDisplaySize(&_deviceRotationDegrees, _displayPixelSize);
+    }
     [self notifyDelegateOfFrame:pixelBuffer];
     DFRunOnMainAsync(^{
         if (self->_headlessHostWindow != nil) {
@@ -2894,6 +3060,17 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     if (properties != nil && [properties respondsToSelector:sel_registerName("uiOrientation")]) {
         NSInteger uiOrientation = ((NSInteger(*)(id, SEL))objc_msgSend)(properties, sel_registerName("uiOrientation"));
         DFLog(@"%@ uiOrientation=%ld", source ?: @"Headless screen", (long)uiOrientation);
+        double rotationDegrees = 0.0;
+        if (DFDegreesForUIOrientation(uiOrientation, &rotationDegrees)) {
+            double normalizedRotation = DFNormalizedDegrees(rotationDegrees);
+            _hasExplicitRotationState = YES;
+            if (fabs(DFNormalizedDegrees(_deviceRotationDegrees) - normalizedRotation) > 0.5) {
+                _deviceRotationDegrees = normalizedRotation;
+                if (_latestPixelBuffer != nil) {
+                    [self notifyDelegateOfFrame:_latestPixelBuffer];
+                }
+            }
+        }
     }
     [self updateStatus:@"Headless screen properties updated"];
 }
@@ -2959,10 +3136,17 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
 }
 
 - (nullable instancetype)initWithUDID:(NSString *)udid error:(NSError * _Nullable __autoreleasing *)error {
-    return [self initWithUDID:udid attachDisplay:YES error:error];
+    return [self initWithUDID:udid preferredScreenDeviceName:nil attachDisplay:YES error:error];
 }
 
 - (nullable instancetype)initWithUDID:(NSString *)udid
+                         attachDisplay:(BOOL)attachDisplay
+                                 error:(NSError * _Nullable __autoreleasing *)error {
+    return [self initWithUDID:udid preferredScreenDeviceName:nil attachDisplay:attachDisplay error:error];
+}
+
+- (nullable instancetype)initWithUDID:(NSString *)udid
+            preferredScreenDeviceName:(NSString *)preferredScreenDeviceName
                          attachDisplay:(BOOL)attachDisplay
                                  error:(NSError * _Nullable __autoreleasing *)error {
     if (![DFPrivateSimulatorDisplayBridge loadPrivateFrameworks:error]) {
@@ -2974,6 +3158,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         return nil;
     }
 
+    _preferredScreenDeviceName = [DFTrimmedString(preferredScreenDeviceName) copy];
     dispatch_queue_attr_t queueAttributes =
         dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
     _callbackQueue = dispatch_queue_create("org.nativescript.simdeck.private-screen", queueAttributes);
@@ -3146,18 +3331,19 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     }
 
     NSArray<NSNumber *> *sortedScreenIDs = [[screens allKeys] sortedArrayUsingSelector:@selector(compare:)];
-    NSNumber *selectedScreenID = nil;
-    for (NSNumber *candidate in sortedScreenIDs) {
-        if (candidate.unsignedIntValue > 0) {
-            selectedScreenID = candidate;
-            break;
-        }
-    }
+    NSNumber *selectedScreenID = DFSelectScreenID(screens, _preferredScreenDeviceName);
     if (selectedScreenID == nil) {
         selectedScreenID = sortedScreenIDs.firstObject;
     }
+    NSMutableArray<NSString *> *screenSummaries = [NSMutableArray arrayWithCapacity:sortedScreenIDs.count];
+    for (NSNumber *screenID in sortedScreenIDs) {
+        [screenSummaries addObject:[NSString stringWithFormat:@"%@=%@", screenID, DFScreenSummary(screens[screenID])]];
+    }
     _activeScreenID = selectedScreenID.unsignedIntValue;
-    DFLog(@"Discovered headless screens %@; selecting %@", sortedScreenIDs, selectedScreenID);
+    DFLog(@"Discovered headless screens %@; preferred=%@ selecting %@",
+          screenSummaries,
+          _preferredScreenDeviceName ?: @"default",
+          selectedScreenID);
 
     _rawScreen = screens[selectedScreenID];
     _activeScreen = DFInitSimDeviceScreen(screenClass, _device, _activeScreenID, error);
@@ -3211,6 +3397,14 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             );
         }
         return nil;
+    }
+
+    id initialDisplayProperties = DFScreenPropertiesForRawScreen(rawScreen);
+    if (initialDisplayProperties == nil && _activeScreen != rawScreen) {
+        initialDisplayProperties = DFScreenPropertiesForRawScreen(_activeScreen);
+    }
+    if (initialDisplayProperties != nil) {
+        [self handleDisplayPropertiesChanged:initialDisplayProperties source:@"Initial headless screen"];
     }
 
     SEL registerIOSurfacesSelector = sel_registerName("registerCallbackWithUUID:ioSurfacesChangeCallback:");
@@ -3419,32 +3613,52 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         [self updateStatus:@"Attaching private SimulatorKit display"];
 
         NSError *activationError = nil;
-        id renderableView = [self->_displayView respondsToSelector:sel_registerName("renderableView")]
-            ? DFSendObject(self->_displayView, "renderableView")
-            : nil;
-        if (renderableView == nil) {
-            activationError = DFMakeError(
-                DFPrivateSimulatorErrorCodeDisplayAttachFailed,
-                @"SimulatorKit did not expose a renderable view for the private display."
+        BOOL connected = NO;
+        BOOL isResizableDisplay = self->_preferredScreenDeviceName.length > 0 &&
+            [self->_preferredScreenDeviceName caseInsensitiveCompare:@"resizable"] == NSOrderedSame;
+        if (isResizableDisplay) {
+            connected = DFCallSwiftThrowingMethodWithSelfAndObjectAndUWordByPattern(
+                self->_displayView,
+                self->_activeScreen,
+                7,
+                "$s12SimulatorKit14SimDisplayViewC7connect6screen6inputsy",
+                "KFTj",
+                "SimDisplayView.connect(screen:inputs:)",
+                &activationError
             );
-        } else {
+            if (connected) {
+                DFLog(@"Activated private SimDisplayView.connect(screen:inputs:) for resizable screen.");
+            }
+        }
+
+        if (!connected) {
+            id renderableView = [self->_displayView respondsToSelector:sel_registerName("renderableView")]
+                ? DFSendObject(self->_displayView, "renderableView")
+                : nil;
+            if (renderableView == nil) {
+                activationError = DFMakeError(
+                    DFPrivateSimulatorErrorCodeDisplayAttachFailed,
+                    @"SimulatorKit did not expose a renderable view for the private display."
+                );
+            } else {
             // SimulatorKit.SimDisplayRenderableView.connect(screen:) — the ObjC
             // dispatch thunk (`Tj`) suffix is stable; the middle of the mangling
             // (parameter type) is what drifts.
-            BOOL connected = DFCallSwiftVoidMethodWithSelfAndObjectByPattern(
-                renderableView,
-                self->_activeScreen,
-                "$s12SimulatorKit24SimDisplayRenderableViewC7connect",
-                "FTj",
-                "SimDisplayRenderableView.connect(screen:)"
-            );
-            if (!connected) {
-                activationError = DFMakeError(
-                    DFPrivateSimulatorErrorCodeDisplayAttachFailed,
-                    @"Failed to locate SimulatorKit renderableView.connect(screen:)."
+                connected = DFCallSwiftVoidMethodWithSelfAndObjectByPattern(
+                    renderableView,
+                    self->_activeScreen,
+                    "$s12SimulatorKit24SimDisplayRenderableViewC7connect",
+                    "FTj",
+                    "SimDisplayRenderableView.connect(screen:)"
                 );
-            } else {
-                DFLog(@"Activated private renderableView.connect(screen:) without SimDisplayView.connect(screen:inputs:).");
+                if (!connected) {
+                    activationError = DFMakeError(
+                        DFPrivateSimulatorErrorCodeDisplayAttachFailed,
+                        @"Failed to locate SimulatorKit renderableView.connect(screen:)."
+                    );
+                } else {
+                    DFLog(@"Activated private renderableView.connect(screen:) without SimDisplayView.connect(screen:inputs:).");
+                }
             }
         }
 
@@ -3744,6 +3958,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         __block BOOL viewsUpdated = NO;
         measurement.value = DFNormalizedDegrees(measurement.value + deltaDegrees);
         self->_deviceRotationDegrees = measurement.value;
+        self->_hasExplicitRotationState = YES;
 
         NSInteger orientationValue = DFOrientationEquivalentValueForMeasurement(measurement);
         BOOL propagatedOrientation = DFSendDeviceOrientationEvent(self->_device, orientationValue);
@@ -3786,6 +4001,9 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
 
         DFLog(@"Rotated to %.0f° (orientation=%ld) viewsUpdated=%d orientationSent=%d",
               measurement.value, (long)orientationValue, viewsUpdated, propagatedOrientation);
+        if (self->_latestPixelBuffer != nil) {
+            [self notifyDelegateOfFrame:self->_latestPixelBuffer];
+        }
         success = YES;
     };
 
@@ -4035,6 +4253,30 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     return [self rotateByDegrees:-90.0 error:error];
 }
 
+- (void)seedRotationQuarterTurns:(NSInteger)quarterTurns {
+    dispatch_block_t work = ^{
+        NSInteger normalizedTurns = quarterTurns % 4;
+        if (normalizedTurns < 0) {
+            normalizedTurns += 4;
+        }
+        double seededDegrees = DFNormalizedDegrees((double)normalizedTurns * 90.0);
+        if (fabs(DFNormalizedDegrees(self->_deviceRotationDegrees) - seededDegrees) > 0.5 || !self->_hasExplicitRotationState) {
+            self->_deviceRotationDegrees = seededDegrees;
+            self->_hasExplicitRotationState = YES;
+            DFLog(@"Seeded rotation to %.0f° from host state", seededDegrees);
+            if (self->_latestPixelBuffer != nil) {
+                [self notifyDelegateOfFrame:self->_latestPixelBuffer];
+            }
+        }
+    };
+
+    if (dispatch_get_specific(DFPrivateSimulatorCallbackQueueKey) != NULL) {
+        work();
+    } else {
+        dispatch_sync(_callbackQueue, work);
+    }
+}
+
 - (void)disconnect {
     dispatch_block_t work = ^{
         if (self->_screenAdapter != nil && self->_screenAdapterCallbackUUID != nil) {
@@ -4154,7 +4396,9 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
 
     dispatch_block_t work = ^{
         self->_displayPixelSize = displaySize;
-        DFReconcileRotationWithDisplaySize(&self->_deviceRotationDegrees, self->_displayPixelSize);
+        if (!self->_hasExplicitRotationState) {
+            DFReconcileRotationWithDisplaySize(&self->_deviceRotationDegrees, self->_displayPixelSize);
+        }
         DFLog(@"Configured private HID display size %.0fx%.0f", displaySize.width, displaySize.height);
     };
 
