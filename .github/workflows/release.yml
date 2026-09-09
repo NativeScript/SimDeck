@@ -77,9 +77,63 @@ permissions:
   id-token: write # OIDC trusted publishing + npm provenance
 
 jobs:
+  # The release version is resolved once, up front, so the native CLI binaries
+  # are compiled from the same version that gets committed and published. (Doing
+  # the bump only in the release job meant the binaries were built from the
+  # previous Cargo.toml and reported a stale `--version`.)
+  resolve-version:
+    name: Resolve ${{ inputs.package }} version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        env:
+          INPUT_PACKAGE: ${{ inputs.package }}
+          BUMP: ${{ inputs.bump }}
+          PREID: ${{ inputs.preid }}
+        run: |
+          set -euo pipefail
+          case "$INPUT_PACKAGE" in
+            simdeck) dir="." ;;
+            react-native-simdeck) dir="packages/react-native-inspector" ;;
+            "@nativescript/simdeck-inspector") dir="packages/nativescript-inspector" ;;
+            simdeck-vscode) dir="packages/vscode-extension" ;;
+            *)
+              echo "Unknown package input: $INPUT_PACKAGE" >&2
+              exit 1
+              ;;
+          esac
+          cd "$dir"
+
+          if [[ "$BUMP" == "current" ]]; then
+            version="$(node -p "require('./package.json').version")"
+          elif [[ "$BUMP" == "prerelease" ]]; then
+            new="$(npm version prerelease --preid "$PREID" --no-git-tag-version)"
+            version="${new#v}"
+          else
+            new="$(npm version "$BUMP" --no-git-tag-version)"
+            version="${new#v}"
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Resolved ${INPUT_PACKAGE} release version: ${version}"
+
   build-native-artifacts:
     if: ${{ inputs.package == 'simdeck' }}
     name: Build ${{ matrix.platform }} native artifact
+    needs: resolve-version
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -87,24 +141,28 @@ jobs:
         include:
           - platform: macos-arm64
             runner: macos-latest
+            binary: build/simdeck-bin-darwin-arm64
             build_cmd: |
               rustup target add aarch64-apple-darwin
               SIMDECK_BUILD_TARGET=aarch64-apple-darwin npm run build:cli
               cp build/simdeck-bin build/simdeck-bin-darwin-arm64
           - platform: macos-x64
             runner: macos-latest
+            binary: build/simdeck-bin-darwin-x64
             build_cmd: |
               rustup target add x86_64-apple-darwin
               SIMDECK_DISABLE_X264=1 SIMDECK_BUILD_TARGET=x86_64-apple-darwin npm run build:cli
               cp build/simdeck-bin build/simdeck-bin-darwin-x64
           - platform: linux-x64
             runner: ubuntu-latest
+            binary: build/simdeck-bin-linux-x64
             build_cmd: |
               rustup target add x86_64-unknown-linux-gnu
               SIMDECK_DISABLE_X264=1 SIMDECK_BUILD_TARGET=x86_64-unknown-linux-gnu npm run build:cli
               cp build/simdeck-bin build/simdeck-bin-linux-x64
           - platform: windows-x64
             runner: windows-latest
+            binary: build/simdeck-bin-win32-x64.exe
             build_cmd: |
               rustup target add x86_64-pc-windows-gnu
               export SIMDECK_DISABLE_X264=1
@@ -150,11 +208,42 @@ jobs:
       - name: Install root dependencies
         run: npm ci
 
+      - name: Sync Rust CLI version
+        shell: bash
+        env:
+          NEW_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          perl -0pi -e 's/(\[package\]\s+name = "simdeck-server"\s+version = ")[^"]+(")/$1$ENV{NEW_VERSION}$2/s' packages/server/Cargo.toml
+          cargo update --manifest-path packages/server/Cargo.toml -p simdeck-server --precise "$NEW_VERSION"
+          grep -q "^version = \"${NEW_VERSION}\"$" packages/server/Cargo.toml
+          echo "Building simdeck-server ${NEW_VERSION}"
+
       - name: Build native artifact
         shell: bash
         run: |
           set -euo pipefail
           ${{ matrix.build_cmd }}
+
+      - name: Verify native artifact reports the release version
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.resolve-version.outputs.version }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "macOS" && "$BINARY" == *darwin-x64 && "$(uname -m)" == "arm64" ]] \
+            && ! arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
+            echo "::warning::Rosetta is unavailable on this runner; skipping the runtime version check for ${BINARY}."
+            exit 0
+          fi
+
+          actual="$("$BINARY" --version)"
+          echo "${BINARY} --version -> ${actual}"
+          if [[ "${actual##* }" != "$EXPECTED_VERSION" ]]; then
+            echo "::error::${BINARY} reports '${actual}' but this release is ${EXPECTED_VERSION}. The binary was built from a stale crate version." >&2
+            exit 1
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -169,8 +258,8 @@ jobs:
 
   release:
     name: Release ${{ inputs.package }} (${{ inputs.bump }})
-    needs: build-native-artifacts
-    if: ${{ always() && (needs.build-native-artifacts.result == 'success' || inputs.package != 'simdeck') }}
+    needs: [resolve-version, build-native-artifacts]
+    if: ${{ always() && needs.resolve-version.result == 'success' && (needs.build-native-artifacts.result == 'success' || inputs.package != 'simdeck') }}
     runs-on: macos-latest
     environment:
       name: ${{ inputs.dry-run && 'npm-publish-dry-run' || 'npm-publish' }}
@@ -269,21 +358,29 @@ jobs:
         shell: bash
         env:
           BUMP: ${{ inputs.bump }}
-          PREID: ${{ inputs.preid }}
+          RESOLVED_VERSION: ${{ needs.resolve-version.outputs.version }}
           PKG_DIR: ${{ steps.meta.outputs.dir }}
           SLUG: ${{ steps.meta.outputs.slug }}
         run: |
           set -euo pipefail
           cd "$PKG_DIR"
 
+          # The version was resolved by the resolve-version job (and already
+          # compiled into the native binaries); apply the same value here.
+          version="$RESOLVED_VERSION"
+          if [[ -z "$version" ]]; then
+            echo "resolve-version did not produce a version" >&2
+            exit 1
+          fi
+
           if [[ "$BUMP" == "current" ]]; then
-            version="$(node -p "require('./package.json').version")"
-          elif [[ "$BUMP" == "prerelease" ]]; then
-            new="$(npm version prerelease --preid "$PREID" --no-git-tag-version)"
-            version="${new#v}"
+            current="$(node -p "require('./package.json').version")"
+            if [[ "$current" != "$version" ]]; then
+              echo "Resolved version ${version} does not match package.json (${current})" >&2
+              exit 1
+            fi
           else
-            new="$(npm version "$BUMP" --no-git-tag-version)"
-            version="${new#v}"
+            npm version "$version" --no-git-tag-version --allow-same-version >/dev/null
           fi
 
           tag="${SLUG}-v${version}"
@@ -339,7 +436,11 @@ jobs:
 
       - name: Verify CLI artifacts are published for all supported hosts
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
+        shell: bash
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          set -euo pipefail
           for artifact in \
             build/simdeck-bin \
             build/simdeck-bin-darwin-arm64 \
@@ -348,6 +449,7 @@ jobs:
             build/simdeck-bin-win32-x64.exe
           do
             test -f "$artifact"
+            chmod +x "$artifact"
           done
 
           file build/simdeck-bin
@@ -357,6 +459,17 @@ jobs:
           file build/simdeck-bin-darwin-x64 | grep -q 'x86_64'
           file build/simdeck-bin-linux-x64 | grep -q 'ELF'
           file build/simdeck-bin-win32-x64.exe | grep -Eq 'PE32|PE32\+'
+
+          # The universal binary is what macOS users run; make sure it was
+          # compiled from this release's crate version, not the previous one.
+          for artifact in build/simdeck-bin build/simdeck-bin-darwin-arm64; do
+            actual="$("$artifact" --version)"
+            echo "${artifact} --version -> ${actual}"
+            if [[ "${actual##* }" != "$NEW_VERSION" ]]; then
+              echo "::error::${artifact} reports '${actual}' but this release is ${NEW_VERSION}." >&2
+              exit 1
+            fi
+          done
 
       # ---------- Apple codesign + notarize (root simdeck only) ----------
 
