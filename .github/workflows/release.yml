@@ -161,8 +161,10 @@ jobs:
         with:
           name: simdeck-native-${{ matrix.platform }}
           path: |
-            build/simdeck-bin*
-            build/*.exe
+            build/simdeck-bin-darwin-arm64
+            build/simdeck-bin-darwin-x64
+            build/simdeck-bin-linux-x64
+            build/simdeck-bin-win32-x64.exe
           if-no-files-found: error
 
   release:
