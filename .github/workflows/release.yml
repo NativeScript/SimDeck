@@ -77,8 +77,98 @@ permissions:
   id-token: write # OIDC trusted publishing + npm provenance
 
 jobs:
+  build-native-artifacts:
+    if: ${{ inputs.package == 'simdeck' }}
+    name: Build ${{ matrix.platform }} native artifact
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-latest
+            build_cmd: |
+              rustup target add aarch64-apple-darwin
+              SIMDECK_BUILD_TARGET=aarch64-apple-darwin npm run build:cli
+              cp build/simdeck-bin build/simdeck-bin-darwin-arm64
+          - platform: macos-x64
+            runner: macos-latest
+            build_cmd: |
+              rustup target add x86_64-apple-darwin
+              SIMDECK_DISABLE_X264=1 SIMDECK_BUILD_TARGET=x86_64-apple-darwin npm run build:cli
+              cp build/simdeck-bin build/simdeck-bin-darwin-x64
+          - platform: linux-x64
+            runner: ubuntu-latest
+            build_cmd: |
+              rustup target add x86_64-unknown-linux-gnu
+              SIMDECK_DISABLE_X264=1 SIMDECK_BUILD_TARGET=x86_64-unknown-linux-gnu npm run build:cli
+              cp build/simdeck-bin build/simdeck-bin-linux-x64
+          - platform: windows-x64
+            runner: windows-latest
+            build_cmd: |
+              rustup target add x86_64-pc-windows-gnu
+              $env:SIMDECK_DISABLE_X264 = '1'
+              $env:SIMDECK_BUILD_TARGET = 'x86_64-pc-windows-gnu'
+              npm run build:cli
+              Copy-Item build/simdeck-bin.exe build/simdeck-bin-win32-x64.exe
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/client/package-lock.json
+            packages/react-native-inspector/package-lock.json
+            packages/nativescript-inspector/package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,x86_64-unknown-linux-gnu,x86_64-pc-windows-gnu
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install pkg-config x264
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y pkg-config libx264-dev
+          else
+            choco install mingw --no-progress -y
+          fi
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Build native artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          ${{ matrix.build_cmd }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: simdeck-native-${{ matrix.platform }}
+          path: |
+            build/simdeck-bin*
+            build/*.exe
+          if-no-files-found: error
+
   release:
     name: Release ${{ inputs.package }} (${{ inputs.bump }})
+    needs: build-native-artifacts
+    if: ${{ always() && (needs.build-native-artifacts.result == 'success' || inputs.package != 'simdeck') }}
     runs-on: macos-latest
     environment:
       name: ${{ inputs.dry-run && 'npm-publish-dry-run' || 'npm-publish' }}
@@ -148,16 +238,6 @@ jobs:
           echo "slug=$slug" >> "$GITHUB_OUTPUT"
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Rust toolchain (root simdeck only)
-        if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin,x86_64-unknown-linux-gnu,x86_64-pc-windows-gnu
-
-      - name: Install native build dependencies
-        if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
-        run: brew install pkg-config x264 mingw-w64
-
       - name: Install root dependencies
         run: npm ci
 
@@ -168,6 +248,14 @@ jobs:
       - name: Install package dependencies
         if: ${{ steps.meta.outputs.kind == 'npm' }}
         run: npm ci --prefix "${{ steps.meta.outputs.dir }}"
+
+      - name: Download native artifacts
+        if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: simdeck-native-*
+          merge-multiple: true
+          path: build
 
       - name: Configure git author
         run: |
@@ -265,25 +353,13 @@ jobs:
 
       # ---------- Build (kind-specific) ----------
 
-      - name: Build root simdeck (macOS + Linux + Windows native artifacts + client + simdeck-test)
+      - name: Build root simdeck (Windows/Linux/macOS native artifacts + client + simdeck-test)
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
         run: |
-          SIMDECK_BUILD_TARGET=aarch64-apple-darwin npm run build:cli
-          cp build/simdeck-bin build/simdeck-bin-darwin-arm64
-
-          SIMDECK_DISABLE_X264=1 SIMDECK_BUILD_TARGET=x86_64-apple-darwin npm run build:cli
-          cp build/simdeck-bin build/simdeck-bin-darwin-x64
-
           lipo -create \
             -output build/simdeck-bin \
             build/simdeck-bin-darwin-arm64 \
             build/simdeck-bin-darwin-x64
-
-          SIMDECK_DISABLE_X264=1 SIMDECK_BUILD_TARGET=x86_64-unknown-linux-gnu npm run build:cli
-          cp build/simdeck-bin build/simdeck-bin-linux-x64
-
-          SIMDECK_DISABLE_X264=1 SIMDECK_BUILD_TARGET=x86_64-pc-windows-gnu npm run build:cli
-          cp build/simdeck-bin.exe build/simdeck-bin-win32-x64.exe
 
           npm run build:client
           npm run build:simdeck-test

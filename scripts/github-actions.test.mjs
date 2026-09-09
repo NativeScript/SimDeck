@@ -69,12 +69,14 @@ test("npm CLI wrapper resolves Windows x64 native binary", () => {
   assert.match(cliWrapper, /simdeck-bin-win32-x64\.exe/);
 });
 
-test("release workflow builds all supported native CLI artifacts", () => {
-  assert.match(releaseWorkflow, /x86_64-pc-windows-gnu/);
+test("release workflow builds supported native CLI artifacts per platform", () => {
+  assert.match(releaseWorkflow, /build-native-artifacts/);
+  assert.match(releaseWorkflow, /runs-on:\s*\$\{\{\s*matrix\.runner\s*\}\}/);
+  assert.match(releaseWorkflow, /linux-x64/);
+  assert.match(releaseWorkflow, /windows-x64/);
   assert.match(releaseWorkflow, /simdeck-bin-win32-x64\.exe/);
-  assert.match(releaseWorkflow, /x86_64-unknown-linux-gnu/);
   assert.match(releaseWorkflow, /simdeck-bin-linux-x64/);
-  assert.match(releaseWorkflow, /mingw-w64/);
+  assert.match(releaseWorkflow, /actions\/download-artifact@v4/);
 });
 
 test("CI runs Android emulator integration on Linux and Windows", () => {
