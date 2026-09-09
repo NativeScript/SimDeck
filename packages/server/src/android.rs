@@ -135,6 +135,7 @@ pub struct AndroidSharedVideoFrame {
 
 pub struct AndroidSharedVideoFrameStream {
     handle: String,
+    #[cfg_attr(not(unix), allow(dead_code))]
     fd: RawFd,
     ptr: *mut u8,
     length: usize,
@@ -1249,6 +1250,9 @@ fn round_android_h264_dimension(value: u32) -> u32 {
     }
 }
 
+// On non-unix hosts the early `return` is the whole body, which clippy reads
+// as needless; keeping one function body for both platforms is clearer.
+#[allow(clippy::needless_return)]
 fn open_android_shared_video_memory(handle: &str) -> Result<(RawFd, *mut u8, usize), AppError> {
     #[cfg(not(unix))]
     {

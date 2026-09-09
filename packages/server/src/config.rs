@@ -226,6 +226,7 @@ fn io_platform_uuid() -> Option<String> {
     parse_io_platform_uuid(&String::from_utf8_lossy(&output.stdout))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_io_platform_uuid(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
         let (_, value) = line.split_once("\"IOPlatformUUID\"")?;

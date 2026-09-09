@@ -3063,7 +3063,9 @@ mod tests {
     use crate::metrics::counters::Metrics;
     use crate::transport::packet::FramePacket;
     use bytes::Bytes;
-    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    #[cfg(target_os = "macos")]
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, RwLock};
     use std::time::Duration;
     use webrtc::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
@@ -3272,8 +3274,12 @@ mod tests {
             frame_sequence: AtomicU64::new(0),
             quality: Mutex::new(crate::android::AndroidH264StreamQuality::default()),
             source_kind: RwLock::new("shared-video"),
+            #[cfg(target_os = "macos")]
             encoder_handle: AtomicUsize::new(0),
+            #[cfg(target_os = "macos")]
             callback_user_data: AtomicUsize::new(0),
+            #[cfg(not(target_os = "macos"))]
+            software_encoder: Mutex::new(super::SoftwareH264Encoder::new(Default::default(), 30)),
             shared_frames_read: AtomicU64::new(0),
             encode_submissions: AtomicU64::new(0),
             encode_failures: AtomicU64::new(0),

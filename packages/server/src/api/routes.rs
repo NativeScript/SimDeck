@@ -5880,10 +5880,10 @@ mod tests {
 
     #[test]
     fn video_codec_modes_normalize_on_every_platform() {
-        assert_eq!(normalize_video_codec("auto"), Some("auto"));
-        assert_eq!(normalize_video_codec(" Hardware "), Some("hardware"));
-        assert_eq!(normalize_video_codec("software"), Some("software"));
-        assert_eq!(normalize_video_codec("h265"), None);
+        assert_eq!(super::normalize_video_codec("auto"), Some("auto"));
+        assert_eq!(super::normalize_video_codec(" Hardware "), Some("hardware"));
+        assert_eq!(super::normalize_video_codec("software"), Some("software"));
+        assert_eq!(super::normalize_video_codec("h265"), None);
     }
 
     #[test]

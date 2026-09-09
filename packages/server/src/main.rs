@@ -22,6 +22,8 @@ mod transport;
 mod webkit;
 
 pub(crate) mod android_emulation_control {
+    // Generated tonic client returns `tonic::Status` errors by value.
+    #![allow(clippy::result_large_err)]
     tonic::include_proto!("android.emulation.control");
 }
 

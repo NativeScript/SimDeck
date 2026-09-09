@@ -168,10 +168,11 @@ impl SoftwareH264Encoder {
         if matches!(&self.encoder, Some((current, _)) if *current == settings) {
             return Ok(());
         }
-        let encoder = Encoder::with_api_config(OpenH264API::from_source(), encoder_config(settings))
-            .map_err(|error| {
-                AppError::native(format!("OpenH264 encoder creation failed: {error}"))
-            })?;
+        let encoder =
+            Encoder::with_api_config(OpenH264API::from_source(), encoder_config(settings))
+                .map_err(|error| {
+                    AppError::native(format!("OpenH264 encoder creation failed: {error}"))
+                })?;
         if self.encoder.is_some() {
             self.reinitializations += 1;
         }
@@ -190,8 +191,7 @@ impl SoftwareH264Encoder {
         let force_keyframe = std::mem::take(&mut self.keyframe_pending);
         let started = Instant::now();
         let encoded = {
-            let (Some((_, encoder)), Some(yuv)) = (self.encoder.as_mut(), self.yuv.as_ref())
-            else {
+            let (Some((_, encoder)), Some(yuv)) = (self.encoder.as_mut(), self.yuv.as_ref()) else {
                 return Err(AppError::native(
                     "OpenH264 encoder state is missing a frame buffer.",
                 ));
@@ -252,7 +252,10 @@ pub(crate) fn software_h264_settings(
     height: u32,
 ) -> SoftwareH264Settings {
     let fps = fps.max(1);
-    let bits_per_pixel = quality.bits_per_pixel.unwrap_or(DEFAULT_BITS_PER_PIXEL).max(1);
+    let bits_per_pixel = quality
+        .bits_per_pixel
+        .unwrap_or(DEFAULT_BITS_PER_PIXEL)
+        .max(1);
     let min_bitrate = quality.min_bitrate.unwrap_or(DEFAULT_MIN_BITRATE_BPS);
     let computed = u64::from(width) * u64::from(height) * u64::from(bits_per_pixel);
     let bitrate_bps = computed
@@ -293,7 +296,7 @@ fn encoder_threads() -> u16 {
 }
 
 fn validate_frame(length: usize, width: u32, height: u32) -> Result<(), AppError> {
-    if width < 2 || height < 2 || width % 2 != 0 || height % 2 != 0 {
+    if width < 2 || height < 2 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
         return Err(AppError::native(format!(
             "OpenH264 needs even frame dimensions; got {width}x{height}."
         )));
@@ -383,13 +386,14 @@ mod tests {
             .expect("first encode")
             .expect("first frame is emitted");
         assert!(first.is_keyframe);
-        assert!(
-            first.data.starts_with(&[0, 0, 0, 1]) || first.data.starts_with(&[0, 0, 1])
-        );
+        assert!(first.data.starts_with(&[0, 0, 0, 1]) || first.data.starts_with(&[0, 0, 1]));
         let types = nal_unit_types(&first.data);
         assert!(types.contains(&7), "keyframe carries SPS: {types:?}");
         assert!(types.contains(&8), "keyframe carries PPS: {types:?}");
-        assert!(types.contains(&5), "keyframe carries an IDR slice: {types:?}");
+        assert!(
+            types.contains(&5),
+            "keyframe carries an IDR slice: {types:?}"
+        );
 
         let second = encoder
             .encode_rgba(&solid_rgba(64, 64, [30, 200, 30]), 64, 64)

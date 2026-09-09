@@ -10,9 +10,6 @@
 
 use serde_json::{json, Value};
 
-/// Operating system that provides the iOS simulator bridge.
-pub const IOS_SIMULATOR_REQUIRED_OS: &str = "macos";
-
 /// Rust target OS name for the running binary (`macos`, `windows`, `linux`).
 pub fn host_os() -> &'static str {
     std::env::consts::OS
@@ -127,10 +124,7 @@ mod tests {
     #[test]
     fn ios_support_matches_the_compiled_target() {
         assert_eq!(ios_simulator_supported(), cfg!(target_os = "macos"));
-        assert_eq!(
-            host_os() == IOS_SIMULATOR_REQUIRED_OS,
-            ios_simulator_supported()
-        );
+        assert_eq!(host_os() == "macos", ios_simulator_supported());
         assert_eq!(live_video_encoder() == "native", ios_simulator_supported());
     }
 
