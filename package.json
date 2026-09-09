@@ -19,6 +19,7 @@
     "scripts/studio-provider-bridge.mjs",
     "scripts/postinstall.mjs",
     "build/simdeck-bin",
+    "build/simdeck-bin.exe",
     "build/camera/",
     "build/simdeck-bin-darwin-arm64",
     "build/simdeck-bin-darwin-x64",

@@ -152,11 +152,11 @@ jobs:
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,x86_64-unknown-linux-gnu,x86_64-pc-windows-gnu
 
       - name: Install native build dependencies
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
-        run: brew install pkg-config x264
+        run: brew install pkg-config x264 mingw-w64
 
       - name: Install root dependencies
         run: npm ci
@@ -265,7 +265,7 @@ jobs:
 
       # ---------- Build (kind-specific) ----------
 
-      - name: Build root simdeck (macOS arm64+x64 binaries + client + simdeck-test)
+      - name: Build root simdeck (macOS + Linux + Windows native artifacts + client + simdeck-test)
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
         run: |
           SIMDECK_BUILD_TARGET=aarch64-apple-darwin npm run build:cli
@@ -279,20 +279,31 @@ jobs:
             build/simdeck-bin-darwin-arm64 \
             build/simdeck-bin-darwin-x64
 
+          SIMDECK_DISABLE_X264=1 SIMDECK_BUILD_TARGET=x86_64-unknown-linux-gnu npm run build:cli
+          cp build/simdeck-bin build/simdeck-bin-linux-x64
+
+          SIMDECK_DISABLE_X264=1 SIMDECK_BUILD_TARGET=x86_64-pc-windows-gnu npm run build:cli
+          cp build/simdeck-bin.exe build/simdeck-bin-win32-x64.exe
+
           npm run build:client
           npm run build:simdeck-test
 
-      - name: Verify CLI artifacts are macOS arm64+x64 binaries
+      - name: Verify CLI artifacts are published for all supported hosts
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
         run: |
           test -x build/simdeck-bin
           test -x build/simdeck-bin-darwin-arm64
           test -x build/simdeck-bin-darwin-x64
+          test -x build/simdeck-bin-linux-x64
+          test -x build/simdeck-bin-win32-x64.exe
+
           file build/simdeck-bin
           file build/simdeck-bin | grep -q 'arm64'
           file build/simdeck-bin | grep -q 'x86_64'
           file build/simdeck-bin-darwin-arm64 | grep -q 'arm64'
           file build/simdeck-bin-darwin-x64 | grep -q 'x86_64'
+          file build/simdeck-bin-linux-x64 | grep -q 'ELF'
+          file build/simdeck-bin-win32-x64.exe | grep -Eq 'PE32|PE32\+'
 
       # ---------- Apple codesign + notarize (root simdeck only) ----------
 

@@ -25,6 +25,10 @@ const ciWorkflow = readFileSync(
   new URL("../.github/workflows/ci.yml", import.meta.url),
   "utf8",
 );
+const releaseWorkflow = readFileSync(
+  new URL("../.github/workflows/release.yml", import.meta.url),
+  "utf8",
+);
 const packageJson = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 );
@@ -63,6 +67,14 @@ test("npm package declares Windows Android host support", () => {
 test("npm CLI wrapper resolves Windows x64 native binary", () => {
   assert.match(cliWrapper, /win32-x64/);
   assert.match(cliWrapper, /simdeck-bin-win32-x64\.exe/);
+});
+
+test("release workflow builds all supported native CLI artifacts", () => {
+  assert.match(releaseWorkflow, /x86_64-pc-windows-gnu/);
+  assert.match(releaseWorkflow, /simdeck-bin-win32-x64\.exe/);
+  assert.match(releaseWorkflow, /x86_64-unknown-linux-gnu/);
+  assert.match(releaseWorkflow, /simdeck-bin-linux-x64/);
+  assert.match(releaseWorkflow, /mingw-w64/);
 });
 
 test("CI runs Android emulator integration on Linux and Windows", () => {

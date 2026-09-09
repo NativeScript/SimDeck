@@ -29,8 +29,21 @@ if (!existsSync(binaryPath)) {
 
 function findPackageRoot(startDir) {
   let current = path.resolve(startDir);
+  const buildMarkers = [
+    "simdeck-bin",
+    "simdeck-bin.exe",
+    "simdeck-bin-darwin-arm64",
+    "simdeck-bin-darwin-x64",
+    "simdeck-bin-linux-arm64",
+    "simdeck-bin-linux-x64",
+    "simdeck-bin-win32-x64.exe",
+  ];
+
   while (true) {
-    if (existsSync(path.join(current, "build", "simdeck-bin"))) {
+    if (
+      existsSync(path.join(current, "package.json")) ||
+      buildMarkers.some((marker) => existsSync(path.join(current, "build", marker)))
+    ) {
       return current;
     }
     const parent = path.dirname(current);
@@ -57,18 +70,21 @@ function resolveBinaryPath(rootDir) {
     return null;
   }
 
-  const platformBinaryPath = path.join(rootDir, "build", binary);
-  if (existsSync(platformBinaryPath)) {
-    return platformBinaryPath;
-  }
+  const candidateNames = [
+    binary,
+    "simdeck-bin.exe",
+    "simdeck-bin",
+    ...Object.values(binaryByHost),
+  ];
 
-  for (const fallback of ["simdeck-bin.exe", "simdeck-bin"]) {
-    const fallbackBinaryPath = path.join(rootDir, "build", fallback);
-    if (existsSync(fallbackBinaryPath)) {
-      return fallbackBinaryPath;
+  for (const candidate of candidateNames) {
+    const candidatePath = path.join(rootDir, "build", candidate);
+    if (existsSync(candidatePath)) {
+      return candidatePath;
     }
   }
-  return platformBinaryPath;
+
+  return path.join(rootDir, "build", binary);
 }
 
 let child;
