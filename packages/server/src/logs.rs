@@ -243,9 +243,11 @@ mod tests {
     use super::{run_start_if_idle, LogRegistry, LogStreamPhase, LogStreamSpawner, LogStreamState};
     use crate::error::AppError;
     use crate::native::bridge::LogFilters;
+    #[cfg(unix)]
     use std::process::Stdio;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    #[cfg(unix)]
     use tokio::process::Command;
     use tokio::sync::Barrier;
     use tokio::time::{sleep, Duration, Instant};
@@ -309,6 +311,7 @@ mod tests {
         assert_eq!(state.status.lock().await.phase, LogStreamPhase::Running);
     }
 
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn ensure_started_only_spawns_one_process_and_streams_logs() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -371,6 +374,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn ensure_started_can_retry_after_spawn_failure() {
         let calls = Arc::new(AtomicUsize::new(0));
