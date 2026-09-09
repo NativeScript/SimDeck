@@ -77,6 +77,12 @@ test("release workflow builds supported native CLI artifacts per platform", () =
   assert.match(releaseWorkflow, /simdeck-bin-win32-x64\.exe/);
   assert.match(releaseWorkflow, /simdeck-bin-linux-x64/);
   assert.match(releaseWorkflow, /actions\/download-artifact@v4/);
+
+  const verifyStep = releaseWorkflow.indexOf("Verify CLI artifacts are published");
+  const commitStep = releaseWorkflow.indexOf("Commit and push version bump");
+  assert.ok(verifyStep !== -1, "artifact verification step should exist");
+  assert.ok(commitStep > verifyStep, "release commit should happen after artifact verification");
+  assert.match(releaseWorkflow, /test -f \\\"\$artifact\\\"/);
 });
 
 test("CI runs Android emulator integration on Linux and Windows", () => {

@@ -324,35 +324,6 @@ jobs:
           fi
           echo "dist_tag=${value}" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and push version bump
-        if: ${{ !inputs.dry-run }}
-        shell: bash
-        env:
-          PKG_DIR: ${{ steps.meta.outputs.dir }}
-          INPUT_PACKAGE: ${{ inputs.package }}
-          NEW_VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
-          BUMP: ${{ inputs.bump }}
-        run: |
-          set -euo pipefail
-          if [[ "$BUMP" == "current" ]]; then
-            git tag -f "${TAG}"
-            git push --force origin "${TAG}"
-            exit 0
-          fi
-
-          git add "${PKG_DIR}/package.json"
-          if [[ -f "${PKG_DIR}/package-lock.json" ]]; then
-            git add "${PKG_DIR}/package-lock.json"
-          fi
-          if [[ "${INPUT_PACKAGE}" == "simdeck" ]]; then
-            git add packages/server/Cargo.toml packages/server/Cargo.lock
-          fi
-          git commit -m "chore(release): ${INPUT_PACKAGE}@${NEW_VERSION}"
-          git tag "${TAG}"
-          git push origin HEAD:${{ github.ref_name }}
-          git push origin "${TAG}"
-
       # ---------- Build (kind-specific) ----------
 
       - name: Build root simdeck (Windows/Linux/macOS native artifacts + client + simdeck-test)
@@ -369,11 +340,15 @@ jobs:
       - name: Verify CLI artifacts are published for all supported hosts
         if: ${{ steps.meta.outputs.kind == 'npm-cli' }}
         run: |
-          test -x build/simdeck-bin
-          test -x build/simdeck-bin-darwin-arm64
-          test -x build/simdeck-bin-darwin-x64
-          test -x build/simdeck-bin-linux-x64
-          test -x build/simdeck-bin-win32-x64.exe
+          for artifact in \
+            build/simdeck-bin \
+            build/simdeck-bin-darwin-arm64 \
+            build/simdeck-bin-darwin-x64 \
+            build/simdeck-bin-linux-x64 \
+            build/simdeck-bin-win32-x64.exe
+          do
+            test -f "$artifact"
+          done
 
           file build/simdeck-bin
           file build/simdeck-bin | grep -q 'arm64'
@@ -557,6 +532,35 @@ jobs:
             "$RUNNER_TEMP/notary.p8" \
             "$RUNNER_TEMP/simdeck-bin.zip" \
             "$RUNNER_TEMP/notary-result.json" || true
+
+      - name: Commit and push version bump
+        if: ${{ !inputs.dry-run }}
+        shell: bash
+        env:
+          PKG_DIR: ${{ steps.meta.outputs.dir }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+          NEW_VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          if [[ "$BUMP" == "current" ]]; then
+            git tag -f "${TAG}"
+            git push --force origin "${TAG}"
+            exit 0
+          fi
+
+          git add "${PKG_DIR}/package.json"
+          if [[ -f "${PKG_DIR}/package-lock.json" ]]; then
+            git add "${PKG_DIR}/package-lock.json"
+          fi
+          if [[ "${INPUT_PACKAGE}" == "simdeck" ]]; then
+            git add packages/server/Cargo.toml packages/server/Cargo.lock
+          fi
+          git commit -m "chore(release): ${INPUT_PACKAGE}@${NEW_VERSION}"
+          git tag "${TAG}"
+          git push origin HEAD:${{ github.ref_name }}
+          git push origin "${TAG}"
 
       - name: Build npm package
         if: ${{ steps.meta.outputs.kind == 'npm' }}
