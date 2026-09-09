@@ -628,9 +628,9 @@ export function AppShell({
   );
   const [streamConfigApplyKey, setStreamConfigApplyKey] = useState(0);
   const [streamConfigReady, setStreamConfigReady] = useState(false);
-  // Non-empty when the connected server build cannot encode live video (for
-  // example the Windows or Linux CLI). The stream stays paused and the reason
-  // is shown instead of retrying WebRTC offers that can never succeed.
+  // Non-empty when the connected server reports that it cannot encode live
+  // video at all. The stream stays paused and the reason is shown instead of
+  // retrying WebRTC offers that can never succeed.
   const [liveVideoUnavailable, setLiveVideoUnavailable] = useState("");
   const [touchIndicators, setTouchIndicators] = useState<TouchIndicator[]>([]);
   const [selectedSimulatorState, setSelectedSimulatorState] =

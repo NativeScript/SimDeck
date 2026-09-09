@@ -5,17 +5,26 @@ SimDeck streams live device video to the browser. Local iOS sessions default to 
 iOS simulator H.264 uses VideoToolbox for hardware encoding and x264 for software encoding.
 Android emulator H.264 uses the emulator gRPC `streamScreenshot` API when SimDeck owns the boot. SimDeck receives raw RGBA frames, pads odd dimensions for H.264, and encodes them on the Mac. If the gRPC endpoint is unavailable, SimDeck falls back to the emulator `-share-vid` display surface and reads BGRA frames from the `videmulator<console-port>` shared memory region.
 
-## Platform requirement
+## Encoders per platform
 
-Live video needs the macOS build. Both encoders above live in the macOS native
-bridge, so the Windows and Linux CLIs link a stub instead and cannot stream iOS
-simulators or Android emulators to the browser. Those builds still manage
-Android emulators, but `--video-codec`, stream quality, and the encoder menu
-have no effect there. The service reports this through `liveVideo` in
-`GET /api/health` and `GET /api/stream-quality`, prints a `Live video:` note
-when it starts, and answers WebRTC offers with `501 Not Implemented` and the
-same explanation. The browser client hides the retry loop and shows that
-message in place of the device screen.
+| Host            | iOS simulator stream          | Android emulator stream                  |
+| --------------- | ----------------------------- | ---------------------------------------- |
+| macOS           | VideoToolbox hardware or x264 | VideoToolbox hardware or x264            |
+| Windows / Linux | Not available                 | OpenH264 software, built into the binary |
+
+Both macOS encoders live in the macOS native bridge, which also owns iOS
+simulator control. The Windows and Linux CLIs link a stub in its place, so they
+cannot drive iOS simulators at all. Android emulator frames on those hosts are
+encoded in Rust with Cisco's OpenH264 (baseline profile, Annex B) and go
+through the same WebRTC path as on macOS. Stream quality profiles and the
+frame-rate and resolution controls apply there too; `--video-codec hardware`
+has no hardware encoder to select and behaves like `software`.
+
+The service reports this through `liveVideo` in `GET /api/health` and
+`GET /api/stream-quality` (`encoder` is `native` or `openh264`, `iosSimulator`
+is `false` off macOS), prints a `Live video:` note when it starts on Windows or
+Linux, and answers iOS simulator WebRTC offers there with `501 Not Implemented`
+and the same explanation.
 
 ## When encoding runs
 

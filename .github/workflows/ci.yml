@@ -50,6 +50,40 @@ jobs:
       - name: Rust unit tests
         run: cargo test --manifest-path packages/server/Cargo.toml
 
+  rust-non-macos:
+    name: Rust unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            packages/server/target
+          key: rust-${{ runner.os }}-${{ hashFiles('packages/server/Cargo.lock', 'packages/server/Cargo.toml', 'packages/server/build.rs', 'packages/server/src/**/*.rs', 'packages/server/native_stubs.c') }}
+          restore-keys: |
+            rust-${{ runner.os }}-
+
+      # The macOS job cannot compile the OpenH264 software encoder or the
+      # native stubs, so lint and test them where they are actually built.
+      - name: Clippy
+        run: cargo clippy --manifest-path packages/server/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust unit tests
+        run: cargo test --manifest-path packages/server/Cargo.toml
+
   client:
     name: Client lint, build, and tests
     runs-on: ubuntu-latest

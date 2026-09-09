@@ -53,9 +53,10 @@ curl -X POST \
 | `POST` | `/api/stream-quality`      | Update stream quality settings                             |
 
 See [Health and metrics](/api/health) for details. Both `/api/health` and
-`/api/stream-quality` include a `liveVideo` block; check `liveVideo.supported`
-before opening a WebRTC offer, because Windows and Linux builds cannot encode
-the live stream and answer offers with `501` and the `liveVideo.reason` text.
+`/api/stream-quality` include a `liveVideo` block. Android emulators stream on
+every platform (`encoder` is `native` on macOS and `openh264` elsewhere); check
+`liveVideo.iosSimulator` before opening an iOS simulator WebRTC offer, because
+Windows and Linux builds answer those with `501` and `iosSimulatorReason`.
 
 ## Devices
 

@@ -10,17 +10,25 @@ use crate::api::routes::{
 };
 use crate::error::AppError;
 use crate::metrics::counters::ClientStreamStats;
+#[cfg(target_os = "macos")]
 use crate::native::ffi;
 use crate::transport::packet::{FramePacket, SharedFrame};
+#[cfg(not(target_os = "macos"))]
+use crate::transport::software_h264::{EncodedH264Frame, SoftwareH264Encoder};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
+#[cfg(target_os = "macos")]
 use std::ffi::{c_void, CStr, CString};
 use std::net::{SocketAddr, TcpStream};
+#[cfg(target_os = "macos")]
 use std::ptr;
+#[cfg(target_os = "macos")]
 use std::slice;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+#[cfg(target_os = "macos")]
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::thread;
 use std::time::Duration;
@@ -206,16 +214,16 @@ pub async fn create_answer(
             "WebRTC payload must include type `offer`.",
         ));
     }
-    // Both the iOS simulator session and the Android emulator source encode
-    // through the macOS native bridge. Non-macOS builds link `native_stubs.c`,
-    // so fail here with the platform explanation instead of letting the stub
-    // encoder fail deeper in the pipeline.
-    if !crate::platform::live_video_supported() {
+    let is_android = android::is_android_id(&udid);
+    // Android emulator frames encode in Rust on every platform. iOS simulator
+    // sessions need the macOS native bridge, which non-macOS builds replace
+    // with `native_stubs.c`, so answer with the platform explanation instead of
+    // letting the stubbed session fail deeper in the pipeline.
+    if !is_android && !crate::platform::ios_simulator_supported() {
         return Err(AppError::unsupported(
-            crate::platform::live_video_unsupported_message(),
+            crate::platform::ios_simulator_unsupported_message(),
         ));
     }
-    let is_android = android::is_android_id(&udid);
     if payload.transport.is_some() {
         return Err(AppError::bad_request(
             "Unsupported WebRTC transport. SimDeck streams WebRTC video over media tracks.",
@@ -1378,6 +1386,9 @@ fn ice_transport_policy() -> RTCIceTransportPolicy {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
+type SoftwareEncodeResult = Result<Option<EncodedH264Frame>, AppError>;
+
 #[derive(Clone)]
 pub(crate) struct AndroidWebRtcSource {
     inner: Arc<AndroidWebRtcSourceInner>,
@@ -1393,8 +1404,12 @@ struct AndroidWebRtcSourceInner {
     frame_sequence: AtomicU64,
     quality: Mutex<android::AndroidH264StreamQuality>,
     source_kind: RwLock<&'static str>,
+    #[cfg(target_os = "macos")]
     encoder_handle: AtomicUsize,
+    #[cfg(target_os = "macos")]
     callback_user_data: AtomicUsize,
+    #[cfg(not(target_os = "macos"))]
+    software_encoder: Mutex<SoftwareH264Encoder>,
     shared_frames_read: AtomicU64,
     encode_submissions: AtomicU64,
     encode_failures: AtomicU64,
@@ -1450,8 +1465,15 @@ impl AndroidWebRtcSource {
             frame_sequence: AtomicU64::new(0),
             quality: Mutex::new(config.quality),
             source_kind: RwLock::new("shared-video"),
+            #[cfg(target_os = "macos")]
             encoder_handle: AtomicUsize::new(0),
+            #[cfg(target_os = "macos")]
             callback_user_data: AtomicUsize::new(0),
+            #[cfg(not(target_os = "macos"))]
+            software_encoder: Mutex::new(SoftwareH264Encoder::new(
+                config.quality,
+                android_h264_target_fps(config.quality),
+            )),
             shared_frames_read: AtomicU64::new(0),
             encode_submissions: AtomicU64::new(0),
             encode_failures: AtomicU64::new(0),
@@ -1469,6 +1491,7 @@ impl AndroidWebRtcSource {
         });
 
         let source = Self { inner };
+        #[cfg(target_os = "macos")]
         source.inner.create_native_encoder()?;
         sources.push(Arc::downgrade(&source.inner));
         drop(sources);
@@ -1849,6 +1872,14 @@ fn android_shutdown_requested(receiver: &mut broadcast::Receiver<()>) -> bool {
 impl Drop for AndroidWebRtcSourceInner {
     fn drop(&mut self) {
         let _ = self.shutdown_tx.send(());
+        #[cfg(target_os = "macos")]
+        self.release_native_encoder();
+    }
+}
+
+impl AndroidWebRtcSourceInner {
+    #[cfg(target_os = "macos")]
+    fn release_native_encoder(&mut self) {
         let handle = self.encoder_handle.swap(0, Ordering::AcqRel);
         if handle != 0 {
             unsafe {
@@ -1862,9 +1893,8 @@ impl Drop for AndroidWebRtcSourceInner {
             }
         }
     }
-}
 
-impl AndroidWebRtcSourceInner {
+    #[cfg(target_os = "macos")]
     fn create_native_encoder(self: &Arc<Self>) -> Result<(), AppError> {
         let weak = Arc::downgrade(self);
         let user_data = Weak::into_raw(weak) as *mut c_void;
@@ -1951,6 +1981,11 @@ impl AndroidWebRtcSourceInner {
             *self.latest_keyframe.write().unwrap() = None;
         }
         drop(current);
+        #[cfg(not(target_os = "macos"))]
+        self.software_encoder
+            .lock()
+            .unwrap()
+            .reconfigure(quality, android_h264_target_fps(quality));
         self.request_keyframe();
     }
 
@@ -1958,12 +1993,17 @@ impl AndroidWebRtcSourceInner {
         self.metrics
             .keyframe_requests
             .fetch_add(1, Ordering::Relaxed);
-        let handle = self.encoder_handle.load(Ordering::Acquire);
-        if handle != 0 {
-            unsafe {
-                ffi::xcw_native_h264_encoder_request_keyframe(handle as *mut c_void);
+        #[cfg(target_os = "macos")]
+        {
+            let handle = self.encoder_handle.load(Ordering::Acquire);
+            if handle != 0 {
+                unsafe {
+                    ffi::xcw_native_h264_encoder_request_keyframe(handle as *mut c_void);
+                }
             }
         }
+        #[cfg(not(target_os = "macos"))]
+        self.software_encoder.lock().unwrap().request_keyframe();
     }
 
     fn stats_snapshot(&self) -> Value {
@@ -2000,6 +2040,12 @@ impl AndroidWebRtcSourceInner {
         })
     }
 
+    #[cfg(not(target_os = "macos"))]
+    fn native_encoder_stats(&self) -> Value {
+        self.software_encoder.lock().unwrap().stats()
+    }
+
+    #[cfg(target_os = "macos")]
     fn native_encoder_stats(&self) -> Value {
         let handle = self.encoder_handle.load(Ordering::Acquire);
         if handle == 0 {
@@ -2017,6 +2063,70 @@ impl AndroidWebRtcSourceInner {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
+    fn encode_android_shared_video_frame(
+        &self,
+        frame: &android::AndroidSharedVideoFrame,
+    ) -> Result<(), AppError> {
+        self.encode_software_frame(frame.width, frame.height, frame.timestamp_us, |encoder| {
+            encoder.encode_bgra(&frame.bgra, frame.width, frame.height)
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn encode_android_rgba_frame(
+        &self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        timestamp_us: u64,
+    ) -> Result<(), AppError> {
+        self.encode_software_frame(width, height, timestamp_us, |encoder| {
+            encoder.encode_rgba(rgba, width, height)
+        })
+    }
+
+    /// Runs one frame through the OpenH264 encoder and publishes the result
+    /// the same way the macOS native callback does.
+    #[cfg(not(target_os = "macos"))]
+    fn encode_software_frame(
+        &self,
+        width: u32,
+        height: u32,
+        timestamp_us: u64,
+        encode: impl FnOnce(&mut SoftwareH264Encoder) -> SoftwareEncodeResult,
+    ) -> Result<(), AppError> {
+        let submit_started = Instant::now();
+        self.encode_submissions.fetch_add(1, Ordering::Relaxed);
+        let result = {
+            let mut encoder = self.software_encoder.lock().unwrap();
+            encode(&mut encoder)
+        };
+        self.latest_encode_submit_us
+            .store(duration_us(submit_started.elapsed()), Ordering::Relaxed);
+        match result {
+            Ok(Some(frame)) => {
+                self.publish_frame(FramePacket {
+                    frame_sequence: 0,
+                    timestamp_us,
+                    is_keyframe: frame.is_keyframe,
+                    width,
+                    height,
+                    codec: Some("h264".to_owned()),
+                    description: None,
+                    data: frame.data,
+                });
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(error) => {
+                self.encode_failures.fetch_add(1, Ordering::Relaxed);
+                Err(error)
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
     fn encode_android_shared_video_frame(
         &self,
         frame: &android::AndroidSharedVideoFrame,
@@ -2050,6 +2160,7 @@ impl AndroidWebRtcSourceInner {
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
     fn encode_android_rgba_frame(
         &self,
         rgba: &[u8],
@@ -2086,15 +2197,15 @@ impl AndroidWebRtcSourceInner {
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
     fn handle_encoded_frame(&self, frame: &ffi::xcw_native_frame) {
         let Some(data) = (unsafe { copy_native_shared_bytes(frame.data) }) else {
             return;
         };
         let description = unsafe { copy_native_shared_bytes(frame.description) };
         let codec = unsafe { native_c_string(frame.codec) };
-        let frame_sequence = self.frame_sequence.fetch_add(1, Ordering::Relaxed) + 1;
-        let packet = Arc::new(FramePacket {
-            frame_sequence,
+        self.publish_frame(FramePacket {
+            frame_sequence: 0,
             timestamp_us: frame.timestamp_us,
             is_keyframe: frame.is_keyframe,
             width: frame.width,
@@ -2103,6 +2214,13 @@ impl AndroidWebRtcSourceInner {
             description,
             data,
         });
+    }
+
+    /// Assigns the next frame sequence number and fans the packet out to
+    /// WebRTC subscribers, remembering keyframes for late joiners.
+    fn publish_frame(&self, mut packet: FramePacket) {
+        packet.frame_sequence = self.frame_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+        let packet = Arc::new(packet);
         self.metrics.frames_encoded.fetch_add(1, Ordering::Relaxed);
         if packet.is_keyframe {
             self.metrics
@@ -2114,6 +2232,7 @@ impl AndroidWebRtcSourceInner {
     }
 }
 
+#[cfg(target_os = "macos")]
 unsafe extern "C" fn android_h264_encoder_frame_callback(
     frame: *const ffi::xcw_native_frame,
     user_data: *mut c_void,
@@ -2129,6 +2248,7 @@ unsafe extern "C" fn android_h264_encoder_frame_callback(
     let _ = Weak::into_raw(weak);
 }
 
+#[cfg(target_os = "macos")]
 unsafe fn copy_native_shared_bytes(bytes: ffi::xcw_native_shared_bytes) -> Option<Bytes> {
     let copied = if bytes.data.is_null() || bytes.length == 0 {
         None
@@ -2142,6 +2262,7 @@ unsafe fn copy_native_shared_bytes(bytes: ffi::xcw_native_shared_bytes) -> Optio
     copied
 }
 
+#[cfg(target_os = "macos")]
 unsafe fn native_c_string(value: *const i8) -> Option<String> {
     if value.is_null() {
         return None;
@@ -2149,6 +2270,7 @@ unsafe fn native_c_string(value: *const i8) -> Option<String> {
     CStr::from_ptr(value).to_str().ok().map(ToOwned::to_owned)
 }
 
+#[cfg(target_os = "macos")]
 unsafe fn take_native_string(value: *mut i8) -> Option<String> {
     if value.is_null() {
         return None;
@@ -2158,6 +2280,7 @@ unsafe fn take_native_string(value: *mut i8) -> Option<String> {
     string
 }
 
+#[cfg(target_os = "macos")]
 unsafe fn take_native_error(error: *mut i8, fallback: &str) -> AppError {
     if error.is_null() {
         return AppError::native(fallback);

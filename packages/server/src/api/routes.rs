@@ -5889,11 +5889,16 @@ mod tests {
     #[test]
     fn stream_quality_state_reports_live_video_capability() {
         let value = crate::platform::live_video_capability_value();
+        assert_eq!(value["supported"].as_bool(), Some(true));
+        assert_eq!(value["androidEmulator"].as_bool(), Some(true));
         assert_eq!(
-            value["supported"].as_bool(),
-            Some(crate::platform::live_video_supported())
+            value["iosSimulator"].as_bool(),
+            Some(crate::platform::ios_simulator_supported())
         );
-        assert_eq!(value["requires"].as_str(), Some("macos"));
+        assert_eq!(
+            value["encoder"].as_str(),
+            Some(crate::platform::live_video_encoder())
+        );
     }
 
     #[test]

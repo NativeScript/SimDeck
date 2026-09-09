@@ -8,21 +8,22 @@
 
 ## Platform support
 
-The npm package installs a native CLI for macOS, Windows, and Linux, but only
-the macOS build includes the native simulator bridge and H.264 encoder.
+The npm package installs a native CLI for macOS, Windows, and Linux. Only the
+macOS build includes the private simulator bridge, so iOS simulators need a
+Mac. Android emulators work everywhere, including the live browser stream.
 
-| Capability                                         | macOS | Windows / Linux         |
-| -------------------------------------------------- | ----- | ----------------------- |
-| iOS simulator control, inspection, and streaming   | Yes   | No                      |
-| Android emulator control and inspection            | Yes   | Yes                     |
-| Live H.264 browser stream (iOS and Android)        | Yes   | No                      |
-| `--video-codec`, stream quality, and encoder menus | Yes   | Reported as unavailable |
+| Capability                                       | macOS                | Windows / Linux        |
+| ------------------------------------------------ | -------------------- | ---------------------- |
+| iOS simulator control, inspection, and streaming | Yes                  | No                     |
+| Android emulator control and inspection          | Yes                  | Yes                    |
+| Android emulator live H.264 browser stream       | VideoToolbox or x264 | OpenH264 software      |
+| `--video-codec hardware`                         | VideoToolbox         | Falls back to software |
 
 On Windows and Linux the CLI prints a `Live video:` note after the service
-URLs, `GET /api/health` and `GET /api/stream-quality` report
-`liveVideo.supported: false` with the reason, the browser shows that reason in
-place of the device screen, and the WebRTC offer endpoint answers `501` with
-the same message. See [Video and streaming](./video.md) for the encoder details.
+URLs, and `GET /api/health` reports `liveVideo.encoder: "openh264"` with
+`liveVideo.iosSimulator: false`. Selecting an iOS simulator through the API
+there returns `501` with the same explanation. See
+[Video and streaming](./video.md) for the encoder details.
 
 Check Xcode selection if you have multiple installs:
 

@@ -51,13 +51,14 @@ static void xcw_set_error(char **error_message, const char *message) {
   }
 }
 
-/* Shared by every H.264 encoder stub. Keep the wording aligned with
- * packages/server/src/platform.rs, which reports the same limitation through
- * the CLI banner and the HTTP API. */
+/* Shared by every H.264 encoder stub. Android emulator streams never reach
+ * these on non-macOS builds: packages/server/src/transport/software_h264.rs
+ * encodes them with OpenH264 instead. Keep the wording aligned with
+ * packages/server/src/platform.rs. */
 static const char XCW_LIVE_VIDEO_UNSUPPORTED_MESSAGE[] =
-    "Live H.264 video streaming requires macOS. This SimDeck build does not "
-    "include the native H.264 encoder used for iOS simulator and Android "
-    "emulator streams.";
+    "The native H.264 encoder is only available in the macOS simulator "
+    "bridge. iOS simulators require macOS; Android emulators on this build "
+    "use the built-in OpenH264 encoder.";
 
 static bool xcw_unsupported(char **error_message) {
   xcw_set_error(error_message,

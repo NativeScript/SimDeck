@@ -39,7 +39,7 @@ view inside the editor.
 
 ## Features
 
-- Supports native H.264 streaming for both iOS simulators and Android emulators (live video requires the macOS build; the Windows and Linux CLIs manage Android emulators without a browser stream)
+- Supports native H.264 streaming for both iOS simulators and Android emulators (iOS simulators need the macOS build; Windows and Linux stream Android emulators with a built-in OpenH264 software encoder)
 - Full simulator control & inspection using private iOS accessibility APIs and Android UIAutomator - available using `simdeck` CLI
 - Real-time screen `describe` command using accessibility view tree - available in token-efficient format for agents
 - Profiling built-in: CPU, memory, disk writes, network throughput, hang signals, and stack sampling

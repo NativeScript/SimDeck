@@ -107,19 +107,32 @@ Android IDs in SimDeck use `android:<avd-name>`.
 
 ## Stream is black or stuck
 
-### Live video requires macOS
+### iOS simulators require macOS
 
 ```text
-Live H.264 video streaming requires macOS. This SimDeck build for Windows can manage devices but does not include the native H.264 encoder...
+iOS simulators require macOS. This SimDeck build for Windows can boot, control, and stream Android emulators, but the iOS simulator bridge is only available on macOS.
 ```
 
-This is expected on the Windows and Linux builds, for both iOS simulators and
-Android emulators. Those builds link a stub instead of the macOS native bridge
-that owns VideoToolbox and x264 encoding, so the browser stream, the encoder
-menu, and `--video-codec` cannot work there. Device control, `describe`,
-screenshots, and the inspectors still run. Use a Mac to see the live screen, or
-pair a Windows or Linux browser with a SimDeck service running on a Mac. Check
-`liveVideo.supported` in `GET /api/health` when scripting against the service.
+This is expected on the Windows and Linux builds. They link a stub instead of
+the macOS native bridge that owns iOS simulator control and the VideoToolbox
+and x264 encoders. Android emulators still boot, stream, and accept input on
+those hosts through the built-in OpenH264 software encoder. Use a Mac for iOS
+simulators, or pair a Windows or Linux browser with a SimDeck service running on
+a Mac. Check `liveVideo.iosSimulator` in `GET /api/health` when scripting
+against the service.
+
+### Android stream is slow on Windows or Linux
+
+Those builds encode with OpenH264 in software. Lower the encoded size first,
+then the frame rate:
+
+```sh
+simdeck service restart --stream-quality low
+```
+
+`GET /api/metrics` lists `androidEncoders[].encoder.native` with
+`latestEncodeLatencyUs` and `skippedFrames`; if encode latency stays above the
+frame interval, the host CPU cannot keep up with the selected profile.
 
 ### Timed out waiting for the first frame
 

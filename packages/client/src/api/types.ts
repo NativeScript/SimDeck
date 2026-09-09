@@ -188,12 +188,18 @@ export interface ChromeDevToolsTargetDiscovery {
 }
 
 /**
- * Whether the server build can encode the live H.264 browser stream. Only the
- * macOS build links the native encoder; Windows and Linux builds report
- * `supported: false` with a user-facing `reason`.
+ * What the server build can stream. Every shipped build encodes the live H.264
+ * browser stream (`native` VideoToolbox/x264 on macOS, `openh264` elsewhere),
+ * but only macOS can drive iOS simulators; Windows and Linux builds report
+ * `iosSimulator: false` with a user-facing `iosSimulatorReason`. A server that
+ * cannot stream at all would report `supported: false` with a `reason`.
  */
 export interface LiveVideoCapability {
   supported: boolean;
+  encoder?: string;
+  iosSimulator?: boolean;
+  androidEmulator?: boolean;
+  iosSimulatorReason?: string | null;
   requires?: string;
   reason?: string | null;
 }
