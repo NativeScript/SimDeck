@@ -3250,7 +3250,9 @@ mod tests {
 
         assert_eq!((width, height), (4, 2));
         let red_values = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|pixel| pixel[0])
             .collect::<Vec<_>>();
         assert_eq!(red_values, vec![1, 2, 3, 3, 4, 5, 6, 6]);
