@@ -107,10 +107,10 @@ jobs:
             runner: windows-latest
             build_cmd: |
               rustup target add x86_64-pc-windows-gnu
-              $env:SIMDECK_DISABLE_X264 = '1'
-              $env:SIMDECK_BUILD_TARGET = 'x86_64-pc-windows-gnu'
+              export SIMDECK_DISABLE_X264=1
+              export SIMDECK_BUILD_TARGET=x86_64-pc-windows-gnu
               npm run build:cli
-              Copy-Item build/simdeck-bin.exe build/simdeck-bin-win32-x64.exe
+              cp build/simdeck-bin.exe build/simdeck-bin-win32-x64.exe
 
     steps:
       - name: Checkout (full history)
