@@ -395,11 +395,13 @@ mod tests {
             "keyframe carries an IDR slice: {types:?}"
         );
 
+        // A full-frame color change can trigger a scene-change IDR, so only
+        // require that a second frame keeps flowing as Annex B.
         let second = encoder
             .encode_rgba(&solid_rgba(64, 64, [30, 200, 30]), 64, 64)
             .expect("second encode");
         if let Some(second) = second {
-            assert!(!second.is_keyframe);
+            assert!(second.data.starts_with(&[0, 0, 0, 1]) || second.data.starts_with(&[0, 0, 1]));
         }
 
         encoder.request_keyframe();
