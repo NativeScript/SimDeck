@@ -51,6 +51,14 @@ static void xcw_set_error(char **error_message, const char *message) {
   }
 }
 
+/* Shared by every H.264 encoder stub. Keep the wording aligned with
+ * packages/server/src/platform.rs, which reports the same limitation through
+ * the CLI banner and the HTTP API. */
+static const char XCW_LIVE_VIDEO_UNSUPPORTED_MESSAGE[] =
+    "Live H.264 video streaming requires macOS. This SimDeck build does not "
+    "include the native H.264 encoder used for iOS simulator and Android "
+    "emulator streams.";
+
 static bool xcw_unsupported(char **error_message) {
   xcw_set_error(error_message,
                 "iOS simulator native bridge is only available on macOS.");
@@ -573,8 +581,7 @@ void *xcw_native_h264_encoder_create_with_video_codec(
   (void)callback;
   (void)user_data;
   (void)video_codec;
-  xcw_set_error(error_message,
-                "H.264 encoding is only available in the macOS native bridge.");
+  xcw_set_error(error_message, XCW_LIVE_VIDEO_UNSUPPORTED_MESSAGE);
   return NULL;
 }
 
@@ -597,8 +604,7 @@ bool xcw_native_h264_encoder_encode_rgba(void *handle, const uint8_t *rgba,
   (void)width;
   (void)height;
   (void)timestamp_us;
-  xcw_set_error(error_message,
-                "H.264 encoding is only available in the macOS native bridge.");
+  xcw_set_error(error_message, XCW_LIVE_VIDEO_UNSUPPORTED_MESSAGE);
   return false;
 }
 
@@ -613,8 +619,7 @@ bool xcw_native_h264_encoder_encode_bgra(void *handle, const uint8_t *bgra,
   (void)width;
   (void)height;
   (void)timestamp_us;
-  xcw_set_error(error_message,
-                "H.264 encoding is only available in the macOS native bridge.");
+  xcw_set_error(error_message, XCW_LIVE_VIDEO_UNSUPPORTED_MESSAGE);
   return false;
 }
 
@@ -622,8 +627,7 @@ void xcw_native_h264_encoder_request_keyframe(void *handle) { (void)handle; }
 
 char *xcw_native_h264_encoder_stats(void *handle, char **error_message) {
   (void)handle;
-  xcw_set_error(error_message,
-                "H.264 encoding is only available in the macOS native bridge.");
+  xcw_set_error(error_message, XCW_LIVE_VIDEO_UNSUPPORTED_MESSAGE);
   return NULL;
 }
 

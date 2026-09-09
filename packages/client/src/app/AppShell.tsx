@@ -38,6 +38,7 @@ import type {
   AccessibilitySourcePreference,
   AccessibilityTreeResponse,
   ChromeProfile,
+  LiveVideoCapability,
   SimulatorMetadata,
   SimulatorStateResponse,
   TouchPhase,
@@ -55,6 +56,7 @@ import {
   simulatorUsesInsetChromeButtons,
 } from "../features/simulators/simulatorDisplay";
 import { useSimulatorList } from "../features/simulators/useSimulatorList";
+import { liveVideoUnavailableReason } from "../features/stream/liveVideoCapability";
 import { sendWebRtcControlMessage } from "../features/stream/streamWorkerClient";
 import type {
   StreamConfig,
@@ -174,6 +176,7 @@ clearLegacyVolatileUiState();
 
 interface StreamQualityResponse {
   ok?: boolean;
+  liveVideo?: LiveVideoCapability;
   quality?: {
     fps?: number;
     maxEdge?: number;
@@ -413,9 +416,9 @@ function simulatorDisplayReady(simulator: SimulatorMetadata): boolean {
   const display = simulator.privateDisplay;
   return Boolean(
     simulator.isBooted &&
-    display?.displayReady &&
-    display.displayWidth > 0 &&
-    display.displayHeight > 0,
+      display?.displayReady &&
+      display.displayWidth > 0 &&
+      display.displayHeight > 0,
   );
 }
 
@@ -625,6 +628,10 @@ export function AppShell({
   );
   const [streamConfigApplyKey, setStreamConfigApplyKey] = useState(0);
   const [streamConfigReady, setStreamConfigReady] = useState(false);
+  // Non-empty when the connected server build cannot encode live video (for
+  // example the Windows or Linux CLI). The stream stays paused and the reason
+  // is shown instead of retrying WebRTC offers that can never succeed.
+  const [liveVideoUnavailable, setLiveVideoUnavailable] = useState("");
   const [touchIndicators, setTouchIndicators] = useState<TouchIndicator[]>([]);
   const [selectedSimulatorState, setSelectedSimulatorState] =
     useState<SimulatorStateResponse | null>(null);
@@ -847,6 +854,7 @@ export function AppShell({
         if (requestId !== streamConfigRequestIdRef.current) {
           return;
         }
+        setLiveVideoUnavailable(liveVideoUnavailableReason(response.liveVideo));
         if (
           !options?.ignoreUserGrace &&
           Date.now() - streamConfigUserChangeAtRef.current <
@@ -930,7 +938,7 @@ export function AppShell({
     streamCanvasKey,
   } = useLiveStream({
     canvasElement: streamCanvasElement,
-    paused: !streamConfigReady,
+    paused: !streamConfigReady || Boolean(liveVideoUnavailable),
     remote: remoteStream,
     simulator: selectedSimulator,
     streamConfig: effectiveStreamConfig,
@@ -1035,8 +1043,8 @@ export function AppShell({
     selectedSimulator != null && shouldRenderNativeChrome(selectedSimulator);
   const deviceChromeToggleActive = Boolean(
     selectedSupportsChrome &&
-    deviceChromeVisible &&
-    !selectedChromeAssetsFailed,
+      deviceChromeVisible &&
+      !selectedChromeAssetsFailed,
   );
   const shouldRenderChrome = deviceChromeToggleActive;
   const viewportChromeProfile = shouldRenderChrome ? chromeProfile : null;
@@ -1127,8 +1135,8 @@ export function AppShell({
     : recordingOverlayLabel || captureStatus?.label || "";
   const captureOverlayBusy = Boolean(
     isInstallingApp ||
-    captureStatus?.busy ||
-    screenRecording?.phase === "stopping",
+      captureStatus?.busy ||
+      screenRecording?.phase === "stopping",
   );
   const autoViewportOffsetY =
     viewMode === "manual" ? 0 : -zoomDockReservedHeight / 2;
@@ -2153,13 +2161,15 @@ export function AppShell({
   const viewportStatusOverlayLabel =
     (providerDisconnected ? NOT_CONNECTED_MESSAGE : "") ||
     simulatorStatusOverlayLabel ||
+    liveVideoUnavailable ||
     streamStatusMessage ||
     (selectedSimulator ? visibleListError : "");
   const viewportHasStreamError = Boolean(
     providerDisconnected ||
-    streamStatus.state === "error" ||
-    visibleStreamError ||
-    (selectedSimulator && visibleListError),
+      liveVideoUnavailable ||
+      streamStatus.state === "error" ||
+      visibleStreamError ||
+      (selectedSimulator && visibleListError),
   );
   const deviceTransform = `translate(${pan.x}px, ${pan.y + autoViewportOffsetY}px) scale(${effectiveZoom})`;
   const chromeScreenRect = computeChromeScreenRect(
@@ -3812,6 +3822,7 @@ export function AppShell({
         recordingActive={screenRecording?.phase === "recording"}
         recordingStopping={screenRecording?.phase === "stopping"}
         remoteStream={remoteStream}
+        liveVideoUnavailableReason={liveVideoUnavailable}
         search={search}
         selectedSimulator={selectedSimulator}
         selectedSimulatorIdentifier={selectedSimulatorDetail}
@@ -3821,8 +3832,8 @@ export function AppShell({
         }}
         showBootButton={Boolean(
           selectedSimulator &&
-          !selectedSimulator.isBooted &&
-          !selectedSimulatorTransitionKind,
+            !selectedSimulator.isBooted &&
+            !selectedSimulatorTransitionKind,
         )}
         streamConfig={effectiveStreamConfig}
         streamTransport={streamTransport}
@@ -4325,8 +4336,8 @@ function normalizeMaxEdge(
 function isAndroidSimulator(simulator: SimulatorMetadata | null): boolean {
   return Boolean(
     simulator?.platform === "android-emulator" ||
-    simulator?.deviceTypeIdentifier === "android-emulator" ||
-    simulator?.udid.startsWith("android:"),
+      simulator?.deviceTypeIdentifier === "android-emulator" ||
+      simulator?.udid.startsWith("android:"),
   );
 }
 

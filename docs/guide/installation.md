@@ -2,9 +2,27 @@
 
 ## Requirements
 
-- macOS on Apple Silicon.
+- macOS on Apple Silicon for the full experience.
 - Xcode with the simulator runtimes you want to use.
 - Node.js 18 or newer.
+
+## Platform support
+
+The npm package installs a native CLI for macOS, Windows, and Linux, but only
+the macOS build includes the native simulator bridge and H.264 encoder.
+
+| Capability                                         | macOS | Windows / Linux         |
+| -------------------------------------------------- | ----- | ----------------------- |
+| iOS simulator control, inspection, and streaming   | Yes   | No                      |
+| Android emulator control and inspection            | Yes   | Yes                     |
+| Live H.264 browser stream (iOS and Android)        | Yes   | No                      |
+| `--video-codec`, stream quality, and encoder menus | Yes   | Reported as unavailable |
+
+On Windows and Linux the CLI prints a `Live video:` note after the service
+URLs, `GET /api/health` and `GET /api/stream-quality` report
+`liveVideo.supported: false` with the reason, the browser shows that reason in
+place of the device screen, and the WebRTC offer endpoint answers `501` with
+the same message. See [Video and streaming](./video.md) for the encoder details.
 
 Check Xcode selection if you have multiple installs:
 

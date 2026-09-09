@@ -107,6 +107,20 @@ Android IDs in SimDeck use `android:<avd-name>`.
 
 ## Stream is black or stuck
 
+### Live video requires macOS
+
+```text
+Live H.264 video streaming requires macOS. This SimDeck build for Windows can manage devices but does not include the native H.264 encoder...
+```
+
+This is expected on the Windows and Linux builds, for both iOS simulators and
+Android emulators. Those builds link a stub instead of the macOS native bridge
+that owns VideoToolbox and x264 encoding, so the browser stream, the encoder
+menu, and `--video-codec` cannot work there. Device control, `describe`,
+screenshots, and the inspectors still run. Use a Mac to see the live screen, or
+pair a Windows or Linux browser with a SimDeck service running on a Mac. Check
+`liveVideo.supported` in `GET /api/health` when scripting against the service.
+
 ### Timed out waiting for the first frame
 
 Try software encoding:

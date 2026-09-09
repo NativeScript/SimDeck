@@ -13,6 +13,7 @@ mod logs;
 mod metrics;
 mod native;
 mod performance;
+mod platform;
 mod service;
 mod simulators;
 mod static_files;
@@ -2046,6 +2047,13 @@ fn print_service_metadata_result(
     }
     if let Some(pairing_code) = metadata.pairing_code.as_deref() {
         println!("{:>12}   {}", "Pair:", format_pairing_code(pairing_code));
+    }
+    if !platform::live_video_supported() {
+        println!(
+            "{:>12}   {}",
+            "Live video:",
+            platform::live_video_cli_note()
+        );
     }
     Ok(())
 }

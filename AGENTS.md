@@ -20,6 +20,13 @@ The native side should own anything that depends on macOS frameworks, `xcrun sim
   Defines REST routes for simulator control, health, metrics, and chrome assets.
 - `packages/server/src/transport/webrtc.rs`
   Exposes the H.264 WebRTC offer/answer endpoint for browser live video.
+- `packages/server/src/platform.rs`
+  Single source of truth for host platform capabilities. Live H.264 video
+  (iOS simulator and Android emulator) exists only in the macOS build; the
+  Windows and Linux builds compile `packages/server/native_stubs.c` in place
+  of the native bridge. Health, stream-quality, the WebRTC offer error, the
+  CLI banner, and the browser client all read this module's `liveVideo`
+  capability instead of hard-coding platform checks.
 - `packages/server/src/webkit.rs`
   Discovers simulator WebKit Remote Inspector targets and bridges WebInspectorUI
   WebSocket traffic to the simulator `webinspectord` binary-plist socket.

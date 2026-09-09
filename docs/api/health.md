@@ -21,6 +21,8 @@ Example:
   "serverKind": "launchAgent",
   "timestamp": 1714094761.234,
   "videoCodec": "auto",
+  "hostOs": "macos",
+  "liveVideo": { "supported": true, "requires": "macos" },
   "androidGpu": "host",
   "lowLatency": false,
   "realtimeStream": true,
@@ -47,9 +49,18 @@ Important fields:
 | `httpPort`      | Port serving UI and API                                 |
 | `serverKind`    | `launchAgent` or `standalone`                           |
 | `videoCodec`    | Requested codec mode: `auto`, `hardware`, or `software` |
+| `hostOs`        | Server build target: `macos`, `windows`, or `linux`     |
+| `liveVideo`     | Whether this build can encode the live H.264 stream     |
 | `androidGpu`    | Android emulator renderer mode for SimDeck-owned boots  |
 | `streamQuality` | Active stream profile and limits                        |
 | `webRtc`        | ICE settings the browser should use                     |
+
+`liveVideo` is `{ "supported": true, "requires": "macos" }` on macOS. Windows
+and Linux builds return `supported: false` plus a `reason` string, because live
+H.264 encoding for both iOS simulators and Android emulators lives in the macOS
+native bridge. Clients should show that reason instead of opening a WebRTC
+offer; the offer endpoint answers `501 Not Implemented` with the same message.
+`GET /api/stream-quality` includes the same `liveVideo` block.
 
 When auth is required, the `401` JSON body still includes `serverId`, `advertiseHost`, `hostId`, `hostName`, `httpPort`, and `serverKind` so native clients can group endpoints before pairing.
 

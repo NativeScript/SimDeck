@@ -187,12 +187,25 @@ export interface ChromeDevToolsTargetDiscovery {
   warnings: string[];
 }
 
+/**
+ * Whether the server build can encode the live H.264 browser stream. Only the
+ * macOS build links the native encoder; Windows and Linux builds report
+ * `supported: false` with a user-facing `reason`.
+ */
+export interface LiveVideoCapability {
+  supported: boolean;
+  requires?: string;
+  reason?: string | null;
+}
+
 export interface HealthResponse {
   ok: boolean;
   serverId?: string;
   advertiseHost?: string;
   hostId?: string;
   hostName?: string;
+  hostOs?: string;
+  liveVideo?: LiveVideoCapability;
   httpPort?: number;
   serverKind?:
     | "launchAgent"

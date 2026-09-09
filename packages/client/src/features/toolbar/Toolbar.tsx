@@ -70,6 +70,7 @@ interface ToolbarProps {
   recordingActive: boolean;
   recordingStopping: boolean;
   remoteStream?: boolean;
+  liveVideoUnavailableReason?: string;
   search: string;
   selectedSimulator: SimulatorMetadata | null;
   selectedSimulatorIdentifier: string;
@@ -137,6 +138,7 @@ export function Toolbar({
   recordingActive,
   recordingStopping,
   remoteStream = false,
+  liveVideoUnavailableReason = "",
   search,
   selectedSimulator,
   selectedSimulatorIdentifier,
@@ -216,6 +218,7 @@ export function Toolbar({
           recordingActive={recordingActive}
           recordingStopping={recordingStopping}
           remoteStream={remoteStream}
+          liveVideoUnavailableReason={liveVideoUnavailableReason}
           selectedSimulator={selectedSimulator}
           showBootButton={showBootButton}
           showStopButton={showStopButton}

@@ -14,6 +14,10 @@ pub enum AppError {
     Native(String),
     #[error("{0}")]
     Internal(String),
+    /// The feature exists in SimDeck but this build cannot provide it on the
+    /// current host platform.
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 #[derive(Serialize)]
@@ -37,6 +41,10 @@ impl AppError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal(message.into())
     }
+
+    pub fn unsupported(message: impl Into<String>) -> Self {
+        Self::Unsupported(message.into())
+    }
 }
 
 impl IntoResponse for AppError {
@@ -45,6 +53,7 @@ impl IntoResponse for AppError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Native(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
         };
         let message = self.to_string();
         (status, Json(ErrorBody { error: &message })).into_response()

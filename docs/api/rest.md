@@ -52,7 +52,10 @@ curl -X POST \
 | `GET`  | `/api/stream-quality`      | Current stream quality settings                            |
 | `POST` | `/api/stream-quality`      | Update stream quality settings                             |
 
-See [Health and metrics](/api/health) for details.
+See [Health and metrics](/api/health) for details. Both `/api/health` and
+`/api/stream-quality` include a `liveVideo` block; check `liveVideo.supported`
+before opening a WebRTC offer, because Windows and Linux builds cannot encode
+the live stream and answer offers with `501` and the `liveVideo.reason` text.
 
 ## Devices
 

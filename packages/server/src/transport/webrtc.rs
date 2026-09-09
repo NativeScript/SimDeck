@@ -206,6 +206,15 @@ pub async fn create_answer(
             "WebRTC payload must include type `offer`.",
         ));
     }
+    // Both the iOS simulator session and the Android emulator source encode
+    // through the macOS native bridge. Non-macOS builds link `native_stubs.c`,
+    // so fail here with the platform explanation instead of letting the stub
+    // encoder fail deeper in the pipeline.
+    if !crate::platform::live_video_supported() {
+        return Err(AppError::unsupported(
+            crate::platform::live_video_unsupported_message(),
+        ));
+    }
     let is_android = android::is_android_id(&udid);
     if payload.transport.is_some() {
         return Err(AppError::bad_request(
