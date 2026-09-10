@@ -6516,15 +6516,14 @@ mod tests {
         project_service_credentials_from_metadata, read_project_service_credentials_from_path,
         removed_service_process_name, render_agent_accessibility_tree, render_qr_code,
         run_maestro_command, server_health_watchdog_should_restart, service_addresses,
-        service_matches_launch_options, service_post_error_is_retryable,
-        service_url_is_healthy, simdeck_open_link,
-        simdeck_pair_url, studio_service_restart_args, workspace_service_process_is_current,
-        write_project_service_credentials_to_path, AndroidGpuMode, Cli, Command, ElementSelector,
-        NoCommandAction, PairingAddress, ProjectServiceCredentials, ServiceCommand,
-        ServiceLaunchOptions, ServiceMetadata, StreamQualityProfileArg, StudioExposeOptions,
-        TapCommandTarget, VideoCodecMode, WorkspaceServiceProcess, YamlValue,
-        DEFAULT_LOCAL_STREAM_QUALITY_PROFILE, SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD,
-        SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
+        service_matches_launch_options, service_post_error_is_retryable, service_url_is_healthy,
+        simdeck_open_link, simdeck_pair_url, studio_service_restart_args,
+        workspace_service_process_is_current, write_project_service_credentials_to_path,
+        AndroidGpuMode, Cli, Command, ElementSelector, NoCommandAction, PairingAddress,
+        ProjectServiceCredentials, ServiceCommand, ServiceLaunchOptions, ServiceMetadata,
+        StreamQualityProfileArg, StudioExposeOptions, TapCommandTarget, VideoCodecMode,
+        WorkspaceServiceProcess, YamlValue, DEFAULT_LOCAL_STREAM_QUALITY_PROFILE,
+        SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD, SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
     };
     use clap::Parser;
     use std::collections::HashMap;
