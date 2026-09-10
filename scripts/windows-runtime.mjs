@@ -1,35 +1,46 @@
-// Helpers for shipping a self-contained Windows binary from the
-// `x86_64-pc-windows-gnu` target.
+// Helpers for shipping a self-contained Windows binary.
 //
-// The OpenH264 encoder is C++ compiled by the MinGW toolchain, which links
-// `libstdc++-6.dll` dynamically by default. That DLL only exists inside
-// MinGW/Git Bash installs, so a plain PowerShell or cmd launch of the binary
-// fails with STATUS_DLL_NOT_FOUND (0xC0000135) and a modal error dialog.
+// The OpenH264 encoder is C++. Built with the MinGW toolchain
+// (`x86_64-pc-windows-gnu`) it links `libstdc++-6.dll`, which only exists
+// inside MinGW/Git Bash installs; built with MSVC without a static CRT it
+// links `vcruntime140.dll`/`msvcp140.dll`, which not every machine has. Either
+// way a plain PowerShell or cmd launch fails with STATUS_DLL_NOT_FOUND
+// (0xC0000135) and a modal error dialog instead of the service URL. The
+// release therefore targets `x86_64-pc-windows-msvc` with `+crt-static`, and
+// the packaging step refuses any binary that still imports a runtime DLL.
 
-/** MinGW runtime DLLs that a shipped SimDeck binary must never import. */
-export const MINGW_RUNTIME_DLLS = [
+/** Toolchain runtime DLLs that a shipped SimDeck binary must never import. */
+export const WINDOWS_RUNTIME_DLLS = [
+  // MinGW
   "libstdc++-6.dll",
   "libgcc_s_seh-1.dll",
   "libgcc_s_dw2-1.dll",
   "libwinpthread-1.dll",
+  // MSVC redistributable
+  "vcruntime140.dll",
+  "vcruntime140_1.dll",
+  "msvcp140.dll",
+  "msvcp140_1.dll",
+  "msvcp140_2.dll",
+  "concrt140.dll",
 ];
 
 const CRT_STATIC_FLAG = "-C target-feature=+crt-static";
 
-export function isWindowsGnuTarget(target) {
-  return typeof target === "string" && /-windows-gnu(llvm)?$/.test(target);
+export function isWindowsTarget(target) {
+  return typeof target === "string" && /-windows-/.test(target);
 }
 
-/** Cargo's per-target RUSTFLAGS variable, e.g. CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS. */
+/** Cargo's per-target RUSTFLAGS variable, e.g. CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS. */
 export function targetRustflagsEnvName(target) {
   return `CARGO_TARGET_${target.toUpperCase().replace(/-/g, "_")}_RUSTFLAGS`;
 }
 
 /**
- * Adds `+crt-static` to existing RUSTFLAGS so rustc links the executable with
- * `-static`, which resolves the MinGW C++ runtime from static archives.
+ * Adds `+crt-static` to existing RUSTFLAGS so rustc and the `cc` crate link
+ * the C/C++ runtime statically (`/MT` on MSVC).
  */
-export function windowsGnuRustflags(existing) {
+export function windowsRustflags(existing) {
   const current = existing?.trim() ?? "";
   if (current.includes("+crt-static")) {
     return current;
@@ -117,8 +128,8 @@ export function peImportedDlls(binary) {
   return names;
 }
 
-/** MinGW runtime DLLs imported by a PE binary, empty for a self-contained one. */
-export function mingwRuntimeImports(binary) {
+/** Toolchain runtime DLLs imported by a PE binary, empty for a self-contained one. */
+export function windowsRuntimeImports(binary) {
   const imported = new Set(peImportedDlls(binary));
-  return MINGW_RUNTIME_DLLS.filter((dll) => imported.has(dll));
+  return WINDOWS_RUNTIME_DLLS.filter((dll) => imported.has(dll));
 }

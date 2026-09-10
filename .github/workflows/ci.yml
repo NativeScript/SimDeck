@@ -367,16 +367,16 @@ jobs:
           npm run build:cli
           npm run build:simdeck-test
 
-      # Build the same x86_64-pc-windows-gnu binary the release ships so the
-      # emulator test also proves it starts from PowerShell without MinGW DLLs.
+      # Build the same x86_64-pc-windows-msvc binary the release ships (static
+      # CRT) so the emulator test also proves it starts from PowerShell without
+      # any toolchain runtime DLLs.
       - name: Build Android integration artifacts (Windows, release target)
         if: runner.os == 'Windows'
         shell: bash
         env:
-          SIMDECK_BUILD_TARGET: x86_64-pc-windows-gnu
+          SIMDECK_BUILD_TARGET: x86_64-pc-windows-msvc
           SIMDECK_DISABLE_X264: "1"
         run: |
-          rustup target add x86_64-pc-windows-gnu
           npm run build:cli
           npm run build:simdeck-test
 

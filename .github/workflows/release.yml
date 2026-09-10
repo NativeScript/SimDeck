@@ -164,9 +164,8 @@ jobs:
             runner: windows-latest
             binary: build/simdeck-bin-win32-x64.exe
             build_cmd: |
-              rustup target add x86_64-pc-windows-gnu
               export SIMDECK_DISABLE_X264=1
-              export SIMDECK_BUILD_TARGET=x86_64-pc-windows-gnu
+              export SIMDECK_BUILD_TARGET=x86_64-pc-windows-msvc
               npm run build:cli
               cp build/simdeck-bin.exe build/simdeck-bin-win32-x64.exe
 
@@ -191,7 +190,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin,x86_64-unknown-linux-gnu,x86_64-pc-windows-gnu
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,x86_64-unknown-linux-gnu,x86_64-pc-windows-msvc
 
       - name: Install native build dependencies
         shell: bash
@@ -201,8 +200,6 @@ jobs:
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             sudo apt-get update
             sudo apt-get install -y pkg-config libx264-dev
-          else
-            choco install mingw --no-progress -y
           fi
 
       - name: Install root dependencies

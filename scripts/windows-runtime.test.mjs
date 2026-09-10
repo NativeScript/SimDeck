@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  isWindowsGnuTarget,
-  mingwRuntimeImports,
+  isWindowsTarget,
   peImportedDlls,
   targetRustflagsEnvName,
-  windowsGnuRustflags,
+  windowsRuntimeImports,
+  windowsRustflags,
 } from "./windows-runtime.mjs";
 
 /** Builds a minimal PE32+ image whose import directory names `dlls`. */
@@ -52,23 +52,24 @@ function buildPeWithImports(dlls) {
   return image;
 }
 
-test("windows-gnu targets get +crt-static in their target RUSTFLAGS", () => {
-  assert.equal(isWindowsGnuTarget("x86_64-pc-windows-gnu"), true);
-  assert.equal(isWindowsGnuTarget("x86_64-pc-windows-gnullvm"), true);
-  assert.equal(isWindowsGnuTarget("x86_64-pc-windows-msvc"), false);
-  assert.equal(isWindowsGnuTarget("x86_64-unknown-linux-gnu"), false);
-  assert.equal(isWindowsGnuTarget(undefined), false);
+test("Windows targets get +crt-static in their target RUSTFLAGS", () => {
+  assert.equal(isWindowsTarget("x86_64-pc-windows-msvc"), true);
+  assert.equal(isWindowsTarget("x86_64-pc-windows-gnu"), true);
+  assert.equal(isWindowsTarget("aarch64-pc-windows-msvc"), true);
+  assert.equal(isWindowsTarget("x86_64-unknown-linux-gnu"), false);
+  assert.equal(isWindowsTarget("aarch64-apple-darwin"), false);
+  assert.equal(isWindowsTarget(undefined), false);
   assert.equal(
-    targetRustflagsEnvName("x86_64-pc-windows-gnu"),
-    "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS",
+    targetRustflagsEnvName("x86_64-pc-windows-msvc"),
+    "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS",
   );
-  assert.equal(windowsGnuRustflags(undefined), "-C target-feature=+crt-static");
+  assert.equal(windowsRustflags(undefined), "-C target-feature=+crt-static");
   assert.equal(
-    windowsGnuRustflags("-C opt-level=3 "),
+    windowsRustflags("-C opt-level=3 "),
     "-C opt-level=3 -C target-feature=+crt-static",
   );
   assert.equal(
-    windowsGnuRustflags("-C target-feature=+crt-static"),
+    windowsRustflags("-C target-feature=+crt-static"),
     "-C target-feature=+crt-static",
   );
 });
@@ -86,9 +87,9 @@ test("PE import directory lists every imported DLL", () => {
   ]);
 });
 
-test("MinGW runtime imports are reported and a static binary passes", () => {
+test("toolchain runtime imports are reported and a static binary passes", () => {
   assert.deepEqual(
-    mingwRuntimeImports(
+    windowsRuntimeImports(
       buildPeWithImports([
         "kernel32.dll",
         "libwinpthread-1.dll",
@@ -98,7 +99,19 @@ test("MinGW runtime imports are reported and a static binary passes", () => {
     ["libstdc++-6.dll", "libwinpthread-1.dll"],
   );
   assert.deepEqual(
-    mingwRuntimeImports(buildPeWithImports(["kernel32.dll", "ws2_32.dll"])),
+    windowsRuntimeImports(
+      buildPeWithImports(["KERNEL32.dll", "VCRUNTIME140.dll", "MSVCP140.dll"]),
+    ),
+    ["vcruntime140.dll", "msvcp140.dll"],
+  );
+  assert.deepEqual(
+    windowsRuntimeImports(
+      buildPeWithImports([
+        "kernel32.dll",
+        "ws2_32.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+      ]),
+    ),
     [],
   );
 });

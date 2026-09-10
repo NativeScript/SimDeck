@@ -171,10 +171,10 @@ test("CI runs Android emulator integration on Linux and Windows", () => {
   assert.match(ciWorkflow, /test:integration:android/);
 });
 
-test("Windows Android CI builds the release's windows-gnu binary", () => {
-  // The release ships x86_64-pc-windows-gnu; the emulator job must exercise
-  // that exact binary from PowerShell so a MinGW runtime DLL dependency fails
-  // CI instead of the published package.
+test("Windows Android CI builds the release's windows-msvc binary", () => {
+  // The release ships x86_64-pc-windows-msvc with a static CRT; the emulator
+  // job must exercise that exact binary from PowerShell so a runtime DLL
+  // dependency fails CI instead of the published package.
   const windowsBuildStep = stepSlice(
     ciWorkflow,
     "Build Android integration artifacts (Windows, release target)",
@@ -182,11 +182,11 @@ test("Windows Android CI builds the release's windows-gnu binary", () => {
   assert.match(windowsBuildStep, /if:\s*runner\.os == 'Windows'/);
   assert.match(
     windowsBuildStep,
-    /SIMDECK_BUILD_TARGET:\s*x86_64-pc-windows-gnu/,
+    /SIMDECK_BUILD_TARGET:\s*x86_64-pc-windows-msvc/,
   );
-  assert.match(windowsBuildStep, /rustup target add x86_64-pc-windows-gnu/);
   assert.match(windowsBuildStep, /npm run build:cli/);
-  assert.match(releaseWorkflow, /SIMDECK_BUILD_TARGET=x86_64-pc-windows-gnu/);
+  assert.match(releaseWorkflow, /SIMDECK_BUILD_TARGET=x86_64-pc-windows-msvc/);
+  assert.doesNotMatch(releaseWorkflow, /windows-gnu|choco install mingw/);
   assert.match(ciWorkflow, /npm run test:windows-runtime/);
 });
 

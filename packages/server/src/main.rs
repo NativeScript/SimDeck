@@ -5554,8 +5554,13 @@ mod windows_handle {
 
     #[link(name = "kernel32")]
     extern "system" {
-        fn GetHandleInformation(handle: usize, flags: *mut u32) -> i32;
         fn SetHandleInformation(handle: usize, mask: u32, flags: u32) -> i32;
+    }
+
+    #[cfg(test)]
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetHandleInformation(handle: usize, flags: *mut u32) -> i32;
     }
 
     pub(crate) fn clear_inherit_flag(handle: usize) -> io::Result<()> {
@@ -7818,7 +7823,10 @@ swipe:
         let port = listener.local_addr().unwrap().port();
         let timeout = std::time::Duration::from_millis(300);
         let started = std::time::Instant::now();
-        assert!(!service_url_is_healthy(&format!("http://127.0.0.1:{port}"), timeout));
+        assert!(!service_url_is_healthy(
+            &format!("http://127.0.0.1:{port}"),
+            timeout
+        ));
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
         drop(listener);
     }
@@ -7829,7 +7837,10 @@ swipe:
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         let timeout = std::time::Duration::from_millis(300);
-        assert!(!service_url_is_healthy(&format!("http://127.0.0.1:{port}"), timeout));
+        assert!(!service_url_is_healthy(
+            &format!("http://127.0.0.1:{port}"),
+            timeout
+        ));
         assert!(!service_url_is_healthy("https://127.0.0.1:4310", timeout));
         assert!(!service_url_is_healthy("nonsense", timeout));
     }

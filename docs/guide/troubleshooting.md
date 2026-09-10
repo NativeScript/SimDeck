@@ -59,14 +59,15 @@ adb kill-server
 Newer builds keep the listener private to the service and give up on a silent
 port after a few seconds.
 
-### Windows reports a missing `libstdc++-6.dll`
+### Windows reports a missing `libstdc++-6.dll` or `vcruntime140.dll`
 
-The Windows binary is built with the MinGW toolchain and must not depend on its
-runtime DLLs. A build that does starts only inside Git Bash and fails from
-PowerShell or cmd with exit code `0xC0000135`. Released builds link the runtime
-statically; a source build needs `SIMDECK_BUILD_TARGET=x86_64-pc-windows-gnu`,
-which `npm run build:cli` handles by adding `+crt-static` and refusing to
-package a binary that still imports those DLLs.
+The Windows binary must not depend on toolchain runtime DLLs. A build that does
+fails from PowerShell or cmd with exit code `0xC0000135` (and only starts inside
+Git Bash when the MinGW DLLs happen to be on PATH). Released builds target
+`x86_64-pc-windows-msvc` with a static CRT; a source build should set
+`SIMDECK_BUILD_TARGET=x86_64-pc-windows-msvc`, which `npm run build:cli` handles
+by adding `+crt-static` and refusing to package a binary that still imports
+those DLLs.
 
 ### Native binary is missing
 
