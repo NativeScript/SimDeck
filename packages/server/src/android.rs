@@ -135,6 +135,7 @@ pub struct AndroidSharedVideoFrame {
 
 pub struct AndroidSharedVideoFrameStream {
     handle: String,
+    #[cfg_attr(not(unix), allow(dead_code))]
     fd: RawFd,
     ptr: *mut u8,
     length: usize,
@@ -1249,6 +1250,9 @@ fn round_android_h264_dimension(value: u32) -> u32 {
     }
 }
 
+// On non-unix hosts the early `return` is the whole body, which clippy reads
+// as needless; keeping one function body for both platforms is clearer.
+#[allow(clippy::needless_return)]
 fn open_android_shared_video_memory(handle: &str) -> Result<(RawFd, *mut u8, usize), AppError> {
     #[cfg(not(unix))]
     {
@@ -1977,20 +1981,7 @@ fn java_home() -> Option<OsString> {
 }
 
 fn home_dir() -> PathBuf {
-    env::var_os("HOME")
-        .or_else(|| env::var_os("USERPROFILE"))
-        .or_else(
-            || match (env::var_os("HOMEDRIVE"), env::var_os("HOMEPATH")) {
-                (Some(drive), Some(path)) => {
-                    let mut combined = PathBuf::from(drive);
-                    combined.push(path);
-                    Some(combined.into_os_string())
-                }
-                _ => None,
-            },
-        )
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new("/").to_path_buf())
+    crate::platform::user_home_dir().unwrap_or_else(|| Path::new("/").to_path_buf())
 }
 
 fn extract_xml(output: &str) -> &str {

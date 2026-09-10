@@ -44,6 +44,31 @@ If it is an old service:
 simdeck service stop
 ```
 
+### `simdeck` prints nothing for minutes on Windows
+
+Earlier Windows builds let child processes inherit the service's listening
+socket. If the service exited while the adb server or an emulator it
+started was still running, port 4310 stayed open with nothing answering, and
+the next `simdeck` run waited on it before starting a fresh service on another
+port. Stop the orphaned holder and run `simdeck` again:
+
+```powershell
+adb kill-server
+```
+
+Newer builds keep the listener private to the service and give up on a silent
+port after a few seconds.
+
+### Windows reports a missing `libstdc++-6.dll` or `vcruntime140.dll`
+
+The Windows binary must not depend on toolchain runtime DLLs. A build that does
+fails from PowerShell or cmd with exit code `0xC0000135` (and only starts inside
+Git Bash when the MinGW DLLs happen to be on PATH). Released builds target
+`x86_64-pc-windows-msvc` with a static CRT; a source build should set
+`SIMDECK_BUILD_TARGET=x86_64-pc-windows-msvc`, which `npm run build:cli` handles
+by adding `+crt-static` and refusing to package a binary that still imports
+those DLLs.
+
 ### Native binary is missing
 
 Reinstall from npm:
@@ -106,6 +131,33 @@ emulator -list-avds
 Android IDs in SimDeck use `android:<avd-name>`.
 
 ## Stream is black or stuck
+
+### iOS simulators require macOS
+
+```text
+iOS simulators require macOS. This SimDeck build for Windows can boot, control, and stream Android emulators, but the iOS simulator bridge is only available on macOS.
+```
+
+This is expected on the Windows and Linux builds. They link a stub instead of
+the macOS native bridge that owns iOS simulator control and the VideoToolbox
+and x264 encoders. Android emulators still boot, stream, and accept input on
+those hosts through the built-in OpenH264 software encoder. Use a Mac for iOS
+simulators, or pair a Windows or Linux browser with a SimDeck service running on
+a Mac. Check `liveVideo.iosSimulator` in `GET /api/health` when scripting
+against the service.
+
+### Android stream is slow on Windows or Linux
+
+Those builds encode with OpenH264 in software. Lower the encoded size first,
+then the frame rate:
+
+```sh
+simdeck service restart --stream-quality low
+```
+
+`GET /api/metrics` lists `androidEncoders[].encoder.native` with
+`latestEncodeLatencyUs` and `skippedFrames`; if encode latency stays above the
+frame interval, the host CPU cannot keep up with the selected profile.
 
 ### Timed out waiting for the first frame
 

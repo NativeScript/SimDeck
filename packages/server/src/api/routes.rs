@@ -992,6 +992,8 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "serverKind": state.config.server_kind.as_str(),
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64(),
         "videoCodec": video_codec,
+        "hostOs": crate::platform::host_os(),
+        "liveVideo": crate::platform::live_video_capability_value(),
         "androidGpu": active_android_gpu(),
         "lowLatency": state.config.low_latency,
         "realtimeStream": crate::transport::webrtc::realtime_stream_enabled(),
@@ -1480,6 +1482,7 @@ fn stream_quality_response(config: &Config) -> Value {
         "ok": true,
         "quality": stream_quality_state_value(&quality),
         "videoCodec": video_codec,
+        "liveVideo": crate::platform::live_video_capability_value(),
         "profiles": STREAM_QUALITY_PROFILES
             .iter()
             .filter(|profile| VISIBLE_STREAM_QUALITY_PROFILE_IDS.contains(&profile.id))
@@ -5872,6 +5875,29 @@ mod tests {
         assert_eq!(
             logical_screen_size_from_display_pixels(1668.0, 2388.0),
             Some((834.0, 1194.0))
+        );
+    }
+
+    #[test]
+    fn video_codec_modes_normalize_on_every_platform() {
+        assert_eq!(super::normalize_video_codec("auto"), Some("auto"));
+        assert_eq!(super::normalize_video_codec(" Hardware "), Some("hardware"));
+        assert_eq!(super::normalize_video_codec("software"), Some("software"));
+        assert_eq!(super::normalize_video_codec("h265"), None);
+    }
+
+    #[test]
+    fn stream_quality_state_reports_live_video_capability() {
+        let value = crate::platform::live_video_capability_value();
+        assert_eq!(value["supported"].as_bool(), Some(true));
+        assert_eq!(value["androidEmulator"].as_bool(), Some(true));
+        assert_eq!(
+            value["iosSimulator"].as_bool(),
+            Some(crate::platform::ios_simulator_supported())
+        );
+        assert_eq!(
+            value["encoder"].as_str(),
+            Some(crate::platform::live_video_encoder())
         );
     }
 

@@ -5,6 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  isWindowsTarget,
+  targetRustflagsEnvName,
+  windowsRuntimeImports,
+  windowsRustflags,
+} from "./windows-runtime.mjs";
+
 const rootDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -36,6 +43,15 @@ const cargoArgs = ["build", "--release", "--manifest-path", manifestPath];
 if (target) {
   cargoArgs.push("--target", target);
 }
+if (isWindowsTarget(target)) {
+  // Link the C/C++ runtime (OpenH264 is C++) statically so the shipped
+  // binary does not depend on redistributable or MinGW DLLs.
+  const envName = targetRustflagsEnvName(target);
+  process.env[envName] = windowsRustflags(
+    process.env[envName] ?? process.env.RUSTFLAGS,
+  );
+  console.log(`${envName}=${process.env[envName]}`);
+}
 run("cargo", cargoArgs);
 
 const serverBin = path.join(
@@ -44,6 +60,16 @@ const serverBin = path.join(
   "release",
   `simdeck-server${targetExe(target) ?? hostExe}`,
 );
+if (isWindowsTarget(target)) {
+  const runtimeImports = windowsRuntimeImports(fs.readFileSync(serverBin));
+  if (runtimeImports.length > 0) {
+    console.error(
+      `${serverBin} imports toolchain runtime DLLs (${runtimeImports.join(", ")}); ` +
+        "it would fail to start on machines without them. Check the +crt-static link flags.",
+    );
+    process.exit(1);
+  }
+}
 const tmpOutputBin = `${outputBin}.tmp.${process.pid}`;
 fs.copyFileSync(serverBin, tmpOutputBin);
 if (process.platform !== "win32") {

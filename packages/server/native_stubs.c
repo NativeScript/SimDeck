@@ -51,6 +51,15 @@ static void xcw_set_error(char **error_message, const char *message) {
   }
 }
 
+/* Shared by every H.264 encoder stub. Android emulator streams never reach
+ * these on non-macOS builds: packages/server/src/transport/software_h264.rs
+ * encodes them with OpenH264 instead. Keep the wording aligned with
+ * packages/server/src/platform.rs. */
+static const char XCW_LIVE_VIDEO_UNSUPPORTED_MESSAGE[] =
+    "The native H.264 encoder is only available in the macOS simulator "
+    "bridge. iOS simulators require macOS; Android emulators on this build "
+    "use the built-in OpenH264 encoder.";
+
 static bool xcw_unsupported(char **error_message) {
   xcw_set_error(error_message,
                 "iOS simulator native bridge is only available on macOS.");
@@ -573,8 +582,7 @@ void *xcw_native_h264_encoder_create_with_video_codec(
   (void)callback;
   (void)user_data;
   (void)video_codec;
-  xcw_set_error(error_message,
-                "H.264 encoding is only available in the macOS native bridge.");
+  xcw_set_error(error_message, XCW_LIVE_VIDEO_UNSUPPORTED_MESSAGE);
   return NULL;
 }
 
@@ -597,8 +605,7 @@ bool xcw_native_h264_encoder_encode_rgba(void *handle, const uint8_t *rgba,
   (void)width;
   (void)height;
   (void)timestamp_us;
-  xcw_set_error(error_message,
-                "H.264 encoding is only available in the macOS native bridge.");
+  xcw_set_error(error_message, XCW_LIVE_VIDEO_UNSUPPORTED_MESSAGE);
   return false;
 }
 
@@ -613,8 +620,7 @@ bool xcw_native_h264_encoder_encode_bgra(void *handle, const uint8_t *bgra,
   (void)width;
   (void)height;
   (void)timestamp_us;
-  xcw_set_error(error_message,
-                "H.264 encoding is only available in the macOS native bridge.");
+  xcw_set_error(error_message, XCW_LIVE_VIDEO_UNSUPPORTED_MESSAGE);
   return false;
 }
 
@@ -622,8 +628,7 @@ void xcw_native_h264_encoder_request_keyframe(void *handle) { (void)handle; }
 
 char *xcw_native_h264_encoder_stats(void *handle, char **error_message) {
   (void)handle;
-  xcw_set_error(error_message,
-                "H.264 encoding is only available in the macOS native bridge.");
+  xcw_set_error(error_message, XCW_LIVE_VIDEO_UNSUPPORTED_MESSAGE);
   return NULL;
 }
 

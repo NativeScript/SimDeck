@@ -32,6 +32,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 webrtc = "0.12"
 
+# macOS encodes through the native bridge (VideoToolbox/x264). Other targets
+# encode Android emulator frames with OpenH264 compiled from source, see
+# src/transport/software_h264.rs.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+openh264 = { version = "0.9", default-features = false, features = ["source"] }
+
 [build-dependencies]
 cc = "1.2"
 protoc-bin-vendored = "3"

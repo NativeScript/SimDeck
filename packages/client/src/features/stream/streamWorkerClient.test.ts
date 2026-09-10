@@ -4,7 +4,62 @@ import {
   buildStreamTarget,
   initialStreamBackend,
   preferredStreamBackend,
+  responseErrorMessage,
 } from "./streamWorkerClient";
+
+function fakeResponse(
+  status: number,
+  body: string,
+  contentType?: string,
+): Pick<Response, "headers" | "status" | "text"> {
+  return {
+    headers: new Headers(contentType ? { "content-type": contentType } : {}),
+    status,
+    text: () => Promise.resolve(body),
+  };
+}
+
+describe("responseErrorMessage", () => {
+  it("unwraps the server error field from JSON bodies", async () => {
+    const message = await responseErrorMessage(
+      fakeResponse(
+        501,
+        '{"error":"Live H.264 video streaming requires macOS."}',
+        "application/json",
+      ),
+    );
+
+    expect(message).toBe("Live H.264 video streaming requires macOS.");
+  });
+
+  it("unwraps JSON error bodies even without a content type", async () => {
+    const message = await responseErrorMessage(
+      fakeResponse(500, '{"error":"encoder failed"}'),
+    );
+
+    expect(message).toBe("encoder failed");
+  });
+
+  it("returns plain text bodies unchanged", async () => {
+    expect(await responseErrorMessage(fakeResponse(502, "Bad gateway"))).toBe(
+      "Bad gateway",
+    );
+  });
+
+  it("falls back to the status when the body is empty or malformed", async () => {
+    expect(await responseErrorMessage(fakeResponse(503, ""))).toBe(
+      "Request failed with status 503",
+    );
+    expect(await responseErrorMessage(fakeResponse(500, "{not json"))).toBe(
+      "{not json",
+    );
+    expect(
+      await responseErrorMessage(
+        fakeResponse(500, '{"error":""}', "application/json"),
+      ),
+    ).toBe('{"error":""}');
+  });
+});
 
 describe("streamWorkerClient", () => {
   it("ignores removed legacy stream transport preferences", () => {

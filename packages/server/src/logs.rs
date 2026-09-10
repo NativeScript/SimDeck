@@ -79,7 +79,7 @@ impl LogRegistry {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn new_for_tests(spawn_log_stream: LogStreamSpawner) -> Self {
         Self {
             streams: Arc::new(Mutex::new(HashMap::new())),
@@ -240,15 +240,18 @@ fn non_empty_string_field(payload: &Value, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_start_if_idle, LogRegistry, LogStreamPhase, LogStreamSpawner, LogStreamState};
+    use super::{run_start_if_idle, LogStreamPhase, LogStreamState};
     use crate::error::AppError;
+    #[cfg(unix)]
     use crate::native::bridge::LogFilters;
+    #[cfg(unix)]
     use std::process::Stdio;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    #[cfg(unix)]
     use tokio::process::Command;
     use tokio::sync::Barrier;
-    use tokio::time::{sleep, Duration, Instant};
+    use tokio::time::{sleep, Duration};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_start_only_runs_one_spawn_action() {
@@ -309,11 +312,12 @@ mod tests {
         assert_eq!(state.status.lock().await.phase, LogStreamPhase::Running);
     }
 
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn ensure_started_only_spawns_one_process_and_streams_logs() {
         let calls = Arc::new(AtomicUsize::new(0));
         let barrier = Arc::new(Barrier::new(17));
-        let spawner: LogStreamSpawner = Arc::new({
+        let spawner: super::LogStreamSpawner = Arc::new({
             let calls = calls.clone();
             move |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
@@ -332,7 +336,7 @@ mod tests {
                     })
             }
         });
-        let registry = LogRegistry::new_for_tests(spawner);
+        let registry = super::LogRegistry::new_for_tests(spawner);
 
         let mut handles = Vec::new();
         for _ in 0..16 {
@@ -353,7 +357,7 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         let filters = LogFilters::new(Vec::new(), Vec::new(), String::new());
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
         loop {
             let entries = registry.snapshot("booted-sim", &filters, 10).await;
             if let Some(entry) = entries.last() {
@@ -364,17 +368,18 @@ mod tests {
             }
 
             assert!(
-                Instant::now() < deadline,
+                tokio::time::Instant::now() < deadline,
                 "timed out waiting for streamed log entry"
             );
             sleep(Duration::from_millis(10)).await;
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn ensure_started_can_retry_after_spawn_failure() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let spawner: LogStreamSpawner = Arc::new({
+        let spawner: super::LogStreamSpawner = Arc::new({
             let calls = calls.clone();
             move |_| {
                 let call = calls.fetch_add(1, Ordering::SeqCst);
@@ -392,7 +397,7 @@ mod tests {
                     })
             }
         });
-        let registry = LogRegistry::new_for_tests(spawner);
+        let registry = super::LogRegistry::new_for_tests(spawner);
 
         let error = registry.ensure_started("booted-sim").await.unwrap_err();
         assert_eq!(error.to_string(), "failed to spawn");

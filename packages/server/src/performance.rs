@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
+#[cfg(target_os = "macos")]
 use std::ffi::c_void;
 use std::path::Path;
 use std::sync::{Arc, Mutex};

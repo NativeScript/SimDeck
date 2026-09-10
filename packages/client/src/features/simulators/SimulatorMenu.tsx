@@ -49,6 +49,8 @@ interface SimulatorMenuProps {
   recordingActive: boolean;
   recordingStopping: boolean;
   remoteStream?: boolean;
+  /** Set when the server build cannot stream video; disables stream controls. */
+  liveVideoUnavailableReason?: string;
   selectedSimulator: SimulatorMetadata | null;
   showBootButton: boolean;
   showStopButton: boolean;
@@ -94,6 +96,7 @@ export function SimulatorMenu({
   recordingActive,
   recordingStopping,
   remoteStream = false,
+  liveVideoUnavailableReason = "",
   selectedSimulator,
   showBootButton,
   showStopButton,
@@ -123,6 +126,7 @@ export function SimulatorMenu({
   const canRotateSelectedSimulator =
     selectedSimulator != null &&
     !simulatorHasFixedOrientation(selectedSimulator);
+  const streamControlsDisabled = liveVideoUnavailableReason !== "";
   return (
     <div className="menu-wrap" ref={menuRef}>
       <button
@@ -146,13 +150,24 @@ export function SimulatorMenu({
                 <div className="menu-section-heading">
                   <span className="menu-section-title">Stream</span>
                   <span className="menu-section-meta">
-                    {formatStreamConfigSummary(streamConfig, streamTransport)}
+                    {streamControlsDisabled
+                      ? "Requires macOS"
+                      : formatStreamConfigSummary(
+                          streamConfig,
+                          streamTransport,
+                        )}
                   </span>
                 </div>
+                {streamControlsDisabled ? (
+                  <p className="menu-note" title={liveVideoUnavailableReason}>
+                    {LIVE_VIDEO_UNAVAILABLE_NOTE}
+                  </p>
+                ) : null}
                 <label className="menu-field">
                   <span className="menu-field-label">Transport</span>
                   <select
                     className="menu-select"
+                    disabled={streamControlsDisabled}
                     onChange={(event) =>
                       onStreamTransportChange(
                         event.currentTarget.value as StreamTransport,
@@ -171,8 +186,14 @@ export function SimulatorMenu({
                   {STREAM_ENCODERS.map((option) => (
                     <button
                       className={`menu-option ${streamConfig.encoder === option.value ? "active" : ""}`}
+                      disabled={streamControlsDisabled}
                       key={option.value}
                       onClick={() => onStreamEncoderChange(option.value)}
+                      title={
+                        streamControlsDisabled
+                          ? liveVideoUnavailableReason
+                          : undefined
+                      }
                       type="button"
                     >
                       {option.label}
@@ -183,6 +204,7 @@ export function SimulatorMenu({
                   {[...activeFpsOption, ...fpsOptions].map((option) => (
                     <button
                       className={`menu-option ${streamConfig.fps === option.value ? "active" : ""}`}
+                      disabled={streamControlsDisabled}
                       key={option.value}
                       onClick={() => onStreamFpsChange(option.value)}
                       type="button"
@@ -195,6 +217,7 @@ export function SimulatorMenu({
                   <span className="menu-field-label">Resolution</span>
                   <select
                     className="menu-select"
+                    disabled={streamControlsDisabled}
                     onChange={(event) =>
                       onStreamQualityChange(
                         event.currentTarget.value as StreamQualityPreset,
@@ -396,6 +419,9 @@ export function SimulatorMenu({
     </div>
   );
 }
+
+const LIVE_VIDEO_UNAVAILABLE_NOTE =
+  "Live H.264 streaming requires macOS. Device control still works from this host.";
 
 const STREAM_ENCODERS: Array<{ label: string; value: StreamEncoder }> = [
   { label: "Auto", value: "auto" },

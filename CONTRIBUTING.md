@@ -180,10 +180,14 @@ manually from the Actions tab and pick the package, bump type, and dist-tag.
 
 The workflow:
 
+- Resolves the new version up front so every job builds from the same number
+- Builds the per-platform native binaries for the root `simdeck` package with
+  `packages/server/Cargo.toml` synced to that version, and fails if any binary's
+  `--version` output disagrees with it
 - Bumps the chosen package's version, commits, and tags as `<slug>-v<version>`
-- Builds a universal native binary for the root `simdeck` package, codesigns
-  with the team's Developer ID Application certificate, and notarizes with
-  Apple's notary service
+- Merges the macOS binaries into a universal binary, codesigns it with the
+  team's Developer ID Application certificate, and notarizes with Apple's
+  notary service
 - Publishes npm packages over OIDC trusted publishing (no NPM_TOKEN required)
 - Publishes the VS Code extension via `vsce` using a stored PAT
 - Creates a GitHub Release with the signed binary attached
