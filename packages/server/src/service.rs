@@ -470,9 +470,7 @@ fn flag_matches(arguments: &[String], name: &str, expected: bool) -> bool {
 }
 
 fn home_dir() -> anyhow::Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("HOME is not set"))
+    crate::platform::user_home_dir().ok_or_else(|| anyhow!("HOME is not set"))
 }
 
 fn launchctl_domain() -> anyhow::Result<String> {

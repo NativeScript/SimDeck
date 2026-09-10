@@ -83,9 +83,7 @@ pub fn user_config_path() -> PathBuf {
 }
 
 pub fn simdeck_user_state_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+    crate::platform::user_home_dir()
         .map(|home| home.join(".simdeck"))
         .unwrap_or_else(|| std::env::temp_dir().join("simdeck"))
 }

@@ -9,10 +9,34 @@
 //! those differences for the CLI banner, the HTTP API, and the browser client.
 
 use serde_json::{json, Value};
+use std::path::PathBuf;
 
 /// Rust target OS name for the running binary (`macos`, `windows`, `linux`).
 pub fn host_os() -> &'static str {
     std::env::consts::OS
+}
+
+/// The current user's home directory, or `None` when no environment variable
+/// describes one.
+///
+/// Unix shells always export `HOME`. On Windows only Git Bash and similar
+/// environments do; PowerShell and cmd expose `USERPROFILE` (and the older
+/// `HOMEDRIVE`/`HOMEPATH` pair) instead. Every SimDeck path under the home
+/// directory must resolve the same way in all of them, otherwise a service
+/// started from one shell is invisible to the CLI in another.
+pub fn user_home_dir() -> Option<PathBuf> {
+    let from_env = |key: &str| {
+        std::env::var_os(key)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    from_env("HOME")
+        .or_else(|| from_env("USERPROFILE"))
+        .or_else(|| {
+            let drive = from_env("HOMEDRIVE")?;
+            let path = from_env("HOMEPATH")?;
+            Some(drive.join(path))
+        })
 }
 
 /// Whether this build includes the native simulator bridge needed to boot,

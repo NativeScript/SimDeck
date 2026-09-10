@@ -44,6 +44,30 @@ If it is an old service:
 simdeck service stop
 ```
 
+### `simdeck` prints nothing for minutes on Windows
+
+Earlier Windows builds let child processes inherit the service's listening
+socket. If the service exited while the adb server or an emulator it
+started was still running, port 4310 stayed open with nothing answering, and
+the next `simdeck` run waited on it before starting a fresh service on another
+port. Stop the orphaned holder and run `simdeck` again:
+
+```powershell
+adb kill-server
+```
+
+Newer builds keep the listener private to the service and give up on a silent
+port after a few seconds.
+
+### Windows reports a missing `libstdc++-6.dll`
+
+The Windows binary is built with the MinGW toolchain and must not depend on its
+runtime DLLs. A build that does starts only inside Git Bash and fails from
+PowerShell or cmd with exit code `0xC0000135`. Released builds link the runtime
+statically; a source build needs `SIMDECK_BUILD_TARGET=x86_64-pc-windows-gnu`,
+which `npm run build:cli` handles by adding `+crt-static` and refusing to
+package a binary that still imports those DLLs.
+
 ### Native binary is missing
 
 Reinstall from npm:

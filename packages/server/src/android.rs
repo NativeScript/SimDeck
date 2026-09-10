@@ -1981,20 +1981,7 @@ fn java_home() -> Option<OsString> {
 }
 
 fn home_dir() -> PathBuf {
-    env::var_os("HOME")
-        .or_else(|| env::var_os("USERPROFILE"))
-        .or_else(
-            || match (env::var_os("HOMEDRIVE"), env::var_os("HOMEPATH")) {
-                (Some(drive), Some(path)) => {
-                    let mut combined = PathBuf::from(drive);
-                    combined.push(path);
-                    Some(combined.into_os_string())
-                }
-                _ => None,
-            },
-        )
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new("/").to_path_buf())
+    crate::platform::user_home_dir().unwrap_or_else(|| Path::new("/").to_path_buf())
 }
 
 fn extract_xml(output: &str) -> &str {
