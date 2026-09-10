@@ -5,6 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  isWindowsGnuTarget,
+  mingwRuntimeImports,
+  targetRustflagsEnvName,
+  windowsGnuRustflags,
+} from "./windows-runtime.mjs";
+
 const rootDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -36,6 +43,15 @@ const cargoArgs = ["build", "--release", "--manifest-path", manifestPath];
 if (target) {
   cargoArgs.push("--target", target);
 }
+if (isWindowsGnuTarget(target)) {
+  // Link the MinGW C++ runtime (OpenH264) statically so the shipped binary
+  // does not depend on libstdc++-6.dll, which plain Windows installs lack.
+  const envName = targetRustflagsEnvName(target);
+  process.env[envName] = windowsGnuRustflags(
+    process.env[envName] ?? process.env.RUSTFLAGS,
+  );
+  console.log(`${envName}=${process.env[envName]}`);
+}
 run("cargo", cargoArgs);
 
 const serverBin = path.join(
@@ -44,6 +60,16 @@ const serverBin = path.join(
   "release",
   `simdeck-server${targetExe(target) ?? hostExe}`,
 );
+if (isWindowsGnuTarget(target)) {
+  const runtimeImports = mingwRuntimeImports(fs.readFileSync(serverBin));
+  if (runtimeImports.length > 0) {
+    console.error(
+      `${serverBin} imports the MinGW runtime (${runtimeImports.join(", ")}); ` +
+        "it would fail to start outside Git Bash. Check the +crt-static link flags.",
+    );
+    process.exit(1);
+  }
+}
 const tmpOutputBin = `${outputBin}.tmp.${process.pid}`;
 fs.copyFileSync(serverBin, tmpOutputBin);
 if (process.platform !== "win32") {

@@ -171,6 +171,25 @@ test("CI runs Android emulator integration on Linux and Windows", () => {
   assert.match(ciWorkflow, /test:integration:android/);
 });
 
+test("Windows Android CI builds the release's windows-gnu binary", () => {
+  // The release ships x86_64-pc-windows-gnu; the emulator job must exercise
+  // that exact binary from PowerShell so a MinGW runtime DLL dependency fails
+  // CI instead of the published package.
+  const windowsBuildStep = stepSlice(
+    ciWorkflow,
+    "Build Android integration artifacts (Windows, release target)",
+  );
+  assert.match(windowsBuildStep, /if:\s*runner\.os == 'Windows'/);
+  assert.match(
+    windowsBuildStep,
+    /SIMDECK_BUILD_TARGET:\s*x86_64-pc-windows-gnu/,
+  );
+  assert.match(windowsBuildStep, /rustup target add x86_64-pc-windows-gnu/);
+  assert.match(windowsBuildStep, /npm run build:cli/);
+  assert.match(releaseWorkflow, /SIMDECK_BUILD_TARGET=x86_64-pc-windows-gnu/);
+  assert.match(ciWorkflow, /npm run test:windows-runtime/);
+});
+
 test("Windows Android CI boot path is bounded and diagnostic", () => {
   const windowsBootStep = stepSlice(
     ciWorkflow,

@@ -117,6 +117,9 @@ jobs:
       - name: Test workflow and CLI packaging guards
         run: npm run test:github-actions
 
+      - name: Test Windows runtime import guard
+        run: npm run test:windows-runtime
+
       - name: Typecheck client
         run: npm run --prefix packages/client typecheck
 
@@ -359,7 +362,21 @@ jobs:
         run: npm ci --ignore-scripts --force
 
       - name: Build Android integration artifacts
+        if: runner.os != 'Windows'
         run: |
+          npm run build:cli
+          npm run build:simdeck-test
+
+      # Build the same x86_64-pc-windows-gnu binary the release ships so the
+      # emulator test also proves it starts from PowerShell without MinGW DLLs.
+      - name: Build Android integration artifacts (Windows, release target)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          SIMDECK_BUILD_TARGET: x86_64-pc-windows-gnu
+          SIMDECK_DISABLE_X264: "1"
+        run: |
+          rustup target add x86_64-pc-windows-gnu
           npm run build:cli
           npm run build:simdeck-test
 
