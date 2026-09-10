@@ -416,9 +416,9 @@ function simulatorDisplayReady(simulator: SimulatorMetadata): boolean {
   const display = simulator.privateDisplay;
   return Boolean(
     simulator.isBooted &&
-      display?.displayReady &&
-      display.displayWidth > 0 &&
-      display.displayHeight > 0,
+    display?.displayReady &&
+    display.displayWidth > 0 &&
+    display.displayHeight > 0,
   );
 }
 
@@ -1043,8 +1043,8 @@ export function AppShell({
     selectedSimulator != null && shouldRenderNativeChrome(selectedSimulator);
   const deviceChromeToggleActive = Boolean(
     selectedSupportsChrome &&
-      deviceChromeVisible &&
-      !selectedChromeAssetsFailed,
+    deviceChromeVisible &&
+    !selectedChromeAssetsFailed,
   );
   const shouldRenderChrome = deviceChromeToggleActive;
   const viewportChromeProfile = shouldRenderChrome ? chromeProfile : null;
@@ -1135,8 +1135,8 @@ export function AppShell({
     : recordingOverlayLabel || captureStatus?.label || "";
   const captureOverlayBusy = Boolean(
     isInstallingApp ||
-      captureStatus?.busy ||
-      screenRecording?.phase === "stopping",
+    captureStatus?.busy ||
+    screenRecording?.phase === "stopping",
   );
   const autoViewportOffsetY =
     viewMode === "manual" ? 0 : -zoomDockReservedHeight / 2;
@@ -2166,10 +2166,10 @@ export function AppShell({
     (selectedSimulator ? visibleListError : "");
   const viewportHasStreamError = Boolean(
     providerDisconnected ||
-      liveVideoUnavailable ||
-      streamStatus.state === "error" ||
-      visibleStreamError ||
-      (selectedSimulator && visibleListError),
+    liveVideoUnavailable ||
+    streamStatus.state === "error" ||
+    visibleStreamError ||
+    (selectedSimulator && visibleListError),
   );
   const deviceTransform = `translate(${pan.x}px, ${pan.y + autoViewportOffsetY}px) scale(${effectiveZoom})`;
   const chromeScreenRect = computeChromeScreenRect(
@@ -3832,8 +3832,8 @@ export function AppShell({
         }}
         showBootButton={Boolean(
           selectedSimulator &&
-            !selectedSimulator.isBooted &&
-            !selectedSimulatorTransitionKind,
+          !selectedSimulator.isBooted &&
+          !selectedSimulatorTransitionKind,
         )}
         streamConfig={effectiveStreamConfig}
         streamTransport={streamTransport}
@@ -4336,8 +4336,8 @@ function normalizeMaxEdge(
 function isAndroidSimulator(simulator: SimulatorMetadata | null): boolean {
   return Boolean(
     simulator?.platform === "android-emulator" ||
-      simulator?.deviceTypeIdentifier === "android-emulator" ||
-      simulator?.udid.startsWith("android:"),
+    simulator?.deviceTypeIdentifier === "android-emulator" ||
+    simulator?.udid.startsWith("android:"),
   );
 }
 
