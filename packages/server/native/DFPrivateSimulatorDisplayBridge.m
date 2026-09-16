@@ -149,12 +149,33 @@ static NSString *DFActiveDeveloperDirectory(void) {
     return @"/Applications/Xcode.app/Contents/Developer";
 }
 
+static NSInteger DFXcodeMajorVersion(NSString *developerDir) {
+    NSString *versionPlistPath = [[developerDir stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"version.plist"];
+    NSDictionary *versionInfo = [NSDictionary dictionaryWithContentsOfFile:versionPlistPath];
+    id version = versionInfo[@"CFBundleShortVersionString"];
+    if (![version isKindOfClass:[NSString class]]) {
+        return 0;
+    }
+    return [(NSString *)version integerValue];
+}
+
 static NSString *DFSimulatorKitExecutablePath(void) {
     NSString *developerDir = DFActiveDeveloperDirectory();
-    if (developerDir.length > 0) {
-        return [developerDir stringByAppendingPathComponent:@"Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
+    if (developerDir.length == 0) {
+        developerDir = @"/Applications/Xcode.app/Contents/Developer";
     }
-    return @"/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit";
+
+    // Xcode 27 moved SimulatorKit from Contents/Developer/Library/PrivateFrameworks to Contents/SharedFrameworks.
+    NSString *sharedPath = [[developerDir stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"SharedFrameworks/SimulatorKit.framework/SimulatorKit"];
+    NSString *legacyPath = [developerDir stringByAppendingPathComponent:@"Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
+    NSArray<NSString *> *candidates = DFXcodeMajorVersion(developerDir) >= 27 ? @[sharedPath, legacyPath] : @[legacyPath, sharedPath];
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    for (NSString *candidate in candidates) {
+        if ([fileManager fileExistsAtPath:candidate]) {
+            return candidate;
+        }
+    }
+    return candidates.firstObject;
 }
 
 typedef struct {
