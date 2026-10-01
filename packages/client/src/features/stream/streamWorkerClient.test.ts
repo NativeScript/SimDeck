@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildStreamTarget,
+  canUseWebRtc,
   initialStreamBackend,
   preferredStreamBackend,
 } from "./streamWorkerClient";
@@ -55,6 +56,23 @@ describe("streamWorkerClient", () => {
     try {
       expect(preferredStreamBackend(target)).toBe("auto");
       expect(initialStreamBackend(target)).toBe("webrtc");
+    } finally {
+      (
+        globalThis as unknown as { RTCPeerConnection: unknown }
+      ).RTCPeerConnection = previousPeerConnection;
+    }
+  });
+
+  it("detects browsers that expose but cannot construct WebRTC", () => {
+    const previousPeerConnection = globalThis.RTCPeerConnection;
+    (
+      globalThis as unknown as { RTCPeerConnection: unknown }
+    ).RTCPeerConnection = (() => {
+      throw new TypeError("RTCPeerConnection is not a constructor");
+    }) as never;
+
+    try {
+      expect(canUseWebRtc()).toBe(false);
     } finally {
       (
         globalThis as unknown as { RTCPeerConnection: unknown }

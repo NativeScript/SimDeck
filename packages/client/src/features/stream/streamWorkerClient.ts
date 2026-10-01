@@ -1,8 +1,4 @@
-import {
-  accessTokenFromLocation,
-  apiHeaders,
-  fetchHealth,
-} from "../../api/client";
+import { apiHeaders, fetchHealth } from "../../api/client";
 import { apiUrl } from "../../api/config";
 import type { HealthResponse } from "../../api/types";
 import { createEmptyStreamStats } from "./stats";
@@ -31,7 +27,6 @@ const CONTROL_BACKLOG_DROP_BYTES = 4096;
 
 let activeWebRtcControlChannel: RTCDataChannel | null = null;
 let activeWebRtcTelemetryChannel: RTCDataChannel | null = null;
-let activeInputSocket: WebSocket | null = null;
 let activeStreamClient: StreamWorkerClient | null = null;
 
 export type StreamBackend = "webrtc";
@@ -40,10 +35,7 @@ export function sendWebRtcControlMessage(
   encoded: string,
   options: { dropIfBacklogged?: boolean } = {},
 ): boolean {
-  return (
-    sendDataChannelMessage(activeWebRtcControlChannel, encoded, options) ||
-    sendWebSocketMessage(activeInputSocket, encoded, options)
-  );
+  return sendDataChannelMessage(activeWebRtcControlChannel, encoded, options);
 }
 
 export function sendStreamClientStats(stats: unknown): boolean {
@@ -86,24 +78,6 @@ function sendDataChannelMessage(
     return true;
   }
   channel.send(encoded);
-  return true;
-}
-
-function sendWebSocketMessage(
-  socket: WebSocket | null,
-  encoded: string,
-  options: { dropIfBacklogged?: boolean } = {},
-): boolean {
-  if (socket?.readyState !== WebSocket.OPEN) {
-    return false;
-  }
-  if (
-    options.dropIfBacklogged &&
-    socket.bufferedAmount > CONTROL_BACKLOG_DROP_BYTES
-  ) {
-    return true;
-  }
-  socket.send(encoded);
   return true;
 }
 
@@ -210,18 +184,18 @@ export function buildStreamTarget(
   };
 }
 
-function webSocketApiUrl(path: string): string {
-  const url = new URL(apiUrl(path), window.location.href);
-  const token = accessTokenFromLocation();
-  if (token) {
-    url.searchParams.set("simdeckToken", token);
-  }
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
-}
-
 export function canUseWebRtc(): boolean {
-  return typeof RTCPeerConnection === "function";
+  const constructor = globalThis.RTCPeerConnection;
+  if (typeof constructor !== "function") {
+    return false;
+  }
+  try {
+    const peer = Reflect.construct(constructor, []);
+    peer.close();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 interface StreamClientBackend {
@@ -374,6 +348,17 @@ class WebRtcStreamClient implements StreamClientBackend {
       type: "status",
       status: { detail: "Creating WebRTC offer", state: "connecting" },
     });
+    if (!canUseWebRtc()) {
+      this.onMessage({
+        type: "status",
+        status: {
+          detail: "Simulator controls use the WebSocket fallback.",
+          error: "WebRTC video is unavailable in this browser.",
+          state: "error",
+        },
+      });
+      return;
+    }
 
     try {
       const health = await fetchHealth().catch(() => null);
@@ -1213,8 +1198,7 @@ class WebRtcStreamClient implements StreamClientBackend {
         this.stats.packetsLost = Math.max(0, video.packetsLost);
       }
       const codecStats = codec as
-        | (RTCStats & { mimeType?: string; payloadType?: number })
-        | undefined;
+        (RTCStats & { mimeType?: string; payloadType?: number }) | undefined;
       if (codecStats?.mimeType) {
         this.stats.codec = codecStats.payloadType
           ? `${codecStats.mimeType}/${codecStats.payloadType}`

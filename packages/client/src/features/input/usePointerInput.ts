@@ -91,7 +91,10 @@ const TWO_FINGER_SPREAD = 0.16;
 const PINCH_MINIMUM_SPREAD = 0.16;
 const BOTTOM_EDGE_GESTURE_START_Y = 0.93;
 const TOUCH_TARGET_TOLERANCE = 0.08;
-const TOUCH_SINGLE_BEGIN_DELAY_MS = 70;
+// Keep enough time for a second finger to arrive, while avoiding a visibly
+// delayed tap on iOS Safari where touch events are the authoritative gesture
+// stream.
+const TOUCH_SINGLE_BEGIN_DELAY_MS = 32;
 
 export function usePointerInput({
   canvasSize,
@@ -499,7 +502,15 @@ export function usePointerInput({
   function pointerEventShouldDeferToTouchEvents(
     event: React.PointerEvent<HTMLElement>,
   ): boolean {
-    return false;
+    // Safari (and touch Chromium) dispatches pointer and touch events for the
+    // same contact.  Letting the pointer handler call preventDefault() here
+    // can suppress the subsequent touch sequence, which leaves iPhone taps
+    // and drags with no native input.  Mouse and pen input remain on the
+    // pointer path.
+    return (
+      event.pointerType === "touch" &&
+      ("ontouchstart" in window || navigator.maxTouchPoints > 0)
+    );
   }
 
   function screenElementFromBottomBezelTarget(
