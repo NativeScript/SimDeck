@@ -1520,15 +1520,8 @@ static DFIndigoMessage *DFCreateIndigoTouchMessage(CGPoint normalizedPoint,
         fmax(0.0, fmin(1.0, normalizedPoint.x)),
         fmax(0.0, fmin(1.0, normalizedPoint.y))
     );
-    // Xcode 26.4+ SimulatorKit consumes pixel-space points here. Keep the
-    // normalized ratios in the digitizer payload below, but construct the
-    // mouse event with the simulator's backing display coordinates.
-    CGPoint pixelPoint = CGPointMake(
-        ratioPoint.x * displaySize.width,
-        ratioPoint.y * displaySize.height
-    );
 
-    DFIndigoMessage *baseMessage = (DFIndigoMessage *)mouseMessage(&pixelPoint, NULL, target, eventType, displaySize, edge);
+    DFIndigoMessage *baseMessage = (DFIndigoMessage *)mouseMessage(&ratioPoint, NULL, target, eventType, displaySize, edge);
     if (baseMessage == NULL) {
         if (error != NULL) {
             *error = DFMakeError(
@@ -1595,16 +1588,8 @@ static DFIndigoMessage *DFCreateIndigoMultiTouchMessage(CGPoint normalizedPoint1
         fmax(0.0, fmin(1.0, normalizedPoint2.x)),
         fmax(0.0, fmin(1.0, normalizedPoint2.y))
     );
-    CGPoint pixelPoint = CGPointMake(
-        ratioPoint.x * displaySize.width,
-        ratioPoint.y * displaySize.height
-    );
-    CGPoint secondPixelPoint = CGPointMake(
-        secondRatioPoint.x * displaySize.width,
-        secondRatioPoint.y * displaySize.height
-    );
 
-    DFIndigoMessage *baseMessage = (DFIndigoMessage *)mouseMessage(&pixelPoint, &secondPixelPoint, target, eventType, displaySize, 0);
+    DFIndigoMessage *baseMessage = (DFIndigoMessage *)mouseMessage(&ratioPoint, NULL, target, eventType, displaySize, 0);
     if (baseMessage == NULL) {
         if (error != NULL) {
             *error = DFMakeError(
