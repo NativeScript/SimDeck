@@ -184,17 +184,22 @@ export function buildStreamTarget(
   };
 }
 
-export function canUseWebRtc(): boolean {
-  const constructor = globalThis.RTCPeerConnection;
-  if (typeof constructor !== "function") {
-    return false;
+class WebRtcInitializationError extends Error {
+  constructor(cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Could not initialize WebRTC video: ${detail}`, { cause });
+    this.name = "WebRtcInitializationError";
   }
+}
+
+/** Create the actual connection; do not make disposable capability probes. */
+export function createWebRtcPeerConnection(
+  configuration: RTCConfiguration,
+): RTCPeerConnection {
   try {
-    const peer = Reflect.construct(constructor, []);
-    peer.close();
-    return true;
-  } catch {
-    return false;
+    return new RTCPeerConnection(configuration);
+  } catch (error) {
+    throw new WebRtcInitializationError(error);
   }
 }
 
@@ -348,24 +353,13 @@ class WebRtcStreamClient implements StreamClientBackend {
       type: "status",
       status: { detail: "Creating WebRTC offer", state: "connecting" },
     });
-    if (!canUseWebRtc()) {
-      this.onMessage({
-        type: "status",
-        status: {
-          detail: "Simulator controls use the WebSocket fallback.",
-          error: "WebRTC video is unavailable in this browser.",
-          state: "error",
-        },
-      });
-      return;
-    }
 
     try {
       const health = await fetchHealth().catch(() => null);
       if (generation !== this.connectGeneration) {
         return;
       }
-      const peerConnection = new RTCPeerConnection({
+      const peerConnection = createWebRtcPeerConnection({
         iceServers: iceServers(health),
         iceTransportPolicy: iceTransportPolicy(health),
       });
@@ -505,6 +499,18 @@ class WebRtcStreamClient implements StreamClientBackend {
       });
       this.scheduleFrameWatchdog(target, generation);
     } catch (error) {
+      if (error instanceof WebRtcInitializationError) {
+        if (generation !== this.connectGeneration) return;
+        // A constructor failure is not a dropped network connection. Avoid
+        // repeated initialization attempts; a new explicit connect can retry.
+        this.shouldReconnect = false;
+        this.closeActiveConnection();
+        this.onMessage({
+          type: "status",
+          status: { error: error.message, state: "error" },
+        });
+        return;
+      }
       this.handleConnectionError(target, generation, error);
     }
   }
