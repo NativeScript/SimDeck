@@ -38,6 +38,7 @@ fn main() {
     let files = [
         camera.join("SimDeckCameraService.m"),
         cli.join("DFPrivateSimulatorDisplayBridge.m"),
+        cli.join("DFDTUHIDClient.m"),
         cli.join("XCWH264Encoder.m"),
         cli.join("XCWProcessRunner.m"),
         cli.join("XCWPrivateSimulatorBooter.m"),

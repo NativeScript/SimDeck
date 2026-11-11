@@ -1,4 +1,5 @@
 #import "DFPrivateSimulatorDisplayBridge.h"
+#import "DFDTUHIDClient.h"
 
 #import <CoreVideo/CoreVideo.h>
 #import <dlfcn.h>
@@ -2755,6 +2756,8 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     id _activeScreen;
     id _rawScreen;
     id _hidClient;
+    BOOL _usesDTUHID;
+    DFDTUHIDClient *_dtuhidClient;
     id _digitizerInputView;
     dispatch_queue_t _callbackQueue;
     dispatch_queue_t _delegateFrameQueue;
@@ -3025,6 +3028,11 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
 
     _inputFamily = DFSimulatorInputFamilyForCoreSimulatorDevice(_device);
     DFLog(@"Resolved simulator input family for %@: %s", udid, DFSimulatorInputFamilyName(_inputFamily));
+
+    _usesDTUHID = [DFDTUHIDClient isRequiredByLoadedCoreSimulator];
+    if (_usesDTUHID) {
+        DFLog(@"CoreSimulator routes guest input through dtuhidd; sending touches, buttons and keys there for %@", udid);
+    }
 
     NSError *hidClientError = nil;
     _hidClient = DFCreateSimulatorKitHIDClientForDevice(_device, &hidClientError);
@@ -3558,6 +3566,56 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     return buttons;
 }
 
+#pragma mark - dtuhidd input
+
+/// dtuhidd's edge values, which differ from the legacy Indigo edge constants above.
+static uint32_t DFDTUHIDEdgeForPrivateTouchEdge(DFPrivateSimulatorTouchEdge edge) {
+    switch (edge) {
+    case DFPrivateSimulatorTouchEdgeTop:
+        return 1;
+    case DFPrivateSimulatorTouchEdgeLeft:
+        return 2;
+    case DFPrivateSimulatorTouchEdgeBottom:
+        return 3;
+    case DFPrivateSimulatorTouchEdgeRight:
+        return 4;
+    case DFPrivateSimulatorTouchEdgeNone:
+        return 0;
+    }
+    return 0;
+}
+
+/// Runs on the callback queue. Connects on first use because dtuhidd only answers once the guest has a display, and
+/// reconnects after the simulator drops the connection.
+- (nullable DFDTUHIDClient *)dtuhidClient:(NSError **)error {
+    if (_dtuhidClient != nil && _dtuhidClient.isValid) {
+        return _dtuhidClient;
+    }
+    [_dtuhidClient disconnect];
+    _dtuhidClient = [[DFDTUHIDClient alloc] initWithDevice:_device error:error];
+    return _dtuhidClient;
+}
+
+- (BOOL)dtuhidPressButtonUsagePage:(uint32_t)usagePage
+                             usage:(uint32_t)usage
+                       holdSeconds:(NSTimeInterval)holdSeconds
+                             error:(NSError **)error {
+    DFDTUHIDClient *client = [self dtuhidClient:error];
+    if (client == nil || ![client sendButtonUsagePage:usagePage usage:usage down:YES error:error]) {
+        return NO;
+    }
+    [NSThread sleepForTimeInterval:holdSeconds];
+    return [client sendButtonUsagePage:usagePage usage:usage down:NO error:error];
+}
+
+- (BOOL)sendKeyboardUsage:(uint16_t)usage down:(BOOL)down error:(NSError **)error {
+    if (_usesDTUHID) {
+        DFDTUHIDClient *client = [self dtuhidClient:error];
+        return client != nil && [client sendKeyboardUsage:usage down:down error:error];
+    }
+    return DFSendSingleKeyboardEvent(_hidClient, usage, down, error);
+}
+
 - (BOOL)pressChromeButtonWithIdentifier:(NSString *)identifier error:(NSError * _Nullable __autoreleasing *)error {
     __block BOOL success = NO;
     __block NSError *dispatchError = nil;
@@ -3619,6 +3677,17 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     __block NSError *dispatchError = nil;
 
     dispatch_block_t work = ^{
+        if (self->_usesDTUHID) {
+            NSError *dtuhidError = nil;
+            if ([self dtuhidPressButtonUsagePage:DFConsumerControlUsagePage usage:0x40 holdSeconds:0.08 error:&dtuhidError]) {
+                DFLog(@"Home dispatched via dtuhidd");
+                success = YES;
+            } else {
+                dispatchError = dtuhidError;
+            }
+            return;
+        }
+
         // Prefer Simulator.app's own chrome affordance when available (iPhone 8 / SE
         // with the Touch ID bezel). This goes through the same code path as clicking
         // the modeled Home button in the Simulator window — guaranteed not to reboot.
@@ -3705,6 +3774,22 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     __block NSError *dispatchError = nil;
 
     dispatch_block_t work = ^{
+        if (self->_usesDTUHID) {
+            NSError *dtuhidError = nil;
+            BOOL pressed = [self dtuhidPressButtonUsagePage:DFConsumerControlUsagePage usage:0x40 holdSeconds:0.06 error:&dtuhidError];
+            if (pressed) {
+                [NSThread sleepForTimeInterval:0.06];
+                pressed = [self dtuhidPressButtonUsagePage:DFConsumerControlUsagePage usage:0x40 holdSeconds:0.06 error:&dtuhidError];
+            }
+            if (pressed) {
+                DFLog(@"App Switcher dispatched via dtuhidd");
+                success = YES;
+            } else {
+                dispatchError = dtuhidError;
+            }
+            return;
+        }
+
         NSError *hidError = nil;
         if (DFOpenAppSwitcherViaHIDClient(self->_hidClient, &hidError)) {
             success = YES;
@@ -3839,6 +3924,11 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         __block BOOL success = NO;
         __block NSError *dispatchError = nil;
         dispatch_block_t work = ^{
+            if (self->_usesDTUHID) {
+                DFDTUHIDClient *client = [self dtuhidClient:&dispatchError];
+                success = client != nil && [client sendButtonUsagePage:DFConsumerControlUsagePage usage:0x40 down:pressed error:&dispatchError];
+                return;
+            }
             if (self->_hidClient == nil) {
                 dispatchError = DFMakeError(
                     DFPrivateSimulatorErrorCodeTouchDispatchFailed,
@@ -3914,6 +4004,36 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     __block NSError *dispatchError = nil;
 
     dispatch_block_t work = ^{
+        if (self->_usesDTUHID) {
+            // dtuhidd takes buttons only as HID usages; the legacy button codes have no equivalent.
+            static NSDictionary<NSString *, NSArray<NSNumber *> *> *dtuhidButtons;
+            static dispatch_once_t dtuhidOnce;
+            dispatch_once(&dtuhidOnce, ^{
+                NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *buttons = [arbitraryButtons mutableCopy];
+                buttons[@"lock"] = @[ @(DFConsumerControlUsagePage), @0x30 ];
+                buttons[@"side"] = @[ @(DFConsumerControlUsagePage), @0x30 ];
+                buttons[@"side-button"] = @[ @(DFConsumerControlUsagePage), @0x30 ];
+                buttons[@"siri"] = @[ @(DFConsumerControlUsagePage), @0xCF ];
+                dtuhidButtons = buttons;
+            });
+            NSArray<NSNumber *> *dtuhidUsage = dtuhidButtons[normalizedName];
+            if (!hasExplicitUsage && dtuhidUsage.count < 2) {
+                dispatchError = DFMakeError(
+                    DFPrivateSimulatorErrorCodeTouchDispatchFailed,
+                    [NSString stringWithFormat:@"Hardware button `%@` has no HID usage dtuhidd accepts.", buttonName ?: @""]
+                );
+                return;
+            }
+            uint32_t page = hasExplicitUsage ? usagePage.unsignedIntValue : dtuhidUsage[0].unsignedIntValue;
+            uint32_t usageValue = hasExplicitUsage ? usage.unsignedIntValue : dtuhidUsage[1].unsignedIntValue;
+            DFDTUHIDClient *client = [self dtuhidClient:&dispatchError];
+            if (client == nil || ![client sendButtonUsagePage:page usage:usageValue down:pressed error:&dispatchError]) {
+                return;
+            }
+            DFLog(@"Sending dtuhidd button `%@` page=0x%x usage=0x%x %@", buttonName, page, usageValue, pressed ? @"down" : @"up");
+            success = YES;
+            return;
+        }
         if (self->_hidClient == nil) {
             dispatchError = DFMakeError(
                 DFPrivateSimulatorErrorCodeTouchDispatchFailed,
@@ -4037,6 +4157,9 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
 
 - (void)disconnect {
     dispatch_block_t work = ^{
+        [self->_dtuhidClient disconnect];
+        self->_dtuhidClient = nil;
+
         if (self->_screenAdapter != nil && self->_screenAdapterCallbackUUID != nil) {
             ((void(*)(id, SEL, id))objc_msgSend)(self->_screenAdapter, sel_registerName("unregisterScreenAdapterCallbacksWithUUID:"), self->_screenAdapterCallbackUUID);
         }
@@ -4207,6 +4330,24 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         }
         uint32_t target = DFIndigoDigitizerTarget;
 
+        if (self->_usesDTUHID) {
+            DFDTUHIDClient *client = [self dtuhidClient:&dispatchError];
+            DFDTUHIDTouchPhase dtuhidPhase =
+                (phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved)
+                    ? DFDTUHIDTouchPhaseDown
+                    : DFDTUHIDTouchPhaseUp;
+            if (client == nil || ![client sendTouchPhase:dtuhidPhase x:clampedX y:clampedY edge:0 error:&dispatchError]) {
+                return;
+            }
+            self->_lastTouchPoint = point;
+            self->_hasLastTouchPoint = dtuhidPhase == DFDTUHIDTouchPhaseDown;
+            if (!self->_hasLastTouchPoint) {
+                self->_lastTouchPoint = CGPointZero;
+            }
+            success = YES;
+            return;
+        }
+
         if (hidClient == nil) {
             dispatchError = DFMakeError(
                 DFPrivateSimulatorErrorCodeTouchDispatchFailed,
@@ -4290,7 +4431,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             dispatchError = DFTVDirectTouchUnsupportedError();
             return;
         }
-        if (self->_hidClient == nil) {
+        if (self->_hidClient == nil && !self->_usesDTUHID) {
             dispatchError = DFMakeError(
                 DFPrivateSimulatorErrorCodeTouchDispatchFailed,
                 @"SimulatorKit did not provide a headless HID client for this simulator."
@@ -4308,6 +4449,24 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             clampedX * fmax(displaySize.width - 1.0, 1.0),
             clampedY * fmax(displaySize.height - 1.0, 1.0)
         );
+
+        if (self->_usesDTUHID) {
+            DFDTUHIDClient *client = [self dtuhidClient:&dispatchError];
+            DFDTUHIDTouchPhase dtuhidPhase =
+                (phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved)
+                    ? DFDTUHIDTouchPhaseDown
+                    : DFDTUHIDTouchPhaseUp;
+            if (client == nil || ![client sendTouchPhase:dtuhidPhase x:clampedX y:clampedY edge:DFDTUHIDEdgeForPrivateTouchEdge(edge) error:&dispatchError]) {
+                return;
+            }
+            self->_lastTouchPoint = point;
+            self->_hasLastTouchPoint = dtuhidPhase == DFDTUHIDTouchPhaseDown;
+            if (!self->_hasLastTouchPoint) {
+                self->_lastTouchPoint = CGPointZero;
+            }
+            success = YES;
+            return;
+        }
 
         uint32_t target = DFIndigoDigitizerTarget;
         IndigoHIDEdge hidEdge = DFIndigoHIDEdgeForPrivateTouchEdge(edge);
@@ -4384,7 +4543,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
             dispatchError = DFTVDirectTouchUnsupportedError();
             return;
         }
-        if (self->_hidClient == nil) {
+        if (self->_hidClient == nil && !self->_usesDTUHID) {
             dispatchError = DFMakeError(
                 DFPrivateSimulatorErrorCodeTouchDispatchFailed,
                 @"SimulatorKit did not provide a headless HID client for this simulator."
@@ -4413,6 +4572,22 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         case DFPrivateSimulatorTouchPhaseCancelled:
             phaseLabel = phase == DFPrivateSimulatorTouchPhaseEnded ? @"ended" : @"cancelled";
             break;
+        }
+
+        if (self->_usesDTUHID) {
+            DFDTUHIDClient *client = [self dtuhidClient:&dispatchError];
+            DFDTUHIDTouchPhase dtuhidPhase =
+                (phase == DFPrivateSimulatorTouchPhaseBegan || phase == DFPrivateSimulatorTouchPhaseMoved)
+                    ? DFDTUHIDTouchPhaseDown
+                    : DFDTUHIDTouchPhaseUp;
+            if (client == nil || ![client sendTwoFingerTouchPhase:dtuhidPhase x1:x1 y1:y1 x2:x2 y2:y2 error:&dispatchError]) {
+                return;
+            }
+            if (phase != DFPrivateSimulatorTouchPhaseMoved) {
+                DFLog(@"Sending %@ dtuhidd multi-touch p1=(%.4f, %.4f) p2=(%.4f, %.4f)", phaseLabel, x1, y1, x2, y2);
+            }
+            success = YES;
+            return;
         }
 
         uint32_t target = DFIndigoDigitizerTarget;
@@ -4572,7 +4747,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     __block NSError *dispatchError = nil;
 
     dispatch_block_t work = ^{
-        if (self->_hidClient == nil) {
+        if (self->_hidClient == nil && !self->_usesDTUHID) {
             dispatchError = DFMakeError(
                 DFPrivateSimulatorErrorCodeTouchDispatchFailed,
                 @"SimulatorKit did not provide a headless HID client for keyboard input."
@@ -4602,24 +4777,24 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
 
         NSError *messageError = nil;
         for (NSNumber *modifierKeyCode in modifierKeyCodes) {
-            if (!DFSendSingleKeyboardEvent(self->_hidClient, modifierKeyCode.unsignedShortValue, YES, &messageError)) {
+            if (![self sendKeyboardUsage:modifierKeyCode.unsignedShortValue down:YES error:&messageError]) {
                 dispatchError = messageError;
                 return;
             }
         }
 
-        if (!DFSendSingleKeyboardEvent(self->_hidClient, keyCode, YES, &messageError)) {
+        if (![self sendKeyboardUsage:keyCode down:YES error:&messageError]) {
             dispatchError = messageError;
             return;
         }
 
-        if (!DFSendSingleKeyboardEvent(self->_hidClient, keyCode, NO, &messageError)) {
+        if (![self sendKeyboardUsage:keyCode down:NO error:&messageError]) {
             dispatchError = messageError;
             return;
         }
 
         for (NSNumber *modifierKeyCode in [modifierKeyCodes reverseObjectEnumerator]) {
-            if (!DFSendSingleKeyboardEvent(self->_hidClient, modifierKeyCode.unsignedShortValue, NO, &messageError)) {
+            if (![self sendKeyboardUsage:modifierKeyCode.unsignedShortValue down:NO error:&messageError]) {
                 dispatchError = messageError;
                 return;
             }
@@ -4649,7 +4824,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
     __block NSError *dispatchError = nil;
 
     dispatch_block_t work = ^{
-        if (self->_hidClient == nil) {
+        if (self->_hidClient == nil && !self->_usesDTUHID) {
             dispatchError = DFMakeError(
                 DFPrivateSimulatorErrorCodeTouchDispatchFailed,
                 @"SimulatorKit did not provide a headless HID client for keyboard input."
@@ -4658,7 +4833,7 @@ static BOOL DFOpenAppSwitcherViaHIDClient(id hidClient, NSError **error) {
         }
 
         NSError *messageError = nil;
-        if (!DFSendSingleKeyboardEvent(self->_hidClient, keyCode, down, &messageError)) {
+        if (![self sendKeyboardUsage:keyCode down:down error:&messageError]) {
             dispatchError = messageError;
             return;
         }
