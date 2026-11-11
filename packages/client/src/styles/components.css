@@ -464,6 +464,13 @@
   opacity: 0.55;
 }
 
+.menu-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .menu-toggle {
   display: flex;
   align-items: center;

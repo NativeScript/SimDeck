@@ -50,6 +50,40 @@ jobs:
       - name: Rust unit tests
         run: cargo test --manifest-path packages/server/Cargo.toml
 
+  rust-non-macos:
+    name: Rust unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            packages/server/target
+          key: rust-${{ runner.os }}-${{ hashFiles('packages/server/Cargo.lock', 'packages/server/Cargo.toml', 'packages/server/build.rs', 'packages/server/src/**/*.rs', 'packages/server/native_stubs.c') }}
+          restore-keys: |
+            rust-${{ runner.os }}-
+
+      # The macOS job cannot compile the OpenH264 software encoder or the
+      # native stubs, so lint and test them where they are actually built.
+      - name: Clippy
+        run: cargo clippy --manifest-path packages/server/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust unit tests
+        run: cargo test --manifest-path packages/server/Cargo.toml
+
   client:
     name: Client lint, build, and tests
     runs-on: ubuntu-latest
@@ -82,6 +116,9 @@ jobs:
 
       - name: Test workflow and CLI packaging guards
         run: npm run test:github-actions
+
+      - name: Test Windows runtime import guard
+        run: npm run test:windows-runtime
 
       - name: Typecheck client
         run: npm run --prefix packages/client typecheck
@@ -325,6 +362,20 @@ jobs:
         run: npm ci --ignore-scripts --force
 
       - name: Build Android integration artifacts
+        if: runner.os != 'Windows'
+        run: |
+          npm run build:cli
+          npm run build:simdeck-test
+
+      # Build the same x86_64-pc-windows-msvc binary the release ships (static
+      # CRT) so the emulator test also proves it starts from PowerShell without
+      # any toolchain runtime DLLs.
+      - name: Build Android integration artifacts (Windows, release target)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          SIMDECK_BUILD_TARGET: x86_64-pc-windows-msvc
+          SIMDECK_DISABLE_X264: "1"
         run: |
           npm run build:cli
           npm run build:simdeck-test

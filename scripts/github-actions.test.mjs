@@ -78,11 +78,89 @@ test("release workflow builds supported native CLI artifacts per platform", () =
   assert.match(releaseWorkflow, /simdeck-bin-linux-x64/);
   assert.match(releaseWorkflow, /actions\/download-artifact@v4/);
 
-  const verifyStep = releaseWorkflow.indexOf("Verify CLI artifacts are published");
+  const verifyStep = releaseWorkflow.indexOf(
+    "Verify CLI artifacts are published",
+  );
   const commitStep = releaseWorkflow.indexOf("Commit and push version bump");
   assert.ok(verifyStep !== -1, "artifact verification step should exist");
-  assert.ok(commitStep > verifyStep, "release commit should happen after artifact verification");
-  assert.match(releaseWorkflow, /test -f \\\"\$artifact\\\"/);
+  assert.ok(
+    commitStep > verifyStep,
+    "release commit should happen after artifact verification",
+  );
+  assert.match(releaseWorkflow, /test -f "\$artifact"/);
+});
+
+test("release workflow compiles native CLI artifacts from the bumped version", () => {
+  // The bug this guards against: native binaries were built before the release
+  // job bumped package.json/Cargo.toml, so simdeck@0.1.35 shipped a binary
+  // whose `--version` said 0.1.34.
+  assert.match(releaseWorkflow, /^  resolve-version:$/m);
+  assert.match(
+    releaseWorkflow,
+    /needs: \[resolve-version, build-native-artifacts\]/,
+  );
+  assert.match(releaseWorkflow, /needs\.resolve-version\.result == 'success'/);
+
+  const nativeJobStart = releaseWorkflow.indexOf("  build-native-artifacts:");
+  const releaseJobStart = releaseWorkflow.indexOf("  release:");
+  assert.ok(nativeJobStart !== -1 && releaseJobStart > nativeJobStart);
+  const nativeJob = releaseWorkflow.slice(nativeJobStart, releaseJobStart);
+
+  assert.match(nativeJob, /needs: resolve-version/);
+  assert.match(
+    nativeJob,
+    /NEW_VERSION: \$\{\{ needs\.resolve-version\.outputs\.version \}\}/,
+  );
+  assert.match(
+    nativeJob,
+    /cargo update --manifest-path packages\/server\/Cargo\.toml -p simdeck-server --precise "\$NEW_VERSION"/,
+  );
+
+  const syncStep = nativeJob.indexOf("- name: Sync Rust CLI version");
+  const buildStep = nativeJob.indexOf("- name: Build native artifact");
+  const checkStep = nativeJob.indexOf(
+    "- name: Verify native artifact reports the release version",
+  );
+  const uploadStep = nativeJob.indexOf("- name: Upload artifact");
+  assert.ok(syncStep !== -1, "native build should sync the crate version");
+  assert.ok(
+    buildStep > syncStep,
+    "crate version must be synced before compiling",
+  );
+  assert.ok(checkStep > buildStep, "built binary should be version-checked");
+  assert.ok(uploadStep > checkStep, "version check must pass before uploading");
+  assert.match(nativeJob, /"\$BINARY" --version/);
+  for (const binary of [
+    "build/simdeck-bin-darwin-arm64",
+    "build/simdeck-bin-darwin-x64",
+    "build/simdeck-bin-linux-x64",
+    "build/simdeck-bin-win32-x64.exe",
+  ]) {
+    assert.ok(
+      nativeJob.includes(`binary: ${binary}`),
+      `${binary} should be declared in the native build matrix`,
+    );
+  }
+
+  const releaseJob = releaseWorkflow.slice(releaseJobStart);
+  assert.match(
+    releaseJob,
+    /RESOLVED_VERSION: \$\{\{ needs\.resolve-version\.outputs\.version \}\}/,
+  );
+  assert.match(
+    releaseJob,
+    /npm version "\$version" --no-git-tag-version --allow-same-version/,
+  );
+  const verifyStep = releaseJob.indexOf(
+    "- name: Verify CLI artifacts are published",
+  );
+  const commitStep = releaseJob.indexOf("- name: Commit and push version bump");
+  const verifyBody = releaseJob.slice(verifyStep, commitStep);
+  assert.match(
+    verifyBody,
+    /for artifact in build\/simdeck-bin build\/simdeck-bin-darwin-arm64; do/,
+  );
+  assert.match(verifyBody, /"\$artifact" --version/);
 });
 
 test("CI runs Android emulator integration on Linux and Windows", () => {
@@ -91,6 +169,25 @@ test("CI runs Android emulator integration on Linux and Windows", () => {
   assert.match(ciWorkflow, /matrix\.os/);
   assert.match(ciWorkflow, /SimDeck_Pixel_CI/);
   assert.match(ciWorkflow, /test:integration:android/);
+});
+
+test("Windows Android CI builds the release's windows-msvc binary", () => {
+  // The release ships x86_64-pc-windows-msvc with a static CRT; the emulator
+  // job must exercise that exact binary from PowerShell so a runtime DLL
+  // dependency fails CI instead of the published package.
+  const windowsBuildStep = stepSlice(
+    ciWorkflow,
+    "Build Android integration artifacts (Windows, release target)",
+  );
+  assert.match(windowsBuildStep, /if:\s*runner\.os == 'Windows'/);
+  assert.match(
+    windowsBuildStep,
+    /SIMDECK_BUILD_TARGET:\s*x86_64-pc-windows-msvc/,
+  );
+  assert.match(windowsBuildStep, /npm run build:cli/);
+  assert.match(releaseWorkflow, /SIMDECK_BUILD_TARGET=x86_64-pc-windows-msvc/);
+  assert.doesNotMatch(releaseWorkflow, /windows-gnu|choco install mingw/);
+  assert.match(ciWorkflow, /npm run test:windows-runtime/);
 });
 
 test("Windows Android CI boot path is bounded and diagnostic", () => {

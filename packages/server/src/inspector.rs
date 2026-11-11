@@ -540,8 +540,7 @@ impl Drop for RegistryFileLock {
 fn inspector_registry_path() -> PathBuf {
     env::var_os("SIMDECK_INSPECTOR_REGISTRY_PATH")
         .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".simdeck")))
-        .unwrap_or_else(|| env::temp_dir().join("simdeck"))
+        .unwrap_or_else(crate::config::simdeck_user_state_dir)
         .join("inspectors.json")
 }
 

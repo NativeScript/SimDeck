@@ -13,6 +13,7 @@ mod logs;
 mod metrics;
 mod native;
 mod performance;
+mod platform;
 mod service;
 mod simulators;
 mod static_files;
@@ -21,6 +22,8 @@ mod transport;
 mod webkit;
 
 pub(crate) mod android_emulation_control {
+    // Generated tonic client returns `tonic::Status` errors by value.
+    #![allow(clippy::result_large_err)]
     tonic::include_proto!("android.emulation.control");
 }
 
@@ -107,7 +110,7 @@ use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{self, IsTerminal, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, ToSocketAddrs, UdpSocket};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -128,6 +131,13 @@ const SERVER_HEALTH_WATCHDOG_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const SERVER_HEALTH_WATCHDOG_STALE_HEARTBEAT: Duration = Duration::from_secs(60);
 const SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD: usize = 12;
 const SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD: usize = 3;
+/// Upper bound for one CLI probe of an existing service's `/api/health`.
+///
+/// A port can stay open without anyone answering it: on Windows a child
+/// process such as the adb server inherits the listening socket and keeps it
+/// alive after the service exits. The CLI must not wait the full HTTP client
+/// read timeout for such a port before starting a fresh service.
+const SERVICE_HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const SIMULATOR_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const SIMULATOR_SESSION_IDLE_REAPER_INITIAL_DELAY: Duration = Duration::from_secs(60);
 const SIMULATOR_SESSION_IDLE_REAPER_INTERVAL: Duration = Duration::from_secs(30);
@@ -1778,6 +1788,10 @@ struct WorkspaceServiceProcess {
 }
 
 fn service_run_processes() -> anyhow::Result<Vec<ServiceRunProcess>> {
+    if cfg!(windows) {
+        // No `ps`; Windows services are tracked through their metadata files.
+        return Ok(Vec::new());
+    }
     let output = ProcessCommand::new("ps")
         .args(["-axo", "pgid=,command="])
         .output()
@@ -1914,6 +1928,7 @@ fn terminate_process_group(pid: u32, timeout: Duration) {
     terminate_process_group_with_kill_timeout(pid, timeout, Duration::from_secs(2));
 }
 
+#[cfg(not(windows))]
 fn terminate_process_group_with_kill_timeout(pid: u32, timeout: Duration, kill_timeout: Duration) {
     signal_process_group(pid, "TERM");
     signal_process(pid, "TERM");
@@ -1925,6 +1940,20 @@ fn terminate_process_group_with_kill_timeout(pid: u32, timeout: Duration, kill_t
     let _ = wait_for_process_exit(pid, kill_timeout);
 }
 
+/// Windows has no process groups or signals; `taskkill /T` ends the service
+/// together with the emulator and adb children it started, matching the
+/// process-group kill on Unix.
+#[cfg(windows)]
+fn terminate_process_group_with_kill_timeout(pid: u32, timeout: Duration, kill_timeout: Duration) {
+    let _ = ProcessCommand::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = wait_for_process_exit(pid, timeout + kill_timeout);
+}
+
+#[cfg(not(windows))]
 fn signal_process(pid: u32, signal: &str) {
     let _ = ProcessCommand::new("kill")
         .args([format!("-{signal}"), pid.to_string()])
@@ -1933,6 +1962,7 @@ fn signal_process(pid: u32, signal: &str) {
         .status();
 }
 
+#[cfg(not(windows))]
 fn signal_process_group(pgid: u32, signal: &str) {
     let _ = ProcessCommand::new("kill")
         .arg(format!("-{signal}"))
@@ -1954,6 +1984,7 @@ fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
     !process_exists(pid)
 }
 
+#[cfg(not(windows))]
 fn process_exists(pid: u32) -> bool {
     ProcessCommand::new("kill")
         .arg("-0")
@@ -1962,6 +1993,44 @@ fn process_exists(pid: u32) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+#[cfg(windows)]
+fn process_exists(pid: u32) -> bool {
+    windows_process::exists(pid)
+}
+
+#[cfg(windows)]
+mod windows_process {
+    use std::io;
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    const ERROR_ACCESS_DENIED: i32 = 5;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(desired_access: u32, inherit_handle: i32, process_id: u32) -> usize;
+        fn GetExitCodeProcess(process: usize, exit_code: *mut u32) -> i32;
+        fn CloseHandle(handle: usize) -> i32;
+    }
+
+    /// Whether a process with this id is still running, the equivalent of
+    /// `kill -0` on Unix. A process owned by another user cannot be opened,
+    /// but the access error still proves it exists.
+    pub(crate) fn exists(pid: u32) -> bool {
+        // SAFETY: plain Win32 calls; the handle is closed before returning.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle == 0 {
+                return io::Error::last_os_error().raw_os_error() == Some(ERROR_ACCESS_DENIED);
+            }
+            let mut exit_code = 0u32;
+            let queried = GetExitCodeProcess(handle, &mut exit_code);
+            CloseHandle(handle);
+            queried != 0 && exit_code == STILL_ACTIVE
+        }
+    }
 }
 
 fn service_status() -> anyhow::Result<()> {
@@ -2046,6 +2115,13 @@ fn print_service_metadata_result(
     }
     if let Some(pairing_code) = metadata.pairing_code.as_deref() {
         println!("{:>12}   {}", "Pair:", format_pairing_code(pairing_code));
+    }
+    if !platform::ios_simulator_supported() {
+        println!(
+            "{:>12}   {}",
+            "Live video:",
+            platform::live_video_cli_note()
+        );
     }
     Ok(())
 }
@@ -2384,7 +2460,22 @@ fn wait_for_pairing_target(target: &PairingTarget, timeout: Duration) -> anyhow:
 }
 
 fn service_is_healthy(metadata: &ServiceMetadata) -> bool {
-    http_get_json(&metadata.http_url, "/api/health").is_ok()
+    service_url_is_healthy(&metadata.http_url, SERVICE_HEALTH_PROBE_TIMEOUT)
+}
+
+/// Probes `/api/health` on a local service URL with a bounded timeout for the
+/// connect, the request, and the response, unlike `http_get_json`, which waits
+/// up to the full read timeout for a listener that accepts but never answers.
+fn service_url_is_healthy(http_url: &str, timeout: Duration) -> bool {
+    let Ok(endpoint) = HttpEndpoint::parse(http_url) else {
+        return false;
+    };
+    let Ok(addresses) = (endpoint.host.as_str(), endpoint.port).to_socket_addrs() else {
+        return false;
+    };
+    addresses
+        .into_iter()
+        .any(|address| http_health_probe(address, timeout))
 }
 
 fn service_binary_matches_current(metadata: &ServiceMetadata) -> anyhow::Result<bool> {
@@ -2512,11 +2603,7 @@ fn project_device_selection_path_for_root(root: &Path) -> anyhow::Result<PathBuf
 }
 
 fn simdeck_user_state_dir() -> PathBuf {
-    env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .map(|home| home.join(".simdeck"))
-        .unwrap_or_else(|| env::temp_dir().join("simdeck"))
+    config::simdeck_user_state_dir()
 }
 
 fn service_metadata_paths() -> anyhow::Result<Vec<PathBuf>> {
@@ -5441,6 +5528,62 @@ fn http_health_probe(address: SocketAddr, timeout: Duration) -> bool {
     read > 12 && response[..read].starts_with(b"HTTP/1.1 200")
 }
 
+/// Keeps the HTTP listener out of child processes on Windows.
+///
+/// Tokio creates Windows sockets with `socket()`, which yields inheritable
+/// handles, and `std::process::Command` lets children inherit every
+/// inheritable handle. A spawned adb server or emulator would otherwise keep
+/// the service port bound after the service exits, so the next `simdeck` run
+/// probes a port that accepts connections but never answers.
+#[cfg(windows)]
+fn mark_listener_non_inheritable(listener: &tokio::net::TcpListener) -> io::Result<()> {
+    use std::os::windows::io::AsRawSocket;
+    windows_handle::clear_inherit_flag(listener.as_raw_socket() as usize)
+}
+
+#[cfg(not(windows))]
+fn mark_listener_non_inheritable(_listener: &tokio::net::TcpListener) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+mod windows_handle {
+    use std::io;
+
+    const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetHandleInformation(handle: usize, mask: u32, flags: u32) -> i32;
+    }
+
+    #[cfg(test)]
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetHandleInformation(handle: usize, flags: *mut u32) -> i32;
+    }
+
+    pub(crate) fn clear_inherit_flag(handle: usize) -> io::Result<()> {
+        // SAFETY: `handle` is an open socket handle owned by the caller and
+        // the call only updates its inherit flag.
+        if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_inheritable(handle: usize) -> io::Result<bool> {
+        let mut flags = 0u32;
+        // SAFETY: `handle` is an open socket handle and `flags` outlives the
+        // call.
+        if unsafe { GetHandleInformation(handle, &mut flags) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(flags & HANDLE_FLAG_INHERIT != 0)
+    }
+}
+
 fn start_simulator_session_idle_reaper(registry: SessionRegistry) {
     tokio::spawn(async move {
         tokio::time::sleep(SIMULATOR_SESSION_IDLE_REAPER_INITIAL_DELAY).await;
@@ -6118,6 +6261,8 @@ async fn serve(
     let http_listener = tokio::net::TcpListener::bind(config.http_addr())
         .await
         .with_context(|| format!("bind HTTP listener on {}", config.http_addr()))?;
+    mark_listener_non_inheritable(&http_listener)
+        .with_context(|| format!("protect HTTP listener on {}", config.http_addr()))?;
     let health_heartbeat = Arc::new(AtomicU64::new(now_secs()));
     start_server_health_watchdog(config.http_addr(), health_heartbeat.clone());
     let _bonjour_advertisement = BonjourAdvertisement::start(&config);
@@ -6371,14 +6516,14 @@ mod tests {
         project_service_credentials_from_metadata, read_project_service_credentials_from_path,
         removed_service_process_name, render_agent_accessibility_tree, render_qr_code,
         run_maestro_command, server_health_watchdog_should_restart, service_addresses,
-        service_matches_launch_options, service_post_error_is_retryable, simdeck_open_link,
-        simdeck_pair_url, studio_service_restart_args, workspace_service_process_is_current,
-        write_project_service_credentials_to_path, AndroidGpuMode, Cli, Command, ElementSelector,
-        NoCommandAction, PairingAddress, ProjectServiceCredentials, ServiceCommand,
-        ServiceLaunchOptions, ServiceMetadata, StreamQualityProfileArg, StudioExposeOptions,
-        TapCommandTarget, VideoCodecMode, WorkspaceServiceProcess, YamlValue,
-        DEFAULT_LOCAL_STREAM_QUALITY_PROFILE, SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD,
-        SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
+        service_matches_launch_options, service_post_error_is_retryable, service_url_is_healthy,
+        simdeck_open_link, simdeck_pair_url, studio_service_restart_args,
+        workspace_service_process_is_current, write_project_service_credentials_to_path,
+        AndroidGpuMode, Cli, Command, ElementSelector, NoCommandAction, PairingAddress,
+        ProjectServiceCredentials, ServiceCommand, ServiceLaunchOptions, ServiceMetadata,
+        StreamQualityProfileArg, StudioExposeOptions, TapCommandTarget, VideoCodecMode,
+        WorkspaceServiceProcess, YamlValue, DEFAULT_LOCAL_STREAM_QUALITY_PROFILE,
+        SERVER_HEALTH_WATCHDOG_FAILURE_THRESHOLD, SERVER_HEALTH_WATCHDOG_HTTP_FAILURE_THRESHOLD,
     };
     use clap::Parser;
     use std::collections::HashMap;
@@ -7667,5 +7812,96 @@ swipe:
             normalize_accessibility_point_for_display(240.0, 226.0, 480.0, 320.0, 800.0, 1200.0),
             (0.70625, 0.5)
         );
+    }
+
+    #[test]
+    fn service_health_probe_gives_up_on_a_port_that_never_answers() {
+        // A bound listener that never accepts stands in for a port kept alive
+        // by an orphaned child process: connections succeed, nothing answers.
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let timeout = std::time::Duration::from_millis(300);
+        let started = std::time::Instant::now();
+        assert!(!service_url_is_healthy(
+            &format!("http://127.0.0.1:{port}"),
+            timeout
+        ));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        drop(listener);
+    }
+
+    #[test]
+    fn service_health_probe_rejects_closed_ports_and_bad_urls() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let timeout = std::time::Duration::from_millis(300);
+        assert!(!service_url_is_healthy(
+            &format!("http://127.0.0.1:{port}"),
+            timeout
+        ));
+        assert!(!service_url_is_healthy("https://127.0.0.1:4310", timeout));
+        assert!(!service_url_is_healthy("nonsense", timeout));
+    }
+
+    fn spawn_idle_child() -> std::process::Child {
+        let mut command = if cfg!(windows) {
+            let mut command = std::process::Command::new("ping");
+            command.args(["-n", "60", "127.0.0.1"]);
+            command
+        } else {
+            let mut command = std::process::Command::new("sleep");
+            command.arg("60");
+            command
+        };
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn idle child")
+    }
+
+    #[test]
+    fn process_exists_tracks_live_and_exited_processes() {
+        assert!(super::process_exists(std::process::id()));
+        let mut child = spawn_idle_child();
+        let pid = child.id();
+        assert!(super::process_exists(pid));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(!super::process_exists(pid));
+    }
+
+    #[test]
+    fn terminate_process_group_ends_a_running_process() {
+        let mut child = spawn_idle_child();
+        let pid = child.id();
+        // Reap concurrently: on Unix a terminated but unreaped child still
+        // answers `kill -0`, which would stall the termination wait.
+        let reaper = std::thread::spawn(move || child.wait().unwrap());
+        super::terminate_process_group(pid, std::time::Duration::from_secs(5));
+        let status = reaper.join().unwrap();
+        assert!(!status.success());
+        assert!(!super::process_exists(pid));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn http_listener_is_not_inheritable_on_windows() {
+        use std::os::windows::io::AsRawSocket;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let handle = listener.as_raw_socket() as usize;
+            super::mark_listener_non_inheritable(&listener).unwrap();
+            assert!(!super::windows_handle::is_inheritable(handle).unwrap());
+        });
     }
 }

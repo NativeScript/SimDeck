@@ -1303,6 +1303,33 @@ function streamErrorIsServerUnreachable(message: string): boolean {
   );
 }
 
+/**
+ * Extracts a human-readable message from a failed SimDeck API response. The
+ * server answers errors with `{"error": "..."}`; surfacing that field instead
+ * of the raw JSON keeps overlays like the stream status readable.
+ */
+export async function responseErrorMessage(
+  response: Pick<Response, "headers" | "status" | "text">,
+): Promise<string> {
+  const fallback = `Request failed with status ${response.status}`;
+  const text = (await response.text().catch(() => "")).trim();
+  if (!text) {
+    return fallback;
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json") || text.startsWith("{")) {
+    try {
+      const body = JSON.parse(text) as { error?: unknown };
+      if (typeof body.error === "string" && body.error.trim()) {
+        return body.error.trim();
+      }
+    } catch {
+      // Fall through and show the raw body.
+    }
+  }
+  return text;
+}
+
 async function postWebRtcOfferWithAuthRetry(
   target: StreamConnectTarget,
   localDescription: RTCSessionDescription,
@@ -1310,17 +1337,17 @@ async function postWebRtcOfferWithAuthRetry(
   const response = await postWebRtcOffer(target, localDescription);
   if (response.status !== 401) {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(await responseErrorMessage(response));
     }
     return response;
   }
   if (target.remote) {
-    throw new Error(await response.text());
+    throw new Error(await responseErrorMessage(response));
   }
   await fetchHealth();
   const retry = await postWebRtcOffer(target, localDescription);
   if (!retry.ok) {
-    throw new Error(await retry.text());
+    throw new Error(await responseErrorMessage(retry));
   }
   return retry;
 }
@@ -1335,17 +1362,17 @@ async function postStreamConfigWithAuthRetry(
   const response = await postStreamConfig(config);
   if (response.status !== 401) {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(await responseErrorMessage(response));
     }
     return;
   }
   if (options.remote) {
-    throw new Error(await response.text());
+    throw new Error(await responseErrorMessage(response));
   }
   await fetchHealth();
   const retry = await postStreamConfig(config);
   if (!retry.ok) {
-    throw new Error(await retry.text());
+    throw new Error(await responseErrorMessage(retry));
   }
 }
 

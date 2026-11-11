@@ -5,6 +5,27 @@ SimDeck streams live device video to the browser. Local iOS sessions default to 
 iOS simulator H.264 uses VideoToolbox for hardware encoding and x264 for software encoding.
 Android emulator H.264 uses the emulator gRPC `streamScreenshot` API when SimDeck owns the boot. SimDeck receives raw RGBA frames, pads odd dimensions for H.264, and encodes them on the Mac. If the gRPC endpoint is unavailable, SimDeck falls back to the emulator `-share-vid` display surface and reads BGRA frames from the `videmulator<console-port>` shared memory region.
 
+## Encoders per platform
+
+| Host            | iOS simulator stream          | Android emulator stream                  |
+| --------------- | ----------------------------- | ---------------------------------------- |
+| macOS           | VideoToolbox hardware or x264 | VideoToolbox hardware or x264            |
+| Windows / Linux | Not available                 | OpenH264 software, built into the binary |
+
+Both macOS encoders live in the macOS native bridge, which also owns iOS
+simulator control. The Windows and Linux CLIs link a stub in its place, so they
+cannot drive iOS simulators at all. Android emulator frames on those hosts are
+encoded in Rust with Cisco's OpenH264 (baseline profile, Annex B) and go
+through the same WebRTC path as on macOS. Stream quality profiles and the
+frame-rate and resolution controls apply there too; `--video-codec hardware`
+has no hardware encoder to select and behaves like `software`.
+
+The service reports this through `liveVideo` in `GET /api/health` and
+`GET /api/stream-quality` (`encoder` is `native` or `openh264`, `iosSimulator`
+is `false` off macOS), prints a `Live video:` note when it starts on Windows or
+Linux, and answers iOS simulator WebRTC offers there with `501 Not Implemented`
+and the same explanation.
+
 ## When encoding runs
 
 SimDeck starts encoding when a browser stream needs H.264 frames. For iOS, the
