@@ -3043,7 +3043,7 @@ impl Drop for WebRtcMetricsGuard {
         self.metrics
             .subscribers_disconnected
             .fetch_add(1, Ordering::Relaxed);
-        let _ = self.metrics.active_streams.fetch_update(
+        let _ = self.metrics.active_streams.try_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
             |current| Some(current.saturating_sub(1)),
